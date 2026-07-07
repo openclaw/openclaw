@@ -39,6 +39,7 @@ type ForkSessionFromParentParams = {
   agentId: string;
   config?: OpenClawConfig;
   sessionsDir?: string;
+  targetSessionsDir?: string;
 };
 
 export type ForkedParentSessionEntry = {

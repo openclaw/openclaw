@@ -628,6 +628,7 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
       "groupId": "google",
       "groupLabel": "Google",

@@ -3,6 +3,7 @@ import type {
   FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
+  SessionRunStatus,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
@@ -11,6 +12,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
@@ -18,6 +20,7 @@ import {
 } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
+  readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
   type SessionChangedResult,
@@ -66,6 +69,13 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
+export type SessionRunTerminal = {
+  sessionKeys: readonly string[];
+  runId?: string | null;
+  status: Exclude<SessionRunStatus, "running">;
+  endedAt: number;
+};
+
 export type SessionPatch = {
   label?: string | null;
   category?: string | null;
@@ -76,6 +86,7 @@ export type SessionPatch = {
   reasoningLevel?: string | null;
   archived?: boolean;
   pinned?: boolean;
+  unread?: boolean;
 };
 
 export type SessionDeleteOptions = {
@@ -137,6 +148,7 @@ export type SessionCapability = {
     options?: SessionReconcileOptions,
   ) => boolean;
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
+  reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
@@ -182,6 +194,7 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
@@ -273,7 +286,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   return params;
 }
 
-export async function requestSessionList(
+async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
@@ -284,7 +297,7 @@ export async function requestSessionList(
   return result ?? null;
 }
 
-export function requestSessionPatch(
+function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
@@ -307,7 +320,7 @@ export function requestSessionDelete(
   });
 }
 
-export function requestSessionReset(
+function requestSessionReset(
   client: SessionRequestClient,
   key: string,
   options: SessionResetOptions = {},
@@ -319,7 +332,7 @@ export function requestSessionReset(
     .then(() => undefined);
 }
 
-export function requestSessionCompact(
+function requestSessionCompact(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -329,7 +342,7 @@ export function requestSessionCompact(
   });
 }
 
-export function requestSessionSteer(
+function requestSessionSteer(
   client: SessionRequestClient,
   key: string,
   message: string,
@@ -341,7 +354,7 @@ export function requestSessionSteer(
   });
 }
 
-export function requestSessionFilesList(
+function requestSessionFilesList(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null; path?: string; search?: string } = {},
@@ -354,7 +367,7 @@ export function requestSessionFilesList(
   });
 }
 
-export function requestSessionFile(
+function requestSessionFile(
   client: SessionRequestClient,
   key: string,
   path: string,
@@ -367,11 +380,11 @@ export function requestSessionFile(
   });
 }
 
-export function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
+function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-export async function subscribeSessionMessages(
+async function subscribeSessionMessages(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -401,7 +414,7 @@ export function unsubscribeSessionMessages(
     .then(() => undefined);
 }
 
-export async function listSessionCheckpoints(
+async function listSessionCheckpoints(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -412,7 +425,7 @@ export async function listSessionCheckpoints(
   );
 }
 
-export function branchSessionCheckpoint(
+function branchSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,
@@ -424,7 +437,7 @@ export function branchSessionCheckpoint(
   });
 }
 
-export function restoreSessionCheckpoint(
+function restoreSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,
@@ -464,8 +477,8 @@ function appendSessionResults(
   };
 }
 
-function isSessionEvent(event: GatewayEventFrame): boolean {
-  return event.event === "sessions.changed";
+function isSessionStateEvent(event: GatewayEventFrame): boolean {
+  return event.event === "sessions.changed" || event.event === "session.message";
 }
 
 function canReconcileSessionEvent(options: SessionListOptions): boolean {
@@ -478,6 +491,66 @@ function canReconcileSessionEvent(options: SessionListOptions): boolean {
     options.includeUnknown !== false &&
     options.configuredAgentsOnly !== true
   );
+}
+
+export function reconcileSessionRunTerminal(
+  result: SessionsListResult | null,
+  terminal: SessionRunTerminal,
+): SessionsListResult | null {
+  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  if (!result || keys.length === 0) {
+    return result;
+  }
+  const runId = terminal.runId?.trim() || null;
+  let changed = false;
+  const sessions = result.sessions.map((row): GatewaySessionRow => {
+    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
+      return row;
+    }
+    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+      // Active rows without matching identity may describe a newer or embedded
+      // run. Only terminalize an active row when this event owns its run ID.
+      if (!runId || !row.activeRunIds?.includes(runId)) {
+        return row;
+      }
+    }
+    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
+    if (remainingRunIds?.length) {
+      changed = true;
+      return {
+        ...row,
+        activeRunIds: remainingRunIds,
+        hasActiveRun: true,
+        status: "running" as const,
+      };
+    }
+    const endedAt = row.endedAt ?? terminal.endedAt;
+    const runtimeMs =
+      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
+    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
+    const abortedLastRun = terminal.status === "killed" ? true : row.abortedLastRun;
+    if (
+      row.hasActiveRun === false &&
+      row.status === terminal.status &&
+      row.endedAt === endedAt &&
+      row.runtimeMs === runtimeMs &&
+      row.activeRunIds === activeRunIds &&
+      row.abortedLastRun === abortedLastRun
+    ) {
+      return row;
+    }
+    changed = true;
+    return {
+      ...row,
+      activeRunIds,
+      hasActiveRun: false,
+      status: terminal.status,
+      endedAt,
+      runtimeMs,
+      abortedLastRun,
+    };
+  });
+  return changed ? { ...result, sessions } : result;
 }
 
 export function createSessionCapability(gateway: SessionGateway): SessionCapability {
@@ -495,6 +568,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   const listeners = new Set<(next: SessionState) => void>();
+  const createdListeners = new Set<(key: string) => void>();
 
   const requestList = async (
     options: SessionListOptions = {},
@@ -647,6 +721,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return null;
       }
       await refresh({ agentId: params.agentId, force: true });
+      // Creation can originate outside the sidebar. Notify presentation owners
+      // after refresh so they can reconcile the new row without guessing from list churn.
+      for (const listener of createdListeners) {
+        listener(key);
+      }
       return key;
     } catch (error) {
       publish({ ...state, error: String(error) });
@@ -728,6 +807,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
     }
     return reconciled;
+  };
+
+  const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
+    const result = reconcileSessionRunTerminal(state.result, terminal);
+    if (result === state.result) {
+      return false;
+    }
+    publish({ ...state, result, error: null });
+    return true;
   };
 
   const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
@@ -969,15 +1057,35 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     void refresh();
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (isSessionEvent(event)) {
-      if (!canReconcileSessionEvent(lastListOptions)) {
-        void refresh({ ...lastListOptions, force: true });
-        return;
-      }
+    if (isSessionStateEvent(event)) {
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
         showArchived: lastListOptions.showArchived,
       });
+      const eventInfo = readSessionChangedEvent(event.payload);
+      const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+      const status = reconciled.status ?? eventInfo?.status;
+      const runEnded =
+        hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+      if (event.event === "session.message" && !runEnded) {
+        return;
+      }
+      if (!canReconcileSessionEvent(lastListOptions)) {
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
+      const priorRow =
+        reconciled.row ??
+        (eventInfo
+          ? state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, eventInfo.key))
+          : undefined);
+      const activeRunClearNeedsRefresh = runEnded && priorRow?.hasActiveRun === true;
+      if (activeRunClearNeedsRefresh) {
+        // Terminal lifecycle events can omit hasActiveRun. Re-list when the
+        // stale-row guard preserves an active row after the run has ended.
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
       if (reconciled.applied) {
         if (reconciled.result !== state.result || reconciled.deletedKey) {
           publish({
@@ -1002,6 +1110,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     list: requestList,
     reconcile,
     reconcileChanged,
+    reconcileRunTerminal,
     refresh,
     create,
     patch,
@@ -1018,6 +1127,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    subscribeCreated(listener) {
+      createdListeners.add(listener);
+      return () => createdListeners.delete(listener);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1026,6 +1139,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       disposed = true;
       stopGateway();
       stopEvents();
+      createdListeners.clear();
       listeners.clear();
       inFlight = null;
       queuedRefresh = null;

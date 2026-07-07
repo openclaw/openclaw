@@ -6,13 +6,23 @@ import {
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
 import {
-  agentLogoUrl,
   assistantAvatarFallbackUrl,
   buildAgentContext,
+  formatBytes,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./display.ts";
+
+describe("formatBytes", () => {
+  it("preserves the Control UI byte-size display contract", () => {
+    expect(formatBytes(undefined)).toBe("-");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(12 * 1024)).toBe("12 KB");
+    expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+  });
+});
 
 describe("resolveEffectiveModelFallbacks", () => {
   it("inherits defaults when no entry fallbacks are configured", () => {
@@ -105,17 +115,6 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
-  });
-});
-
-describe("agentLogoUrl", () => {
-  it("keeps base-mounted control UI logo paths absolute to the mount", () => {
-    expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
-    expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
-  });
-
-  it("uses a root-relative fallback when no basePath is configured", () => {
-    expect(agentLogoUrl("")).toBe("/favicon.svg");
   });
 });
 

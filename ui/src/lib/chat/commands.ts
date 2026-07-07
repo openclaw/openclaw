@@ -5,8 +5,8 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
-export type SlashCommandTier = "essential" | "standard" | "power";
-export type ChatIconName = string;
+type SlashCommandTier = "essential" | "standard" | "power";
+type ChatIconName = string;
 
 export type SlashCommandDef = {
   key: string;
@@ -487,7 +487,7 @@ export function getHiddenCommandCount(): number {
   return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
-export type ParsedSlashCommand = {
+type ParsedSlashCommand = {
   command: SlashCommandDef;
   args: string;
 };

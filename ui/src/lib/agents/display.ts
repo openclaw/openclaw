@@ -1,4 +1,5 @@
 // Control UI view renders agents utils screen content.
+import { formatByteSize } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
@@ -36,7 +37,7 @@ export type AgentToolSection = {
   tools: AgentToolEntry[];
 };
 
-export const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
+const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
   {
     id: "fs",
     label: "Files",
@@ -203,10 +204,6 @@ export function normalizeAgentLabel(agent: {
   );
 }
 
-export function agentLogoUrl(basePath: string): string {
-  return controlUiPublicAssetPath("favicon.svg", basePath);
-}
-
 export function assistantAvatarFallbackUrl(basePath: string): string {
   return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
@@ -240,17 +237,12 @@ export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
     return "-";
   }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let size = bytes / 1024;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  return `${size.toFixed(size < 10 ? 1 : 0)} ${units[unitIndex]}`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+  });
 }
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {

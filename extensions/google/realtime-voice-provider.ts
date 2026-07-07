@@ -22,7 +22,6 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
@@ -42,6 +41,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resamplePcm,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asBoolean,
@@ -752,7 +752,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private handleServerContent(content: LiveServerContent): void {
     if (content.interrupted) {
-      this.config.onClearAudio();
+      this.config.onClearAudio("barge-in");
     }
 
     if (content.inputTranscription?.text) {
@@ -960,6 +960,7 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
       supportsVideoFrames: true,
       supportsSessionResumption: true,

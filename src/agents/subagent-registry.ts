@@ -11,7 +11,12 @@ import type { ContextEngine, SubagentEndReason } from "../context-engine/types.j
 import { callGateway } from "../gateway/call.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import {
+  formatAbandonedLivenessError,
+  formatBlockedLivenessError,
+  isAbandonedLivenessState,
+  isBlockedLivenessState,
+} from "../shared/agent-liveness.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
@@ -1496,7 +1501,9 @@ function ensureListener() {
         });
         return;
       }
-      if (isBlockedLivenessState(livenessState)) {
+      const blocked = isBlockedLivenessState(livenessState);
+      const abandoned = isAbandonedLivenessState(livenessState);
+      if (blocked || abandoned) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
         const blockedParams = {
@@ -1504,7 +1511,9 @@ function ensureListener() {
           endedAt,
           outcome: {
             status: "error" as const,
-            error: formatBlockedLivenessError(error),
+            error: blocked
+              ? formatBlockedLivenessError(error)
+              : formatAbandonedLivenessError(error),
           },
           reason: SUBAGENT_ENDED_REASON_ERROR,
           sendFarewell: true,
@@ -1512,7 +1521,10 @@ function ensureListener() {
           triggerCleanup: true,
           startedAt,
         };
-        await completeSubagentRunWithRecovery(blockedParams, "lifecycle-blocked-event");
+        await completeSubagentRunWithRecovery(
+          blockedParams,
+          blocked ? "lifecycle-blocked-event" : "lifecycle-abandoned-event",
+        );
         return;
       }
       if (evt.data?.aborted) {

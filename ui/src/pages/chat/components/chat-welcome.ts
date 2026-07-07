@@ -2,13 +2,12 @@
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
 import {
-  agentLogoUrl,
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,
 } from "../../../lib/agents/display.ts";
 import { resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
 
-export type ChatWelcomeProps = {
+type ChatWelcomeProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -46,7 +45,6 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
   const avatar = resolveAssistantAvatarUrl(props);
   const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   const fallbackAvatarUrl = assistantAvatarFallbackUrl(props.basePath ?? "");
-  const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
@@ -66,9 +64,7 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
             </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
-        <span class="agent-chat__badge"
-          ><img src=${logoUrl} alt="" /> ${t("chat.welcome.ready")}</span
-        >
+        <span class="agent-chat__badge">${t("chat.welcome.ready")}</span>
       </div>
       <p class="agent-chat__hint">
         ${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd>

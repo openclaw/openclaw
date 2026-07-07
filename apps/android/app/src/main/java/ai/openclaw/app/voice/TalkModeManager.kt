@@ -34,6 +34,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
@@ -142,6 +143,7 @@ class TalkModeManager internal constructor(
   private val scope: CoroutineScope,
   private val session: GatewaySession,
   private val isConnected: () -> Boolean,
+  private val gatewayStableId: () -> String? = { null },
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
   private val onStoppedByRelay: () -> Unit = {},
@@ -161,6 +163,14 @@ class TalkModeManager internal constructor(
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
+  private var gatewayWorkJob = SupervisorJob()
+  private var gatewayWorkScope = CoroutineScope(scope.coroutineContext + gatewayWorkJob)
+  private val gatewayGeneration = AtomicLong()
+
+  init {
+    scope.coroutineContext[Job]?.invokeOnCompletion { gatewayWorkJob.cancel() }
+  }
+
   private val json = Json { ignoreUnknownKeys = true }
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -300,6 +310,46 @@ class TalkModeManager internal constructor(
   fun stopAllCapture() {
     _isEnabled.value = false
     stop()
+  }
+
+  /** Cancels work carrying voice/session data before a replacement gateway can connect. */
+  fun onGatewayScopeChanging() {
+    gatewayGeneration.incrementAndGet()
+    gatewayWorkJob.cancel()
+    gatewayWorkJob = SupervisorJob()
+    gatewayWorkScope = CoroutineScope(scope.coroutineContext + gatewayWorkJob)
+    _conversation.value = emptyList()
+    _lastAssistantText.value = null
+    configLoaded = false
+    silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
+    interruptOnSpeech = false
+  }
+
+  private suspend fun requestGateway(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): String {
+    val gatewayId = gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() }
+    return if (gatewayId == null) {
+      session.request(method, paramsJson, timeoutMs)
+    } else {
+      session.requestForEndpoint(gatewayId, method, paramsJson, timeoutMs)
+    }
+  }
+
+  private suspend fun sendGatewayRequestFrame(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
+    onError: (GatewaySession.ErrorShape) -> Unit,
+  ) {
+    val gatewayId = gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() }
+    if (gatewayId == null) {
+      session.sendRequestFrame(method, paramsJson, timeoutMs, onError)
+    } else {
+      session.sendRequestFrameForEndpoint(gatewayId, method, paramsJson, timeoutMs, onError)
+    }
   }
 
   internal val activePushToTalkCaptureId: String?
@@ -455,7 +505,7 @@ class TalkModeManager internal constructor(
           // background stop can run between capture startup and job registration.
           startSilenceMonitor(captureId)
           pttTimeoutJob =
-            scope.launch {
+            gatewayWorkScope.launch {
               delay(autoStopAfterMs)
               if (pttAutoStopEnabled) {
                 endPushToTalk(captureId)
@@ -506,7 +556,9 @@ class TalkModeManager internal constructor(
       _statusText.value = "Thinking…"
       lateinit var finishingJob: Job
       finishingJob =
-        scope.launch(start = CoroutineStart.LAZY) {
+        // Gateway-scoped so a switch drops the stale finalize; the NonCancellable
+        // finally still resumes capture when the scope cancels this job.
+        gatewayWorkScope.launch(start = CoroutineStart.LAZY) {
           try {
             finalizeTranscript(transcript)
           } finally {
@@ -617,7 +669,7 @@ class TalkModeManager internal constructor(
     command: String,
     onComplete: () -> Unit,
   ) {
-    scope.launch {
+    gatewayWorkScope.launch {
       try {
         reloadConfig()
         val startedAt = System.currentTimeMillis().toDouble() / 1000.0
@@ -661,7 +713,7 @@ class TalkModeManager internal constructor(
   fun playTtsForText(text: String) {
     val playbackToken = playbackGeneration.incrementAndGet()
     cancelActivePlayback()
-    scope.launch {
+    gatewayWorkScope.launch {
       reloadConfig()
       runPlaybackSession(playbackToken) {
         playAssistant(text, playbackToken)
@@ -786,11 +838,12 @@ class TalkModeManager internal constructor(
 
   private fun start() {
     if (realtimeSessionId != null || realtimeCaptureJob?.isActive == true) return
+    if (scope.coroutineContext[Job]?.isActive == false) return
     val generation = startGeneration.incrementAndGet()
     stopRequested = false
     listeningMode = true
     Log.d(tag, "start")
-    scope.launch {
+    gatewayWorkScope.launch {
       try {
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
@@ -895,7 +948,7 @@ class TalkModeManager internal constructor(
         put("transport", JsonPrimitive("gateway-relay"))
         put("brain", JsonPrimitive("agent-consult"))
       }
-    val payload = session.request("talk.session.create", params.toString(), timeoutMs = 15_000)
+    val payload = requestGateway("talk.session.create", params.toString(), timeoutMs = 15_000)
     val root = json.parseToJsonElement(payload).asObjectOrNull()
     val relaySession = root?.get("relaySessionId").asStringOrNull()
     val sessionId = relaySession ?: root?.get("sessionId").asStringOrNull()
@@ -967,7 +1020,7 @@ class TalkModeManager internal constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
     realtimeAppendJob =
-      scope.launch(realtimeCaptureDispatcher) {
+      gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
           if (realtimeSessionId != sessionId) continue
           if (isRealtimePlaybackActive()) continue
@@ -979,7 +1032,7 @@ class TalkModeManager internal constructor(
               put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
             }
           try {
-            session.sendRequestFrame(
+            sendGatewayRequestFrame(
               "talk.session.appendAudio",
               params.toString(),
               timeoutMs = 8_000,
@@ -995,7 +1048,7 @@ class TalkModeManager internal constructor(
         }
       }
     realtimeCaptureJob =
-      scope.launch(realtimeCaptureDispatcher) {
+      gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
@@ -1153,7 +1206,7 @@ class TalkModeManager internal constructor(
         ?: Channel<ByteArray>(Channel.UNLIMITED).also { queue ->
           realtimeAudioQueue = queue
           realtimeAudioWriterJob =
-            scope.launch(Dispatchers.IO) {
+            gatewayWorkScope.launch(Dispatchers.IO) {
               for (chunk in queue) {
                 if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
                 try {
@@ -1232,7 +1285,7 @@ class TalkModeManager internal constructor(
     realtimePlaybackIdleJob?.cancel()
     val delayMs = maxOf(0L, realtimePlaybackEndsAtMs - SystemClock.elapsedRealtime())
     realtimePlaybackIdleJob =
-      scope.launch {
+      gatewayWorkScope.launch {
         delay(delayMs)
         val idle =
           synchronized(realtimePlaybackLock) {
@@ -1315,7 +1368,7 @@ class TalkModeManager internal constructor(
     }
     _isListening.value = false
     if (closeSession && !sessionId.isNullOrBlank()) {
-      scope.launch {
+      gatewayWorkScope.launch {
         closeRealtimeSession(sessionId)
       }
     }
@@ -1401,7 +1454,7 @@ class TalkModeManager internal constructor(
   private suspend fun closeRealtimeSession(sessionId: String) {
     try {
       val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
-      session.request("talk.session.close", params.toString(), timeoutMs = 5_000)
+      requestGateway("talk.session.close", params.toString(), timeoutMs = 5_000)
     } catch (err: Throwable) {
       if (err !is CancellationException) {
         Log.d(tag, "realtime close ignored: ${err.message ?: err::class.simpleName}")
@@ -1419,7 +1472,7 @@ class TalkModeManager internal constructor(
     synchronized(realtimeToolLock) {
       pendingRealtimeToolCalls.add(callId)
     }
-    scope.launch {
+    gatewayWorkScope.launch {
       try {
         if (name == REALTIME_AGENT_CONTROL_TOOL) {
           submitRealtimeAgentControl(callId = callId, relaySessionId = relaySessionId, args = args)
@@ -1437,7 +1490,7 @@ class TalkModeManager internal constructor(
             if (args != null) put("args", args)
           }
         val response =
-          session.request("talk.client.toolCall", params.toString(), timeoutMs = 15_000)
+          requestGateway("talk.client.toolCall", params.toString(), timeoutMs = 15_000)
         val runId = parseRunId(response)
         if (!runId.isNullOrBlank()) {
           when (val registration = registerRealtimeToolRun(runId, callId, relaySessionId)) {
@@ -1528,7 +1581,7 @@ class TalkModeManager internal constructor(
       "final" -> {
         val text = extractTextFromChatEventMessage(dispatch.messageEl).orEmpty()
         val toolRun = dispatch.toolRun
-        scope.launch {
+        gatewayWorkScope.launch {
           submitRealtimeToolResult(
             callId = toolRun.callId,
             result = buildJsonObject { put("text", JsonPrimitive(text)) },
@@ -1539,7 +1592,7 @@ class TalkModeManager internal constructor(
       "aborted", "error" -> {
         val toolRun = dispatch.toolRun
         val state = dispatch.state
-        scope.launch {
+        gatewayWorkScope.launch {
           submitRealtimeToolError(toolRun.callId, state, toolRun.relaySessionId)
         }
       }
@@ -1573,7 +1626,7 @@ class TalkModeManager internal constructor(
         if (options != null) put("options", options)
       }
     try {
-      session.request("talk.session.submitToolResult", params.toString(), timeoutMs = 15_000)
+      requestGateway("talk.session.submitToolResult", params.toString(), timeoutMs = 15_000)
     } catch (err: Throwable) {
       if (err is CancellationException) throw err
       Log.w(tag, "realtime submitToolResult failed: ${err.message ?: err::class.simpleName}")
@@ -1626,7 +1679,7 @@ class TalkModeManager internal constructor(
         put("text", JsonPrimitive(text.ifEmpty { "status" }))
         if (!mode.isNullOrEmpty()) put("mode", JsonPrimitive(mode))
       }
-    val response = session.request("talk.session.steer", params.toString(), timeoutMs = 15_000)
+    val response = requestGateway("talk.session.steer", params.toString(), timeoutMs = 15_000)
     val result = json.parseToJsonElement(response).asObjectOrNull()
     if (result != null) {
       submitRealtimeToolResult(callId = callId, result = result, sessionId = relaySessionId)
@@ -1883,7 +1936,7 @@ class TalkModeManager internal constructor(
     if (stopRequested) return
     restartJob?.cancel()
     restartJob =
-      scope.launch {
+      gatewayWorkScope.launch {
         delay(delayMs)
         mainHandler.post {
           if (stopRequested) return@post
@@ -1930,7 +1983,7 @@ class TalkModeManager internal constructor(
   private fun startSilenceMonitor(captureId: String) {
     silenceJob?.cancel()
     silenceJob =
-      scope.launch {
+      gatewayWorkScope.launch {
         while (_isEnabled.value || pttAutoStopEnabled) {
           delay(200)
           checkSilence(captureId)
@@ -1947,13 +2000,13 @@ class TalkModeManager internal constructor(
     if (elapsed < silenceWindowMs) return
     if (activePttCaptureId != null) {
       if (pttAutoStopEnabled) {
-        scope.launch { endPushToTalk(captureId) }
+        gatewayWorkScope.launch { endPushToTalk(captureId) }
       }
       return
     }
     if (finalizeInFlight) return
     finalizeInFlight = true
-    scope.launch {
+    gatewayWorkScope.launch {
       try {
         finalizeTranscript(transcript)
       } finally {
@@ -2107,7 +2160,7 @@ class TalkModeManager internal constructor(
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
-      val res = session.request("chat.send", params.toString())
+      val res = requestGateway("chat.send", params.toString())
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
@@ -2214,7 +2267,7 @@ class TalkModeManager internal constructor(
     sinceSeconds: Double? = null,
   ): String? {
     val key = mainSessionKey.ifBlank { "main" }
-    val res = session.request("chat.history", "{\"sessionKey\":\"$key\"}")
+    val res = requestGateway("chat.history", "{\"sessionKey\":\"$key\"}")
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null
     for (item in messages.reversed()) {
@@ -2455,7 +2508,7 @@ class TalkModeManager internal constructor(
             put("sessionId", JsonPrimitive(sessionId))
             put("reason", JsonPrimitive(reason))
           }
-        session.request("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
+        requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
         // The response confirms provider cancellation; clear confirms that the
         // old playback boundary reached Android before capture can resume.
         withTimeout(2_000) { clear.await() }
@@ -2634,14 +2687,17 @@ class TalkModeManager internal constructor(
   }
 
   private suspend fun reloadConfig() {
+    val generation = gatewayGeneration.get()
     try {
-      val res = session.request("talk.config", "{}")
+      val res = requestGateway("talk.config", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
+      if (generation != gatewayGeneration.get()) return
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
       configLoaded = true
     } catch (_: Throwable) {
+      if (generation != gatewayGeneration.get()) return
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
       configLoaded = false
     }

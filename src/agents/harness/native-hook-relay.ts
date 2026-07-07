@@ -36,6 +36,7 @@ import {
   hasBeforeToolCallPolicy,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -91,6 +92,7 @@ export type NativeHookRelayProcessResponse = {
   stdout: string;
   stderr: string;
   exitCode: number;
+  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
 export type NativeHookRelayRegistration = {
@@ -107,6 +109,12 @@ export type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
+  onPreToolUseFailure?: (failure: {
+    toolName: string;
+    toolCallId: string;
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
+    durationMs: number;
+  }) => void | Promise<void>;
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
@@ -135,6 +143,7 @@ export type RegisterNativeHookRelayParams = {
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
+  onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
 export type NativeHookRelayCommandOptions = {
@@ -183,7 +192,10 @@ type NativeHookRelayProviderAdapter = {
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderPreToolUseBlockResponse: (
+    reason: string,
+    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
+  ) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
   renderPermissionDecisionResponse: (
@@ -245,6 +257,7 @@ type NativeHookRelaySharedState = {
 
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
+  preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
 type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
@@ -313,6 +326,7 @@ export type NativeHookRelayDeferredApprovalOutcome =
       handled: true;
       outcome: "denied";
       reason: string;
+      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
 
 type NativeHookRelayBridgeRegistration = {
@@ -361,7 +375,7 @@ const nativeHookRelayProviderAdapters: Record<
       // Codex treats empty stdout plus exit 0 as no decision/no additional context.
       return { stdout: "", stderr: "", exitCode: 0 };
     },
-    renderPreToolUseBlockResponse: (reason) => ({
+    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -371,6 +385,7 @@ const nativeHookRelayProviderAdapters: Record<
       })}\n`,
       stderr: "",
       exitCode: 0,
+      ...(failureDisposition ? { failureDisposition } : {}),
     }),
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
@@ -437,7 +452,9 @@ export function registerNativeHookRelay(
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs,
+    preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration);
@@ -656,11 +673,72 @@ export async function invokeNativeHookRelay(
     rawPayload: params.rawPayload,
   });
   recordNativeHookRelayInvocation(normalized);
-  return processNativeHookRelayInvocation({
+  const startedAt = Date.now();
+  const response = await processNativeHookRelayInvocation({
     registration,
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+  if (
+    normalized.toolUseId &&
+    response.failureDisposition &&
+    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
+  ) {
+    projectNativeHookRelayPreToolUseFailure(registration, {
+      toolName: normalizeNativeHookToolName(normalized.toolName),
+      toolCallId: normalized.toolUseId,
+      disposition: response.failureDisposition,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+  return response;
+}
+
+function projectNativeHookRelayPreToolUseFailure(
+  registration: ActiveNativeHookRelayRegistration,
+  failure: Parameters<NonNullable<NativeHookRelayRegistration["onPreToolUseFailure"]>>[0],
+): void {
+  const callback = registration.onPreToolUseFailure;
+  if (!callback) {
+    return;
+  }
+  if (registration.preToolUseFailureProjections.has(failure.toolCallId)) {
+    return;
+  }
+  const record = {
+    promise: Promise.resolve().then(() => callback(failure)),
+    settled: false,
+  };
+  registration.preToolUseFailureProjections.set(failure.toolCallId, record);
+  void record.promise.then(
+    () => {
+      record.settled = true;
+    },
+    (error: unknown) => {
+      record.settled = true;
+      if (registration.preToolUseFailureProjections.get(failure.toolCallId) === record) {
+        registration.preToolUseFailureProjections.delete(failure.toolCallId);
+      }
+      log.debug("native pre-tool failure projection failed", {
+        error,
+        relayId: registration.relayId,
+        toolCallId: failure.toolCallId,
+      });
+    },
+  );
+  if (registration.preToolUseFailureProjections.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
+    let oldestToolCallId: string | undefined;
+    for (const [toolCallId, candidate] of registration.preToolUseFailureProjections) {
+      oldestToolCallId ??= toolCallId;
+      if (candidate.settled) {
+        registration.preToolUseFailureProjections.delete(toolCallId);
+        return;
+      }
+    }
+    if (oldestToolCallId) {
+      registration.preToolUseFailureProjections.delete(oldestToolCallId);
+    }
+  }
 }
 
 export function hasNativeHookRelayInvocation(params: {
@@ -716,7 +794,14 @@ async function resolveNativeHookRelayPreToolUseApproval(
     signal,
   });
   if (outcome.blocked) {
-    return { handled: true, outcome: "denied", reason: outcome.reason };
+    return {
+      handled: true,
+      outcome: "denied",
+      reason: outcome.reason,
+      ...(outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? { failureDisposition: outcome.disposition }
+        : {}),
+    };
   }
   if (
     nativeHookRelayParamsWereRewritten(pendingApproval.originalParamsFingerprint, outcome.params)
@@ -1407,7 +1492,12 @@ async function runNativeHookRelayPreToolUse(params: {
     },
   });
   if (outcome.blocked) {
-    return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
+    return params.adapter.renderPreToolUseBlockResponse(
+      outcome.reason,
+      outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? outcome.disposition
+        : undefined,
+    );
   }
   if (outcome.deferredApproval) {
     if (

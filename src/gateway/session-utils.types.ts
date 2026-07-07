@@ -66,6 +66,9 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  unread?: boolean;
+  lastReadAt?: number;
+  lastActivityAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;

@@ -335,6 +335,25 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("classifies MPEG-2 audio attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:https://example.com/recording.m2a",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/recording.m2a",
+            kind: "audio",
+            label: "recording.m2a",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
     it("keeps valid local MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

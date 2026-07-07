@@ -15,6 +15,7 @@ import type {
   BtwEvent,
   ChatEvent,
   SessionChangedEvent,
+  TuiHistoryLoadResult,
   TuiStateAccess,
 } from "./tui-types.js";
 
@@ -63,7 +64,7 @@ type EventHandlerContext = {
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<void>;
+  loadHistory?: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -102,6 +103,15 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
+  const pendingNewSessionRunIds = new Set<string>();
+  const persistedTerminalRunIds = new Map<string, number>();
+  const historyReloadRunIds = new Set<string>();
+  const historyOwnedReloadRunIds = new Set<string>();
+  const historyDisplayedReloadRunIds = new Set<string>();
+  const queuedHistoryReloadRunIds = new Set<string>();
+  const deferredHistoryRunEvents = new Map<string, ChatEvent>();
+  let historyReloadInFlight = false;
+  let historyReloadGeneration = 0;
   const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
@@ -164,6 +174,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const clearTrackedRunState = () => {
+    historyReloadGeneration += 1;
+    pendingNewSessionRunIds.clear();
+    persistedTerminalRunIds.clear();
+    historyReloadRunIds.clear();
+    historyOwnedReloadRunIds.clear();
+    historyDisplayedReloadRunIds.clear();
+    queuedHistoryReloadRunIds.clear();
+    deferredHistoryRunEvents.clear();
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
     completedRuns.clear();
@@ -613,6 +631,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
+    if (historyReloadRunIds.has(evt.runId)) {
+      const previous = deferredHistoryRunEvents.get(evt.runId);
+      // Keep the latest delta until a terminal event arrives; terminal state
+      // stays authoritative if a delayed delta follows it.
+      if (!previous || previous.state === "delta" || evt.state !== "delta") {
+        deferredHistoryRunEvents.set(evt.runId, evt);
+      }
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
@@ -751,6 +778,93 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const drainHistoryReloadQueue = () => {
+    if (historyReloadInFlight || queuedHistoryReloadRunIds.size === 0 || !loadHistory) {
+      return;
+    }
+    const reloadGeneration = historyReloadGeneration;
+    const runIds = Array.from(queuedHistoryReloadRunIds);
+    queuedHistoryReloadRunIds.clear();
+    historyReloadInFlight = true;
+    const finishReload = (result: TuiHistoryLoadResult) => {
+      if (reloadGeneration !== historyReloadGeneration) {
+        return;
+      }
+      for (const runId of runIds) {
+        historyReloadRunIds.delete(runId);
+        const deferred = deferredHistoryRunEvents.get(runId);
+        deferredHistoryRunEvents.delete(runId);
+        const historyOwned = historyOwnedReloadRunIds.delete(runId);
+        const previouslyDisplayed = historyDisplayedReloadRunIds.delete(runId);
+        const restoredInFlight = result.loaded && result.inFlightRunId === runId;
+        if (historyOwned && !restoredInFlight) {
+          // Rebuilt history owns the final row; after a failed rebuild retain
+          // the pre-reload display fact so late finals neither duplicate nor vanish.
+          finalizeRun({
+            runId,
+            wasActiveRun: state.activeChatRunId === runId,
+            status: "idle",
+            displayedFinal: result.loaded || previouslyDisplayed,
+          });
+        }
+        if (deferred && (!result.loaded || historyOwned || restoredInFlight)) {
+          handleChatEvent(deferred);
+        }
+      }
+    };
+    void loadHistory()
+      .then(finishReload, () => finishReload({ loaded: false }))
+      .finally(() => {
+        historyReloadInFlight = false;
+        drainHistoryReloadQueue();
+      });
+  };
+
+  const queueHistoryReload = (
+    runIds: Iterable<string>,
+    historyOwnedRunIds: Iterable<string>,
+    displayedRunIds: Iterable<string> = [],
+  ) => {
+    const historyOwned = new Set(historyOwnedRunIds);
+    const displayed = new Set(displayedRunIds);
+    if (!loadHistory) {
+      for (const runId of runIds) {
+        if (historyOwned.has(runId)) {
+          noteFinalizedRun(runId, { displayedFinal: true });
+        }
+      }
+      void refreshSessionInfo?.();
+      return;
+    }
+    for (const runId of runIds) {
+      historyReloadRunIds.add(runId);
+      queuedHistoryReloadRunIds.add(runId);
+      if (historyOwned.has(runId)) {
+        historyOwnedReloadRunIds.add(runId);
+      }
+      if (displayed.has(runId)) {
+        historyDisplayedReloadRunIds.add(runId);
+      }
+    }
+    drainHistoryReloadQueue();
+  };
+
+  const collectTrackedSessionRunIds = () => {
+    const runIds = new Set(sessionRuns.keys());
+    if (state.activeChatRunId) {
+      runIds.add(state.activeChatRunId);
+    }
+    if (state.pendingChatRunId) {
+      runIds.add(state.pendingChatRunId);
+    }
+    const finalizedRunIds = new Set(finalizedRuns.keys());
+    const displayedRunIds = new Set(finalizedRunsWithDisplay.keys());
+    for (const runId of finalizedRunIds) {
+      runIds.add(runId);
+    }
+    return { runIds, finalizedRunIds, displayedRunIds };
+  };
+
   const handleSessionsChangedEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -763,28 +877,76 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
+
+    if (evt.runId && (evt.phase === "end" || evt.phase === "error")) {
+      persistedTerminalRunIds.set(evt.runId, Date.now());
+      pruneRunMap(persistedTerminalRunIds);
+      if (pendingNewSessionRunIds.delete(evt.runId)) {
+        if (evt.phase === "end") {
+          const displayedRunIds = finalizedRunsWithDisplay.has(evt.runId) ? [evt.runId] : [];
+          queueHistoryReload([evt.runId], [evt.runId], displayedRunIds);
+        } else {
+          void refreshSessionInfo?.();
+        }
+      }
+      return;
+    }
     if (evt.reason !== "new" && evt.reason !== "reset") {
       return;
     }
 
+    const nextSessionId = typeof evt.sessionId === "string" ? evt.sessionId : null;
+    const replacesKnownSession =
+      state.currentSessionId !== null &&
+      nextSessionId !== null &&
+      state.currentSessionId !== nextSessionId;
+    if (evt.reason === "new" && !replacesKnownSession) {
+      const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+      if (runIds.size > 0) {
+        if (nextSessionId) {
+          state.currentSessionId = nextSessionId;
+        }
+        if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
+          state.sessionInfo.updatedAt = evt.updatedAt;
+        }
+        const persistedRunIds: string[] = [];
+        for (const runId of runIds) {
+          if (persistedTerminalRunIds.has(runId)) {
+            persistedRunIds.push(runId);
+          } else {
+            pendingNewSessionRunIds.add(runId);
+          }
+        }
+        queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
+        tui.requestRender();
+        return;
+      }
+    }
+
+    const {
+      runIds: reloadingRunIds,
+      finalizedRunIds,
+      displayedRunIds,
+    } = collectTrackedSessionRunIds();
     clearTrackedRunState();
     state.activeChatRunId = null;
     state.activityStatus = "idle";
     setActivityStatus("idle");
-    if (typeof evt.sessionId === "string") {
-      state.currentSessionId = evt.sessionId;
+    if (nextSessionId) {
+      state.currentSessionId = nextSessionId;
     }
     if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
-    if (loadHistory) {
+    if (reloadingRunIds.size > 0) {
+      queueHistoryReload(reloadingRunIds, finalizedRunIds, displayedRunIds);
+    } else if (loadHistory) {
       void loadHistory();
     } else {
       void refreshSessionInfo?.();
     }
     tui.requestRender();
   };
-
   const handleAgentEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -974,6 +1136,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const dispose = () => {
+    historyReloadGeneration += 1;
+    pendingNewSessionRunIds.clear();
+    persistedTerminalRunIds.clear();
+    historyReloadRunIds.clear();
+    historyOwnedReloadRunIds.clear();
+    historyDisplayedReloadRunIds.clear();
+    queuedHistoryReloadRunIds.clear();
+    deferredHistoryRunEvents.clear();
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
   };

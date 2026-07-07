@@ -166,6 +166,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
       supportsVideoFrames: true,
       supportsSessionResumption: true,
@@ -356,10 +357,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const config = lastConnectParams().config as {
       tools?: Array<{ functionDeclarations?: Array<{ name?: string }> }>;
     };
-    expect(config.tools?.[0]?.functionDeclarations?.map((declaration) => declaration.name)).toEqual([
-      "_lookup",
-      "calendar.lookup:next",
-    ]);
+    expect(config.tools?.[0]?.functionDeclarations?.map((declaration) => declaration.name)).toEqual(
+      ["_lookup", "calendar.lookup:next"],
+    );
   });
 
   it("omits zero temperature for native audio responses", async () => {
@@ -876,6 +876,24 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("reports provider-confirmed input interruption as barge-in", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: { interrupted: true },
+    });
+
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
   });
 
   it("forwards Live API tool calls and submits matching function responses", async () => {

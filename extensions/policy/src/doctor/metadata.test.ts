@@ -5,7 +5,12 @@ import {
   POLICY_FIX_METADATA_BY_CHECK_ID,
   type PolicyFixMetadata,
 } from "./fix-metadata.js";
-import { POLICY_CHECK_IDS, POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
+import {
+  CHECK_IDS,
+  POLICY_CHECK_IDS,
+  POLICY_RULE_METADATA,
+  type PolicyRuleMetadata,
+} from "./metadata.js";
 
 describe("policy doctor metadata", () => {
   it("describes strictness for agent-scoped policy fields", () => {
@@ -171,6 +176,12 @@ describe("policy doctor metadata", () => {
     expect([...POLICY_FIX_METADATA_BY_CHECK_ID.keys()].toSorted()).toEqual(
       [...POLICY_CHECK_IDS].toSorted(),
     );
+  });
+
+  it("points required-deny repair metadata at OpenClaw deny config paths", () => {
+    expect(
+      POLICY_FIX_METADATA_BY_CHECK_ID.get(CHECK_IDS.policyToolsRequiredDenyMissing)?.configTargets,
+    ).toEqual(["tools.deny", "agents.list[].tools.deny"]);
   });
 
   it("keeps policy fix class assignments explicit", () => {

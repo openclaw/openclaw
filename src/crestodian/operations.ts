@@ -17,6 +17,12 @@ import type { CrestodianOverview } from "./overview.js";
 /**
  * Crestodian command parser and operation executor.
  *
+ * The grammar is a single anchored command language: every pattern must match
+ * the whole input. Natural language never parses into an operation — it flows
+ * to the AI custodian instead (chat) or to the planner (one-shot). This is a
+ * security property, not a convenience: unanchored keyword matching used to
+ * turn questions like "why did my gateway stop" into mutation proposals.
+ *
  * Persistent operations require explicit approval, write audit records, and
  * lazy-load heavy CLI modules only when the selected operation needs them.
  */
@@ -27,9 +33,6 @@ type CrestodianOverviewFormatter = (overview: CrestodianOverview) => string;
 
 const loadConfigModule = async () => await import("../config/config.js");
 const loadOverviewModule = async () => await import("./overview.js");
-const loadModelsSharedModule = async () => await import("../commands/models/shared.js");
-const loadConfigCliModule = async () => await import("../cli/config-cli.js");
-const loadDoctorModule = async () => await import("../commands/doctor.js");
 
 /** Parsed Crestodian operation before approval/execution. */
 export type CrestodianOperation =
@@ -116,32 +119,56 @@ export type CrestodianCommandDeps = {
   applySetup?: typeof import("./setup-apply.js").applyCrestodianSetup;
 };
 
-const SET_MODEL_RE = /(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?model\s+(.+)/i;
-const CONFIGURE_MODELS_RE = /(?:set|configure|use)\s+models?\s+(?<model>\S+)/i;
-const CREATE_AGENT_RE =
-  /(?:create|add|setup|set\s+up)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)/i;
-const TALK_AGENT_RE =
-  /(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent/i;
-const WORKSPACE_RE = /(?:workspace|workdir|cwd|for|in)\s+(?<workspace>"[^"]+"|'[^']+'|\S+)/i;
-const MODEL_RE = /\bmodel\s+(?<model>\S+)/i;
-const CONFIG_SET_RE =
-  /^(?:config\s+set|set\s+config)\s+(?<path>[A-Za-z0-9_.[\]-]+)\s+(?<value>.+)$/i;
-const CONFIG_GET_RE = /^config\s+get\s+(?<path>[A-Za-z0-9_.[\]-]+)$/i;
-const CONFIG_SCHEMA_RE = /^config\s+schema(?:\s+(?<path>[A-Za-z0-9_.[\]-]+))?$/i;
-const CONFIG_SET_REF_RE =
-  /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>[A-Za-z0-9_.[\]-]+)\s+(?:(?<source>env|file|exec)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$/i;
-const SETUP_RE =
-  /^(?:setup(?!\s+agent\b)|set\s+me\s+up|set\s+up\s+openclaw|onboard|onboard\s+me|bootstrap|first\s+run)(?:\b|$)/i;
-const PLUGIN_LIST_RE = /^(?:plugins?|clawhub)\s+list$|^list\s+plugins?$/i;
+// Grammar tokens. Workspace/path tokens accept quoted strings so paths with
+// spaces survive; model refs and ids stay single tokens.
+const TOKEN = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
+const CONFIG_PATH = String.raw`[A-Za-z0-9_.[\]-]+`;
+
+// Every command pattern is anchored to the whole input. Optional clauses use a
+// fixed order (workspace before model) so filler words never become values.
+const CONFIG_SET_RE = new RegExp(
+  String.raw`^(?:config\s+set|set\s+config)\s+(?<path>${CONFIG_PATH})\s+(?<value>.+)$`,
+  "i",
+);
+const CONFIG_GET_RE = new RegExp(String.raw`^config\s+get\s+(?<path>${CONFIG_PATH})$`, "i");
+const CONFIG_SCHEMA_RE = new RegExp(
+  String.raw`^config\s+schema(?:\s+(?<path>${CONFIG_PATH}))?$`,
+  "i",
+);
+const CONFIG_SET_REF_RE = new RegExp(
+  String.raw`^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>${CONFIG_PATH})\s+(?:(?<source>env|file|exec)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
+  "i",
+);
+const SETUP_RE = new RegExp(
+  String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+const CREATE_AGENT_RE = new RegExp(
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+// "talk to agent for ~/Projects/work" is a documented selector; "for|in" are
+// only valid here, after the literal word "agent", never as generic fillers.
+const TALK_AGENT_RE = new RegExp(
+  String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${TOKEN}))?$`,
+  "i",
+);
+const SET_MODEL_RE = /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)$/i;
+const GATEWAY_RE =
+  /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
+const PLUGIN_LIST_RE = /^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i;
 const PLUGIN_SEARCH_RE =
   /^(?:(?:plugins?|clawhub)\s+search|search\s+plugins?(?:\s+for)?)\s+(?<query>.+)$/i;
 const PLUGIN_INSTALL_RE =
-  /^(?:(?:plugins?)\s+install|install\s+(?:(?<source>npm|clawhub)\s+)?plugins?)\s+(?<spec>\S+)$/i;
+  /^(?:plugins?\s+install|install\s+(?:(?<source>npm|clawhub)\s+)?plugins?)\s+(?<spec>\S+)$/i;
 const PLUGIN_UNINSTALL_RE =
-  /^(?:(?:plugins?)\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
+  /^(?:plugins?\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
 const CHANNEL_LIST_RE = /^(?:channels|list\s+channels|show\s+channels)$/i;
 const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
+
+const NO_MATCH_MESSAGE =
+  "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.";
 
 /** Audit/source labels for detected inference backends (docs-visible contract). */
 const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
@@ -154,17 +181,11 @@ const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
 };
 
 /**
- * Parse one user command into Crestodian's closed operation union.
- *
- * strict mode (AI-first chat) only matches exact command grammar so natural
- * language flows to the assistant; loose mode (one-shot CLI, rescue) keeps the
- * forgiving keyword heuristics.
+ * Parse one user command into Crestodian's closed operation union. Anything
+ * that does not match the anchored grammar exactly returns kind "none" so the
+ * caller can route it to the AI custodian (or show guidance).
  */
-export function parseCrestodianOperation(
-  input: string,
-  opts: { strict?: boolean } = {},
-): CrestodianOperation {
-  const strict = opts.strict === true;
+export function parseCrestodianOperation(input: string): CrestodianOperation {
   const trimmed = input.trim();
   const lower = trimmed.toLowerCase();
   if (!trimmed) {
@@ -176,8 +197,38 @@ export function parseCrestodianOperation(
   if (["help", "?", "overview", "system"].includes(lower)) {
     return { kind: "overview" };
   }
-  if (lower === "audit" || (!strict && lower.includes("audit log"))) {
-    return { kind: "audit" };
+  switch (lower) {
+    case "audit":
+    case "audit log":
+    case "show audit":
+      return { kind: "audit" };
+    case "status":
+      return { kind: "status" };
+    case "health":
+      return { kind: "health" };
+    case "doctor":
+      return { kind: "doctor" };
+    case "doctor fix":
+    case "doctor repair":
+      return { kind: "doctor-fix" };
+    case "config validate":
+    case "validate config":
+      return { kind: "config-validate" };
+    case "agents":
+    case "list agents":
+      return { kind: "agents" };
+    case "models":
+    case "list models":
+      return { kind: "models" };
+    case "tui":
+    case "open tui":
+    case "chat":
+      return { kind: "open-tui" };
+    case "quit":
+    case "exit":
+      return { kind: "none", message: "Crestodian retracts into shell. Bye." };
+    default:
+      break;
   }
   const configSetRefMatch = trimmed.match(CONFIG_SET_REF_RE);
   if (configSetRefMatch?.groups?.path && configSetRefMatch.groups.id?.trim()) {
@@ -208,13 +259,6 @@ export function parseCrestodianOperation(
     const path = configSchemaMatch.groups?.path?.trim();
     return { kind: "config-schema", ...(path ? { path } : {}) };
   }
-  if (
-    lower === "config validate" ||
-    lower === "validate config" ||
-    lower.includes("validate config")
-  ) {
-    return { kind: "config-validate" };
-  }
   if (PLUGIN_LIST_RE.test(trimmed)) {
     return { kind: "plugin-list" };
   }
@@ -243,97 +287,55 @@ export function parseCrestodianOperation(
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
   }
-  if (SETUP_RE.test(lower)) {
-    const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
-    const model = trimmed.match(MODEL_RE)?.groups?.model;
+  const setupMatch = trimmed.match(SETUP_RE);
+  if (setupMatch) {
+    const workspace = trimShellishToken(setupMatch.groups?.workspace);
+    const model = setupMatch.groups?.model;
     return {
       kind: "setup",
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
     };
   }
-  if (strict ? lower === "doctor" || lower === "doctor fix" : lower.includes("doctor")) {
-    if (lower.includes("fix") || lower.includes("repair")) {
-      return { kind: "doctor-fix" };
-    }
-    return { kind: "doctor" };
-  }
-  if (strict ? lower === "health" : lower.includes("health")) {
-    return { kind: "health" };
-  }
-  if (
-    strict
-      ? /^(?:gateway\s+(?:status|start|stop|restart)|(?:start|stop|restart)\s+(?:the\s+)?gateway)$/.test(
-          lower,
-        )
-      : lower.includes("gateway")
-  ) {
-    if (lower.includes("restart")) {
-      return { kind: "gateway-restart" };
-    }
-    if (lower.includes("start")) {
+  const gatewayMatch = trimmed.match(GATEWAY_RE);
+  if (gatewayMatch) {
+    const action = (gatewayMatch.groups?.sub ?? gatewayMatch.groups?.verb ?? "").toLowerCase();
+    if (action === "start") {
       return { kind: "gateway-start" };
     }
-    if (lower.includes("stop")) {
+    if (action === "stop") {
       return { kind: "gateway-stop" };
+    }
+    if (action === "restart") {
+      return { kind: "gateway-restart" };
     }
     return { kind: "gateway-status" };
   }
-  if (strict ? lower === "status" : lower.includes("status")) {
-    return { kind: "status" };
+  const createMatch = trimmed.match(CREATE_AGENT_RE);
+  if (createMatch?.groups?.agent) {
+    const workspace = trimShellishToken(createMatch.groups.workspace);
+    const model = createMatch.groups.model;
+    return {
+      kind: "create-agent",
+      agentId: normalizeAgentId(createMatch.groups.agent),
+      ...(workspace ? { workspace } : {}),
+      ...(model ? { model } : {}),
+    };
   }
-  if (
-    strict
-      ? lower === "agents" || CREATE_AGENT_RE.test(trimmed) || TALK_AGENT_RE.test(trimmed)
-      : lower.includes("agent")
-  ) {
-    // Creation is checked before "talk to agent" because setup phrasing can contain both words.
-    const createMatch = trimmed.match(CREATE_AGENT_RE);
-    if (createMatch?.groups?.agent) {
-      const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
-      const model = trimmed.match(MODEL_RE)?.groups?.model;
-      return {
-        kind: "create-agent",
-        agentId: normalizeAgentId(createMatch.groups.agent),
-        ...(workspace ? { workspace } : {}),
-        ...(model ? { model } : {}),
-      };
-    }
-    const talkMatch = trimmed.match(TALK_AGENT_RE);
-    if (talkMatch) {
-      const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
-      return {
-        kind: "open-tui",
-        agentId: talkMatch.groups?.agent,
-        ...(workspace ? { workspace } : {}),
-      };
-    }
-    return { kind: "agents" };
+  const talkMatch = trimmed.match(TALK_AGENT_RE);
+  if (talkMatch) {
+    const workspace = trimShellishToken(talkMatch.groups?.workspace);
+    return {
+      kind: "open-tui",
+      ...(talkMatch.groups?.agent ? { agentId: talkMatch.groups.agent } : {}),
+      ...(workspace ? { workspace } : {}),
+    };
   }
-  if (strict ? lower === "models" || SET_MODEL_RE.test(trimmed) : lower.includes("model")) {
-    const match = trimmed.match(SET_MODEL_RE);
-    const pluralMatch = trimmed.match(CONFIGURE_MODELS_RE);
-    const model = match?.[1]?.trim() ?? pluralMatch?.groups?.model?.trim();
-    if (model) {
-      return { kind: "set-default-model", model };
-    }
-    return { kind: "models" };
+  const setModelMatch = trimmed.match(SET_MODEL_RE);
+  if (setModelMatch?.groups?.model) {
+    return { kind: "set-default-model", model: setModelMatch.groups.model };
   }
-  if (
-    strict
-      ? lower === "tui" || lower === "open tui"
-      : lower === "tui" || lower.includes("open tui") || lower.includes("chat")
-  ) {
-    return { kind: "open-tui" };
-  }
-  if (lower === "quit" || lower === "exit") {
-    return { kind: "none", message: "Crestodian retracts into shell. Bye." };
-  }
-  return {
-    kind: "none",
-    message:
-      "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
-  };
+  return { kind: "none", message: NO_MATCH_MESSAGE };
 }
 
 function trimShellishToken(value: string | undefined): string | undefined {
@@ -377,14 +379,17 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
   return null;
 }
 
-/** Return whether an operation can change local state or process lifecycle. */
+/**
+ * Return whether an operation can change local state or process lifecycle.
+ * channel-setup is intentionally absent: starting the guided wizard is not a
+ * write — the wizard itself collects explicit answers and commits at the end.
+ */
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
     operation.kind === "set-default-model" ||
     operation.kind === "config-set" ||
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
-    operation.kind === "channel-setup" ||
     operation.kind === "doctor-fix" ||
     operation.kind === "plugin-install" ||
     operation.kind === "plugin-uninstall" ||
@@ -406,8 +411,6 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
       return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
-    case "channel-setup":
-      return `walk through connecting the ${operation.channel} channel`;
     case "doctor-fix":
       return "run doctor repairs";
     case "plugin-install":
@@ -520,11 +523,6 @@ async function chooseSetupModel(params: {
   return { model: detected.modelRef, source: INFERENCE_SOURCE_LABELS[detected.kind] };
 }
 
-function logQueued(runtime: RuntimeEnv, operation: string): void {
-  runtime.log(`[crestodian] queued: ${operation}`);
-  runtime.log(`[crestodian] running: ${operation}`);
-}
-
 function formatGatewayStatusLine(overview: CrestodianOverview): string {
   return [
     `Gateway: ${overview.gateway.reachable ? "reachable" : "not reachable"}`,
@@ -562,25 +560,6 @@ async function loadOverviewForOperation(
   }
   const { loadCrestodianOverview } = await loadOverviewModule();
   return await loadCrestodianOverview();
-}
-
-async function formatOverviewForOperation(
-  overview: CrestodianOverview,
-  deps: CrestodianCommandDeps | undefined,
-): Promise<string> {
-  if (deps?.formatOverview) {
-    return deps.formatOverview(overview);
-  }
-  const { formatCrestodianOverview } = await loadOverviewModule();
-  return formatCrestodianOverview(overview);
-}
-
-async function loadConfigFileMutationHelpers(): Promise<{
-  mutateConfigFile: ConfigModule["mutateConfigFile"];
-  readConfigFileSnapshot: ConfigModule["readConfigFileSnapshot"];
-}> {
-  const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
-  return { mutateConfigFile, readConfigFileSnapshot };
 }
 
 function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string {
@@ -638,621 +617,608 @@ async function resolveTuiAgentId(params: {
   return match?.id ?? requested;
 }
 
-/** Execute a parsed Crestodian operation after applying approval gates and audit logging. */
-export async function executeCrestodianOperation(
-  operation: CrestodianOperation,
-  runtime: RuntimeEnv,
-  opts: {
-    approved?: boolean;
-    deps?: CrestodianCommandDeps;
-    auditDetails?: Record<string, unknown>;
-  } = {},
-): Promise<CrestodianOperationResult> {
-  if (operation.kind === "none") {
-    runtime.log(operation.message);
-    return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
+type ExecuteOptions = {
+  approved?: boolean;
+  deps?: CrestodianCommandDeps;
+  auditDetails?: Record<string, unknown>;
+};
+
+/**
+ * One persistent operation = one audited apply. The shared wrapper owns the
+ * approval gate, before/after config hashes, the audit record, and the
+ * `[crestodian] running/done` markers the e2e lanes assert on; each spec only
+ * describes what to run and what to record.
+ */
+type PersistentApplyContext = {
+  runtime: RuntimeEnv;
+  deps?: CrestodianCommandDeps;
+};
+
+type PersistentApplyOutcome = {
+  summary: string;
+  details?: Record<string, unknown>;
+  /** Overrides the after-snapshot config path in the audit record. */
+  configPath?: string;
+};
+
+async function applyPersistentOperation(params: {
+  auditOperation: string;
+  operation: CrestodianOperation;
+  runtime: RuntimeEnv;
+  opts: ExecuteOptions;
+  run: (ctx: PersistentApplyContext) => Promise<PersistentApplyOutcome>;
+}): Promise<CrestodianOperationResult> {
+  const { auditOperation, runtime, opts } = params;
+  if (!opts.approved) {
+    const message = formatCrestodianPersistentPlan(params.operation);
+    runtime.log(message);
+    return { applied: false, message };
   }
-  if (operation.kind === "overview") {
-    const overview = await loadOverviewForOperation(opts.deps);
-    runtime.log(await formatOverviewForOperation(overview, opts.deps));
-    return { applied: false };
-  }
-  if (operation.kind === "agents") {
-    const overview = await loadOverviewForOperation(opts.deps);
-    runtime.log(
-      [
-        "Agents:",
-        ...overview.agents.map((agent) => {
-          const bits = [
-            agent.id,
-            agent.isDefault ? "default" : undefined,
-            agent.name ? `name=${agent.name}` : undefined,
-            agent.workspace
-              ? `workspace=${shortenHomePath(resolveUserPath(agent.workspace))}`
-              : undefined,
-          ].filter(Boolean);
-          return `  - ${bits.join(" | ")}`;
-        }),
-      ].join("\n"),
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "models") {
-    const overview = await loadOverviewForOperation(opts.deps);
-    runtime.log(
-      [
-        `Default model: ${overview.defaultModel ?? "not configured"}`,
-        `Codex: ${overview.tools.codex.found ? "found" : "not found"}`,
-        `Claude Code: ${overview.tools.claude.found ? "found" : "not found"}`,
-        `OpenAI key: ${overview.tools.apiKeys.openai ? "found" : "not found"}`,
-        `Anthropic key: ${overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
-      ].join("\n"),
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "plugin-list") {
-    logQueued(runtime, "plugins.list");
-    const runPluginsList =
-      opts.deps?.runPluginsList ??
-      (async (pluginRuntime: RuntimeEnv) => {
-        const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
-        await runPluginsListCommand({}, pluginRuntime);
+  runtime.log(`[crestodian] running: ${auditOperation}`);
+  const { readConfigFileSnapshot } = await loadConfigModule();
+  const before = await readConfigFileSnapshot();
+  const outcome = await params.run({ runtime, deps: opts.deps });
+  const after = await readConfigFileSnapshot();
+  await appendCrestodianAuditEntry({
+    operation: auditOperation,
+    summary: outcome.summary,
+    configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
+    configHashBefore: before.hash ?? null,
+    configHashAfter: after.hash ?? null,
+    details: { ...opts.auditDetails, ...outcome.details },
+  });
+  runtime.log(`[crestodian] done: ${auditOperation}`);
+  return { applied: true };
+}
+
+async function runConfigSetOperation(params: {
+  operation: Extract<CrestodianOperation, { kind: "config-set" | "config-set-ref" }>;
+  ctx: PersistentApplyContext;
+}): Promise<void> {
+  const { operation, ctx } = params;
+  const runConfigSet =
+    ctx.deps?.runConfigSet ??
+    (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
+      const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
+      await importedRunConfigSet({
+        ...setOpts,
+        runtime: createNoExitRuntime(ctx.runtime),
       });
-    await runPluginsList(runtime);
-    runtime.log("[crestodian] done: plugins.list");
-    return { applied: false };
-  }
-  if (operation.kind === "plugin-search") {
-    logQueued(runtime, "plugins.search");
-    const runPluginsSearch =
-      opts.deps?.runPluginsSearch ??
-      (async (query: string, pluginRuntime: RuntimeEnv) => {
-        const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
-        await runPluginsSearchCommand(query, {}, pluginRuntime);
-      });
-    await runPluginsSearch(operation.query, runtime);
-    runtime.log("[crestodian] done: plugins.search");
-    return { applied: false };
-  }
-  if (operation.kind === "audit") {
-    runtime.log(`Audit log: ${resolveCrestodianAuditPath()}`);
-    runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
-    return { applied: false };
-  }
-  if (operation.kind === "config-validate") {
-    const snapshot = await readConfigFileSnapshotLazy();
-    runtime.log(formatConfigValidationLine(snapshot));
-    return { applied: false };
-  }
-  if (operation.kind === "config-get") {
-    const snapshot = await readConfigFileSnapshotLazy();
-    if (!snapshot.exists) {
-      runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
-      return { applied: false };
-    }
-    const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : snapshot.sourceConfig;
-    const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
-    if (!lookup.found) {
-      runtime.log(
-        `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
-      );
-      return { applied: false };
-    }
-    const redacted = redactConfigValue(lookup.value, operation.path);
-    const rendered = JSON.stringify(redacted, null, 2) ?? "null";
-    runtime.log(
-      rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
-        ? `${operation.path} = ${rendered.slice(0, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
-        : `${operation.path} = ${rendered}`,
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "config-schema") {
-    const { buildConfigSchema, lookupConfigSchema } = await import("../config/schema.js");
-    const response = buildConfigSchema();
-    const path = operation.path ?? ".";
-    const result = lookupConfigSchema(response, path);
-    if (!result) {
-      runtime.log(`No config schema at "${path}". Try \`config schema .\` for the root keys.`);
-      return { applied: false };
-    }
-    const schema = result.schema as {
-      type?: string | string[];
-      description?: string;
-      enum?: unknown[];
-      default?: unknown;
-    };
-    const childLines = result.children.slice(0, CONFIG_SCHEMA_CHILDREN_MAX).map((child) => {
-      const type = Array.isArray(child.type) ? child.type.join("|") : (child.type ?? "object");
-      const bits = [
-        type,
-        child.required ? "required" : undefined,
-        child.hasChildren ? "…" : undefined,
-      ]
-        .filter(Boolean)
-        .join(", ");
-      return `  - ${child.path} (${bits})`;
     });
-    runtime.log(
-      [
-        `Schema for ${result.path === "" ? "." : result.path}:`,
-        schema.type
-          ? `type: ${Array.isArray(schema.type) ? schema.type.join("|") : schema.type}`
-          : undefined,
-        schema.description ? `description: ${schema.description}` : undefined,
-        schema.enum
-          ? `allowed values: ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`
-          : undefined,
-        schema.default !== undefined ? `default: ${JSON.stringify(schema.default)}` : undefined,
-        ...(childLines.length > 0 ? ["keys:", ...childLines] : []),
-        result.children.length > CONFIG_SCHEMA_CHILDREN_MAX
-          ? `… +${result.children.length - CONFIG_SCHEMA_CHILDREN_MAX} more keys`
-          : undefined,
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n"),
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "channel-list") {
-    // Use the same discovery as channel setup (bundled plugins + trusted
-    // catalog), so the listing matches what `connect <channel>` can configure
-    // even before any plugin registry is active.
-    const [{ listChannelSetupPlugins }, { resolveChannelSetupEntries, shouldShowChannelInSetup }] =
-      await Promise.all([
-        import("../channels/plugins/setup-registry.js"),
-        import("../commands/channel-setup/discovery.js"),
-      ]);
-    const snapshot = await readConfigFileSnapshotLazy();
-    const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-    const resolved = resolveChannelSetupEntries({
-      cfg,
-      installedPlugins: listChannelSetupPlugins(),
-    });
-    const entries = resolved.entries
-      .filter((entry) => shouldShowChannelInSetup(entry.meta))
-      .toSorted((a, b) => a.id.localeCompare(b.id));
-    runtime.log(
-      [
-        "Channels:",
-        ...entries.map(
-          (entry) => `  - ${entry.id}${entry.meta.label ? ` (${entry.meta.label})` : ""}`,
-        ),
-        "",
-        "Say `connect <channel>` to walk through setup (for example `connect telegram`).",
-      ].join("\n"),
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "channel-setup") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    // Channel setup is a multi-step wizard; only interactive Crestodian (TUI
-    // chat bridge) can host it. One-shot mode points at the guided paths.
-    runtime.log(
-      [
-        `Connecting ${operation.channel} needs an interactive session.`,
-        "Run `openclaw crestodian` and say `connect " + operation.channel + "`,",
-        "or run `openclaw channels add` for the terminal wizard.",
-      ].join("\n"),
-    );
-    return { applied: false };
-  }
-  if (operation.kind === "setup") {
-    const overview = await loadOverviewForOperation(opts.deps);
-    const setupModel = await chooseSetupModel({
-      overview,
-      requestedModel: operation.model,
-      deps: opts.deps,
-    });
-    if (!opts.approved) {
-      const message = [
-        formatCrestodianPersistentPlan(operation),
-        setupModel.model
-          ? `Model choice: ${setupModel.model} (${setupModel.source}).`
-          : setupModel.source === "existing default model"
-            ? `Model choice: keep existing default ${overview.defaultModel}.`
-            : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
-      ].join("\n");
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "crestodian.setup");
-    const { readConfigFileSnapshot } = await loadConfigModule();
-    const before = await readConfigFileSnapshot();
-    const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-    const applySetup =
-      opts.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
-    const applied = await applySetup({
-      workspace,
-      ...(setupModel.model ? { model: setupModel.model } : {}),
-      surface: opts.deps?.setupSurface ?? "cli",
-      runtime,
-    });
-    const after = await readConfigFileSnapshot();
-    await appendCrestodianAuditEntry({
-      operation: "crestodian.setup",
-      summary: setupModel.model
-        ? `Bootstrapped setup with ${setupModel.model}`
-        : "Bootstrapped setup workspace",
-      configPath: after.path || applied.configPath || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        workspace,
-        modelSource: setupModel.source,
-        ...(setupModel.model ? { model: setupModel.model } : {}),
-      },
-    });
-    runtime.log(`Updated ${after.path || applied.configPath}`);
-    for (const line of applied.lines) {
-      runtime.log(line);
-    }
-    if (!setupModel.model && overview.defaultModel) {
-      runtime.log(`Default model: ${overview.defaultModel} (kept)`);
-    } else if (!setupModel.model) {
-      runtime.log("Default model: not configured yet");
-    }
-    runtime.log("[crestodian] done: crestodian.setup");
-    return { applied: true };
-  }
   if (operation.kind === "config-set") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "config.set");
-    const { readConfigFileSnapshot } = await loadConfigModule();
-    const before = await readConfigFileSnapshot();
-    const runConfigSet =
-      opts.deps?.runConfigSet ??
-      (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
-        await importedRunConfigSet({
-          ...setOpts,
-          runtime: createNoExitRuntime(runtime),
-        });
-      });
-    await runConfigSet({
-      path: operation.path,
-      value: operation.value,
-      cliOptions: {},
-    });
-    const after = await readConfigFileSnapshot();
-    await appendCrestodianAuditEntry({
-      operation: "config.set",
-      summary: `Set config ${operation.path}`,
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        path: operation.path,
-      },
-    });
-    runtime.log("[crestodian] done: config.set");
-    return { applied: true };
+    await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
+    return;
   }
-  if (operation.kind === "config-set-ref") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "config.setRef");
-    const { readConfigFileSnapshot } = await loadConfigModule();
-    const before = await readConfigFileSnapshot();
-    const runConfigSet =
-      opts.deps?.runConfigSet ??
-      (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
-        await importedRunConfigSet({
-          ...setOpts,
-          runtime: createNoExitRuntime(runtime),
-        });
-      });
-    await runConfigSet({
-      path: operation.path,
-      cliOptions: {
-        refProvider: operation.provider ?? "default",
-        refSource: operation.source,
-        refId: operation.id,
-      },
-    });
-    const after = await readConfigFileSnapshot();
-    await appendCrestodianAuditEntry({
-      operation: "config.setRef",
-      summary: `Set config ${operation.path} SecretRef`,
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        path: operation.path,
-        source: operation.source,
-        provider: operation.provider ?? "default",
-      },
-    });
-    runtime.log("[crestodian] done: config.setRef");
-    return { applied: true };
+  await runConfigSet({
+    path: operation.path,
+    cliOptions: {
+      refProvider: operation.provider ?? "default",
+      refSource: operation.source,
+      refId: operation.id,
+    },
+  });
+}
+
+async function executeSetup(
+  operation: Extract<CrestodianOperation, { kind: "setup" }>,
+  runtime: RuntimeEnv,
+  opts: ExecuteOptions,
+): Promise<CrestodianOperationResult> {
+  const overview = await loadOverviewForOperation(opts.deps);
+  const setupModel = await chooseSetupModel({
+    overview,
+    requestedModel: operation.model,
+    deps: opts.deps,
+  });
+  if (!opts.approved) {
+    const message = [
+      formatCrestodianPersistentPlan(operation),
+      setupModel.model
+        ? `Model choice: ${setupModel.model} (${setupModel.source}).`
+        : setupModel.source === "existing default model"
+          ? `Model choice: keep existing default ${overview.defaultModel}.`
+          : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
+    ].join("\n");
+    runtime.log(message);
+    return { applied: false, message };
   }
-  if (operation.kind === "plugin-install") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
+  const workspace = resolveUserPath(operation.workspace ?? process.cwd());
+  return await applyPersistentOperation({
+    auditOperation: "crestodian.setup",
+    operation,
+    runtime,
+    opts,
+    run: async (ctx) => {
+      const applySetup =
+        ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
+      const applied = await applySetup({
+        workspace,
+        ...(setupModel.model ? { model: setupModel.model } : {}),
+        surface: ctx.deps?.setupSurface ?? "cli",
+        runtime: ctx.runtime,
+      });
+      const after = await readConfigFileSnapshotLazy();
+      ctx.runtime.log(`Updated ${after.path || applied.configPath}`);
+      for (const line of applied.lines) {
+        ctx.runtime.log(line);
+      }
+      if (!setupModel.model && overview.defaultModel) {
+        ctx.runtime.log(`Default model: ${overview.defaultModel} (kept)`);
+      } else if (!setupModel.model) {
+        ctx.runtime.log("Default model: not configured yet");
+      }
+      return {
+        summary: setupModel.model
+          ? `Bootstrapped setup with ${setupModel.model}`
+          : "Bootstrapped setup workspace",
+        configPath: after.path || applied.configPath,
+        details: {
+          workspace,
+          modelSource: setupModel.source,
+          ...(setupModel.model ? { model: setupModel.model } : {}),
+        },
+      };
+    },
+  });
+}
+
+async function executeSetDefaultModel(
+  operation: Extract<CrestodianOperation, { kind: "set-default-model" }>,
+  runtime: RuntimeEnv,
+  opts: ExecuteOptions,
+): Promise<CrestodianOperationResult> {
+  return await applyPersistentOperation({
+    auditOperation: "config.setDefaultModel",
+    operation,
+    runtime,
+    opts,
+    run: async (ctx) => {
+      const { mutateConfigFile } = await loadConfigModule();
+      const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
+      const result = await mutateConfigFile({
+        base: "source",
+        mutate: (cfg) => {
+          const next = applyDefaultModelPrimaryUpdate({
+            cfg,
+            modelRaw: operation.model,
+            field: "model",
+          });
+          Object.assign(cfg, next);
+        },
+      });
+      const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
+      const effectiveModel = resolveAgentModelPrimaryValue(
+        result.nextConfig.agents?.defaults?.model,
+      );
+      ctx.runtime.log(`Updated ${result.path}`);
+      ctx.runtime.log(`Default model: ${effectiveModel ?? operation.model}`);
+      return {
+        summary: `Set default model to ${operation.model}`,
+        configPath: result.path,
+        details: { requestedModel: operation.model, effectiveModel },
+      };
+    },
+  });
+}
+
+async function executePluginInstall(
+  operation: Extract<CrestodianOperation, { kind: "plugin-install" }>,
+  runtime: RuntimeEnv,
+  opts: ExecuteOptions,
+): Promise<CrestodianOperationResult> {
+  if (opts.approved) {
     const validationError = validateCrestodianPluginInstallSpec(operation.spec);
     if (validationError) {
       runtime.error(validationError);
       runtime.exit(1);
       return { applied: false };
     }
-    logQueued(runtime, "plugin.install");
-    const before = await readConfigFileSnapshotLazy();
-    const runPluginInstall =
-      opts.deps?.runPluginInstall ??
-      (async (spec: string, pluginRuntime: RuntimeEnv) => {
-        const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-        await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
-      });
-    await runPluginInstall(operation.spec, createNoExitRuntime(runtime));
-    const after = await readConfigFileSnapshotLazy();
-    await appendCrestodianAuditEntry({
-      operation: "plugin.install",
-      summary: `Installed plugin ${operation.spec}`,
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        spec: operation.spec,
-      },
-    });
-    runtime.log("[crestodian] done: plugin.install");
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-    return { applied: true };
   }
-  if (operation.kind === "plugin-uninstall") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "plugin.uninstall");
-    const before = await readConfigFileSnapshotLazy();
-    const runPluginUninstall =
-      opts.deps?.runPluginUninstall ??
-      (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
-        const { runPluginUninstallCommand } = await import("../cli/plugins-uninstall-command.js");
-        await runPluginUninstallCommand(pluginId, { force: true }, pluginRuntime);
-      });
-    await runPluginUninstall(operation.pluginId, createNoExitRuntime(runtime));
-    const after = await readConfigFileSnapshotLazy();
-    await appendCrestodianAuditEntry({
-      operation: "plugin.uninstall",
-      summary: `Uninstalled plugin ${operation.pluginId}`,
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        pluginId: operation.pluginId,
-      },
-    });
-    runtime.log("[crestodian] done: plugin.uninstall");
-    runtime.log("Restart the Gateway to apply plugin changes.");
-    return { applied: true };
-  }
-  if (operation.kind === "create-agent") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "agents.create");
-    const { readConfigFileSnapshot } = await loadConfigModule();
-    const before = await readConfigFileSnapshot();
-    const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-    const runAgentsAdd =
-      opts.deps?.runAgentsAdd ??
-      (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-    await runAgentsAdd(
-      {
-        name: operation.agentId,
-        workspace,
-        ...(operation.model ? { model: operation.model } : {}),
-        nonInteractive: true,
-      },
-      runtime,
-      { hasFlags: true },
-    );
-    const after = await readConfigFileSnapshot();
-    await appendCrestodianAuditEntry({
-      operation: "agents.create",
-      summary: `Created agent ${operation.agentId}`,
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        agentId: operation.agentId,
-        workspace,
-        ...(operation.model ? { model: operation.model } : {}),
-      },
-    });
-    runtime.log("[crestodian] done: agents.create");
-    return { applied: true };
-  }
-  if (operation.kind === "doctor") {
-    logQueued(runtime, "doctor");
-    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
-    await runDoctor(runtime, { nonInteractive: true });
-    runtime.log("[crestodian] done: doctor");
-    return { applied: false };
-  }
-  if (operation.kind === "doctor-fix") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "doctor.fix");
-    const { readConfigFileSnapshot } = await loadConfigModule();
-    const before = await readConfigFileSnapshot();
-    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
-    await runDoctor(runtime, { nonInteractive: true, repair: true, yes: true });
-    const after = await readConfigFileSnapshot();
-    await appendCrestodianAuditEntry({
-      operation: "doctor.fix",
-      summary: "Ran doctor repairs",
-      configPath: after.path || before.path || undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
-      details: opts.auditDetails,
-    });
-    runtime.log("[crestodian] done: doctor.fix");
-    return { applied: true };
-  }
-  if (operation.kind === "status") {
-    logQueued(runtime, "status.check");
-    const { statusCommand } = await import("../commands/status.command.js");
-    await statusCommand({ timeoutMs: 10_000 }, runtime);
-    runtime.log("[crestodian] done: status.check");
-    return { applied: false };
-  }
-  if (operation.kind === "health") {
-    logQueued(runtime, "health.check");
-    const { healthCommand } = await import("../commands/health.js");
-    await healthCommand({ timeoutMs: 10_000 }, runtime);
-    runtime.log("[crestodian] done: health.check");
-    return { applied: false };
-  }
-  if (operation.kind === "gateway-status") {
-    const overview = await loadOverviewForOperation(opts.deps);
-    runtime.log(formatGatewayStatusLine(overview));
-    return { applied: false };
-  }
-  if (operation.kind === "gateway-start") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "gateway.start");
-    const runGatewayStart = opts.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
-    await runGatewayStart();
-    await appendCrestodianAuditEntry({
-      operation: "gateway.start",
-      summary: "Started Gateway",
-      details: opts.auditDetails,
-    });
-    runtime.log("[crestodian] done: gateway.start");
-    return { applied: true };
-  }
-  if (operation.kind === "gateway-stop") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "gateway.stop");
-    const runGatewayStop = opts.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
-    await runGatewayStop();
-    await appendCrestodianAuditEntry({
-      operation: "gateway.stop",
-      summary: "Stopped Gateway",
-      details: opts.auditDetails,
-    });
-    runtime.log("[crestodian] done: gateway.stop");
-    return { applied: true };
-  }
-  if (operation.kind === "gateway-restart") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "gateway.restart");
-    const runGatewayRestart =
-      opts.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
-    await runGatewayRestart();
-    await appendCrestodianAuditEntry({
-      operation: "gateway.restart",
-      summary: "Restarted Gateway",
-      details: opts.auditDetails,
-    });
-    runtime.log("[crestodian] done: gateway.restart");
-    return { applied: true };
-  }
-  if (operation.kind === "open-tui") {
-    logQueued(runtime, "tui.open");
-    const agentId = await resolveTuiAgentId({
-      requestedAgentId: operation.agentId,
-      requestedWorkspace: operation.workspace,
-      deps: opts.deps,
-    });
-    const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-    const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
-    const result = await runTui({ local: true, session, deliver: false, historyLimit: 200 });
-    if (result?.exitReason === "return-to-crestodian") {
-      runtime.log(
-        result.crestodianMessage
-          ? `[crestodian] returned from agent with request: ${result.crestodianMessage}`
-          : "[crestodian] returned from agent",
-      );
-      return {
-        applied: false,
-        nextInput: result.crestodianMessage,
-      };
-    }
-    return { applied: false, exitsInteractive: true };
-  }
-  if (operation.kind === "set-default-model") {
-    if (!opts.approved) {
-      const message = formatCrestodianPersistentPlan(operation);
-      runtime.log(message);
-      return { applied: false, message };
-    }
-    logQueued(runtime, "config.setDefaultModel");
-    const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigFileMutationHelpers();
-    const before = await readConfigFileSnapshot();
-    const { applyDefaultModelPrimaryUpdate } = await loadModelsSharedModule();
-    const result = await mutateConfigFile({
-      base: "source",
-      mutate: (cfg) => {
-        const next = applyDefaultModelPrimaryUpdate({
-          cfg,
-          modelRaw: operation.model,
-          field: "model",
+  const result = await applyPersistentOperation({
+    auditOperation: "plugin.install",
+    operation,
+    runtime,
+    opts,
+    run: async (ctx) => {
+      const runPluginInstall =
+        ctx.deps?.runPluginInstall ??
+        (async (spec: string, pluginRuntime: RuntimeEnv) => {
+          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
+          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
         });
-        Object.assign(cfg, next);
-      },
-    });
-    const after = await readConfigFileSnapshot();
-    const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
-    const effectiveModel = resolveAgentModelPrimaryValue(result.nextConfig.agents?.defaults?.model);
-    await appendCrestodianAuditEntry({
-      operation: "config.setDefaultModel",
-      summary: `Set default model to ${operation.model}`,
-      configPath: result.path,
-      configHashBefore: before.hash ?? result.previousHash,
-      configHashAfter: after.hash ?? null,
-      details: {
-        ...opts.auditDetails,
-        requestedModel: operation.model,
-        effectiveModel,
-      },
-    });
-    runtime.log(`Updated ${result.path}`);
-    runtime.log(`Default model: ${effectiveModel ?? operation.model}`);
-    runtime.log("[crestodian] done: config.setDefaultModel");
-    return { applied: true };
+      await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
+      return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
+    },
+  });
+  if (result.applied) {
+    runtime.log("Restart the Gateway to apply installed plugin changes.");
   }
-  return { applied: false };
+  return result;
+}
+
+/** Execute a parsed Crestodian operation after applying approval gates and audit logging. */
+export async function executeCrestodianOperation(
+  operation: CrestodianOperation,
+  runtime: RuntimeEnv,
+  opts: ExecuteOptions = {},
+): Promise<CrestodianOperationResult> {
+  switch (operation.kind) {
+    case "none":
+      runtime.log(operation.message);
+      return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
+    case "overview": {
+      const overview = await loadOverviewForOperation(opts.deps);
+      if (opts.deps?.formatOverview) {
+        runtime.log(opts.deps.formatOverview(overview));
+      } else {
+        const { formatCrestodianOverview } = await loadOverviewModule();
+        runtime.log(formatCrestodianOverview(overview));
+      }
+      return { applied: false };
+    }
+    case "agents": {
+      const overview = await loadOverviewForOperation(opts.deps);
+      runtime.log(
+        [
+          "Agents:",
+          ...overview.agents.map((agent) => {
+            const bits = [
+              agent.id,
+              agent.isDefault ? "default" : undefined,
+              agent.name ? `name=${agent.name}` : undefined,
+              agent.workspace
+                ? `workspace=${shortenHomePath(resolveUserPath(agent.workspace))}`
+                : undefined,
+            ].filter(Boolean);
+            return `  - ${bits.join(" | ")}`;
+          }),
+        ].join("\n"),
+      );
+      return { applied: false };
+    }
+    case "models": {
+      const overview = await loadOverviewForOperation(opts.deps);
+      runtime.log(
+        [
+          `Default model: ${overview.defaultModel ?? "not configured"}`,
+          `Codex: ${overview.tools.codex.found ? "found" : "not found"}`,
+          `Claude Code: ${overview.tools.claude.found ? "found" : "not found"}`,
+          `Gemini CLI: ${overview.tools.gemini.found ? "found" : "not found"}`,
+          `OpenAI key: ${overview.tools.apiKeys.openai ? "found" : "not found"}`,
+          `Anthropic key: ${overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
+        ].join("\n"),
+      );
+      return { applied: false };
+    }
+    case "plugin-list": {
+      const runPluginsList =
+        opts.deps?.runPluginsList ??
+        (async (pluginRuntime: RuntimeEnv) => {
+          const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
+          await runPluginsListCommand({}, pluginRuntime);
+        });
+      await runPluginsList(runtime);
+      return { applied: false };
+    }
+    case "plugin-search": {
+      const runPluginsSearch =
+        opts.deps?.runPluginsSearch ??
+        (async (query: string, pluginRuntime: RuntimeEnv) => {
+          const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
+          await runPluginsSearchCommand(query, {}, pluginRuntime);
+        });
+      await runPluginsSearch(operation.query, runtime);
+      return { applied: false };
+    }
+    case "audit":
+      runtime.log(`Audit log: ${resolveCrestodianAuditPath()}`);
+      runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
+      return { applied: false };
+    case "config-validate": {
+      const snapshot = await readConfigFileSnapshotLazy();
+      runtime.log(formatConfigValidationLine(snapshot));
+      return { applied: false };
+    }
+    case "config-get": {
+      const snapshot = await readConfigFileSnapshotLazy();
+      if (!snapshot.exists) {
+        runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
+        return { applied: false };
+      }
+      const cfg = snapshot.valid
+        ? (snapshot.sourceConfig ?? snapshot.config)
+        : snapshot.sourceConfig;
+      const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
+      if (!lookup.found) {
+        runtime.log(
+          `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
+        );
+        return { applied: false };
+      }
+      const redacted = redactConfigValue(lookup.value, operation.path);
+      const rendered = JSON.stringify(redacted, null, 2) ?? "null";
+      runtime.log(
+        rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
+          ? `${operation.path} = ${rendered.slice(0, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
+          : `${operation.path} = ${rendered}`,
+      );
+      return { applied: false };
+    }
+    case "config-schema": {
+      const { buildConfigSchema, lookupConfigSchema } = await import("../config/schema.js");
+      const response = buildConfigSchema();
+      const path = operation.path ?? ".";
+      const result = lookupConfigSchema(response, path);
+      if (!result) {
+        runtime.log(`No config schema at "${path}". Try \`config schema .\` for the root keys.`);
+        return { applied: false };
+      }
+      const schema = result.schema as {
+        type?: string | string[];
+        description?: string;
+        enum?: unknown[];
+        default?: unknown;
+      };
+      const childLines = result.children.slice(0, CONFIG_SCHEMA_CHILDREN_MAX).map((child) => {
+        const type = Array.isArray(child.type) ? child.type.join("|") : (child.type ?? "object");
+        const bits = [
+          type,
+          child.required ? "required" : undefined,
+          child.hasChildren ? "…" : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        return `  - ${child.path} (${bits})`;
+      });
+      runtime.log(
+        [
+          `Schema for ${result.path === "" ? "." : result.path}:`,
+          schema.type
+            ? `type: ${Array.isArray(schema.type) ? schema.type.join("|") : schema.type}`
+            : undefined,
+          schema.description ? `description: ${schema.description}` : undefined,
+          schema.enum
+            ? `allowed values: ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`
+            : undefined,
+          schema.default !== undefined ? `default: ${JSON.stringify(schema.default)}` : undefined,
+          ...(childLines.length > 0 ? ["keys:", ...childLines] : []),
+          result.children.length > CONFIG_SCHEMA_CHILDREN_MAX
+            ? `… +${result.children.length - CONFIG_SCHEMA_CHILDREN_MAX} more keys`
+            : undefined,
+        ]
+          .filter((line): line is string => line !== undefined)
+          .join("\n"),
+      );
+      return { applied: false };
+    }
+    case "channel-list": {
+      // Use the same discovery as channel setup (bundled plugins + trusted
+      // catalog), so the listing matches what `connect <channel>` can configure
+      // even before any plugin registry is active.
+      const [
+        { listChannelSetupPlugins },
+        { resolveChannelSetupEntries, shouldShowChannelInSetup },
+      ] = await Promise.all([
+        import("../channels/plugins/setup-registry.js"),
+        import("../commands/channel-setup/discovery.js"),
+      ]);
+      const snapshot = await readConfigFileSnapshotLazy();
+      const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+      const resolved = resolveChannelSetupEntries({
+        cfg,
+        installedPlugins: listChannelSetupPlugins(),
+      });
+      const entries = resolved.entries
+        .filter((entry) => shouldShowChannelInSetup(entry.meta))
+        .toSorted((a, b) => a.id.localeCompare(b.id));
+      runtime.log(
+        [
+          "Channels:",
+          ...entries.map(
+            (entry) => `  - ${entry.id}${entry.meta.label ? ` (${entry.meta.label})` : ""}`,
+          ),
+          "",
+          "Say `connect <channel>` to walk through setup (for example `connect telegram`).",
+        ].join("\n"),
+      );
+      return { applied: false };
+    }
+    case "channel-setup":
+      // Channel setup is a multi-step wizard; only interactive Crestodian (TUI
+      // chat bridge or the gateway chat) can host it. One-shot mode points at
+      // the guided paths.
+      runtime.log(
+        [
+          `Connecting ${operation.channel} needs an interactive session.`,
+          "Run `openclaw crestodian` and say `connect " + operation.channel + "`,",
+          "or run `openclaw channels add` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "setup":
+      return await executeSetup(operation, runtime, opts);
+    case "config-set":
+      return await applyPersistentOperation({
+        auditOperation: "config.set",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          await runConfigSetOperation({ operation, ctx });
+          return { summary: `Set config ${operation.path}`, details: { path: operation.path } };
+        },
+      });
+    case "config-set-ref":
+      return await applyPersistentOperation({
+        auditOperation: "config.setRef",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          await runConfigSetOperation({ operation, ctx });
+          return {
+            summary: `Set config ${operation.path} SecretRef`,
+            details: {
+              path: operation.path,
+              source: operation.source,
+              provider: operation.provider ?? "default",
+            },
+          };
+        },
+      });
+    case "plugin-install":
+      return await executePluginInstall(operation, runtime, opts);
+    case "plugin-uninstall": {
+      const result = await applyPersistentOperation({
+        auditOperation: "plugin.uninstall",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runPluginUninstall =
+            ctx.deps?.runPluginUninstall ??
+            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+              const { runPluginUninstallCommand } =
+                await import("../cli/plugins-uninstall-command.js");
+              await runPluginUninstallCommand(pluginId, { force: true }, pluginRuntime);
+            });
+          await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
+          return {
+            summary: `Uninstalled plugin ${operation.pluginId}`,
+            details: { pluginId: operation.pluginId },
+          };
+        },
+      });
+      if (result.applied) {
+        runtime.log("Restart the Gateway to apply plugin changes.");
+      }
+      return result;
+    }
+    case "create-agent": {
+      const workspace = resolveUserPath(operation.workspace ?? process.cwd());
+      return await applyPersistentOperation({
+        auditOperation: "agents.create",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runAgentsAdd =
+            ctx.deps?.runAgentsAdd ??
+            (await import("../commands/agents.commands.add.js")).agentsAddCommand;
+          await runAgentsAdd(
+            {
+              name: operation.agentId,
+              workspace,
+              ...(operation.model ? { model: operation.model } : {}),
+              nonInteractive: true,
+            },
+            ctx.runtime,
+            { hasFlags: true },
+          );
+          return {
+            summary: `Created agent ${operation.agentId}`,
+            details: {
+              agentId: operation.agentId,
+              workspace,
+              ...(operation.model ? { model: operation.model } : {}),
+            },
+          };
+        },
+      });
+    }
+    case "doctor": {
+      const runDoctor =
+        opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+      await runDoctor(runtime, { nonInteractive: true });
+      return { applied: false };
+    }
+    case "doctor-fix":
+      return await applyPersistentOperation({
+        auditOperation: "doctor.fix",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runDoctor =
+            ctx.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+          await runDoctor(ctx.runtime, { nonInteractive: true, repair: true, yes: true });
+          return { summary: "Ran doctor repairs" };
+        },
+      });
+    case "status": {
+      const { statusCommand } = await import("../commands/status.command.js");
+      await statusCommand({ timeoutMs: 10_000 }, runtime);
+      return { applied: false };
+    }
+    case "health": {
+      const { healthCommand } = await import("../commands/health.js");
+      await healthCommand({ timeoutMs: 10_000 }, runtime);
+      return { applied: false };
+    }
+    case "gateway-status": {
+      const overview = await loadOverviewForOperation(opts.deps);
+      runtime.log(formatGatewayStatusLine(overview));
+      return { applied: false };
+    }
+    case "gateway-start":
+      return await applyPersistentOperation({
+        auditOperation: "gateway.start",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runGatewayStart = ctx.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
+          await runGatewayStart();
+          return { summary: "Started Gateway" };
+        },
+      });
+    case "gateway-stop":
+      return await applyPersistentOperation({
+        auditOperation: "gateway.stop",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runGatewayStop = ctx.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
+          await runGatewayStop();
+          return { summary: "Stopped Gateway" };
+        },
+      });
+    case "gateway-restart":
+      return await applyPersistentOperation({
+        auditOperation: "gateway.restart",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runGatewayRestart =
+            ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
+          await runGatewayRestart();
+          return { summary: "Restarted Gateway" };
+        },
+      });
+    case "open-tui": {
+      const agentId = await resolveTuiAgentId({
+        requestedAgentId: operation.agentId,
+        requestedWorkspace: operation.workspace,
+        deps: opts.deps,
+      });
+      const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
+      const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      const result = await runTui({ local: true, session, deliver: false, historyLimit: 200 });
+      if (result?.exitReason === "return-to-crestodian") {
+        runtime.log(
+          result.crestodianMessage
+            ? `[crestodian] returned from agent with request: ${result.crestodianMessage}`
+            : "[crestodian] returned from agent",
+        );
+        return { applied: false, nextInput: result.crestodianMessage };
+      }
+      return { applied: false, exitsInteractive: true };
+    }
+    case "set-default-model":
+      return await executeSetDefaultModel(operation, runtime, opts);
+    default:
+      return { applied: false };
+  }
 }

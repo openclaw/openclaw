@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -18,6 +19,7 @@ import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import { OPENCLAW_ABORTABLE_WRAPPER } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.js";
@@ -34,6 +36,7 @@ import {
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1351,6 +1354,62 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const continuationError = new TranscriptNotContinuableError("assistant");
+    const run = vi.fn().mockRejectedValue(continuationError);
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(continuationError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "candidate_failed" }),
+    );
+  });
+
+  it("still continues fallback on genuine timeout-shaped errors (#99943)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const timeoutError = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.provider).toBe("anthropic");
+  });
+
   it("keeps provider failover metadata authoritative over nested session locks", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1471,6 +1530,40 @@ describe("runWithModelFallback", () => {
     );
     expect(error.attempts[0]?.error).toBe("LLM request timed out.");
     expect(error.attempts[0]?.error).not.toBe(rawError);
+  });
+
+  it("preserves structured timeout attribution after fallback exhaustion", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("CLI produced no output", {
+        reason: "timeout",
+      }),
+    );
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          run,
+        }),
+      ),
+    );
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+    });
   });
 
   it("carries request attribution through exhausted fallback summaries", async () => {
@@ -3422,6 +3515,489 @@ describe("runWithModelFallback", () => {
         allowTransientCooldownProbe: true,
         isFinalFallbackAttempt: false,
       });
+    });
+  });
+
+  describe("terminal abort propagation", () => {
+    function makeAbortError(message = "aborted"): Error {
+      const err = new Error(message);
+      err.name = "AbortError";
+      return err;
+    }
+
+    function makeAbortableWrapper(reason: Error): Error {
+      const err = new Error(reason.message, { cause: reason });
+      err.name = "AbortError";
+      (err as Error & { [OPENCLAW_ABORTABLE_WRAPPER]?: true })[OPENCLAW_ABORTABLE_WRAPPER] = true;
+      return err;
+    }
+
+    function makeAbortWrapper(reason: Error): Error {
+      const err = new Error("aborted", { cause: reason });
+      err.name = "AbortError";
+      return err;
+    }
+
+    function makeTaggedAbortController(reason: Error): AbortController {
+      const controller = new AbortController();
+      controller.abort(reason);
+      return controller;
+    }
+
+    it("rethrows immediately when signal.reason has name=TimeoutError (run-budget timeout)", async () => {
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const timeoutReason = new Error("request timed out");
+      timeoutReason.name = "TimeoutError";
+      const controller = makeTaggedAbortController(timeoutReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows immediately when signal.reason has name=ClientDisconnectError", async () => {
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const disconnectReason = new Error("HTTP client disconnected");
+      disconnectReason.name = "ClientDisconnectError";
+      const controller = makeTaggedAbortController(disconnectReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("detects TimeoutError nested as cause of an outer Error", async () => {
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const innerTimeout = new Error("request timed out");
+      innerTimeout.name = "TimeoutError";
+      const outerWrap = makeAbortableWrapper(innerTimeout);
+      const controller = makeTaggedAbortController(outerWrap);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has TimeoutError in cause chain (embedded run-budget timer)", async () => {
+      const cfg = makeCfg();
+      const innerTimeout = new Error("request timed out");
+      innerTimeout.name = "TimeoutError";
+      const outerAbort = makeAbortableWrapper(innerTimeout);
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has ClientDisconnectError in cause chain", async () => {
+      const cfg = makeCfg();
+      const innerDisconnect = new Error("client disconnected");
+      innerDisconnect.name = "ClientDisconnectError";
+      const outerAbort = makeAbortableWrapper(innerDisconnect);
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has restart abort in cause chain", async () => {
+      const cfg = makeCfg();
+      const restartAbort = createAgentRunRestartAbortError();
+      const outerAbort = makeAbortableWrapper(restartAbort);
+      const run = vi.fn().mockRejectedValueOnce(outerAbort).mockResolvedValueOnce("ok");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when an unmarked AbortError wraps a restart abort", async () => {
+      const cfg = makeCfg();
+      const restartAbort = createAgentRunRestartAbortError();
+      const outerAbort = makeAbortWrapper(restartAbort);
+      const run = vi.fn().mockRejectedValueOnce(outerAbort).mockResolvedValueOnce("ok");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("discards deferred session suspension for private terminal abort wrappers", () => {
+      const timeout = new Error("request timed out");
+      timeout.name = "TimeoutError";
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortableWrapper(timeout),
+        }),
+      ).toBe(true);
+
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortWrapper(createAgentRunRestartAbortError()),
+        }),
+      ).toBe(true);
+
+      const providerTimeout = new Error("provider request timed out after 60s");
+      providerTimeout.name = "TimeoutError";
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortWrapper(providerTimeout),
+        }),
+      ).toBe(false);
+    });
+
+    it("falls back normally when a provider wraps its own timeout as AbortError(cause: TimeoutError) WITHOUT the abortable() marker", async () => {
+      const cfg = makeCfg();
+      const providerInnerTimeout = new Error("provider request timed out after 60s");
+      providerInnerTimeout.name = "TimeoutError";
+      const unmarkedAbortError = new Error("aborted", { cause: providerInnerTimeout });
+      unmarkedAbortError.name = "AbortError";
+      const run = vi.fn().mockRejectedValueOnce(unmarkedAbortError).mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when a top-level provider TimeoutError is thrown (not an AbortError wrapper)", async () => {
+      const cfg = makeCfg();
+      const directProviderTimeout = new Error("provider request timed out after 60s");
+      directProviderTimeout.name = "TimeoutError";
+      const run = vi.fn().mockRejectedValueOnce(directProviderTimeout).mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when thrown error is generic AbortError without terminal cause", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("provider transient failure"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips fallback when the caller signal is aborted, even with a non-terminal reason", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("provider had a sad day"))
+        .mockResolvedValueOnce("ok");
+
+      const genericReason = new Error("some unrelated abort");
+      const controller = makeTaggedAbortController(genericReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back normally when no abortSignal is passed (back-compat)", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when signal is provided but not aborted", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const controller = new AbortController();
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("rethrows terminal abort even when error resembles a failover-normalizable error", async () => {
+      const cfg = makeCfg();
+
+      const rateLimitLikeError = Object.assign(new Error("RESOURCE_EXHAUSTED: quota exceeded"), {
+        status: 429,
+        name: "AbortError",
+      });
+
+      const run = vi.fn().mockRejectedValue(rateLimitLikeError);
+
+      const timeoutReason = new Error("request timed out");
+      timeoutReason.name = "TimeoutError";
+      const controller = new AbortController();
+      controller.abort(timeoutReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(rateLimitLikeError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats phase-suffixed cron timeout reason as terminal (covers `(last phase: ...)` variant)", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out (last phase: model_call_started)");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats isolated-agent setup-timeout (and phase suffix) as terminal", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort(
+        "cron: isolated agent setup timed out before runner start (last phase: workspace_provision)",
+      );
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats isolated-agent pre-execution stall (and phase suffix) as terminal", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort(
+        "cron: isolated agent run stalled before execution start (last phase: runner_ready)",
+      );
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats bare isolated-agent pre-execution stall as terminal", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort("cron: isolated agent run stalled before execution start");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats an Error whose .message matches a known terminal string as terminal", async () => {
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const wrapped = new Error("cron: job execution timed out");
+      const controller = new AbortController();
+      controller.abort(wrapped);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not classify an unrelated string reason as terminal (caller-abort still skips fallback)", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const controller = new AbortController();
+      controller.abort("some unrelated cancel reason");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
     });
   });
 });

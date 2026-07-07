@@ -136,7 +136,7 @@ function isAvatarUrl(value: string): boolean {
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
 }
 
-export type ChatAvatarHost = {
+type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
   basePath: string;

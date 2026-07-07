@@ -525,6 +525,8 @@ export type PluginManifestProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
+  appGuidedSecret?: boolean;
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
@@ -1536,6 +1538,7 @@ function normalizeProviderAuthChoices(
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
+    const appGuidedSecret = entry.appGuidedSecret === true;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
@@ -1557,6 +1560,7 @@ function normalizeProviderAuthChoices(
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
+      ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }

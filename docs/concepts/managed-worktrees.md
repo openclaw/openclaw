@@ -72,7 +72,7 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page provides the same list, delete, restore, and cleanup actions.
+The Control UI **Worktrees** page under Settings provides the same list, delete, restore, and cleanup actions.
 
 ## Gateway methods
 

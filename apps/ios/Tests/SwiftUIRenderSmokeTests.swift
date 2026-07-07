@@ -115,6 +115,12 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `display math builds valid and fallback view hierarchies`() {
         for typeSize in [DynamicTypeSize.large, .accessibility2] {
             let root = VStack {
+                ChatMarkdownRenderer(
+                    text: #"Inline math \(E = mc^2\) stays inside prose."#,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
                 ChatMathBlockView(block: ChatMathBlock(
                     latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
                     isComplete: true), textColor: OpenClawChatTheme.assistantText)
@@ -138,6 +144,30 @@ struct SwiftUIRenderSmokeTests {
 
             _ = Self.host(root, size: CGSize(width: 393, height: 240))
         }
+    }
+
+    @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
+        let text = """
+        Earlier prose stays visible.
+
+        ```swift
+        let answer = 42
+        ```
+
+        Trailing streamed words fade in.
+        """
+
+        let root = ChatStreamingAssistantBubble(
+            text: text,
+            markdownVariant: .standard,
+            showsAssistantTrace: false,
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false)
+
+        _ = Self.host(root, size: CGSize(width: 393, height: 400))
     }
 
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {

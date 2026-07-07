@@ -182,7 +182,7 @@ targets:
         NSContactsUsageDescription: OpenClaw uses your contacts so you can search and reference people while using the assistant.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
+        NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
         NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true

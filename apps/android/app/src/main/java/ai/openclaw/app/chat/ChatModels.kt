@@ -1,5 +1,16 @@
 package ai.openclaw.app.chat
 
+import java.util.Locale
+
+private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+
+/** Keeps transcript rows limited to roles Android renders as user-visible chat. */
+internal fun normalizeVisibleChatMessageRole(role: String?): String? =
+  role
+    ?.trim()
+    ?.lowercase(Locale.US)
+    ?.takeIf(visibleChatMessageRoles::contains)
+
 /**
  * Chat transcript item as delivered by gateway chat history and live chat events.
  */
@@ -20,6 +31,7 @@ data class ChatMessageContent(
   val mimeType: String? = null,
   val fileName: String? = null,
   val base64: String? = null,
+  val durationMs: Long? = null,
 )
 
 /**
@@ -40,11 +52,33 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val displayName: String? = null,
+  val label: String? = null,
+  val category: String? = null,
+  val pinned: Boolean? = null,
+  val archived: Boolean? = null,
+  val unread: Boolean? = null,
+  val lastReadAt: Long? = null,
+  val lastActivityAt: Long? = null,
   val totalTokens: Long? = null,
   val totalTokensFresh: Boolean? = null,
+  val modelProvider: String? = null,
+  val model: String? = null,
   val contextTokens: Long? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
 )
+
+/** Local fallback for server-side `sessions.list` search over cached entries. */
+fun filterSessionEntries(
+  sessions: List<ChatSessionEntry>,
+  search: String,
+): List<ChatSessionEntry> {
+  val query = search.trim().lowercase()
+  if (query.isEmpty()) return sessions
+  return sessions.filter { session ->
+    listOfNotNull(session.displayName, session.label, session.key)
+      .any { it.lowercase().contains(query) }
+  }
+}
 
 /**
  * Slash command metadata exposed by the gateway for text-surface chat clients.
@@ -56,7 +90,6 @@ data class ChatCommandEntry(
   val textAliases: List<String> = emptyList(),
   val acceptsArgs: Boolean = false,
 )
-
 
 /**
  * Run still streaming on the gateway when a chat.history snapshot was captured;
@@ -87,4 +120,5 @@ data class OutgoingAttachment(
   val mimeType: String,
   val fileName: String,
   val base64: String,
+  val durationMs: Long? = null,
 )

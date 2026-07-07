@@ -245,13 +245,14 @@ describe("engine/utils/stt", () => {
     });
   });
 
-  it("bounds STT error bodies without using response.text()", async () => {
+  it("bounds STT error bodies on a UTF-16 boundary without using response.text()", async () => {
     await withTempDir("openclaw-qqbot-stt-error-", async (tmpDir) => {
       const audioPath = path.join(tmpDir, "voice.wav");
       fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
       const release = vi.fn(async () => {});
-      const tracked = cancelTrackedResponse(`${"stt provider unavailable ".repeat(1024)}tail`, {
+      const safePrefix = "x".repeat(299);
+      const tracked = cancelTrackedResponse(`${safePrefix}🎉${"tail".repeat(4096)}`, {
         status: 503,
         statusText: "Service Unavailable",
         headers: { "content-type": "text/plain" },
@@ -279,8 +280,7 @@ describe("engine/utils/stt", () => {
         error = caught;
       }
 
-      expect(String(error)).toContain("STT failed (HTTP 503): stt provider unavailable");
-      expect(String(error)).not.toContain("tail");
+      expect((error as Error).message).toBe(`STT failed (HTTP 503): ${safePrefix}`);
       expect(tracked.wasCanceled()).toBe(true);
       expect(textSpy).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);

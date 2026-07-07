@@ -195,6 +195,7 @@ describe("production lint suppressions", () => {
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
+        "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",

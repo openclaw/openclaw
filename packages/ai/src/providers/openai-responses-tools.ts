@@ -26,7 +26,7 @@ type ResponsesFunctionTool = {
   strict?: boolean | null;
 };
 
-export type ConvertedResponsesTools = {
+type ConvertedResponsesTools = {
   projection: OpenAIToolProjection;
   tools: OpenAITool[];
 };

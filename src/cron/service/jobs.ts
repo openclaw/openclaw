@@ -5,6 +5,7 @@ import {
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -959,7 +960,8 @@ export function applyJobPatch(
     job.payload = mergeCronPayload(job.payload, patch.payload);
   }
   if (patch.delivery) {
-    job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
+    const implicitMode = resolveCronDeliveryPlan(job).mode;
+    job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
   }
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
@@ -1231,10 +1233,11 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
+  implicitMode: CronDelivery["mode"],
 ): CronDelivery | undefined {
   const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
-    mode: existing?.mode ?? "none",
+    mode: existing?.mode ?? implicitMode,
     channel: existing?.channel,
     to: existing?.to,
     threadId: existing?.threadId,
@@ -1338,7 +1341,6 @@ function mergeCronDelivery(
   if (
     existing === undefined &&
     !("mode" in patch) &&
-    next.mode === "none" &&
     next.channel === undefined &&
     next.to === undefined &&
     next.threadId === undefined &&

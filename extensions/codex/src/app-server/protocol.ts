@@ -87,18 +87,6 @@ export type CodexDynamicToolNamespaceSpec = JsonObject & {
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
 
-export type CodexLegacyDynamicToolFunctionSpec = JsonObject & {
-  name: string;
-  description: string;
-  inputSchema: JsonValue;
-  deferLoading?: boolean;
-  namespace?: string;
-};
-
-export type CodexThreadStartDynamicToolSpec =
-  | CodexDynamicToolSpec
-  | CodexLegacyDynamicToolFunctionSpec;
-
 export function flattenCodexDynamicToolFunctions(
   tools: readonly CodexDynamicToolSpec[] | undefined,
 ): CodexDynamicToolFunctionSpec[] {
@@ -120,12 +108,10 @@ export type CodexThreadStartParams = JsonObject & {
   approvalsReviewer?: string | null;
   sandbox?: string;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
+  dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
@@ -139,8 +125,6 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -363,6 +347,7 @@ export type CodexDynamicToolCallParams = {
 export type CodexDynamicToolCallResponse = {
   asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
@@ -370,6 +355,7 @@ export type CodexDynamicToolCallResponse = {
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
+export type CodexDynamicToolDiagnosticTerminalReason = "failed" | "cancelled" | "timed_out";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {
@@ -382,6 +368,9 @@ export type CodexDynamicToolCallOutputContentItem =
     }
   | JsonObject;
 
+// Mirrors v2 ErrorNotification/TurnError (codex-rs app-server-protocol
+// notification.rs + thread_data.rs). `message` is required upstream; other
+// TurnError fields stay open because CodexErrorInfo is a wide enum.
 export type CodexErrorNotification = {
   error: {
     message?: string;
@@ -389,9 +378,12 @@ export type CodexErrorNotification = {
       message?: string;
       [key: string]: unknown;
     };
+    additionalDetails?: string | null;
     [key: string]: unknown;
   };
-  message?: string;
+  willRetry?: boolean;
+  threadId?: string;
+  turnId?: string;
 };
 
 export type CodexTurnCompletedNotification = {

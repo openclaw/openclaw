@@ -355,4 +355,24 @@ describe("createCacheTrace", () => {
       messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
     });
   });
+
+  it("fingerprints malformed and transport-normalized text identically", () => {
+    const { lines, trace } = createMemoryTraceForTest();
+    const high = String.fromCharCode(0xd83d);
+
+    trace?.recordStage("prompt:before", {
+      messages: [{ role: "user", content: `left${high}right`, timestamp: 1 }],
+    });
+    trace?.recordStage("prompt:images", {
+      messages: [{ role: "user", content: "leftright", timestamp: 1 }],
+    });
+
+    const malformedEvent = JSON.parse(lines[0]?.trim() ?? "{}") as {
+      messageFingerprints?: string[];
+    };
+    const normalizedEvent = JSON.parse(lines[1]?.trim() ?? "{}") as {
+      messageFingerprints?: string[];
+    };
+    expect(malformedEvent.messageFingerprints).toEqual(normalizedEvent.messageFingerprints);
+  });
 });

@@ -146,4 +146,48 @@ describe("readResponseText", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
+    const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
+    const text = vi.fn(async () => "hello");
+    const response = {
+      arrayBuffer,
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response, { maxBytes: 4 })).resolves.toEqual({
+      text: "",
+      truncated: true,
+      bytesRead: 0,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("treats a native bodyless response as empty when maxBytes is set", async () => {
+    await expect(
+      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
+    ).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("preserves uncapped text-only fallback byte accounting", async () => {
+    const value = "中文🔥";
+    const text = vi.fn(async () => value);
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: value,
+      truncated: false,
+      bytesRead: new TextEncoder().encode(value).byteLength,
+    });
+    expect(text).toHaveBeenCalledTimes(1);
+  });
 });
