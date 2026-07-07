@@ -229,6 +229,9 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
   if (primary) {
     keys.add(primary);
   }
+  if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
+    keys.add("global");
+  }
   for (const row of host.sessionsResult?.sessions ?? []) {
     if (uiSessionRowMatchesSelectedChat(host, row.key, primary)) {
       keys.add(row.key);

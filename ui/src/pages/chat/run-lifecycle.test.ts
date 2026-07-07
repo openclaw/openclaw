@@ -401,6 +401,36 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     );
   });
 
+  it("publishes the canonical global key before the local session list loads", () => {
+    const reconcileRunTerminal = vi.fn();
+    const host = makeHost({
+      sessionKey: "agent:work:main",
+      chatRunId: "run-global",
+      chatStream: "streaming",
+      sessionsResult: null,
+      sessions: {
+        reconcileRunTerminal,
+        setModelOverride: vi.fn(),
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      sessionStatus: "done",
+      runId: "run-global",
+      sessionKey: "agent:work:main",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(reconcileRunTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-global",
+        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
+      }),
+    );
+  });
+
   it("arms suppression on a completed turn, then suppresses the racing refresh", () => {
     const host = makeHost({
       chatRunId: "r1",
