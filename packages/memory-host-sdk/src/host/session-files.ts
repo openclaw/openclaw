@@ -34,7 +34,6 @@ import type { MemorySessionSyncTarget } from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,
-  type SessionTranscriptCorpusArtifactKind,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
 
@@ -241,7 +240,7 @@ function isCanonicalSessionsDirForAgent(sessionsDir: string, agentId: string): b
   );
 }
 
-export function loadSessionTranscriptClassificationForSessionsDir(
+function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
 ): SessionTranscriptClassification {
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
