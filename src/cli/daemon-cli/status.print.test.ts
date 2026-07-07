@@ -327,6 +327,14 @@ describe("printDaemonStatus", () => {
             listeners: [],
             hints: [],
           },
+          rpc: {
+            ok: false,
+            kind: "connect",
+            capability: "unknown",
+            error: "gateway closed (1000): ",
+            url: "ws://127.0.0.1:18789",
+          },
+          lastError: "failed to bind gateway socket EADDRINUSE",
           extraServices: [],
         },
         { json: false },
@@ -338,6 +346,8 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Errors: suppressed");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
 
   it("prints GUI-session wording before generic missing-supervision wording", () => {

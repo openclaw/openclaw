@@ -57,9 +57,9 @@ const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>
     connections: [],
   }),
 );
-const readLastGatewayErrorLine = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<string | null>>(
-  async (_env?: NodeJS.ProcessEnv) => null,
-);
+const readLastGatewayErrorLine = vi.fn<
+  (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
+>(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
 const loadInstalledPluginIndexInstallRecords = vi.fn<
   (params?: {
     env?: NodeJS.ProcessEnv;
@@ -177,7 +177,8 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
+  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv, options?: { requirePatternMatch?: boolean }) =>
+    readLastGatewayErrorLine(env, options),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -1176,12 +1177,66 @@ describe("gatherDaemonStatus", () => {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
       }),
+      { requirePatternMatch: true },
     );
     expect(status.port?.status).toBe("busy");
     expect(status.rpc?.ok).toBe(false);
     expect(status.lastError).toBe(
       "parse/handle error: Error: ENOSPC: no space left on device, write",
     );
+  });
+
+  it("does not read local gateway errors for an explicit probe URL", async () => {
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://remote.example:18790",
+      error: "gateway closed (1000): ",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: { url: "wss://remote.example:18790" },
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
+    expect(status.lastError).toBeUndefined();
+  });
+
+  it("does not read local gateway errors in remote mode", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://remote.example:18790" },
+        auth: { token: "daemon-token" },
+      },
+    };
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://remote.example:18790",
+      error: "gateway closed (1000): ",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
+    expect(status.lastError).toBeUndefined();
   });
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {
