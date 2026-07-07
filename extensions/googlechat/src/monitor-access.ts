@@ -1,10 +1,11 @@
-// Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+// Googlechat plugin module implements monitor access behavior.
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -142,8 +143,8 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
   return { hasAnyMention, wasMentioned };
 }
 
-const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
-const warnedMutableGroupKeys = new Set<string>();
+const warnedDeprecatedUsersEmailAllowFrom = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const warnedMutableGroupKeys = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
   const deprecated = entries
@@ -157,10 +158,9 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
     .map((v) => normalizeLowercaseStringOrEmpty(v))
     .toSorted((a, b) => a.localeCompare(b))
     .join(",");
-  if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
+  if (warnedDeprecatedUsersEmailAllowFrom.check(key)) {
     return;
   }
-  warnedDeprecatedUsersEmailAllowFrom.add(key);
   logVerbose(
     `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
   );
@@ -180,10 +180,9 @@ function warnMutableGroupKeysConfigured(
     .map((key) => normalizeLowercaseStringOrEmpty(key))
     .toSorted((a, b) => a.localeCompare(b))
     .join(",");
-  if (warnedMutableGroupKeys.has(warningKey)) {
+  if (warnedMutableGroupKeys.check(warningKey)) {
     return;
   }
-  warnedMutableGroupKeys.add(warningKey);
   logVerbose(
     `Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: ${mutableKeys.join(", ")}`,
   );
