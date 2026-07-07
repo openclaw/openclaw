@@ -250,7 +250,7 @@ describe("agent role eval harness", () => {
     expect(source).not.toContain("ci-hydrate-live-auth");
     expect(source).not.toContain("actions/upload-artifact");
     expect(requireWorkflowStep(contractJob, "Validate role contracts").run).toBe(
-      "pnpm agents:eval:contracts",
+      "node scripts/agent-role-eval.mjs --contracts-only",
     );
     expect(validateLiveInputsStep.env).toEqual({
       INPUT_LIVE_MODEL: "${{ inputs.live_model }}",
