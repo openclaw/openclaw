@@ -97,39 +97,29 @@ describe("readResponseBodySnippet", () => {
     expect(result).toBe("");
   });
 
-  it("does not split surrogate pairs when truncating by maxChars (body-less path)", async () => {
-    // "a" (1 code unit) + 5×🦞 (10 code units) = 11 code units > maxChars=10
-    // .slice(0, 10) would cut between the surrogates of the 5th emoji
-    const text = "a" + "🦞".repeat(5);
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+  it.each([
+    {
+      name: "body-less response under the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
       maxBytes: 1024,
+    },
+    {
+      name: "body-less response truncated by the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      maxBytes: 30,
+    },
+    {
+      name: "streamed response",
+      response: () =>
+        new Response(new Blob([new TextEncoder().encode("a" + "🦞".repeat(10))]).stream()),
+      maxBytes: 1024,
+    },
+  ])("preserves surrogate pairs for $name", async ({ response, maxBytes }) => {
+    const result = await readResponseBodySnippet(response(), {
+      maxBytes,
       maxChars: 10,
     });
-    for (let i = 0; i < result.length; i++) {
-      const cp = result.charCodeAt(i);
-      if (cp >= 0xd800 && cp <= 0xdbff) {
-        expect(result.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
-        expect(result.charCodeAt(i + 1)).toBeLessThanOrEqual(0xdfff);
-      }
-    }
-    const lastCode = result.charCodeAt(result.length - 1);
-    expect(lastCode < 0xd800 || lastCode > 0xdbff).toBe(true);
-  });
 
-  it("does not split surrogate pairs in the stream path", async () => {
-    const text = "a" + "🦞".repeat(5);
-    const data = new TextEncoder().encode(text);
-    const response = new Response(new Blob([data]).stream());
-    const result = await readResponseBodySnippet(response, {
-      maxBytes: 1024,
-      maxChars: 10,
-    });
-    for (let i = 0; i < result.length; i++) {
-      const cp = result.charCodeAt(i);
-      if (cp >= 0xd800 && cp <= 0xdbff) {
-        expect(result.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
-        expect(result.charCodeAt(i + 1)).toBeLessThanOrEqual(0xdfff);
-      }
-    }
+    expect(result).toBe("a" + "🦞".repeat(4));
   });
 });
