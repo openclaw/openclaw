@@ -25,7 +25,11 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -644,28 +648,13 @@ async function runIMessageCliJson(
       }
       stdout = appended.value;
     });
-    child.stdout.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      fail(
-        new Error(
-          `iMessage CLI stdout stream error: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
-    });
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
-    child.stderr.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      fail(
-        new Error(
-          `iMessage CLI stderr stream error: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
     });
     child.on("error", (error) => {
       if (settled) {

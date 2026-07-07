@@ -42,6 +42,7 @@ function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: tru
 }
 
 function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
+  const kill = vi.fn();
   spawnMock.mockImplementationOnce(() => {
     const child = new EventEmitter() as EventEmitter & {
       stdout: EventEmitter & { setEncoding: (encoding: string) => void };
@@ -50,12 +51,13 @@ function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
     };
     child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
     child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    child.kill = vi.fn();
+    child.kill = kill;
     queueMicrotask(() => {
       child[stream].emit("error", error);
     });
     return child;
   });
+  return kill;
 }
 
 function mockRpcChatList(chats: Array<Record<string, unknown>>) {
@@ -101,7 +103,7 @@ describe("imessage actions runtime", () => {
   });
 
   it("rejects on stdout stream error", async () => {
-    mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
+    const kill = mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
 
     await expect(
       imessageActionsRuntime.sendReaction({
@@ -114,10 +116,11 @@ describe("imessage actions runtime", () => {
         },
       }),
     ).rejects.toThrow("iMessage CLI stdout stream error: stdout pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("rejects on stderr stream error", async () => {
-    mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
+    const kill = mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
 
     await expect(
       imessageActionsRuntime.sendReaction({
@@ -130,6 +133,7 @@ describe("imessage actions runtime", () => {
         },
       }),
     ).rejects.toThrow("iMessage CLI stderr stream error: stderr pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {

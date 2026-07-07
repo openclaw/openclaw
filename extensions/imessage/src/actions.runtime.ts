@@ -9,7 +9,11 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import {
@@ -243,28 +247,13 @@ async function runIMessageCliJson(
       }
       stdout = appended.value;
     });
-    child.stdout.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      fail(
-        new Error(
-          `iMessage CLI stdout stream error: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
-    });
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
-    child.stderr.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      fail(
-        new Error(
-          `iMessage CLI stderr stream error: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
     });
     child.on("error", (error) => {
       if (settled) {
