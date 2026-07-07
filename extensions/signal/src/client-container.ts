@@ -6,7 +6,6 @@
  * to keep the two modes cleanly isolated.
  */
 
-import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -19,6 +18,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 
 export type ContainerRpcOptions = {
@@ -57,6 +57,10 @@ const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 // Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
 // Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
 const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Outbound file paths are converted to base64 before posting to the container. Cap
+// reads to the same default the native signal send path uses (8 MiB) so a path to a
+// huge or symlinked file cannot OOM the gateway before encoding.
+const SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -395,7 +399,10 @@ export async function streamContainerEvents(params: {
 async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
   const results: string[] = [];
   for (const filePath of filePaths) {
-    const buffer = await fs.readFile(filePath);
+    const { buffer } = await readRegularFile({
+      filePath,
+      maxBytes: SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES,
+    });
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
     const filename = nodePath.basename(filePath);
     const b64 = buffer.toString("base64");

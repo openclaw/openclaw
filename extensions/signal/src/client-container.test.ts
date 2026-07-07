@@ -569,6 +569,28 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it("rejects outbound attachments that exceed the size cap", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "huge.bin");
+    await fs.writeFile(tmpFile, Buffer.alloc(8 * 1024 * 1024 + 1));
+
+    await expect(
+      containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Photo",
+        attachments: [tmpFile],
+      }),
+    ).rejects.toThrow("exceeds");
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
 });
 
 describe("containerSendTyping", () => {
