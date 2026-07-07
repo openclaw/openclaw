@@ -1230,6 +1230,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
           timeoutMs: compactionTimeoutMs,
         }),
       }),
+      // Allow re-entrant acquisition so the overflow-recovery compaction
+      // path does not block on the session write lock already held by the
+      // outer embedded agent attempt.
+      allowReentrant: true,
     });
     try {
       await repairSessionFileIfNeeded({
