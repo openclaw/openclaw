@@ -24,6 +24,23 @@ import type {
   MaybeCreateDiscordAutoThreadParams,
 } from "./threading.types.js";
 
+const SUPPORTED_DISCORD_AUTO_ARCHIVE_DURATIONS = new Set([60, 1440, 4320, 10080]);
+
+function resolveDiscordAutoArchiveDuration(value: unknown) {
+  if (typeof value === "number") {
+    return SUPPORTED_DISCORD_AUTO_ARCHIVE_DURATIONS.has(value) ? value : 60;
+  }
+  if (typeof value !== "string") {
+    return 60;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 60;
+  }
+  const duration = Number(trimmed);
+  return SUPPORTED_DISCORD_AUTO_ARCHIVE_DURATIONS.has(duration) ? duration : 60;
+}
+
 function resolveTrimmedDiscordMessageChannelId(params: {
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
@@ -171,9 +188,9 @@ export async function maybeCreateDiscordAutoThread(
 
     const rawThreadSource = params.baseText || params.combinedBody || "Thread";
     const threadName = sanitizeDiscordThreadName(rawThreadSource, params.message.id);
-    const archiveDuration = params.channelConfig?.autoArchiveDuration
-      ? Number(params.channelConfig.autoArchiveDuration)
-      : 60;
+    const archiveDuration = resolveDiscordAutoArchiveDuration(
+      params.channelConfig?.autoArchiveDuration,
+    );
 
     const created = await createThread<{ id?: string }>(
       params.client.rest,

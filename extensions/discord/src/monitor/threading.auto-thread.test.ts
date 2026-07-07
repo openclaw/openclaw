@@ -27,9 +27,11 @@ const mockMessage = {
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 
 function createMockMessage(overrides: Record<string, unknown>) {
-  return Object.assign({}, mockMessage, overrides) as Parameters<
-    MaybeCreateDiscordAutoThreadFn
-  >[0]["message"];
+  return Object.assign(
+    {},
+    mockMessage,
+    overrides,
+  ) as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 }
 
 function createBaseParams(
@@ -213,6 +215,21 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
     getMock.mockResolvedValueOnce({});
     await maybeCreateDiscordAutoThread(createBaseParams());
     expectRestBodyField(postMock, "auto_archive_duration", 60);
+  });
+
+  it("defaults to 60 for unsupported autoArchiveDuration values", async () => {
+    for (const autoArchiveDuration of ["0", "abc", 999] as const) {
+      postMock.mockResolvedValueOnce({ id: "thread1" });
+      getMock.mockResolvedValueOnce({});
+      await maybeCreateDiscordAutoThread(
+        createBaseParams({
+          channelConfig: { allowed: true, autoThread: true, autoArchiveDuration },
+        }),
+      );
+      expectRestBodyField(postMock, "auto_archive_duration", 60);
+      postMock.mockClear();
+      getMock.mockClear();
+    }
   });
 });
 
