@@ -144,6 +144,7 @@ function resolveAgentRuntimeSecretTargets(params: {
     config: params.config,
     channel: params.channelSecretScope.channel,
     accountId: params.channelSecretScope.accountId,
+    defaultAccountWhenMissing: true,
   });
   const targetIds = new Set(baseTargetIds);
   for (const targetId of channelTargets.targetIds) {
