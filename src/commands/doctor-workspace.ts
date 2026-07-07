@@ -1,6 +1,7 @@
 /** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
@@ -15,6 +16,13 @@ import {
 } from "../memory/root-memory-files.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+// AGENTS.md is only scanned for a memory-system reference; a small cap prevents
+// a huge file from being buffered just for one regex check.
+const AGENTS_MD_MAX_BYTES = 1024 * 1024;
+// Root memory files are markdown journals; 8 MiB is generous while preventing
+// a runaway file from OOMing the migration path.
+const ROOT_MEMORY_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 export const MEMORY_SYSTEM_PROMPT = [
   "Memory system not found in workspace.",
@@ -41,8 +49,15 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 
   const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
   try {
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
-    if (new RegExp(`\\b${CANONICAL_ROOT_MEMORY_FILENAME.replace(".", "\\.")}\\b`).test(content)) {
+    const { buffer } = await readRegularFile({
+      filePath: agentsPath,
+      maxBytes: AGENTS_MD_MAX_BYTES,
+    });
+    if (
+      new RegExp(`\\b${CANONICAL_ROOT_MEMORY_FILENAME.replace(".", "\\.")}\\b`).test(
+        buffer.toString("utf-8"),
+      )
+    ) {
       return false;
     }
   } catch {
@@ -207,10 +222,31 @@ export async function migrateLegacyRootMemoryFile(
     workspaceDir: detection.workspaceDir,
     legacyPath: detection.legacyPath,
   });
-  const [canonicalText, legacyText] = await Promise.all([
-    fs.promises.readFile(detection.canonicalPath, "utf-8"),
-    fs.promises.readFile(archivedLegacyPath, "utf-8"),
-  ]);
+  let canonicalText: string;
+  let legacyText: string;
+  try {
+    [canonicalText, legacyText] = await Promise.all([
+      readRegularFile({
+        filePath: detection.canonicalPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }).then(({ buffer }) => buffer.toString("utf-8")),
+      readRegularFile({ filePath: archivedLegacyPath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES }).then(
+        ({ buffer }) => buffer.toString("utf-8"),
+      ),
+    ]);
+  } catch {
+    // One of the files is unreadable or exceeds the safe read cap. Leave the
+    // legacy file archived and do not attempt a memory merge.
+    return {
+      changed: true,
+      canonicalPath: detection.canonicalPath,
+      legacyPath: detection.legacyPath,
+      removedLegacy: true,
+      mergedLegacy: false,
+      archivedLegacyPath,
+      ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
+    };
+  }
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,

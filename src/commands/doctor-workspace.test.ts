@@ -132,4 +132,22 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
   });
+
+  it("treats an oversized AGENTS.md as missing memory guidance", async () => {
+    await fs.writeFile(path.join(tmpDir, "AGENTS.md"), "x".repeat(2 * 1024 * 1024), "utf8");
+
+    await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
+  });
+
+  it("archives but does not merge an oversized legacy memory file", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
+
+    const migration = await migrateLegacyRootMemoryFile(tmpDir);
+    expect(migration.changed).toBe(true);
+    expect(migration.removedLegacy).toBe(true);
+    expect(migration.mergedLegacy).toBe(false);
+    expect(migration.archivedLegacyPath).toBeDefined();
+    await expectPathMissing(path.join(tmpDir, "memory.md"));
+  });
 });
