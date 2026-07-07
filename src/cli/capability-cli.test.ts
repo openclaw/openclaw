@@ -3145,7 +3145,7 @@ describe("capability cli", () => {
   it("returns empty object when model auth status output is unparseable", async () => {
     mocks.modelsStatusCommand.mockImplementationOnce(
       async (_opts: unknown, runtime: { log: (...args: unknown[]) => void }) => {
-        runtime.log("unexpected text output with no json");
+        runtime.log("{not valid json");
       },
     );
 
