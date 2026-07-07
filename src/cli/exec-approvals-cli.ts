@@ -1,6 +1,7 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -180,7 +181,7 @@ function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(firstLine);
-  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
+  return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
 }
 
 async function loadConfigForApprovalsTarget(params: {
@@ -634,5 +635,6 @@ export function registerExecApprovalsCli(program: Command) {
 }
 
 export const testing = {
+  formatCliError,
   readStdin,
 };
