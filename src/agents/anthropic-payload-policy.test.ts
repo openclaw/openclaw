@@ -6,7 +6,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
  */
 import { describe, expect, it } from "vitest";
 import {
-  anthropicRuntimeContextCarrierParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
@@ -83,7 +82,7 @@ describe("anthropic payload policy", () => {
       ],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.service_tier).toBe("standard_only");
     expect(payload.system).toEqual([
@@ -118,14 +117,12 @@ describe("anthropic payload policy", () => {
     });
     const stableUser = { role: "user", content: [{ type: "text", text: "stable question" }] };
     const carrier = { role: "user", content: "volatile current-turn metadata" };
-    // The managed transport marks carrier params on conversion; emulate that.
-    anthropicRuntimeContextCarrierParams.add(carrier);
     const payload: TestPayload = {
       system: [{ type: "text", text: "system" }],
       messages: [stableUser, carrier],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set([1]));
 
     // Deepest breakpoint anchors on the stable user turn...
     expect(payload.messages[0]).toEqual({
@@ -175,7 +172,7 @@ describe("anthropic payload policy", () => {
       ],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.messages[0]).toEqual({
       role: "user",
@@ -230,7 +227,7 @@ describe("anthropic payload policy", () => {
       ],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.messages[0]).toEqual({
       role: "user",
@@ -279,7 +276,7 @@ describe("anthropic payload policy", () => {
       ],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.messages[0]).toEqual({
       role: "user",
@@ -309,7 +306,7 @@ describe("anthropic payload policy", () => {
     });
     const payload = simpleTextPayload();
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload).not.toHaveProperty("service_tier");
     expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" })]);
@@ -331,7 +328,7 @@ describe("anthropic payload policy", () => {
       });
       const payload = simpleTextPayload();
 
-      applyAnthropicPayloadPolicyToParams(payload, policy);
+      applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
       expectShortEphemeralTextPayload(payload);
     } finally {
@@ -353,7 +350,7 @@ describe("anthropic payload policy", () => {
     });
     const payload = simpleTextPayload();
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expectShortEphemeralTextPayload(payload);
   });
@@ -368,7 +365,7 @@ describe("anthropic payload policy", () => {
     });
     const payload = boundarySystemPayload();
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.system).toEqual([
       textBlock("Stable prefix", { type: "ephemeral", ttl: "1h" }),
@@ -392,7 +389,7 @@ describe("anthropic payload policy", () => {
       messages: [{ role: "user", content: "Hello" }],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.system).toEqual([
       textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
@@ -414,7 +411,7 @@ describe("anthropic payload policy", () => {
     });
     const payload = simpleTextPayload();
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
   });
@@ -429,7 +426,7 @@ describe("anthropic payload policy", () => {
     });
     const payload = boundarySystemPayload();
 
-    applyAnthropicPayloadPolicyToParams(payload, policy);
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
