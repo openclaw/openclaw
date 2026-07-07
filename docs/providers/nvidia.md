@@ -100,15 +100,15 @@ The selectable bundled rows snapshot NVIDIA's featured-model catalog. Deprecated
 compatibility rows remain resolvable by exact reference but stay out of model
 pickers.
 
-| Model ref                                  | Name                  | Context   | Max output | Notes             |
-| ------------------------------------------ | --------------------- | --------- | ---------- | ----------------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | Nemotron 3 Ultra 550B | 1,048,576 | 8,192      | Default           |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B | 1,000,000 | 8,192      | Featured fallback |
-| `nvidia/z-ai/glm-5.2`                      | GLM 5.2               | 202,752   | 8,192      | Featured fallback |
-| `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6             | 262,144   | 8,192      | Featured fallback |
-| `nvidia/minimaxai/minimax-m3`              | Minimax M3            | 196,608   | 8,192      | Featured fallback |
-| `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     | Featured fallback |
-| `nvidia/qwen/qwen3.5-397b-a17b`            | Qwen3.5 397B A17B     | 262,144   | 16,384     | Featured fallback |
+| Model ref                                  | Name                  | Context   | Max output |
+| ------------------------------------------ | --------------------- | --------- | ---------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | Nemotron 3 Ultra 550B | 1,048,576 | 8,192      |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B | 1,000,000 | 8,192      |
+| `nvidia/z-ai/glm-5.2`                      | GLM 5.2               | 202,752   | 8,192      |
+| `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6             | 262,144   | 8,192      |
+| `nvidia/minimaxai/minimax-m3`              | Minimax M3            | 196,608   | 8,192      |
+| `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     |
+| `nvidia/qwen/qwen3.5-397b-a17b`            | Qwen3.5 397B A17B     | 262,144   | 16,384     |
 
 `nvidia/minimaxai/minimax-m2.7` remains available by exact reference for
 existing configurations. New setups should use `nvidia/minimaxai/minimax-m3`.
