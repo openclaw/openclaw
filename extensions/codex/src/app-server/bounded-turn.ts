@@ -168,7 +168,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
-          persistExtendedHistory: false,
           ephemeral: true,
         } satisfies CodexThreadStartParams,
         { timeoutMs, signal: abortController.signal },

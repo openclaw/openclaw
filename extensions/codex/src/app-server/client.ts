@@ -587,12 +587,6 @@ function defaultServerRequestResponse(
   if (request.method === "item/permissions/requestApproval") {
     return { permissions: {}, scope: "turn" };
   }
-  if (isCodexAppServerApprovalRequest(request.method)) {
-    return {
-      decision: "decline",
-      reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
-    };
-  }
   if (request.method === "item/tool/requestUserInput") {
     return {
       answers: {},
@@ -631,28 +625,35 @@ function timeoutServerRequestResponse(
   };
 }
 
+/** Raised when the initialize handshake detects an unsupported app-server version. */
+export class CodexAppServerVersionError extends Error {
+  readonly detectedVersion?: string;
+
+  constructor(detectedVersion: string | undefined) {
+    const detected = detectedVersion
+      ? `detected ${detectedVersion}`
+      : "OpenClaw could not determine the running Codex version";
+    super(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+    );
+    this.name = "CodexAppServerVersionError";
+    this.detectedVersion = detectedVersion;
+  }
+}
+
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  if (!detectedVersion) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
-  }
-  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
+  if (
+    !detectedVersion ||
+    compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0
+  ) {
+    throw new CodexAppServerVersionError(detectedVersion);
   }
   return detectedVersion;
 }
 
 export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.startsWith(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    )
-  );
+  return error instanceof CodexAppServerVersionError;
 }
 
 function buildCodexAppServerRuntimeIdentity(
@@ -759,6 +760,9 @@ function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail
   );
 }
 
+// Codex has emitted JSON with raw newlines inside string values, which breaks
+// line framing. Buffer the fragments and re-join with an escaped newline so
+// the message parses; bounded by CODEX_APP_SERVER_PARSE_BUFFER_MAX*.
 function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): boolean {
   if (!value.startsWith("{") && !value.startsWith("[")) {
     return false;

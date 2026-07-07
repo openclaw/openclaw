@@ -371,14 +371,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
-  it("sends legacy flat dynamic tools on thread start", async () => {
+  it("sends canonical typed dynamic tools on thread start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-flat-tools");
+        return threadStartResult("thread-typed-tools");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -399,17 +399,22 @@ describe("Codex app-server thread lifecycle bindings", () => {
       | undefined;
     expect(startParams?.dynamicTools).toEqual([
       expect.objectContaining({
+        type: "function",
         name: "message",
         description: "Send a message.",
       }),
       expect.objectContaining({
-        name: "web_search",
-        namespace: "openclaw",
-        deferLoading: true,
+        type: "namespace",
+        name: "openclaw",
+        tools: [
+          expect.objectContaining({
+            type: "function",
+            name: "web_search",
+            deferLoading: true,
+          }),
+        ],
       }),
     ]);
-    expect(startParams?.dynamicTools?.[0]).not.toHaveProperty("type");
-    expect(startParams?.dynamicTools?.[1]).not.toHaveProperty("type");
   });
 
   it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {

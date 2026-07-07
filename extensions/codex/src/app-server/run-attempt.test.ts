@@ -5048,7 +5048,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
@@ -5595,7 +5594,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;

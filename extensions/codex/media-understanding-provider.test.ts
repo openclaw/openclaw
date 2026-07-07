@@ -254,7 +254,6 @@ describe("codex media understanding provider", () => {
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
-      persistExtendedHistory: false,
     });
     expect(requests[2]?.params).toEqual({
       threadId: "thread-1",
@@ -546,7 +545,6 @@ describe("codex media understanding provider", () => {
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
-      persistExtendedHistory: false,
     });
     const turnParams = requests[2]?.params as
       | {

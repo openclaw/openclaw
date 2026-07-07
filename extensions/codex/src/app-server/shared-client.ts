@@ -33,76 +33,20 @@ type SharedCodexAppServerClientState = {
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
 };
 
-type LegacySharedCodexAppServerClientState = Partial<SharedCodexAppServerClientEntry> & {
-  key?: string;
-  clients?: unknown;
-};
-
-type KeyedSharedCodexAppServerClientState = {
-  clients: Map<string, Partial<SharedCodexAppServerClientEntry>>;
-  leasedReleases?: unknown;
-};
-
+// Symbol.for shares one client table across duplicate module copies (dist +
+// src bundles in one process). Plugin updates restart the gateway, so every
+// copy writing this state runs the same code and the shape never migrates.
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: unknown;
+    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: SharedCodexAppServerClientState;
   };
-  const state = globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
-  const keyedState = readKeyedSharedCodexAppServerClientState(state);
-  if (keyedState) {
-    const clients = keyedState.clients as Map<string, SharedCodexAppServerClientEntry>;
-    for (const entry of clients.values()) {
-      entry.activeLeases ??= 0;
-      entry.pendingAcquires ??= 0;
-      entry.closeWhenIdle ??= false;
-    }
-    const nextState: SharedCodexAppServerClientState = {
-      clients,
-      leasedReleases:
-        keyedState.leasedReleases instanceof WeakMap ? keyedState.leasedReleases : new WeakMap(),
-    };
-    globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
-    return nextState;
-  }
-  const legacyState = readLegacySharedCodexAppServerClientState(state);
-  const clients = new Map<string, SharedCodexAppServerClientEntry>();
-  if (legacyState?.key && (legacyState.client || legacyState.promise)) {
-    const legacyKey = legacyState.key;
-    clients.set(legacyKey, {
-      client: legacyState.client,
-      promise: legacyState.promise,
-      activeLeases: 0,
-      pendingAcquires: 0,
-      closeWhenIdle: false,
-    });
-    legacyState.client?.addCloseHandler((closedClient) =>
-      clearSharedClientEntryIfCurrent(legacyKey, closedClient),
-    );
-  }
-  const nextState: SharedCodexAppServerClientState = { clients, leasedReleases: new WeakMap() };
-  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
-  return nextState;
-}
-
-function readKeyedSharedCodexAppServerClientState(
-  value: unknown,
-): KeyedSharedCodexAppServerClientState | undefined {
-  return value !== null &&
-    typeof value === "object" &&
-    (value as { clients?: unknown }).clients instanceof Map
-    ? (value as KeyedSharedCodexAppServerClientState)
-    : undefined;
-}
-
-function readLegacySharedCodexAppServerClientState(
-  value: unknown,
-): LegacySharedCodexAppServerClientState | undefined {
-  if (value === null || typeof value !== "object") {
-    return undefined;
-  }
-  return value as LegacySharedCodexAppServerClientState;
+  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
+    clients: new Map(),
+    leasedReleases: new WeakMap(),
+  };
+  return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
 
 type CodexAppServerClientOptions = {

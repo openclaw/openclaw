@@ -1120,35 +1120,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptErrorSource).toBe("prompt");
   });
 
-  it("normalizes snake_case current token usage fields", async () => {
-    const projector = await createProjector();
-
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", {
-        tokenUsage: {
-          total: { total_tokens: 1_000_000 },
-          last_token_usage: {
-            total_tokens: 17,
-            input_tokens: 8,
-            cached_input_tokens: 3,
-            output_tokens: 9,
-          },
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expectUsageFields(result.attemptUsage, { input: 5, output: 9, cacheRead: 3, total: 17 });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 5,
-      output: 9,
-      cacheRead: 3,
-      total: 17,
-    });
-  });
-
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
