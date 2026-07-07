@@ -17,6 +17,10 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readAndroidReleaseWorkflow() {
+  return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
+}
+
 function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
@@ -320,18 +324,43 @@ describe("ci workflow guards", () => {
 
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
+    const releaseWorkflow = readAndroidReleaseWorkflow();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
-    const installStep = workflow.jobs.android.steps.find(
-      (step) => step.name === "Install Android SDK packages",
-    );
-    const packageId = `platforms;android-${appCompileSdk}`;
+    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+    const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
-    expect(installStep.run).toContain(`"${packageId}"`);
-    expect(installStep.run).not.toContain(`${packageId}.0`);
+    for (const job of sdkJobs) {
+      const cacheStep = job.steps.find((step) => step.name === "Cache Android SDK");
+      const installStep = job.steps.find(
+        (step) => step.name === "Install Android SDK packages",
+      );
+
+      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
+      expect(installStep.run).toContain(`"${packageId}"`);
+    }
+  });
+
+  it("covers Android app variants, lint, and benchmark compilation", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const runStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Run Android ${{ matrix.task }}",
+    );
+
+    expect(source).toContain('{ check_name: "android-test-play", task: "test-play" }');
+    expect(source).toContain(
+      '{ check_name: "android-test-third-party", task: "test-third-party" }',
+    );
+    expect(source).toContain('{ check_name: "android-build-play", task: "build-play" }');
+    expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
+    expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
+    expect(runStep.run).toContain(":app:assemblePlayDebug");
+    expect(runStep.run).toContain(":app:assembleThirdPartyDebug");
+    expect(runStep.run).toContain(":app:lintPlayDebug");
+    expect(runStep.run).toContain(":app:lintThirdPartyDebug");
+    expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {

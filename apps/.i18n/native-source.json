@@ -379,7 +379,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 76,
+      "line": 86,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayDiscovery.kt",
       "source": "Searching…",
       "surface": "android",
