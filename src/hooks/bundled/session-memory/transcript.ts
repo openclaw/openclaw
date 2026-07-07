@@ -1,5 +1,5 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { streamSessionTranscriptLinesReverse } from "../../../config/sessions/transcript-stream.js";
@@ -63,7 +63,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
 }
 
 async function readBoundedTranscriptContent(sessionFilePath: string): Promise<string | null> {
-  let stat: fs.Stats;
+  let stat: Stats;
   try {
     stat = await fs.stat(sessionFilePath);
   } catch {
