@@ -241,6 +241,13 @@ async function finalizeTurn(
   });
 }
 
+async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEvent[]> {
+  return (await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as TrajectoryEvent);
+}
+
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
@@ -2002,6 +2009,72 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "visible_reply_contract: message_tool_only",
     );
     expect(contextCompiled?.data?.prompt).toContain("[OpenClaw room event]");
+  });
+
+  it("keeps ambient room_event empty replies silent on the attempt path", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      trajectory: true,
+      attemptOverrides: {
+        allowEmptyAssistantReplyAsSilent: true,
+        currentInboundEventKind: "room_event",
+      },
+      sessionPrompt: async (session, _prompt, options) => {
+        options?.preflightResult?.(true);
+        session.messages = [
+          ...session.messages,
+          {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-test",
+            timestamp: 2,
+          } as unknown as AgentMessage,
+        ];
+      },
+    });
+
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
+    const sessionEnded = trajectoryEvents.find((event) => event.type === "session.ended");
+    const traceArtifacts = trajectoryEvents.find((event) => event.type === "trace.artifacts");
+    expect(sessionEnded?.data?.status).toBe("success");
+    expect(traceArtifacts?.data?.terminalError).toBeUndefined();
+  });
+
+  it("does not silence direct user_request empty replies on the attempt path", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      trajectory: true,
+      attemptOverrides: {
+        allowEmptyAssistantReplyAsSilent: true,
+        currentInboundEventKind: "user_request",
+      },
+      sessionPrompt: async (session, _prompt, options) => {
+        options?.preflightResult?.(true);
+        session.messages = [
+          ...session.messages,
+          {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-test",
+            timestamp: 2,
+          } as unknown as AgentMessage,
+        ];
+      },
+    });
+
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
+    const sessionEnded = trajectoryEvents.find((event) => event.type === "session.ended");
+    const traceArtifacts = trajectoryEvents.find((event) => event.type === "trace.artifacts");
+    expect(sessionEnded?.data?.status).toBe("error");
+    expect(traceArtifacts?.data?.terminalError).toBe("non_deliverable_terminal_turn");
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {

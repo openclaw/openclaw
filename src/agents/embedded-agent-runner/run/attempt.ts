@@ -5787,6 +5787,7 @@ export async function runEmbeddedAttempt(
         (silentToolResultReplyPayload ? 1 : 0);
       const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
+        currentInboundEventKind: params.currentInboundEventKind,
         payloadCount: 0,
         aborted,
         timedOut,
