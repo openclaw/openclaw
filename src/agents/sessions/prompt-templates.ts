@@ -10,6 +10,7 @@ export {
   parseCommandArgs,
   substituteArgs,
 } from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseCommandArgs,
   substituteArgs,
@@ -42,8 +43,7 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
     if (!description) {
       const firstLine = body.split("\n").find((line) => line.trim());
       if (firstLine) {
-        // Truncate if too long
-        description = firstLine.slice(0, 60);
+        description = truncateUtf16Safe(firstLine, 60);
         if (firstLine.length > 60) {
           description += "...";
         }

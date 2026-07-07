@@ -411,3 +411,20 @@ describe("normalizeRationale truncation", () => {
     expect(truncateUtf16Safe("", 500)).toBe("");
   });
 });
+
+describe("prompt template description truncation", () => {
+  it("does not cut session description with an emoji straddling the 60-char boundary", () => {
+    // "🚀" is a surrogate pair (2 UTF-16 code units). A first line with 59
+    // 'y' + the emoji has 61 code units. Raw slice(0,60) splits the pair.
+    const text = "y".repeat(59) + "🚀";
+    // slice splits the surrogate pair
+    const sliced = text.slice(0, 60);
+    expect(sliced.charCodeAt(59)).toBe(0xd83d); // lone high surrogate
+    // truncateUtf16Safe drops the incomplete pair
+    expect(truncateUtf16Safe(text, 60)).toBe("y".repeat(59));
+  });
+
+  it("preserves description text shorter than the limit unchanged", () => {
+    expect(truncateUtf16Safe("Team onboarding guide", 60)).toBe("Team onboarding guide");
+  });
+});
