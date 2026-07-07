@@ -182,6 +182,8 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = readFileSync(wrapperPath, "utf8");
     const normalizedContent = content.replaceAll("\r\n", "\n").toLowerCase();
+    // Only npm cmd-shim launchers are safe to bypass; arbitrary batch wrappers
+    // can depend on setup commands before dispatching their target.
     const isNpmCmdShim =
       normalizedContent.includes("\ngoto start\n") &&
       normalizedContent.includes("\n:find_dp0\n") &&
