@@ -53,10 +53,20 @@ function mergeChildEnv(params: {
 }): NodeJS.ProcessEnv {
   const resolvedEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(params.baseEnv)) {
-    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+    assignChildEnvValue({
+      env: resolvedEnv,
+      key,
+      platform: params.platform,
+      value,
+    });
   }
   for (const [key, value] of Object.entries(params.env ?? {})) {
-    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+    assignChildEnvValue({
+      env: resolvedEnv,
+      key,
+      platform: params.platform,
+      value,
+    });
   }
   return resolvedEnv;
 }
@@ -166,15 +176,23 @@ export async function runExec(
           encoding: "buffer" as const,
         };
   try {
-    const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
+    const invocation = resolveChildProcessInvocation({
+      argv: [command, ...args],
+    });
     const { stdout, stderr } = (await execFileAsync(invocation.command, invocation.args, {
       ...options,
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     })) as { stdout: Buffer; stderr: Buffer };
     const windowsEncoding = resolveWindowsConsoleEncoding();
-    const decodedStdout = decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding });
-    const decodedStderr = decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding });
+    const decodedStdout = decodeWindowsOutputBuffer({
+      buffer: stdout,
+      windowsEncoding,
+    });
+    const decodedStderr = decodeWindowsOutputBuffer({
+      buffer: stderr,
+      windowsEncoding,
+    });
     if (shouldLogVerbose()) {
       if (decodedStdout.trim()) {
         logDebug(decodedStdout.trim());
@@ -449,7 +467,10 @@ export async function runCommandWithTimeout(
     ...(killProcessTree && process.platform !== "win32" ? { detached: true } : {}),
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    ...(shouldSpawnWithShell({ resolvedCommand: invocation.command, platform: process.platform })
+    ...(shouldSpawnWithShell({
+      resolvedCommand: invocation.command,
+      platform: process.platform,
+    })
       ? { shell: true }
       : {}),
   });
@@ -480,7 +501,10 @@ export async function runCommandWithTimeout(
     let noOutputTimedOut = false;
     let killIssuedByTimeout = false;
     let killIssuedByAbort = false;
-    let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let childExitState: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
     let processTreeForceKillTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
@@ -533,7 +557,7 @@ export async function runCommandWithTimeout(
             spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
               stdio: "ignore",
               windowsHide: true,
-            });
+            }).on("error", () => {});
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
                 processTreeForceKillTimer = null;
@@ -549,7 +573,7 @@ export async function runCommandWithTimeout(
                   spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
                     stdio: "ignore",
                     windowsHide: true,
-                  });
+                  }).on("error", () => {});
                 } catch {
                   child.kill("SIGKILL");
                 }
@@ -561,7 +585,9 @@ export async function runCommandWithTimeout(
             // Fall through to Node's direct child kill as a last resort.
           }
         }
-        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        terminateProcessTree(child.pid, {
+          graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+        });
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
@@ -573,7 +599,7 @@ export async function runCommandWithTimeout(
               stdio: "ignore",
               windowsHide: true,
             },
-          );
+          ).on("error", () => {});
           return;
         } catch {
           // Fall through to Node's direct child kill as a last resort.
