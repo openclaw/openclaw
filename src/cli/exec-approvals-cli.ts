@@ -1,4 +1,5 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -71,6 +72,48 @@ async function readStdin(
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, total).toString("utf8");
+}
+
+async function readFileWithBound(
+  filePath: string,
+  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
+): Promise<string> {
+  // Open the file handle first, then check and read via the same fd to
+  // prevent TOCTOU races and reject non-regular files. Use O_NONBLOCK so
+  // that POSIX FIFOs (named pipes) without a writer fail fast on the
+  // stat.isFile() check rather than blocking the CLI indefinitely.
+  const fd = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    const stat = await fd.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Exec approvals file is not a regular file: ${filePath}`);
+    }
+    if (stat.size > maxBytes) {
+      throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+    }
+    // Loop until EOF (bytesRead === 0) or until we have read maxBytes + 1
+    // bytes. Node's FileHandle.read can return fewer bytes than the requested
+    // length on any call, so a single read is not guaranteed to return the
+    // full file even when it fits within the cap.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let totalBytes = 0;
+    for (;;) {
+      const { bytesRead } = await fd.read(
+        buffer,
+        totalBytes,
+        maxBytes + 1 - totalBytes,
+        totalBytes,
+      );
+      if (bytesRead === 0) break; // EOF
+      totalBytes += bytesRead;
+      if (totalBytes > maxBytes) {
+        throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+      }
+    }
+    return buffer.toString("utf8", 0, totalBytes);
+  } finally {
+    await fd.close();
+  }
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -549,7 +592,7 @@ export function registerExecApprovalsCli(program: Command) {
           exitWithError("Use either --file or --stdin (not both).");
         }
         const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const raw = opts.stdin ? await readStdin() : await readFileWithBound(String(opts.file));
         let file: ExecApprovalsFile;
         try {
           file = JSON5.parse(raw);
@@ -635,4 +678,5 @@ export function registerExecApprovalsCli(program: Command) {
 
 export const testing = {
   readStdin,
+  readFileWithBound,
 };
