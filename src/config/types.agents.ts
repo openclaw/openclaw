@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SubagentAnnounceTarget } from "../agents/subagent-spawn.types.js";
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
 import type {
@@ -141,6 +142,8 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Per-agent default thinking level for spawned sub-agents. */
     thinking?: string;
+    /** Per-agent default completion routing for native sub-agents. */
+    announceTarget?: SubagentAnnounceTarget;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };

@@ -47,6 +47,7 @@ import {
 } from "./subagent-run-generation.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
+import type { SubagentAnnounceTarget } from "./subagent-spawn.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
@@ -179,6 +180,7 @@ export type RegisterSubagentRunParams = {
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
   attachmentsRootDir?: string;
@@ -756,6 +758,7 @@ export function createSubagentRunManager(params: {
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
+      announceTarget: registerParams.announceTarget,
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,

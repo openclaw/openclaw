@@ -437,6 +437,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.list[].subagents.delegationMode": "Sub-agent Delegation Mode",
+  "agents.defaults.subagents.announceTarget": "Sub-agent Announce Target",
+  "agents.list[].subagents.announceTarget": "Sub-agent Announce Target",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.promptOverlays": "Prompt Overlays",

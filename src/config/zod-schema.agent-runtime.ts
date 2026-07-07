@@ -9,6 +9,7 @@ import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
+import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-spawn.types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
@@ -1075,6 +1076,7 @@ export const AgentEntrySchema = z
         allowAgents: z.array(z.string()).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        announceTarget: z.enum(SUBAGENT_ANNOUNCE_TARGETS).optional(),
         requireAgentId: z.boolean().optional(),
       })
       .strict()

@@ -29,6 +29,7 @@ import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_ANNOUNCE_TARGETS,
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
@@ -197,6 +198,10 @@ function createSessionsSpawnToolSchema(params: {
       description:
         'Native context. Omit/"isolated" for clean child; "fork" only when child needs requester transcript.',
     }),
+    announceTarget: optionalStringEnum(SUBAGENT_ANNOUNCE_TARGETS, {
+      description:
+        'Native completion routing. "channel" preserves direct channel announce; "parent" wakes the requester session with no direct channel announce.',
+    }),
     lightContext: Type.Optional(
       Type.Boolean({
         description: 'Light bootstrap context; runtime="subagent" only.',
@@ -322,6 +327,10 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+      const announceTarget =
+        params.announceTarget === "channel" || params.announceTarget === "parent"
+          ? params.announceTarget
+          : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
@@ -485,6 +494,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           context,
+          announceTarget,
           lightContext,
           expectsCompletionMessage,
           attachments,

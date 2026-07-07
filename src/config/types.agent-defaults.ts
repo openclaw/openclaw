@@ -1,3 +1,4 @@
+import type { SubagentAnnounceTarget } from "../agents/subagent-spawn.types.js";
 // Defines agent default configuration types shared by runtime schemas.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
@@ -482,6 +483,8 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
+    /** Default completion routing for native sub-agents. Default: "channel". */
+    announceTarget?: SubagentAnnounceTarget;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };

@@ -76,6 +76,7 @@ export {
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveConfiguredSubagentAnnounceTarget,
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "./subagent-spawn-plan.js";
@@ -112,9 +113,11 @@ import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
+  SubagentAnnounceTarget,
 } from "./subagent-spawn.types.js";
 
 export {
+  SUBAGENT_ANNOUNCE_TARGETS,
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   SUBAGENT_SPAWN_SANDBOX_MODES,
@@ -123,6 +126,7 @@ export type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
+  SubagentAnnounceTarget,
 } from "./subagent-spawn.types.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
@@ -172,6 +176,7 @@ type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
+  announceTarget?: SubagentAnnounceTarget;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
@@ -1182,6 +1187,11 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
+  const announceTarget = resolveConfiguredSubagentAnnounceTarget({
+    cfg,
+    requesterAgentId,
+    announceTarget: params.announceTarget,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -1546,9 +1556,10 @@ export async function spawnSubagentDirect(
   let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-  const shouldAnnounceCompletion = deliverInitialChildRunDirectly
-    ? false
-    : expectsCompletionMessage;
+  const shouldAnnounceCompletion =
+    deliverInitialChildRunDirectly && announceTarget !== "parent"
+      ? false
+      : expectsCompletionMessage;
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -1672,6 +1683,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
       expectsCompletionMessage: shouldAnnounceCompletion,
+      announceTarget,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,

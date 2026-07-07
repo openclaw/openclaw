@@ -625,6 +625,7 @@ export function createSubagentRegistryLifecycleController(params: {
       outcome: entry.delivery?.payload?.outcome ?? entry.outcome,
       expectsCompletionMessage:
         entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+      announceTarget: entry.delivery?.payload?.announceTarget ?? entry.announceTarget,
       spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
       frozenResultText: entry.delivery?.payload?.frozenResultText ?? entry.completion?.resultText,
       fallbackFrozenResultText:
@@ -1292,6 +1293,7 @@ export function createSubagentRegistryLifecycleController(params: {
         outcome: pendingPayload.outcome,
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
+        announceTarget: pendingPayload.announceTarget,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
         onBeforeDeleteChildSession:
           cleanup === "delete"

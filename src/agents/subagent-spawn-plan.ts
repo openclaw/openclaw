@@ -4,6 +4,7 @@
  * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
  */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveDefaultModelForAgent,
@@ -11,6 +12,7 @@ import {
   resolveSubagentSpawnModelSelection,
 } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+import type { SubagentAnnounceTarget } from "./subagent-spawn.types.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
@@ -48,6 +50,32 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   return typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
     ? Math.max(0, Math.floor(params.runTimeoutSeconds))
     : cfgSubagentTimeout;
+}
+
+function readConfiguredAnnounceTarget(value: unknown): SubagentAnnounceTarget | undefined {
+  return value === "channel" || value === "parent" ? value : undefined;
+}
+
+/** Resolves subagent completion routing from per-call override, per-agent config, or defaults. */
+export function resolveConfiguredSubagentAnnounceTarget(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId?: string;
+  announceTarget?: SubagentAnnounceTarget;
+}): SubagentAnnounceTarget {
+  if (params.announceTarget) {
+    return params.announceTarget;
+  }
+  const requesterAgentConfig =
+    params.requesterAgentId && Array.isArray(params.cfg?.agents?.list)
+      ? (params.cfg.agents.list.find((agent) => agent.id === params.requesterAgentId) as
+          | AgentConfig
+          | undefined)
+      : undefined;
+  return (
+    readConfiguredAnnounceTarget(requesterAgentConfig?.subagents?.announceTarget) ??
+    readConfiguredAnnounceTarget(params.cfg?.agents?.defaults?.subagents?.announceTarget) ??
+    "channel"
+  );
 }
 
 /** Resolves the subagent model plus thinking patch to apply to the spawned session. */
