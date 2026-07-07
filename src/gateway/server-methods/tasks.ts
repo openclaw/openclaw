@@ -13,7 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { getTaskById, selectTaskRecords } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -171,11 +171,22 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    const filtered = listTaskRecords().filter((task) => {
+    // Select matching records without a full-registry clone+sort so only the
+    // filtered subset is materialized and sorted. The ledger pages by last
+    // activity; a predicate-first listing avoids the O(n log n) createdAt
+    // sort that listTaskRecords applies before the gateway re-sorts by
+    // updatedAt.
+    const filtered = selectTaskRecords((task) => {
       if (statusFilter && !statusFilter.has(task.status)) {
         return false;
       }
       return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
+    }).toSorted((left, right) => {
+      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+      if (updatedDiff !== 0) {
+        return updatedDiff;
+      }
+      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
     });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;

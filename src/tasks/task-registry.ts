@@ -2414,6 +2414,22 @@ export function listTaskRecords(): TaskRecord[] {
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
+// Predicate-filtered listing without sorting: callers that apply their own
+// sort/filter order avoid an unnecessary full-registry clone and createdAt
+// sort by selecting only matching records. Hot-path callers such as the
+// gateway tasks.list RPC use this to page by activity without materializing
+// and sorting the entire task ledger on every request.
+export function selectTaskRecords(predicate: (task: TaskRecord) => boolean): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const results: TaskRecord[] = [];
+  for (const task of tasks.values()) {
+    if (predicate(task)) {
+      results.push(cloneTaskRecord(task));
+    }
+  }
+  return results;
+}
+
 export function hasActiveTaskForChildSessionKey(params: {
   sessionKey: string;
   excludeTaskId?: string;
