@@ -1,5 +1,6 @@
 // Irc tests cover monitor plugin behavior.
 import net from "node:net";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorIrcProvider, resolveIrcInboundTarget } from "./monitor.js";
 import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
@@ -50,6 +51,70 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
           socket.write(":server 001 bot :welcome\r\n");
           if (connectionNumber === 1) {
             setTimeout(() => socket.destroy(), 10);
+          }
+        }
+      }
+    });
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback IRC server to bind a TCP port");
+  }
+
+  return {
+    port: address.port,
+    lines,
+    get connectionCount() {
+      return connectionCount;
+    },
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function startFatalReconnectIrcServer(): Promise<DisconnectingIrcServer> {
+  const lines: string[] = [];
+  const sockets = new Set<net.Socket>();
+  let connectionCount = 0;
+
+  const server = net.createServer((socket) => {
+    const connectionNumber = ++connectionCount;
+    sockets.add(socket);
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      let idx = buffer.indexOf("\n");
+      while (idx !== -1) {
+        const line = buffer.slice(0, idx).replace(/\r$/, "");
+        buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf("\n");
+        lines.push(line);
+        if (line.startsWith("USER ")) {
+          if (connectionNumber === 1) {
+            socket.write(":server 001 bot :welcome\r\n");
+            setTimeout(() => socket.destroy(), 10);
+          } else {
+            socket.write(":server 464 bot :Password incorrect\r\n");
           }
         }
       }
@@ -142,6 +207,72 @@ describe("irc monitor reconnect", () => {
       );
 
       expect(server.connectionCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      monitor?.stop();
+      await server.close();
+    }
+  });
+
+  it("marks the account disconnected when reconnect receives a fatal login error", async () => {
+    installMonitorRuntime();
+    const server = await startFatalReconnectIrcServer();
+    const config = {
+      channels: {
+        irc: {
+          host: "127.0.0.1",
+          port: server.port,
+          tls: false,
+          nick: "bot",
+          username: "bot",
+          realname: "OpenClaw",
+          channels: ["#openclaw"],
+        },
+      },
+    } as CoreConfig;
+    const statusPatches: Array<Partial<ChannelAccountSnapshot>> = [];
+    let monitor: { stop: () => void } | undefined;
+
+    try {
+      monitor = await monitorIrcProvider({
+        config,
+        statusSink: (patch) => {
+          statusPatches.push(patch);
+        },
+      });
+      await waitForIrcCondition(
+        () =>
+          statusPatches.some(
+            (patch) =>
+              patch.running === false &&
+              patch.connected === false &&
+              patch.lastError === "IRC login failed (464): Password incorrect",
+          ),
+        "expected IRC monitor to publish fatal reconnect failure status",
+      );
+
+      expect(server.connectionCount).toBeGreaterThanOrEqual(2);
+      expect(statusPatches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            running: true,
+            connected: true,
+            lastError: null,
+          }),
+          expect.objectContaining({
+            running: false,
+            connected: false,
+            lastError: "IRC connection closed",
+          }),
+          expect.objectContaining({
+            running: false,
+            connected: false,
+            lastError: "IRC login failed (464): Password incorrect",
+            lastDisconnect: expect.objectContaining({
+              error: "IRC login failed (464): Password incorrect",
+            }),
+          }),
+        ]),
+      );
     } finally {
       monitor?.stop();
       await server.close();

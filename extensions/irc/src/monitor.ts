@@ -1,5 +1,6 @@
 // Irc plugin module implements monitor behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
@@ -11,12 +12,27 @@ import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
+type IrcMonitorStatusPatch = Partial<
+  Pick<
+    ChannelAccountSnapshot,
+    | "running"
+    | "connected"
+    | "lastStartAt"
+    | "lastStopAt"
+    | "lastConnectedAt"
+    | "lastDisconnect"
+    | "lastError"
+    | "lastInboundAt"
+    | "lastOutboundAt"
+  >
+>;
+
 type IrcMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: IrcMonitorStatusPatch) => void;
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
 };
 
@@ -65,6 +81,27 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
   let stopped = false;
   const monitorAbort = new AbortController();
   let removeAbortListener: (() => void) | null = null;
+
+  function publishConnectedStatus() {
+    const now = Date.now();
+    opts.statusSink?.({
+      running: true,
+      connected: true,
+      lastStartAt: now,
+      lastConnectedAt: now,
+      lastDisconnect: null,
+      lastError: null,
+    });
+  }
+
+  function publishDisconnectedStatus(error: string) {
+    opts.statusSink?.({
+      running: false,
+      connected: false,
+      lastDisconnect: { at: Date.now(), error },
+      lastError: error,
+    });
+  }
   if (opts.abortSignal) {
     const forwardAbort = () => monitorAbort.abort();
     if (opts.abortSignal.aborted) {
@@ -96,97 +133,108 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     if (stopped || monitorAbort.signal.aborted) {
       return;
     }
-    const nextClient = await connectIrcClient(
-      buildIrcConnectOptions(account, {
-        channels: account.config.channels,
-        abortSignal: monitorAbort.signal,
-        onLine: (line) => {
-          if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] << ${line}`);
-          }
-        },
-        onNotice: (text, target) => {
-          if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
-          }
-        },
-        onError: (error) => {
-          logger.error(`[${account.accountId}] IRC error: ${error.message}`);
-        },
-        onDisconnect: () => {
-          if (stopped || monitorAbort.signal.aborted) {
-            return;
-          }
-          client = null;
-          logger.warn?.(
-            `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
-          );
-          scheduleReconnect();
-        },
-        onPrivmsg: async (event) => {
-          if (!client) {
-            return;
-          }
-          if (
-            normalizeLowercaseStringOrEmpty(event.senderNick) ===
-            normalizeLowercaseStringOrEmpty(client.nick)
-          ) {
-            return;
-          }
+    let nextClient: IrcClient;
+    try {
+      nextClient = await connectIrcClient(
+        buildIrcConnectOptions(account, {
+          channels: account.config.channels,
+          abortSignal: monitorAbort.signal,
+          onLine: (line) => {
+            if (core.logging.shouldLogVerbose()) {
+              logger.debug?.(`[${account.accountId}] << ${line}`);
+            }
+          },
+          onNotice: (text, target) => {
+            if (core.logging.shouldLogVerbose()) {
+              logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
+            }
+          },
+          onError: (error) => {
+            logger.error(`[${account.accountId}] IRC error: ${error.message}`);
+          },
+          onDisconnect: () => {
+            if (stopped || monitorAbort.signal.aborted) {
+              return;
+            }
+            client = null;
+            publishDisconnectedStatus("IRC connection closed");
+            logger.warn?.(
+              `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
+            );
+            scheduleReconnect();
+          },
+          onPrivmsg: async (event) => {
+            if (!client) {
+              return;
+            }
+            if (
+              normalizeLowercaseStringOrEmpty(event.senderNick) ===
+              normalizeLowercaseStringOrEmpty(client.nick)
+            ) {
+              return;
+            }
 
-          const inboundTarget = resolveIrcInboundTarget({
-            target: event.target,
-            senderNick: event.senderNick,
-          });
-          const message: IrcInboundMessage = {
-            messageId: makeIrcMessageId(),
-            target: inboundTarget.target,
-            rawTarget: inboundTarget.rawTarget,
-            senderNick: event.senderNick,
-            senderUser: event.senderUser,
-            senderHost: event.senderHost,
-            text: event.text,
-            timestamp: Date.now(),
-            isGroup: inboundTarget.isGroup,
-          };
+            const inboundTarget = resolveIrcInboundTarget({
+              target: event.target,
+              senderNick: event.senderNick,
+            });
+            const message: IrcInboundMessage = {
+              messageId: makeIrcMessageId(),
+              target: inboundTarget.target,
+              rawTarget: inboundTarget.rawTarget,
+              senderNick: event.senderNick,
+              senderUser: event.senderUser,
+              senderHost: event.senderHost,
+              text: event.text,
+              timestamp: Date.now(),
+              isGroup: inboundTarget.isGroup,
+            };
 
-          core.channel.activity.record({
-            channel: "irc",
-            accountId: account.accountId,
-            direction: "inbound",
-            at: message.timestamp,
-          });
+            core.channel.activity.record({
+              channel: "irc",
+              accountId: account.accountId,
+              direction: "inbound",
+              at: message.timestamp,
+            });
 
-          if (opts.onMessage) {
-            await opts.onMessage(message, client);
-            return;
-          }
+            if (opts.onMessage) {
+              await opts.onMessage(message, client);
+              return;
+            }
 
-          await handleIrcInbound({
-            message,
-            account,
-            config: cfg,
-            runtime,
-            connectedNick: client.nick,
-            sendReply: async (target, text) => {
-              client?.sendPrivmsg(target, text);
-              opts.statusSink?.({ lastOutboundAt: Date.now() });
-              core.channel.activity.record({
-                channel: "irc",
-                accountId: account.accountId,
-                direction: "outbound",
-              });
-            },
-            statusSink: opts.statusSink,
-          });
-        },
-      }),
-    );
+            await handleIrcInbound({
+              message,
+              account,
+              config: cfg,
+              runtime,
+              connectedNick: client.nick,
+              sendReply: async (target, text) => {
+                client?.sendPrivmsg(target, text);
+                opts.statusSink?.({ lastOutboundAt: Date.now() });
+                core.channel.activity.record({
+                  channel: "irc",
+                  accountId: account.accountId,
+                  direction: "outbound",
+                });
+              },
+              statusSink: opts.statusSink,
+            });
+          },
+        }),
+      );
+    } catch (error) {
+      if (!stopped && !monitorAbort.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        publishDisconnectedStatus(message);
+      }
+      throw error;
+    }
     if (stopped || monitorAbort.signal.aborted) {
       nextClient.quit("shutdown");
       return;
     }
     client = nextClient;
+    publishConnectedStatus();
 
     logger.info(
       `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${nextClient.nick}`,
@@ -207,6 +255,7 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      opts.statusSink?.({ running: false, connected: false, lastStopAt: Date.now() });
       client?.quit("shutdown");
       client = null;
     },
