@@ -23,13 +23,21 @@ function withTarball(
   files: Record<string, string>,
   testBody: (tarball: string) => void,
   version = "0.0.0",
-  options: { includeControlUi?: boolean; includeShrinkwrap?: boolean } = {},
+  options: {
+    includeControlUi?: boolean;
+    includeShrinkwrap?: boolean;
+    packageJson?: Record<string, unknown>;
+    shrinkwrapRootPackage?: Record<string, unknown>;
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw", version }));
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version, ...options.packageJson }),
+    );
     if (options.includeShrinkwrap !== false) {
       writeFileSync(
         join(packageRoot, "npm-shrinkwrap.json"),
@@ -41,6 +49,7 @@ function withTarball(
             "": {
               name: "openclaw",
               version,
+              ...options.shrinkwrapRootPackage,
             },
           },
         }),
@@ -81,7 +90,7 @@ describe("check-openclaw-package-tarball", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>",
+      "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>",
     );
     expect(result.stderr).toBe("");
   });
@@ -271,6 +280,23 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects CommonJS require chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/index.cjs"],
+      {
+        "dist/index.cjs": 'module.exports = require("./chunk.cjs");\n',
+        "dist/chunk.cjs": "module.exports = {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.cjs");
+      },
+      "2026.4.27",
+    );
+  });
+
   it("rejects dist files with missing import.meta.url URL dependencies", () => {
     withTarball(
       ["dist/index.js"],
@@ -416,6 +442,105 @@ describe("check-openclaw-package-tarball", () => {
         );
       },
       "2026.4.27",
+    );
+  });
+
+  it("rejects workspace protocol dependencies in package manifests", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must not use workspace protocol workspace:*",
+        );
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "workspace:*" } } },
+    );
+  });
+
+  it("rejects workspace protocol dependencies in shrinkwrap root metadata", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "npm-shrinkwrap.json packages root dependencies.@openclaw/ai must not use workspace protocol workspace:*",
+        );
+      },
+      "2026.6.11",
+      { shrinkwrapRootPackage: { dependencies: { "@openclaw/ai": "workspace:*" } } },
+    );
+  });
+
+  it("accepts separately published private workspace dependencies by default", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+    );
+  });
+
+  it("rejects private workspace dependencies that are not bundled when strict packaging requires it", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must be listed in bundleDependencies because it is private to the OpenClaw workspace",
+        );
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must be bundled in node_modules/@openclaw/ai",
+        );
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+    );
+  });
+
+  it("accepts private workspace dependencies when bundled in the tarball", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": JSON.stringify({
+          name: "@openclaw/ai",
+          version: "2026.6.11",
+        }),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
     );
   });
 

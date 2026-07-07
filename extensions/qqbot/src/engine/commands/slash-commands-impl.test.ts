@@ -73,6 +73,68 @@ describe("QQBot framework slash commands", () => {
     expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
   });
 
+  it("rejects private-only plugin commands in groups with the shared private-chat message", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-me",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("keeps private-only plugin commands private even when command level is all", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-me",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+        groupCommandLevel: "all",
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("rejects plugin commands in groups when command level is strict", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-ping",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+        groupCommandLevel: "strict",
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("keeps requireAuth commands gated in default all group mode", async () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({
+      name: "shared-admin",
+      description: "shared admin command",
+      requireAuth: true,
+      handler: () => "ok",
+    });
+
+    const result = await registry.matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/shared-admin",
+        groupOpenid: "group-1",
+        commandAuthorized: false,
+      }),
+    );
+
+    expect(result).toContain("权限不足");
+  });
+
   it("does not write streaming config when the sender is not command-authorized", async () => {
     const writes: OpenClawConfig[] = [];
     installCommandRuntime(

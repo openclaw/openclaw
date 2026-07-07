@@ -1,6 +1,8 @@
 // Telegram tests cover bot native commands.session meta plugin behavior.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
@@ -27,9 +29,13 @@ type DispatchReplyWithBufferedBlockDispatcherParams =
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
+type ResolveCommandArgMenuFn =
+  typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgMenu;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
 type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loadModelCatalog;
+type ResolveDefaultModelForAgentFn =
+  typeof import("openclaw/plugin-sdk/agent-runtime").resolveDefaultModelForAgent;
 type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
@@ -47,13 +53,14 @@ const persistentBindingMocks = vi.hoisted(() => ({
   })),
 }));
 const sessionMocks = vi.hoisted(() => ({
+  getSessionEntry: vi.fn(),
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
-  resolveAndPersistSessionFile: vi.fn(),
+  resolveSessionTranscriptLegacyFileTarget: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
-  resolveCommandArgMenu: vi.fn(),
+  resolveCommandArgMenu: vi.fn<ResolveCommandArgMenuFn>(),
 }));
 const agentRuntimeMocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
@@ -64,6 +71,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
       reasoning: true,
     },
   ]),
+  resolveDefaultModelForAgent: vi.fn<ResolveDefaultModelForAgentFn>(),
 }));
 const pluginRuntimeMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
@@ -166,9 +174,18 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
+    getSessionEntry: sessionMocks.getSessionEntry,
     loadSessionStore: sessionMocks.loadSessionStore,
-    resolveAndPersistSessionFile: sessionMocks.resolveAndPersistSessionFile,
     resolveStorePath: sessionMocks.resolveStorePath,
+  };
+});
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/session-transcript-runtime")
+  >("openclaw/plugin-sdk/session-transcript-runtime");
+  return {
+    ...actual,
+    resolveSessionTranscriptLegacyFileTarget: sessionMocks.resolveSessionTranscriptLegacyFileTarget,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -185,18 +202,48 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
     "openclaw/plugin-sdk/agent-runtime",
   );
-  return {
-    ...actual,
-    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
-  };
-});
-vi.mock("./bot-native-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot-native-commands.runtime.js")>(
-    "./bot-native-commands.runtime.js",
+  agentRuntimeMocks.resolveDefaultModelForAgent.mockImplementation(
+    actual.resolveDefaultModelForAgent,
   );
   return {
     ...actual,
+    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
+    resolveDefaultModelForAgent: agentRuntimeMocks.resolveDefaultModelForAgent,
+  };
+});
+vi.mock("./bot-native-commands.runtime.js", () => {
+  return {
+    ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
+    executePluginCommand: pluginRuntimeMocks.executePluginCommand,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+    getAgentScopedMediaLocalRoots,
+    getPluginCommandSpecs: vi.fn(() => []),
+    getSessionEntry: sessionMocks.getSessionEntry,
+    matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
+    recordInboundSessionMetaSafe: vi.fn(
+      async (params: {
+        cfg: OpenClawConfig;
+        agentId: string;
+        sessionKey: string;
+        ctx: unknown;
+        onError?: (error: unknown) => void;
+      }) => {
+        const storePath = sessionMocks.resolveStorePath(params.cfg.session?.store, {
+          agentId: params.agentId,
+        });
+        try {
+          await sessionMocks.recordSessionMetaFromInbound({
+            storePath,
+            sessionKey: params.sessionKey,
+            ctx: params.ctx,
+          });
+        } catch (error) {
+          params.onError?.(error);
+        }
+      },
+    ),
+    resolveChunkMode,
+    resolveThreadSessionKeys,
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
   };
 });
@@ -224,6 +271,7 @@ type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 type TelegramPluginCommandSpecs = ReturnType<
   NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]>
 >;
+type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
@@ -266,6 +314,7 @@ function registerAndResolveCommandHandlerBase(params: {
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
+  runModelsAuthLoginFlow?: TelegramLoginFlow;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -280,6 +329,7 @@ function registerAndResolveCommandHandlerBase(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -290,6 +340,7 @@ function registerAndResolveCommandHandlerBase(params: {
     getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
+    ...(runModelsAuthLoginFlow ? { runModelsAuthLoginFlow } : {}),
   };
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
@@ -329,6 +380,7 @@ function registerAndResolveCommandHandler(params: {
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
+  runModelsAuthLoginFlow?: TelegramLoginFlow;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -343,6 +395,7 @@ function registerAndResolveCommandHandler(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   } = params;
   return registerAndResolveCommandHandlerBase({
     commandName,
@@ -354,6 +407,7 @@ function registerAndResolveCommandHandler(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   });
 }
 
@@ -540,52 +594,79 @@ function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.f
   });
 }
 
+function resetSessionMetaMocks() {
+  persistentBindingMocks.resolveConfiguredBindingRoute.mockClear();
+  persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
+    createConfiguredBindingRoute(route, null),
+  );
+  persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
+  persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+  commandAuthMocks.resolveCommandArgMenu.mockClear().mockImplementation(({ command, args }) => {
+    if (args?.raw || (args?.values && Object.keys(args.values).length > 0)) {
+      return null;
+    }
+    const arg = command.args?.[0];
+    if (!arg) {
+      return null;
+    }
+    if (command.key === "think") {
+      return {
+        arg,
+        choices: ["low", "medium", "high"].map((value) => ({ label: value, value })),
+      };
+    }
+    if (command.key === "fast") {
+      const choices = ["on", "off", "auto (30 sec)", "default", "status"];
+      return {
+        arg,
+        choices: choices.map((value) => ({ label: value, value })),
+      };
+    }
+    return null;
+  });
+  agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue([
+    {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      reasoning: true,
+    },
+  ]);
+  sessionMocks.getSessionEntry.mockClear().mockReturnValue(undefined);
+  sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
+  sessionMocks.getSessionEntry.mockImplementation(
+    ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+      sessionMocks.loadSessionStore(storePath)[sessionKey],
+  );
+  sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
+  sessionMocks.resolveSessionTranscriptLegacyFileTarget.mockClear().mockResolvedValue({
+    agentId: "main",
+    memoryKey: "transcript:main:sess-topic",
+    sessionId: "sess-topic",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+    sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+    targetKind: "runtime-session",
+  });
+  sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
+  pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
+  pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
+  replyMocks.dispatchReplyWithBufferedBlockDispatcher
+    .mockClear()
+    .mockResolvedValue(dispatchReplyResult);
+  sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
+  sessionBindingMocks.touch.mockReset();
+  deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
+}
+
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
-    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+    const commandModule = await import("./bot-native-commands.js");
+    registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
+    await commandModule.testing.loadNativeCommandRuntime();
+    agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 
-  beforeEach(() => {
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockClear();
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
-      createConfiguredBindingRoute(route, null),
-    );
-    persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
-    persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
-    commandAuthMocks.resolveCommandArgMenu.mockClear();
-    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        reasoning: true,
-      },
-    ]);
-    sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
-    sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
-    sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
-      const sessionFile =
-        params.fallbackSessionFile ?? `/tmp/openclaw-sessions/${params.sessionId}.jsonl`;
-      return {
-        sessionFile,
-        sessionEntry: {
-          ...params.sessionEntry,
-          sessionId: params.sessionId,
-          sessionFile,
-          updatedAt: Date.now(),
-        },
-      };
-    });
-    sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
-    pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
-    pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher
-      .mockClear()
-      .mockResolvedValue(dispatchReplyResult);
-    sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
-    sessionBindingMocks.touch.mockReset();
-    deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
-  });
+  beforeEach(resetSessionMetaMocks);
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const cfg: OpenClawConfig = {};
@@ -646,7 +727,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       { provider: "anthropic", model: "claude-opus-4-7" },
       "thinking menu call",
     );
-    expect(sessionMocks.loadSessionStore).toHaveBeenCalledWith("/tmp/openclaw-sessions.json");
+    expect(sessionMocks.getSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-sessions.json",
+      sessionKey: "agent:main:main",
+    });
     expectSendMessageCall({
       sendMessage,
       chatId: 100,
@@ -1407,6 +1491,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("passes a persisted topic session file to plugin commands", async () => {
     sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
+    sessionMocks.getSessionEntry.mockReturnValue({
+      authProfileOverride: "openai:owner@example.com",
+      sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+      sessionId: "sess-topic",
+      updatedAt: 1,
+    });
     sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:telegram:group:-1001234567890:topic:42": {
         authProfileOverride: "openai:owner@example.com",
@@ -1445,24 +1535,133 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     expectRecordFields(
-      firstMockArg(sessionMocks.resolveAndPersistSessionFile, "resolveAndPersistSessionFile"),
+      firstMockArg(
+        sessionMocks.resolveSessionTranscriptLegacyFileTarget,
+        "resolveSessionTranscriptLegacyFileTarget",
+      ),
       {
+        agentId: "main",
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         storePath: "/tmp/openclaw-sessions/sessions.json",
-        sessionsDir: "/tmp/openclaw-sessions",
-        fallbackSessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
+        threadId: 42,
       },
-      "resolved session file params",
+      "resolved transcript target params",
     );
     expectRecordFields(
       (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
       {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
+        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
         authProfileId: "openai:owner@example.com",
         messageThreadId: 42,
+      },
+      "plugin command params",
+    );
+  });
+
+  it("passes the target session auth profile to Telegram /login codex", async () => {
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        authProfileOverride: "openai:owner@example.com",
+        sessionId: "sess-main",
+        updatedAt: 1,
+      },
+    });
+    const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
+      await opts.prompter.note?.(
+        "URL: https://auth.openai.com/codex/device\nCode: ABCD-EFGH",
+        "OpenAI Codex device code",
+      );
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [{ profileId: "openai:owner@example.com", provider: "openai", mode: "oauth" }],
+      };
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "login",
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+      } as OpenClawConfig,
+      allowFrom: ["200"],
+      runModelsAuthLoginFlow,
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "codex", userId: 200 }));
+
+    expect(runModelsAuthLoginFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        method: "device-code",
+        agent: "main",
+        profileId: "openai:owner@example.com",
+      }),
+    );
+  });
+
+  it("passes a resolved transcript file to plugin commands when the entry has no file", async () => {
+    sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
+    sessionMocks.getSessionEntry.mockReturnValue({
+      sessionId: "sess-main",
+      updatedAt: 1,
+    });
+    sessionMocks.resolveSessionTranscriptLegacyFileTarget.mockResolvedValue({
+      agentId: "main",
+      memoryKey: "transcript:main:sess-main",
+      sessionFile: "/tmp/openclaw-sessions/sess-main.jsonl",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      targetKind: "runtime-session",
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
+    expectRecordFields(
+      firstMockArg(
+        sessionMocks.resolveSessionTranscriptLegacyFileTarget,
+        "resolveSessionTranscriptLegacyFileTarget",
+      ),
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions/sessions.json",
+      },
+      "resolved transcript target params",
+    );
+    expectRecordFields(
+      (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
+      {
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        sessionFile: "/tmp/openclaw-sessions/sess-main.jsonl",
       },
       "plugin command params",
     );

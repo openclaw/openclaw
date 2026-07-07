@@ -3,40 +3,26 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveTrustedGroupId,
-  resolveSubagentToolPolicyForSession,
-} from "../agent-tools.policy.js";
-import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../subagent-capabilities.js";
+import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  type ToolPolicyFilterEvent,
   type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
-import {
-  collectExplicitDenylist,
-  mergeAlsoAllowPolicy,
-  resolveToolProfilePolicy,
-} from "../tool-policy.js";
+import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
+export { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+
 /**
- * Identity inputs used by `resolveGroupToolPolicy` to look up channel/group
- * tool policy. These fields are an authorization signal (they can widen
- * bundled-tool availability via a group-scoped allowlist), so callers MUST
- * pass values derived from server-verified session metadata (session key,
- * inbound transport event), not from tool-call or model-controlled input.
- * The helper cross-checks caller-provided `groupId` against session-derived
- * group ids and drops the caller value when they disagree, but it cannot
- * detect drift on fields that have no session-bound counterpart.
+ * The capability profile is an authorization signal (group/sender policies can
+ * widen bundled-tool availability), so callers MUST resolve it from
+ * server-verified session metadata (session key, inbound transport event),
+ * never from tool-call or model-controlled input. Passing the same profile
+ * that constructed the core tool set keeps this final bundled-tool pass and
+ * tool construction from ever disagreeing about policy inputs.
  */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
@@ -46,23 +32,10 @@ type FinalEffectiveToolPolicyParams = {
   // metadata no longer survives core-tool wrapping/normalization.
   bundledTools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  sessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
+  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
   toolPolicyAuditLogLevel?: "info" | "debug";
+  onFilter?: (event: ToolPolicyFilterEvent) => void;
 };
 
 export function applyFinalEffectiveToolPolicy(
@@ -71,7 +44,8 @@ export function applyFinalEffectiveToolPolicy(
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
   }
-  const trustedGroup = resolveTrustedGroupId(params);
+  const capabilityProfile = params.conversationCapabilityProfile;
+  const { trustedGroup } = capabilityProfile.policy;
   // Resolve here for warnings and to strip caller-only group metadata before
   // this pass; resolveGroupToolPolicy re-checks internally for all callers.
   if (trustedGroup.dropped) {
@@ -87,65 +61,20 @@ export function applyFinalEffectiveToolPolicy(
     agentProviderPolicy,
     profile,
     providerProfile,
+    profilePolicy,
+    providerProfilePolicy,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.config,
-    agentId,
-    messageProvider: params.messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+    groupPolicy,
+    senderPolicy,
+    sandboxPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  } = capabilityProfile.policy;
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
-  );
-  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sessionKey &&
-    isSubagentEnvelopeSession(params.sessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sessionKey,
-    {
-      store: subagentStore,
-    },
   );
   // Suppress unavailable-core-tool warnings on every step of this pass.
   // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
@@ -173,7 +102,7 @@ export function applyFinalEffectiveToolPolicy(
       senderPolicy,
       agentId,
     }),
-    { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
+    { policy: sandboxPolicy, label: "sandbox tools.allow" },
     { policy: subagentPolicy, label: "subagent tools.allow" },
     { policy: inheritedToolPolicy, label: "inherited tools" },
   ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
@@ -183,6 +112,7 @@ export function applyFinalEffectiveToolPolicy(
     warn: params.warn,
     steps: pipelineSteps,
     auditLogLevel: params.toolPolicyAuditLogLevel,
+    onFilter: params.onFilter,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.config,
       toolDenylist: collectExplicitDenylist(pipelineSteps.map((step) => step.policy)),

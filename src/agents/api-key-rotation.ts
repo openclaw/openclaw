@@ -30,17 +30,16 @@ type ExecuteWithApiKeyRotationOptions<T> = {
   transientRetry?: TransientProviderRetryConfig;
 };
 
-function dedupeApiKeys(raw: string[]): string[] {
-  return normalizeUniqueStringEntries(raw);
-}
-
 /** Collect primary and live-discovered provider keys in stable de-duped order. */
 export function collectProviderApiKeysForExecution(params: {
   provider: string;
   primaryApiKey?: string;
 }): string[] {
   const { primaryApiKey, provider } = params;
-  return dedupeApiKeys([primaryApiKey?.trim() ?? "", ...collectProviderApiKeys(provider)]);
+  return normalizeUniqueStringEntries([
+    primaryApiKey?.trim() ?? "",
+    ...collectProviderApiKeys(provider),
+  ]);
 }
 
 /**
@@ -50,7 +49,7 @@ export function collectProviderApiKeysForExecution(params: {
 export async function executeWithApiKeyRotation<T>(
   params: ExecuteWithApiKeyRotationOptions<T>,
 ): Promise<T> {
-  const keys = dedupeApiKeys(params.apiKeys);
+  const keys = normalizeUniqueStringEntries(params.apiKeys);
   if (keys.length === 0) {
     throw new Error(`No API keys configured for provider "${params.provider}".`);
   }

@@ -37,6 +37,15 @@ changelog_required_for_changed_files() {
   return 1
 }
 
+root_changelog_update_allowed_for_pr() {
+  case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 print_review_stdout_summary() {
   require_artifact .local/review.md
   require_artifact .local/review.json
@@ -134,27 +143,6 @@ wait_for_pr_head_sha() {
   done
 
   return 1
-}
-
-is_author_email_merge_error() {
-  local msg="$1"
-  printf '%s\n' "$msg" | rg -qi 'author.?email|email.*associated|associated.*email|invalid.*email'
-}
-
-merge_author_email_candidates() {
-  local reviewer="$1"
-  local reviewer_id="$2"
-
-  local gh_email
-  gh_email=$(gh api user --jq '.email // ""' 2>/dev/null || true)
-  local git_email
-  git_email=$(git config user.email 2>/dev/null || true)
-
-  printf '%s\n' \
-    "$gh_email" \
-    "$git_email" \
-    "${reviewer_id}+${reviewer}@users.noreply.github.com" \
-    "${reviewer}@users.noreply.github.com" | awk 'NF && !seen[$0]++'
 }
 
 pr_contributor_allows_human_trailers() {

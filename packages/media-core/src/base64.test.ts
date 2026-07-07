@@ -7,11 +7,28 @@ describe("base64 helpers", () => {
     expect(actual).toBe(expected);
   }
 
+  it("canonicalizeBase64 validates large payloads without cons-string overflow", () => {
+    const encoded = Buffer.alloc(1_900_000).toString("base64");
+
+    expect(canonicalizeBase64(encoded)).toBe(encoded);
+    expect(canonicalizeBase64(encoded + "!")).toBeUndefined();
+  });
+
   it.each([
     {
       name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",
       actual: canonicalizeBase64(" SGV s bG8= \n"),
       expected: "SGVsbG8=",
+    },
+    {
+      name: "canonicalizeBase64 pads valid unpadded base64",
+      actual: canonicalizeBase64("SGVsbG8"),
+      expected: "SGVsbG8=",
+    },
+    {
+      name: "canonicalizeBase64 rejects impossible unpadded length",
+      actual: canonicalizeBase64("S"),
+      expected: undefined,
     },
     {
       name: "canonicalizeBase64 rejects invalid base64 characters",

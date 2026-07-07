@@ -6,6 +6,12 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  OPENCLAW_DELIVERY_MIRROR_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -117,6 +123,115 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
     return event;
   }
+
+  it("uses configured session.store when storePath is omitted", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      const sessionsDir = path.join(tempDir, "configured", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const configuredSessionKey = "agent:main:configured-store";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [configuredSessionKey]: {
+            sessionId: "configured-session-id",
+            chatType: "direct",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        agentId: "main",
+        sessionKey: configuredSessionKey,
+        text: "mirrored configured store reply",
+        config: { session: { store: storePath } },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      expect(path.basename(result.sessionFile)).toBe("configured-session-id.jsonl");
+      expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
+        fs.realpathSync.native(sessionsDir),
+      );
+      await expect(fs.promises.readFile(result.sessionFile, "utf-8")).resolves.toContain(
+        "mirrored configured store reply",
+      );
+    } finally {
+      if (previousStateDir === undefined) {
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      } else {
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the session key agent for configured session.store templates", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      const storeTemplate = path.join(tempDir, "agents", "{agentId}", "sessions", "sessions.json");
+      const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const configuredSessionKey = "agent:worker:configured-store";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [configuredSessionKey]: {
+            sessionId: "worker-session-id",
+            chatType: "direct",
+          },
+        }),
+        "utf-8",
+      );
+      const beforeMessageWrite = vi.fn(({ message }: BeforeMessageWriteParams) => message);
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey: configuredSessionKey,
+        text: "mirrored worker store reply",
+        config: { session: { store: storeTemplate } },
+        beforeMessageWrite,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      expect(path.basename(result.sessionFile)).toBe("worker-session-id.jsonl");
+      expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
+        fs.realpathSync.native(sessionsDir),
+      );
+      await expect(fs.promises.readFile(result.sessionFile, "utf-8")).resolves.toContain(
+        "mirrored worker store reply",
+      );
+      expect(beforeMessageWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "worker",
+          sessionKey: configuredSessionKey,
+        }),
+      );
+      const event = requireTranscriptUpdateCall(emitSpy);
+      expect(event.agentId).toBe("worker");
+      expect(event.sessionKey).toBe(configuredSessionKey);
+    } finally {
+      emitSpy.mockRestore();
+      if (previousStateDir === undefined) {
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      } else {
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();
@@ -403,6 +518,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const message = event.message as
       | {
           role?: string;
+          api?: string;
           provider?: string;
           model?: string;
           content?: unknown;
@@ -412,6 +528,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(event?.sessionKey).toBe(sessionKey);
     expect(event?.messageId).toBeTypeOf("string");
     expect(message?.role).toBe("assistant");
+    expect(message?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(message?.provider).toBe("openclaw");
     expect(message?.model).toBe("delivery-mirror");
     expect(message?.content).toEqual([{ type: "text", text: "Hello from delivery mirror!" }]);
@@ -510,6 +627,90 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         kind: "channel-final",
         sourceMessageId: "message-1",
       });
+    }
+  });
+
+  it("idempotently appends suppressed channel finals by key while preserving source ids", async () => {
+    writeTranscriptStore();
+
+    const text = "Channel final suppressed before delivery: stale foreground";
+    const first = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-1:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-1",
+      },
+    });
+    const replay = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-1:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-1",
+      },
+    });
+    const nextTurn = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-2:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-2",
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    expect(nextTurn.ok).toBe(true);
+    if (first.ok && replay.ok && nextTurn.ok) {
+      expect(replay.messageId).toBe(first.messageId);
+      expect(nextTurn.messageId).not.toBe(first.messageId);
+      const lines = fs.readFileSync(first.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(3);
+      const firstMirror = JSON.parse(lines[1]).message;
+      const secondMirror = JSON.parse(lines[2]).message;
+      expect(firstMirror).toMatchObject({
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+        model: OPENCLAW_DELIVERY_MIRROR_MODEL,
+        openclawDeliveryMirror: {
+          kind: "channel-final-suppressed",
+          reason: "stale-foreground",
+          sourceMessageId: "message-1",
+        },
+      });
+      expect(secondMirror.openclawDeliveryMirror).toEqual({
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-2",
+      });
+      await appendSessionTranscriptMessage({
+        transcriptPath: first.sessionFile,
+        message: {
+          role: "user",
+          content: "next user turn",
+          timestamp: Date.now(),
+        },
+      });
+      await expect(
+        readRecentUserAssistantTextFromSessionTranscript(first.sessionFile, { limit: 10 }),
+      ).resolves.toEqual([
+        {
+          id: expect.any(String),
+          role: "user",
+          text: "next user turn",
+          timestamp: expect.any(Number),
+        },
+      ]);
     }
   });
 
@@ -872,6 +1073,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(lines.length).toBe(4);
 
       const messageLine = JSON.parse(lines[3]);
+      expect(messageLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
       expect(messageLine.message.provider).toBe("openclaw");
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
@@ -913,6 +1115,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
     expect(linesAfterMirror).toHaveLength(3);
     const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(mirrorLine.message.model).toBe("delivery-mirror");
 
     await appendSessionTranscriptMessage({
@@ -1242,6 +1445,57 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       code: "session-rebound",
     });
     expect(fs.existsSync(replacementSessionFile)).toBe(false);
+  });
+
+  it("rejects a concurrent lifecycle owner change without a session id rotation", async () => {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          lifecycleRevision: "original-revision",
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionStoreEntry({
+      storePath: fixture.storePath(),
+      sessionKey,
+      update: async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "replacement-revision" };
+      },
+    });
+    await ownerChangeStarted;
+
+    const append = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedSessionId: sessionId,
+      expectedLifecycleRevision: "original-revision",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(append).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {

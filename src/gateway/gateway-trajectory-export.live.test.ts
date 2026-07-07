@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -465,14 +466,14 @@ describeLive("gateway live trajectory export", () => {
       } else if (!process.env.OPENAI_BASE_URL?.trim()) {
         delete process.env.OPENAI_BASE_URL;
       }
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       process.env.OPENCLAW_TRAJECTORY = "1";
       process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
 

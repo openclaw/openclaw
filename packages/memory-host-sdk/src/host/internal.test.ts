@@ -124,6 +124,7 @@ describe("memory host SDK package internals", () => {
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
     fsSync.writeFileSync(path.join(extraDir, "diagram.png"), Buffer.from("png"));
+    fsSync.writeFileSync(path.join(extraDir, "recording.m2a"), Buffer.from("audio"));
     fsSync.writeFileSync(path.join(extraDir, "ignore.txt"), "ignored");
 
     const files = await listMemoryFiles(
@@ -136,6 +137,7 @@ describe("memory host SDK package internals", () => {
       "MEMORY.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
+      path.join("extra", "recording.m2a"),
     ]);
   });
 

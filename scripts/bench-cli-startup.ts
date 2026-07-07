@@ -105,10 +105,20 @@ type CliOptions = {
 const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
-const TIMEOUT_KILL_GRACE_MS = 1_000;
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
+const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return DEFAULT_TIMEOUT_KILL_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_TIMEOUT_KILL_GRACE_MS;
+}
 const VALUE_FLAGS = new Set([
   "--case",
   "--compare-baseline",
@@ -471,9 +481,16 @@ function parseRepeatableFlag(flag: string): string[] {
 }
 
 function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
+  const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
@@ -533,7 +550,12 @@ function parsePresets(raw: string | undefined): string[] {
 function resolveCases(options: { presets: string[]; caseIds: string[] }): CommandCase[] {
   const byId = new Map(COMMAND_CASES.map((commandCase) => [commandCase.id, commandCase]));
   if (options.caseIds.length > 0) {
+    const seenIds = new Set<string>();
     return options.caseIds.map((id) => {
+      if (seenIds.has(id)) {
+        throw new Error(`Duplicate --case "${id}"`);
+      }
+      seenIds.add(id);
       const commandCase = byId.get(id);
       if (!commandCase) {
         throw new Error(`Unknown --case "${id}"`);

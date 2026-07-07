@@ -88,6 +88,24 @@ describe("dependency-changes-report", () => {
     }
   });
 
+  it("rejects duplicate and conflicting dependency report inputs", () => {
+    for (const flag of [
+      "--root",
+      "--base-ref",
+      "--base-lockfile",
+      "--head-lockfile",
+      "--json",
+      "--markdown",
+    ]) {
+      expect(() => parseArgs(["--base-ref", "main", flag, "one", flag, "two"])).toThrow(
+        `${flag} was provided more than once.`,
+      );
+    }
+    expect(() => parseArgs(["--base-ref", "main", "--base-lockfile", "base-lock.yaml"])).toThrow(
+      "Use either --base-ref or --base-lockfile, not both.",
+    );
+  });
+
   it("reports CLI argument errors without a Node stack trace", () => {
     const missingBase = runCli();
     expect(missingBase.status).toBe(1);

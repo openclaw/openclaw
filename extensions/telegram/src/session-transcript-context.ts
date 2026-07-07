@@ -3,7 +3,7 @@ import {
   type SessionRecentConversationText,
 } from "openclaw/plugin-sdk/session-store-runtime";
 
-export type TelegramSessionTranscriptPromptMessage = {
+type TelegramSessionTranscriptPromptMessage = {
   message_id?: string;
   sender: string;
   timestamp_ms?: number;
@@ -11,7 +11,7 @@ export type TelegramSessionTranscriptPromptMessage = {
   source_channel?: string;
 };
 
-export type BuildTelegramSessionTranscriptPromptMessagesParams = {
+type BuildTelegramSessionTranscriptPromptMessagesParams = {
   agentId: string;
   beforeTimestampMs?: number;
   limit: number;

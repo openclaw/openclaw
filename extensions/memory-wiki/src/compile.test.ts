@@ -121,6 +121,155 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const brokenPath = path.join(rootDir, "syntheses", "broken.md");
+    const brokenPage = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.broken",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Broken",
+      "",
+      "Body that compile must not rewrite.",
+    ].join("\n");
+    await fs.writeFile(brokenPath, brokenPage, "utf8");
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.frontmatterErrors).toHaveLength(1);
+    expect(result.frontmatterErrors[0]).toMatchObject({
+      relativePath: "syntheses/broken.md",
+    });
+    expect(result.pageCounts.synthesis).toBe(1);
+    expect(result.pages.map((page) => page.relativePath)).not.toContain("syntheses/broken.md");
+    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.not.toContain(
+      "Broken",
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ).resolves.not.toContain("syntheses/broken.md");
+  });
+
+  it.each([
+    {
+      name: "root index with syntax-error frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "root index with sequence-root frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: ["- pageType: report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+    {
+      name: "directory index with syntax-error frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "directory index with scalar-root frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: ["report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects $name without changing its bytes",
+    async ({ relativePath, frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        rootDir: nextCaseRoot(),
+        initialize: true,
+        config: { render: { createDashboards: false } },
+      });
+      const targetPath = path.join(rootDir, relativePath);
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Existing Index",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
+
+      await expect(compileMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
+
+  it("discovers pages in nested subdirectories during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "top.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
+        body: "# Top Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "sub", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+        body: "# Nested Source\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.pageCounts.source).toBe(2);
+    // Root index should link to both
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Top Source](sources/top.md)",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sources/sub/nested.md)",
+    );
+    // Sources index should link to nested file
+    await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sub/nested.md)",
+    );
+  });
+
   it("renders native directory index links relative to each generated index", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -557,6 +706,85 @@ describe("compileMemoryWikiVault", () => {
     expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
       "claim.alpha.db",
     );
+  });
+
+  it("excludes concept and synthesis pages from stale-pages report", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "entity-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha Entity",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Entity\n",
+      }),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "source-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+
+    // Concept page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "concept-beta.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.beta",
+          title: "Beta Concept",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Beta Concept\n",
+      }),
+      "utf8",
+    );
+
+    // Synthesis page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "synthesis-gamma.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.gamma",
+          title: "Gamma Synthesis",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Gamma Synthesis\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const stalePages = await fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8");
+
+    // Entity and source pages still appear in stale-pages
+    expect(stalePages).toContain("[Alpha Entity](../entities/entity-alpha.md)");
+    expect(stalePages).toContain("[Alpha Source](../sources/source-alpha.md)");
+    // Concept and synthesis pages are excluded
+    expect(stalePages).not.toContain("[Beta Concept](../concepts/concept-beta.md)");
+    expect(stalePages).not.toContain("[Gamma Synthesis](../syntheses/synthesis-gamma.md)");
   });
 
   it("skips dashboard report pages when createDashboards is disabled", async () => {

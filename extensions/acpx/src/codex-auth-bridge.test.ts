@@ -175,7 +175,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@0.15.0"');
+    expect(wrapper).toContain('"@zed-industries/codex-acp@0.16.0"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
   });
@@ -196,7 +196,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.39.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.55.0"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -250,6 +250,15 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     expect(wrapper).not.toMatch(
       /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
+    );
+    // Orphan detection must trigger on any PPID change, not only when the new
+    // PPID is init (1). Systemd user services and container init reparent
+    // orphaned processes to a session manager or container init (PID != 1),
+    // and the older `process.ppid !== 1` guard would silently leak the codex
+    // adapter tree there.
+    expect(wrapper).not.toContain("process.ppid !== 1");
+    expect(wrapper).toMatch(
+      /setInterval\(\(\) => \{[\s\S]*?if \(process\.ppid === originalParentPid\) \{\s*return;\s*\}/,
     );
   });
 

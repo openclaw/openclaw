@@ -23,6 +23,7 @@ const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/ac
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
@@ -290,6 +291,11 @@ describe("package acceptance workflow", () => {
       '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
+    const prepareCrabboxShell = workflowStep(hydrate, "Prepare Crabbox shell").run;
+    expect(prepareCrabboxShell).toContain("link_node_tool()");
+    expect(prepareCrabboxShell).toContain('readlink -f "$source"');
+    expect(prepareCrabboxShell).toContain('readlink -f "$target"');
+    expect(prepareCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
@@ -363,12 +369,17 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
     );
+    const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
   });
 
-  it("keeps default Crabbox capacity on the Azure credit-backed lane", () => {
+  it("defaults Crabbox proof to Blacksmith while keeping direct jobs on Azure", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       aws?: { region?: string };
       capacity?: {
@@ -378,22 +389,30 @@ describe("package acceptance workflow", () => {
         regions?: string[];
       };
       jobs?: {
-        changed?: { command?: string; market?: string; shell?: boolean; type?: string };
-        prewarm?: { market?: string; type?: string };
+        changed?: {
+          command?: string;
+          market?: string;
+          provider?: string;
+          shell?: boolean;
+          type?: string;
+        };
+        prewarm?: { market?: string; provider?: string; type?: string };
       };
       provider?: string;
       ssh?: { port?: string; user?: string };
     };
 
-    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.provider).toBe("blacksmith-testbox");
     expect(crabboxConfig.capacity?.market).toBe("on-demand");
     expect(crabboxConfig.capacity?.fallback).toBeUndefined();
     expect(crabboxConfig.capacity?.regions).toBeUndefined();
     expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
     expect(crabboxConfig.aws?.region).toBe("eu-west-1");
     expect(crabboxConfig.jobs?.prewarm?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.prewarm?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.prewarm?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.changed?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.changed?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.shell).toBe(true);
     expect(crabboxConfig.jobs?.changed?.command).toContain("set -euo pipefail");
@@ -531,7 +550,7 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
     expect(workflow).toContain(
-      '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
+      '[[ ( "$CHILD_WORKFLOW_REF" == release-ci/* || "$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$ ) && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
     );
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
@@ -551,7 +570,7 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
-      "Dispatch Full Release Validation from a ref pinned to the target SHA",
+      "Dispatch Full Release Validation from a release-ci or extended-stable ref pinned to the target SHA",
     );
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
@@ -753,6 +772,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker-full "full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
@@ -776,7 +796,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
-    expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
+    expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
@@ -1071,11 +1091,28 @@ describe("package artifact reuse", () => {
       '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      '-e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "run_setup_command npm install -g @anthropic-ai/claude-code",
+      'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
+    const acpBindScript = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
+    expect(acpBindScript).toContain(
+      "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH must be one of: auto, api-key, subscription.",
+    );
+    expect(acpBindScript).toContain(
+      'if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "subscription" ]]; then',
+    );
+    expect(acpBindScript).toContain(
+      "unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN",
+    );
+    expect(acpBindScript).toContain('-e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"');
+    expect(acpBindScript).not.toContain("    -e ANTHROPIC_API_KEY \\\n");
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription/g)).toHaveLength(2);
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key/g)).toHaveLength(2);
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
@@ -1261,10 +1298,10 @@ describe("package artifact reuse", () => {
       reusableWorkflow.match(
         /if \[\[ -n "\$\{OPENCLAW_CLAUDE_CREDENTIALS_JSON:-\}" \|\| -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 
-  it("finalizes Testbox delegation even when setup or the remote command fails", () => {
+  it("finalizes dispatched Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
@@ -1288,7 +1325,7 @@ describe("package artifact reuse", () => {
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep.if).toBe("always()");
+    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.if).toBe("always()");
@@ -1383,6 +1420,27 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       "QA release-check lanes are advisory and do not block release validation.",
     );
+  });
+
+  it("prefers fresh Claude OAuth credentials for direct Anthropic live provider lanes", () => {
+    const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+
+    expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
+    expect(hydrateScript).toContain("access_token=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain('export ANTHROPIC_OAUTH_TOKEN="$access_token"');
+    expect(hydrateScript).toContain('local min_remaining_ms="$(( 90 * 60 * 1000 ))"');
+    expect(hydrateScript).toContain(
+      'printf \'ANTHROPIC_OAUTH_TOKEN=%s\\n\' "$access_token" >>"$GITHUB_ENV"',
+    );
+    for (const jobName of [
+      "validate_live_models_docker",
+      "validate_live_models_docker_targeted",
+      "validate_live_provider_suites",
+    ]) {
+      expect(workflowJob(LIVE_E2E_WORKFLOW, jobName).env?.ANTHROPIC_OAUTH_TOKEN).toBe(
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+      );
+    }
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -1521,15 +1579,23 @@ describe("package artifact reuse", () => {
 
     for (const item of cases) {
       const label = `${item.workflowPath} ${item.jobName}`;
-      const uploadStep = workflowStep(
-        workflowJob(item.workflowPath, item.jobName),
-        item.stepName,
-      );
+      const uploadStep = workflowStep(workflowJob(item.workflowPath, item.jobName), item.stepName);
 
       expect(uploadStep.if, label).toContain("always()");
       expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
       expect(uploadStep.with?.["if-no-files-found"], label).toBe("error");
     }
+  });
+
+  it("maps every supported Slack approval checkpoint scenario family", () => {
+    const workflow = readFileSync(MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "utf8");
+
+    expectTextToIncludeAll(workflow, [
+      'endswith("-exec-native")',
+      'endswith("-plugin-native")',
+      'startswith("slack-codex-")',
+      'expected_result="Slack approval checkpoint passes for $scenario_label"',
+    ]);
   });
 
   it("fails Docker E2E release lanes when summary artifacts are missing", () => {
@@ -1667,7 +1733,8 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(fullReleaseDocs, [
       "cross_os_suite_filter",
       "QA release-check failures block normal release validation",
-      "input capture fails instead of silently skipping the lane",
+      "input capture fails",
+      "skipping the lane",
       "does not duplicate that",
       "canonical Package Acceptance Telegram E2E",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
@@ -2027,6 +2094,99 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("gates stable GitHub publication on the signed Android APK contract", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
+    const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
+    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
+
+    expect(androidWorkflow).toContain("environment: android-release");
+    expect(androidWorkflow).toContain(
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+    );
+    expect(androidWorkflow).toContain("repositories: apps-signing");
+    expect(androidWorkflow).toContain("permission-contents: read");
+    expect(androidWorkflow).toContain("--mode materialize");
+    expect(androidWorkflow).not.toContain("APPS_SIGNING_DEPLOY_KEY");
+    expect(androidWorkflow).toContain("MATCH_PASSWORD");
+    expect(androidWorkflow).toContain("scripts/validate-release-publish-approval.mjs");
+    expect(releaseWorkflow).toContain("Write Android release approval");
+    expect(releaseWorkflow).toContain("Attest Android release approval");
+    expect(releaseWorkflow).toContain("Upload Android release approval");
+    expect(releaseWorkflow).toContain("android-release-approval-${{ github.run_id }}");
+    expect(releaseWorkflow).toContain("parentRunId: process.env.RELEASE_PUBLISH_RUN_ID");
+    expect(releaseWorkflow).toContain("releaseTag: process.env.RELEASE_TAG");
+    expect(releaseWorkflow).toContain("targetSha: process.env.TARGET_SHA");
+    expect(androidWorkflow).toContain("Download parent release approval");
+    expect(androidWorkflow).toContain(
+      "android-release-approval-${{ inputs.release_publish_run_id }}",
+    );
+    expect(androidWorkflow).toContain(
+      '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml"',
+    );
+    expect(androidWorkflow).toContain('--source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}"');
+    expect(approvalScript).toContain(
+      "Attested Android release approval does not match this run request.",
+    );
+    expect(androidWorkflow).toContain('--artifact", "third-party');
+    expect(androidWorkflow).toContain("OpenClaw-Android.apk");
+    expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
+    expect(androidWorkflow).toContain("actions/attest@a1948c3f048ba23858d222213b7c278aabede763");
+    expect(androidWorkflow).toContain("--signer-workflow");
+    expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
+    expect(androidWorkflow).toContain("--deny-self-hosted-runners");
+    expect(androidWorkflow).toContain("--verify-apk");
+    expect(androidWorkflow).toContain('expected_source_ref="refs/tags/${RELEASE_TAG}"');
+    expect(androidWorkflow).toContain("release_target_sha must be a full lowercase commit SHA");
+    expect(androidWorkflow).toContain("does not match ${RELEASE_TAG} (${tag_sha})");
+    expect(androidWorkflow).toContain(
+      "must resolve to the same source commit as ${fallback_base_tag}",
+    );
+    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_TAG");
+    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_SHA");
+    expect(androidWorkflow).toContain('--source-digest "${FALLBACK_ANDROID_BASE_SHA}"');
+    expect(androidWorkflow).toContain("steps.release_source.outputs.fallback_base_tag == ''");
+    expect(androidWorkflow).toContain(
+      "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG}",
+    );
+    expect(androidWorkflow).toContain("Existing Android release asset ${asset_name} differs");
+    expect(androidWorkflow).not.toContain("--clobber");
+
+    expect(releaseWorkflow).toContain("promote_android_release_asset()");
+    expect(releaseWorkflow).toContain("is_android_release()");
+    expect(androidWorkflow).toContain("requires a final or correction OpenClaw release tag");
+    expect(androidWorkflow).toContain("previous_version_code");
+    expect(androidWorkflow).toContain("must exceed ${previous_tag} versionCode");
+    expect(androidWorkflow).toContain("standalone channel bootstrap");
+    expect(releaseWorkflow).toContain(
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml',
+    );
+    expect(releaseWorkflow).toContain('-f release_target_sha="${TARGET_SHA}"');
+    expect(releaseWorkflow).toContain("verify_android_release_asset_contract");
+    expect(releaseWorkflow).toContain("Android release APK digest does not match");
+    expect(releaseWorkflow).toContain("Android APK asset contract: verified");
+
+    const createDraftCall = releaseWorkflow.lastIndexOf(
+      "\n            create_or_update_github_release\n",
+    );
+    const promoteAndroidCall = releaseWorkflow.lastIndexOf(
+      "\n            if ! promote_android_release_asset; then\n",
+    );
+    const publishReleaseCall = releaseWorkflow.lastIndexOf(
+      "\n              publish_github_release\n",
+    );
+    expect(createDraftCall).toBeGreaterThan(-1);
+    expect(promoteAndroidCall).toBeGreaterThan(createDraftCall);
+    expect(publishReleaseCall).toBeGreaterThan(promoteAndroidCall);
+
+    expect(androidDocs).toContain("github.com/openclaw/openclaw/releases");
+    expect(androidDocs).not.toContain("releases/latest/download/OpenClaw-Android.apk");
+    expect(androidDocs).toContain("gh attestation verify OpenClaw-Android.apk");
+    expect(androidDocs).toContain('--source-ref "refs/tags/${release_tag}"');
+    expect(releaseDocs).toContain("signed standalone Android APK");
+  });
+
   it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
@@ -2104,7 +2264,7 @@ describe("package artifact reuse", () => {
     expect(pluginPretagPackScript).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
     expect(pluginPretagPackScript).toContain("scripts/plugin-npm-publish.sh");
     expect(pluginPretagPackScript).toContain("scripts/plugin-clawhub-publish.sh");
-    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubWorkflow).toContain("pack_plugins_clawhub_artifacts:");
@@ -2127,7 +2287,10 @@ describe("package artifact reuse", () => {
       "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
     );
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
+    );
+    expect(clawHubWorkflow).toContain(
+      'family: ${{ contains(fromJson(\'["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]\'), matrix.plugin.packageName) && \'bundle-plugin\' || \'\' }}',
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
@@ -2277,7 +2440,7 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
     expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
-    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"');
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");
@@ -2370,6 +2533,7 @@ describe("package artifact reuse", () => {
       LIVE_E2E_WORKFLOW,
       NPM_TELEGRAM_WORKFLOW,
       ".github/workflows/openclaw-release-publish.yml",
+      ".github/workflows/android-release.yml",
       ".github/workflows/openclaw-npm-release.yml",
       ".github/workflows/macos-release.yml",
       ".github/workflows/plugin-clawhub-release.yml",
@@ -2388,6 +2552,12 @@ describe("package artifact reuse", () => {
     );
     expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(
+      workflowStep(
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+        "Setup Node environment",
+      ).with?.["install-deps"],
+    ).toBe("true");
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(

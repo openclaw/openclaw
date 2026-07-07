@@ -431,6 +431,7 @@ export default definePluginEntry({
           label: "GitHub device login",
           hint: "Browser device-code flow",
           kind: "device_code",
+          starterModel: DEFAULT_COPILOT_MODEL,
           run: async (ctx) => await runGitHubCopilotAuth(ctx),
           runNonInteractive: async (ctx) => await runGitHubCopilotNonInteractiveAuth(ctx),
         },

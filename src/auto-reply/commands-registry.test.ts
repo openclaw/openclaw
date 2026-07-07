@@ -217,10 +217,35 @@ describe("commands registry", () => {
       "help",
       "stop",
       "skill",
+      "learn",
       "tasks",
       "whoami",
       "compact",
     ]);
+  });
+
+  it("keeps /login text-enabled while limiting native registration to Telegram", () => {
+    const command = requireChatCommand("login");
+    expect(command.textAliases).toEqual(["/login"]);
+    expect(command.nativeName).toBe("login");
+    expect(command.nativeProviders).toEqual(["telegram"]);
+
+    expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
+    expect(
+      findCommandByNativeName("login", "telegram", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("login");
+    expect(
+      findCommandByNativeName("login", "discord", {
+        includeBundledChannelFallback: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      findCommandByNativeName("login", "slack", {
+        includeBundledChannelFallback: false,
+      }),
+    ).toBeUndefined();
   });
 
   it("exposes /side as a BTW text and native alias", () => {
@@ -257,6 +282,22 @@ describe("commands registry", () => {
     ).toBe("/skill demo_skill first line\nsecond line");
     expect(resolveTextCommand("/skill demo_skill first line\nsecond line")?.args).toBe(
       "demo_skill first line\nsecond line",
+    );
+  });
+
+  it("registers /learn as a standard tools command with optional free text", () => {
+    const learn = requireChatCommand("learn");
+    expect(learn.nativeName).toBe("learn");
+    expect(learn.textAliases).toEqual(["/learn"]);
+    expect(learn.category).toBe("tools");
+    expect(learn.tier).toBe("standard");
+    expect(learn.acceptsArgs).toBe(true);
+    expect(requireCommandArg(learn, "request").required).not.toBe(true);
+    expect(normalizeCommandBody("/learn first line\nsecond line")).toBe(
+      "/learn first line\nsecond line",
+    );
+    expect(resolveTextCommand("/learn first line\nsecond line")?.args).toBe(
+      "first line\nsecond line",
     );
   });
 
@@ -478,6 +519,7 @@ describe("commands registry", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.exact.has("/skill")).toBe(true);
+    expect(detection.exact.has("/learn")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
     expect(detection.exact.has("/whoami")).toBe(true);
     expect(detection.exact.has("/id")).toBe(true);

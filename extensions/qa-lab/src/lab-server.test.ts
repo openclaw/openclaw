@@ -657,7 +657,8 @@ describe("qa-lab server", () => {
     });
 
     const result = await lab.runSelfCheck();
-    expect(result.outputPath).toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md"));
+    expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
     expect(await readFile(result.outputPath, "utf8")).toContain("Synthetic Slack-class roundtrip");
   });
 
