@@ -214,6 +214,51 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("auto-selects Bedrock PDF models with AWS SDK auth", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      vi.stubEnv("AWS_PROFILE", "");
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
+      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "amazon-bedrock/text-1" } } },
+        models: {
+          mode: "replace",
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              auth: "aws-sdk",
+              api: "bedrock-converse-stream",
+              models: [
+                {
+                  id: "text-1",
+                  name: "Bedrock Text",
+                  input: ["text"],
+                  contextWindow: 16_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+                {
+                  id: "vision-1",
+                  name: "Bedrock Vision",
+                  input: ["text", "image"],
+                  contextWindow: 16_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const tool = (await loadCreatePdfTool())({ config: cfg, agentDir });
+      expect(typeof tool?.execute).toBe("function");
+    });
+  });
+
   it("defers automatic model config resolution during registration (#76644)", async () => {
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
     const cfg = withDefaultModel("openai/gpt-5.4");
