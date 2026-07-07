@@ -108,6 +108,7 @@ import {
   createChannelPairingController,
   createChannelMessageReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  evictOldHistoryKeys,
   logInboundDrop,
   logTypingFailure,
   registerPluginHttpRoute,
@@ -872,6 +873,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     0,
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  const MAX_MATTERMOST_CHANNEL_HISTORIES = 200;
   const channelHistories = new Map<string, HistoryEntry[]>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -1490,6 +1492,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                 : null,
           });
+          evictOldHistoryKeys(channelHistories, MAX_MATTERMOST_CHANNEL_HISTORIES);
         };
 
         const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
