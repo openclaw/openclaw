@@ -24,7 +24,7 @@ const sleepMock = vi.hoisted(() =>
   }),
 );
 const childUnref = vi.hoisted(() => vi.fn());
-const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+const spawn = vi.hoisted(() => vi.fn(() => ({ on: vi.fn(), unref: childUnref })));
 type SpawnSyncResult = {
   pid: number;
   output: (string | null)[];
