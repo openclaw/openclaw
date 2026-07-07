@@ -2362,11 +2362,10 @@ export async function dispatchReplyFromConfig(
       botUsername: ctx.BotUsername,
     }).trim();
     if (normalizedCommandBody.startsWith("/") || isExplicitSourceReplyCommand(ctx, cfg)) {
-      return;
+      return undefined;
     }
     return (
       normalizeOptionalString(ctx.BodyForAgent) ??
-      normalizeOptionalString(ctx.BodyStripped) ??
       normalizeOptionalString(ctx.Body) ??
       normalizeOptionalString(ctx.CommandBody) ??
       normalizeOptionalString(ctx.RawBody)
