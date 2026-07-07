@@ -590,6 +590,8 @@ export async function prepareCliRunContext(
             OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
             OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
             OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
+            OPENCLAW_MCP_CURRENT_THREAD_PARENT_ID:
+              params.messageThreadParentId != null ? String(params.messageThreadParentId) : "",
             OPENCLAW_MCP_CURRENT_MESSAGE_ID:
               params.currentMessageId != null ? String(params.currentMessageId) : "",
             OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
@@ -713,6 +715,7 @@ export async function prepareCliRunContext(
             // CLI binding hashes must use session-stable prompt facts. Per-sender
             // and per-message scope stays in the runtime MCP env/list-call path.
             currentThreadTs: undefined,
+            currentThreadParentId: undefined,
             currentMessageId: undefined,
             currentInboundAudio: undefined,
             accountId: params.agentAccountId,

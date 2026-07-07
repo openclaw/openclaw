@@ -120,6 +120,7 @@ export type RunCliAgentParams = {
   chatId?: string;
   channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
+  messageThreadParentId?: string | number;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   agentAccountId?: string;
