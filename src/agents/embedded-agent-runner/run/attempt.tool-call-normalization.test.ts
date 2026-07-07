@@ -1117,6 +1117,48 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(forwardedContext.messages).toBe(messages);
   });
 
+  it("replaces omitted Anthropic replay tool results with an actionable marker", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "stale-call",
+            content: [{ type: "text", text: "stale output" }],
+          },
+        ],
+      } as never,
+    ];
+    const baseFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) =>
+      createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: "ok" },
+      }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      undefined,
+      { validateAnthropicTurns: true },
+      "anthropic",
+    );
+
+    void wrapped({ api: "anthropic-messages" } as never, { messages } as never, {} as never);
+
+    const forwardedContext = baseFn.mock.calls[0]?.[1] as {
+      messages?: AgentMessage[];
+    };
+    expect(forwardedContext.messages?.[0]).toMatchObject({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "[tool result pruned to fit context budget - re-run the tool call to see fresh output]",
+        },
+      ],
+    });
+  });
+
   it("repairs OpenAI Responses pairing even when replay inputs do not change", () => {
     const messages: AgentMessage[] = [
       {

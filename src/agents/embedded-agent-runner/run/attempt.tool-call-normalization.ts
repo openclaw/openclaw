@@ -35,6 +35,8 @@ import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
+const TOOL_RESULTS_OMITTED_PROMPT_TEXT =
+  "[tool result pruned to fit context budget - re-run the tool call to see fresh output]";
 
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
@@ -574,7 +576,7 @@ function sanitizeAnthropicReplayToolResults(
 
     out.push({
       ...message,
-      content: [{ type: "text", text: "[tool results omitted]" }],
+      content: [{ type: "text", text: TOOL_RESULTS_OMITTED_PROMPT_TEXT }],
     } as AgentMessage);
   }
 
