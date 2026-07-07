@@ -29,8 +29,8 @@ describe("release-check", () => {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      "/tmp/openclaw.tgz",
       "/tmp/openclaw-ai.tgz",
+      "/tmp/openclaw.tgz",
     ]);
   });
 

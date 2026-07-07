@@ -446,8 +446,8 @@ export function createPackedTarballInstallArgs(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    tarballPath,
     ...localPackageTarballs,
+    tarballPath,
   ];
 }
 
