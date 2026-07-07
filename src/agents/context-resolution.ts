@@ -156,7 +156,7 @@ export function resolveAnthropicFixedContextWindow(
     return undefined;
   }
   if (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
+    (provider === "anthropic" || provider === "anthropic-vertex" || provider === "claude-cli") &&
     /^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)
   ) {
     return ANTHROPIC_FABLE_CONTEXT_TOKENS;

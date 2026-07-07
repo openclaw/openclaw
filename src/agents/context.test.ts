@@ -89,12 +89,14 @@ describe("applyDiscoveredContextWindows", () => {
         { id: "claude-cli/claude-opus-4.8-20260514", contextWindow: 200_000 },
         { id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 },
         { id: "claude-cli/claude-sonnet-4-6", contextWindow: 200_000 },
+        { id: "claude-cli/claude-fable-5", contextWindow: 200_000 },
       ],
     });
 
     expect(cache.get("claude-cli/claude-opus-4.8-20260514")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
     expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
     expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    expect(cache.get("claude-cli/claude-fable-5")).toBe(ANTHROPIC_FABLE_CONTEXT_TOKENS);
   });
 
   it("does not upgrade non-Anthropic GA 1M model ids from discovery", () => {
@@ -425,6 +427,7 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -466,6 +469,7 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5"],
     ["anthropic-vertex", "claude-fable-5"],
+    ["claude-cli", "claude-fable-5"],
     ["anthropic", "claude-sonnet-4-6"],
     ["anthropic-vertex", "claude-sonnet-4-6"],
   ])("honors an authored %s window for fixed model %s", (provider, modelId) => {
@@ -564,6 +568,7 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
