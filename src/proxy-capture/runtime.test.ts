@@ -581,14 +581,67 @@ describe("debug proxy runtime", () => {
 });
 
 describe("readCapturedResponseBodyBounded", () => {
-  it("skips body read when content-length exceeds cap", async () => {
-    const large = Buffer.alloc(5 * 1024 * 1024, 0x61);
-    const response = new Response(large, {
-      headers: { "content-length": String(large.length) },
-    });
+  it("skips body read when content-length exceeds cap (body-less fallback)", async () => {
+    // Force the !body fallback with a mock clone so the content-length
+    // precheck, not the streaming path, rejects the oversized body.
+    // A real Response clone exposes body.getReader in Node 24 and would
+    // enter the streaming branch, never testing this guard.
+    const largeSize = 5 * 1024 * 1024;
+    const arrayBufferSpy = vi.fn();
+    const mockClone = {
+      headers: new Headers({ "content-length": String(largeSize) }),
+      body: null,
+      arrayBuffer: arrayBufferSpy,
+    };
+    const response = {
+      clone: () => mockClone,
+    } as unknown as Response;
     const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
     expect(truncated).toBe(true);
     expect(buffer.length).toBe(0);
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads body via fallback when content-length is within cap", async () => {
+    // Body-less path with a declared length under the cap: must call
+    // arrayBuffer() and return the body.
+    const body = Buffer.from("small");
+    const arrayBufferSpy = vi
+      .fn()
+      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+    const mockClone = {
+      headers: new Headers({ "content-length": String(body.length) }),
+      body: null,
+      arrayBuffer: arrayBufferSpy,
+    };
+    const response = {
+      clone: () => mockClone,
+    } as unknown as Response;
+    const result = await readCapturedResponseBodyBounded(response, 1024);
+    expect(result.truncated).toBe(false);
+    expect(result.buffer.equals(body)).toBe(true);
+    expect(arrayBufferSpy).toHaveBeenCalledOnce();
+  });
+
+  it("reads body via fallback when content-length is missing (within cap)", async () => {
+    // Body-less path without a content-length header: must fall through
+    // to arrayBuffer() and check the actual byte length.
+    const body = Buffer.from("no length header");
+    const arrayBufferSpy = vi
+      .fn()
+      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+    const mockClone = {
+      headers: new Headers(),
+      body: null,
+      arrayBuffer: arrayBufferSpy,
+    };
+    const response = {
+      clone: () => mockClone,
+    } as unknown as Response;
+    const result = await readCapturedResponseBodyBounded(response, 4096);
+    expect(result.truncated).toBe(false);
+    expect(result.buffer.equals(body)).toBe(true);
+    expect(arrayBufferSpy).toHaveBeenCalledOnce();
   });
 
   it("reads body when content-length is within cap", async () => {
