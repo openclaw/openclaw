@@ -201,26 +201,6 @@ function appsForPlugin(
     .toSorted();
 }
 
-function hasLoneSurrogate(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 >= text.length) {
-        return true;
-      }
-      const next = text.charCodeAt(i + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      i++;
-    }
-  }
-  return false;
-}
-
 describe("Codex app-server elicitation bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -1688,7 +1668,7 @@ describe("Codex app-server elicitation bridge", () => {
 
     const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
     const description = approvalCallParams.description ?? "";
-    expect(hasLoneSurrogate(description)).toBe(false);
+    expect(description).toContain(`${"b".repeat(116)}...`);
   });
 
   it("does not expose a split surrogate pair from the display scan cap", async () => {
@@ -1708,7 +1688,7 @@ describe("Codex app-server elicitation bridge", () => {
 
     const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
     expect(approvalCallParams.title).toBe("Codex MCP tool approval");
-    expect(hasLoneSurrogate(approvalCallParams.description ?? "")).toBe(false);
+    expect(approvalCallParams.description).not.toContain(String.fromCharCode(0xd83d));
     expect(() => encodeURIComponent(approvalCallParams.description ?? "")).not.toThrow();
   });
 });

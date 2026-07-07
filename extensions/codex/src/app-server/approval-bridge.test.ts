@@ -116,26 +116,6 @@ function createParams(): EmbeddedRunAttemptParams {
   } as unknown as EmbeddedRunAttemptParams;
 }
 
-function hasLoneSurrogate(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 >= text.length) {
-        return true;
-      }
-      const next = text.charCodeAt(i + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      i++;
-    }
-  }
-  return false;
-}
-
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -2753,10 +2733,10 @@ describe("Codex app-server approval bridge", () => {
     });
 
     const event = findApprovalEvent(params, { status: "pending" });
-    expect(hasLoneSurrogate(typeof event.command === "string" ? event.command : "")).toBe(false);
+    expect(event.command).toBe(`${"a".repeat(176)}...`);
 
     const description = String(gatewayRequestPayload().description);
-    expect(hasLoneSurrogate(description)).toBe(false);
+    expect(description).toContain(`${"a".repeat(176)}...`);
   });
 
   it.each([
@@ -2792,10 +2772,9 @@ describe("Codex app-server approval bridge", () => {
 
       const event = findApprovalEvent(params, { status: "pending" });
       const description = String(gatewayRequestPayload().description);
-      const command = typeof event.command === "string" ? event.command : "";
       expect(event.commandPreviewOmitted).toBe(true);
-      expect(hasLoneSurrogate(command)).toBe(false);
-      expect(hasLoneSurrogate(description)).toBe(false);
+      expect(event.command).toBeUndefined();
+      expect(description).not.toContain(String.fromCharCode(0xd83d));
       expect(() => encodeURIComponent(description)).not.toThrow();
     },
   );
@@ -2814,7 +2793,5 @@ describe("Codex app-server approval bridge", () => {
     const payload = gatewayRequestPayload();
     expect(payload.title).toBe(`${"t".repeat(76)}...`);
     expect(payload.description).toBe(`${"d".repeat(252)}...`);
-    expect(hasLoneSurrogate(String(payload.title))).toBe(false);
-    expect(hasLoneSurrogate(String(payload.description))).toBe(false);
   });
 });
