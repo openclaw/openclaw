@@ -187,7 +187,7 @@ export function formatDiscordDeployErrorMessage(err: unknown): string {
   return `Discord REST ${operation} was aborted${timingText}`;
 }
 
-export function resolveDiscordDeployRateLimitDetails(
+function resolveDiscordDeployRateLimitDetails(
   err: unknown,
 ): DiscordDeployRateLimitDetails | undefined {
   if (!err || typeof err !== "object") {

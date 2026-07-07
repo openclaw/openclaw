@@ -1024,7 +1024,7 @@ export function addClientToolsToToolSearchCatalog(params: {
 }
 
 /** Register catalog entries under run/session keys and optional direct refs. */
-export function registerToolSearchCatalog(params: {
+function registerToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
