@@ -446,12 +446,19 @@ function deviceAuthStorageKey(gatewayUrl: string): string {
   return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
 }
 
-function readStore(gatewayUrl: string): DeviceAuthStore | null {
+function removeLegacyDeviceAuthStore(storage: Storage | null) {
   try {
-    const raw = getSafeLocalStorage()?.getItem(deviceAuthStorageKey(gatewayUrl));
-    if (!raw) {
-      return null;
-    }
+    storage?.removeItem(LEGACY_DEVICE_AUTH_STORAGE_KEY);
+  } catch {
+    // Legacy cleanup must not make an otherwise usable device token unreadable.
+  }
+}
+
+function parseDeviceAuthStore(raw: string | null): DeviceAuthStore | null {
+  if (!raw) {
+    return null;
+  }
+  try {
     const parsed = JSON.parse(raw) as DeviceAuthStore;
     if (!parsed || parsed.version !== 1) {
       return null;
@@ -468,11 +475,42 @@ function readStore(gatewayUrl: string): DeviceAuthStore | null {
   }
 }
 
+function readStore(gatewayUrl: string): DeviceAuthStore | null {
+  try {
+    const storage = getSafeLocalStorage();
+    const scopedKey = deviceAuthStorageKey(gatewayUrl);
+    const scopedStore = parseDeviceAuthStore(storage?.getItem(scopedKey) ?? null);
+    if (scopedStore) {
+      removeLegacyDeviceAuthStore(storage);
+      return scopedStore;
+    }
+
+    const legacyStore = parseDeviceAuthStore(
+      storage?.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY) ?? null,
+    );
+    if (!legacyStore) {
+      return null;
+    }
+
+    // Older releases stored one origin-wide token. Claim it for the first gateway
+    // opened after upgrade, then remove the ambiguous key before sibling routes use it.
+    try {
+      storage?.setItem(scopedKey, JSON.stringify(legacyStore));
+      removeLegacyDeviceAuthStore(storage);
+    } catch {
+      // Keep the usable in-memory result when browser storage rejects the migration.
+    }
+    return legacyStore;
+  } catch {
+    return null;
+  }
+}
+
 function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
   try {
     const storage = getSafeLocalStorage();
     storage?.setItem(deviceAuthStorageKey(gatewayUrl), JSON.stringify(store));
-    storage?.removeItem(LEGACY_DEVICE_AUTH_STORAGE_KEY);
+    removeLegacyDeviceAuthStore(storage);
   } catch {
     // localStorage can be unavailable in private or embedded contexts.
   }

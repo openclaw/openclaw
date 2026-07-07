@@ -14,6 +14,8 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const DEFAULT_DEVICE_AUTH_STORAGE_KEY = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:${DEFAULT_GATEWAY_URL}`;
 const STORED_CRED = "stored-device-token";
 const ROSITA_CRED = "rosita-device-token";
 const WILFRED_CRED = "wilfred-device-token";
@@ -957,6 +959,35 @@ describe("GatewayBrowserClient", () => {
       token: "stored-device-token",
       nonce: "nonce-1",
     });
+  });
+
+  it("uses a scoped device token when legacy cleanup fails", async () => {
+    vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("storage cleanup blocked");
+    });
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+  });
+
+  it("migrates the legacy device token store to the first gateway opened after upgrade", async () => {
+    const legacyStore = localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY);
+    expect(legacyStore).not.toBeNull();
+    localStorage.clear();
+    localStorage.setItem(LEGACY_DEVICE_AUTH_STORAGE_KEY, legacyStore ?? "");
+
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+    });
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(localStorage.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY)).toBe(legacyStore);
   });
 
   it("keeps cached device tokens separate for gateways on the same origin", async () => {
