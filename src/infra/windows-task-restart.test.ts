@@ -98,6 +98,10 @@ describe("relaunchGatewayScheduledTask", () => {
       seenCommandArg = args[3];
       createdScriptPaths.add(decodeCmdPathArg(args[3]));
       return { on: vi.fn(), unref };
+    });
+
+    const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
+    const cmdExePath = getWindowsCmdExePath();
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe("schtasks");
