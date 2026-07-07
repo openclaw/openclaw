@@ -413,7 +413,7 @@ public final class OpenClawChatViewModel {
                 return
             }
             self.sessions.removeAll { $0.key == sessionKey }
-            if sessionKey == self.sessionKey {
+            if self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey) {
                 // The active transcript just disappeared server-side; fall
                 // back to the main session instead of a dead key.
                 let fallback = self.resolvedMainSessionKey

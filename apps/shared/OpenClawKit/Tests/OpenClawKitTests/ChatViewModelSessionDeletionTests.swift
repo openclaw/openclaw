@@ -53,7 +53,6 @@ private final class DeleteSessionTestTransport: @unchecked Sendable, OpenClawCha
     }
 }
 
-@Suite
 @MainActor
 struct ChatViewModelSessionDeletionTests {
     @Test func `deleting the active main session re-bootstraps in place`() async throws {
@@ -92,6 +91,27 @@ struct ChatViewModelSessionDeletionTests {
             await MainActor.run { transport.deletedKeys == ["scratch"] }
         }
         try await waitUntil("fallback switch to main") {
+            await MainActor.run { vm.sessionKey == "main" }
+        }
+    }
+
+    @Test func `deleting the canonical selected global row treats its alias as active`() async throws {
+        let transport = DeleteSessionTestTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: "global",
+            activeAgentId: "ops",
+            transport: transport)
+        vm.load()
+        try await waitUntil("initial bootstrap history") {
+            await MainActor.run { transport.historyRequests.contains("global") }
+        }
+
+        vm.deleteSession("agent:ops:global")
+
+        try await waitUntil("delete reaches transport") {
+            await MainActor.run { transport.deletedKeys == ["agent:ops:global"] }
+        }
+        try await waitUntil("alias fallback switch to main") {
             await MainActor.run { vm.sessionKey == "main" }
         }
     }

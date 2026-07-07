@@ -2,6 +2,32 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
+private final class ContextUsageTestTransport: @unchecked Sendable, OpenClawChatTransport {
+    func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        throw CancellationError()
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw CancellationError()
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        false
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+}
+
 struct ChatContextUsageTests {
     private func message(
         role: String = "assistant",
@@ -159,5 +185,35 @@ struct ChatContextUsageTests {
             modelContextWindow: 4000)
 
         #expect(result == nil)
+    }
+
+    @Test @MainActor func `view model resolves context totals through a selected global alias`() {
+        let vm = OpenClawChatViewModel(
+            sessionKey: "global",
+            activeAgentId: "ops",
+            transport: ContextUsageTestTransport())
+        vm.sessions = [OpenClawChatSessionEntry(
+            key: "agent:ops:global",
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: 5000,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: 10000)]
+
+        #expect(vm.contextUsage?.usedTokens == 5000)
+        #expect(vm.contextUsage?.contextWindowTokens == 10000)
     }
 }
