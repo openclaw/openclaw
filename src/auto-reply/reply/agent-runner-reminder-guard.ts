@@ -11,7 +11,7 @@ const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+(?:(?:remind|ping|follow up|follow-up|check back|circle back)\b|(?:set|create|schedule)\s+(?:a\s+)?reminder\b)/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\b[^.!?]{0,160}\b(?:tomorrow|tonight|later|(?:this|next)\s+(?:morning|afternoon|evening|week|month|year)|in\s+(?:\d+|an?|one|two|three|four|five)\s+(?:minutes?|hours?|days?|weeks?)|at\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?|when|once|after|before)\b/i,
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\b[^.!?]{0,160}?(?:\s+and(?:\s+then)?|,\s*(?:(?:and\s+)?then)?)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\b[^.!?]{0,160}?(?:\s+and(?:\s+then)?|,\s*(?:(?:and\s+)?then)?)\s+(?:(?:i\s*['’]?ll|i will|will)\s+)?(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
