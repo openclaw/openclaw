@@ -178,7 +178,7 @@ export function markBackgroundTaskTerminal(
   runId: string,
   params: {
     sessionKey?: string;
-    status: "succeeded" | "failed" | "timed_out";
+    status: "succeeded" | "failed" | "timed_out" | "cancelled";
     endedAt: number;
     lastEventAt?: number;
     error?: string;
@@ -201,6 +201,8 @@ export function markBackgroundTaskTerminal(
       });
       return;
     }
+    // Non-success terminals (failed/timed_out/cancelled) record through the detached-task
+    // fail sink, which preserves the distinct terminal status instead of collapsing to success.
     failTaskRunByRunId({
       runId,
       runtime: "acp",

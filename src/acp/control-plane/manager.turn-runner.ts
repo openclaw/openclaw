@@ -294,9 +294,11 @@ export async function runManagerTurn(params: {
           });
           if (taskContext) {
             const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+            // A cancelled turn also resolves without throwing; record it honestly
+            // rather than mirroring the child task as succeeded.
             markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
-              status: "succeeded",
+              status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",
               endedAt: Date.now(),
               lastEventAt: Date.now(),
               error: undefined,
