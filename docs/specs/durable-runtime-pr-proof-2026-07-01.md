@@ -13,31 +13,38 @@ identity pass:
 - gateway `chat.send` durable intake records work-unit context when a
   `work_unit` context reference is present;
 - coordination projections surface `workUnitId` and `reportRouteId` for
-  TaskFlow, Workboard, and operator clients;
-- Workboard plugin metadata declares the `workboard_archive` tool contract.
+  durable-runtime consumers and operator clients.
+
+This private review pass intentionally excludes Workboard plugin, Workboard UI,
+and TaskFlow product-level proof. See
+`docs/specs/durable-core-private-review-plan-2026-07-07.md` for the
+five-PR durable-core-only stack plan.
 
 ## Verification
 
 Commands run from the OpenClaw worktree:
 
 ```bash
-npm test -- --run extensions/workboard/src/tools.test.ts extensions/workboard/doctor-contract-api.test.ts src/durable src/gateway/server-methods/durable.test.ts src/gateway/context-refs.test.ts
-npm run tsgo:core
-npm run tsgo:core:test
-npm run build
+node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable src/gateway/server-methods/durable.test.ts src/gateway/context-refs.test.ts
+pnpm tsgo:core
+pnpm tsgo:core:test
+pnpm lint:kysely
 git diff --check
 ```
 
 Results:
 
-- durable unit shard: 14 files, 45 tests passed;
-- gateway shard: 6 files, 20 tests passed;
-- workboard extension shard: 2 files, 13 tests passed;
-- `tsgo:core`: passed;
-- `tsgo:core:test`: passed;
-- `npm run build`: passed, including `tsdown`, plugin SDK export checks, plugin
-  asset copy, and control UI production build;
+Latest private durable-core-only rerun on 2026-07-07:
+
+- durable/gateway/context-ref shard: passed, 125 tests across 17 files;
+- `pnpm tsgo:core`: passed;
+- `pnpm tsgo:core:test`: passed;
+- `pnpm lint:kysely`: passed;
 - `git diff --check`: passed.
+
+Earlier Workboard extension shards and full build were intentionally removed
+from this proof narrative because they are outside durable-core private review
+scope.
 
 ## Local Runtime Smoke
 
