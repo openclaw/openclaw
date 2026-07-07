@@ -4,6 +4,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveCronMinIntervalMs } from "../../config/cron-limits.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -30,12 +32,14 @@ import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
   applyJobPatch,
   applyDeclarativeJobSpec,
+  assertScheduleMeetsMinInterval,
   assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
+  minIntervalFloorAtMs,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -525,6 +529,7 @@ function finalizeUpdatedJob(params: {
   now: number;
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
+  cronConfig: Pick<CronConfig, "minInterval"> | undefined;
 }) {
   const { job, nextJob, now } = params;
   if (nextJob.schedule.kind === "every") {
@@ -568,15 +573,25 @@ function finalizeUpdatedJob(params: {
   }
 
   nextJob.updatedAtMs = now;
+  // Update re-arms keep the cron.minInterval fire-time floor: without it, a
+  // bare {enabled: true} update would reset a floor-deferred next fire back
+  // to the natural (too fast) slot, defeating the operator limit.
+  const rearmedNextRunAtMs = () => {
+    const naturalNext = computeJobNextRunAtMs(nextJob, now);
+    if (naturalNext === undefined) {
+      return undefined;
+    }
+    return Math.max(naturalNext, minIntervalFloorAtMs(params.cronConfig, nextJob));
+  };
   if (schedulingInputsChanged) {
     if (isJobEnabled(nextJob)) {
-      nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+      nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
     } else {
       nextJob.state.nextRunAtMs = undefined;
       nextJob.state.runningAtMs = undefined;
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
-    nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+    nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
   }
 }
 
@@ -654,13 +669,25 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       ) {
         return { ...existing, created: false, updated: false, job: existing };
       }
+      const scheduleChanged = !isDeepStrictEqual(existing.schedule, nextJob.schedule);
+      // Declarative converge edits the schedule like update(): a changed
+      // schedule must meet cron.minInterval here too, or add() with a
+      // declarationKey would bypass the create/update-time rejection.
+      if (scheduleChanged) {
+        assertScheduleMeetsMinInterval(
+          nextJob.schedule,
+          resolveCronMinIntervalMs(state.deps.cronConfig),
+          now,
+        );
+      }
       const snapshot = snapshotStoreForRollback(state);
       finalizeUpdatedJob({
         job: existing,
         nextJob,
         now,
         schedulingInputsRequested: true,
-        scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
+        scheduleChanged,
+        cronConfig: state.deps.cronConfig,
       });
       await persistUpdatedJob({ state, snapshot, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
@@ -723,12 +750,22 @@ async function updateLoadedJob(params: {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
   });
+  // Re-validate against the configured floor only when the schedule itself
+  // changes, so unrelated edits to a pre-existing fast job are not blocked.
+  if (patch.schedule !== undefined) {
+    assertScheduleMeetsMinInterval(
+      nextJob.schedule,
+      resolveCronMinIntervalMs(state.deps.cronConfig),
+      now,
+    );
+  }
   finalizeUpdatedJob({
     job,
     nextJob,
     now,
     schedulingInputsRequested: patch.schedule !== undefined || patch.enabled !== undefined,
     scheduleChanged: patch.schedule !== undefined,
+    cronConfig: state.deps.cronConfig,
   });
   await persistUpdatedJob({ state, snapshot, nextJob });
   return nextJob;

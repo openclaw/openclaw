@@ -1396,6 +1396,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Stale acknowledgement suppression
   - H3: Silent token suppression
   - H3: Structured denials
+  - H2: Minimum interval
   - H2: Retention
   - H2: Migrating older jobs
   - H2: Common edits

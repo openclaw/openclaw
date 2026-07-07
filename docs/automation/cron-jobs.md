@@ -497,6 +497,7 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 8,
+    minInterval: "5m",
     retry: {
       maxAttempts: 3,
       backoffMs: [30000, 60000, 300000],
@@ -512,6 +513,8 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 The `retry` values above are the defaults: up to 3 retries with `30s/60s/5m` backoff, retrying all five transient categories. `webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+
+`minInterval` is an optional guardrail against accidental or wasteful high-frequency schedules. It sets the minimum allowed gap between fires for recurring `every` and `cron` jobs, accepting a duration string (`30s`, `5m`, `1h`) or a number of milliseconds (bare numbers are milliseconds). Enforcement is layered. Creating or editing a recurring job whose schedule would fire more often than the floor is rejected with a clear error, so the agent or CLI caller learns to back off instead of scheduling a runaway job; for `cron` expressions this creation check samples upcoming fires (an expression like `0,1 * * * *`, which fires one minute apart, is caught) and is best-effort feedback. The scheduler then enforces the limit at fire time: after each run, the next fire is paced so consecutive fires stay at least `minInterval` apart — within a small dispatch tolerance (up to ~2 seconds) that absorbs timer jitter so a job whose cadence equals the floor is not nudged off its slot every run. This covers jobs created before the limit was configured and cron expressions whose tight gaps sampling cannot prove, and each deferred fire logs a warning naming the job. Recurring transient-failure retries are also lower-bounded by the floor, so a short `cron.retry` backoff cannot make a recurring job re-fire faster than `minInterval`. One-shot `at` jobs (including their retries) are exempt, and the default (`0` / unset) imposes no minimum.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 
