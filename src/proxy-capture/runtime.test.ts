@@ -602,6 +602,24 @@ describe("readCapturedResponseBodyBounded", () => {
     expect(arrayBufferSpy).not.toHaveBeenCalled();
   });
 
+  it("skips body read when content-length is a huge non-safe integer (body-less fallback)", async () => {
+    // Very long digit-only Content-Length values overflow Number parsing and
+    // would bypass a naive Number.isFinite guard, still calling arrayBuffer().
+    const arrayBufferSpy = vi.fn();
+    const mockClone = {
+      headers: new Headers({ "content-length": "9".repeat(100) }),
+      body: null,
+      arrayBuffer: arrayBufferSpy,
+    };
+    const response = {
+      clone: () => mockClone,
+    } as unknown as Response;
+    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
+    expect(truncated).toBe(true);
+    expect(buffer.length).toBe(0);
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
+  });
+
   it("reads body via fallback when content-length is within cap", async () => {
     // Body-less path with a declared length under the cap: must call
     // arrayBuffer() and return the body.

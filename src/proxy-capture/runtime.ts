@@ -30,6 +30,30 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 
+function declaredContentLengthExceedsCap(headers: Headers, maxBytes: number): boolean {
+  const raw = headers.get("content-length");
+  if (!raw) {
+    return false;
+  }
+  const trimmed = raw.trim();
+  // Only accept plain digit strings; reject scientific notation, decimals,
+  // signs, or non-numeric values. Those are treated as unknown length and
+  // verified after the actual arrayBuffer() read.
+  if (!/^\d+$/u.test(trimmed)) {
+    return false;
+  }
+  // Any digit-only value with more digits than MAX_SAFE_INTEGER is definitely
+  // above the cap and cannot be safely represented as a Number.
+  if (trimmed.length > String(Number.MAX_SAFE_INTEGER).length) {
+    return true;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    return true;
+  }
+  return parsed > maxBytes;
+}
+
 // Reads a cloned capture response body under a byte cap. Returns truncated=true
 // (and discards the partial buffer) once the cap is exceeded so oversized or
 // hostile/endless bodies are recorded as metadata-only instead of buffered.
@@ -51,8 +75,7 @@ export async function readCapturedResponseBodyBounded(
     // body before allocating through arrayBuffer(). The stream path above
     // cancels on overflow; this path must pre-check content-length then
     // still verify the full read stayed within the cap.
-    const declaredLength = Number(clone.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    if (declaredContentLengthExceedsCap(clone.headers, maxBytes)) {
       return { buffer: Buffer.alloc(0), truncated: true };
     }
     const bytes = Buffer.from(await clone.arrayBuffer());
