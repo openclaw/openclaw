@@ -680,4 +680,133 @@ describe("xiaomi provider plugin", () => {
 
     await expect(stream.result()).resolves.toEqual(resultMessage);
   });
+
+  it.each(["mimo-v2.5", "mimo-v2.5-pro"] as const)(
+    "deduplicates text blocks that repeat thinking content for %s",
+    async (modelId) => {
+      const model = mimoReasoningModel(modelId);
+      const thinkingText = "Let me think about this step by step.";
+      const resultMessage = {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: thinkingText },
+          { type: "text", text: `${thinkingText}${thinkingText}${thinkingText}` },
+        ],
+        stopReason: "stop",
+      };
+      const wrapped = requireThinkingWrapper(
+        createMiMoThinkingWrapper(
+          createResultStreamFn({
+            events: [
+              {
+                type: "message_end",
+                message: resultMessage,
+              },
+            ],
+            resultMessage,
+          }),
+          "high",
+        ),
+        modelId,
+      );
+
+      const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+      const events: unknown[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      // Text block should be removed (pure duplicate of thinking).
+      expect(events).toEqual([
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: thinkingText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+      await expect(stream.result()).resolves.toEqual({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: thinkingText }],
+        stopReason: "stop",
+      });
+    },
+  );
+
+  it.each(["mimo-v2.5", "mimo-v2.5-pro"] as const)(
+    "preserves unique text suffix after stripping duplicated thinking prefix for %s",
+    async (modelId) => {
+      const model = mimoReasoningModel(modelId);
+      const thinkingText = "Let me analyze the request.";
+      const uniqueReply = "Here is the result.";
+      const resultMessage = {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: thinkingText },
+          { type: "text", text: `${thinkingText}${thinkingText}${uniqueReply}` },
+        ],
+        stopReason: "stop",
+      };
+      const wrapped = requireThinkingWrapper(
+        createMiMoThinkingWrapper(createResultStreamFn({ resultMessage }), "high"),
+        modelId,
+      );
+
+      const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+      await expect(stream.result()).resolves.toEqual({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: thinkingText },
+          { type: "text", text: uniqueReply },
+        ],
+        stopReason: "stop",
+      });
+    },
+  );
+
+  it("does not dedup when text content does not repeat thinking content for mimo-v2.5", async () => {
+    const model = mimoReasoningModel("mimo-v2.5");
+    const thinkingText = "Internal reasoning.";
+    const visibleText = "Hello! How can I help you today?";
+    const resultMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: thinkingText },
+        { type: "text", text: visibleText },
+      ],
+      stopReason: "stop",
+    };
+    const wrapped = requireThinkingWrapper(
+      createMiMoThinkingWrapper(createResultStreamFn({ resultMessage }), "high"),
+      "mimo-v2.5",
+    );
+
+    const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+    // Text is not a duplicate prefix — keep both blocks.
+    await expect(stream.result()).resolves.toEqual(resultMessage);
+  });
+
+  it("does not affect mimo-v2-pro / mimo-v2-omni thinking-only promotion", async () => {
+    // mimo-v2-pro is still promoted (thinking → text), not deduped.
+    const model = mimoReasoningModel("mimo-v2-pro");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "MiMo final answer" }],
+      stopReason: "stop",
+    };
+    const wrapped = requireThinkingWrapper(
+      createMiMoThinkingWrapper(createResultStreamFn({ resultMessage }), "high"),
+      "mimo-v2-pro",
+    );
+
+    const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+    // Still promoted to text (existing behavior unchanged).
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "MiMo final answer" }],
+      stopReason: "stop",
+    });
+  });
 });

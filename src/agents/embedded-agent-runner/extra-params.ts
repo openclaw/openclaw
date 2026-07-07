@@ -26,6 +26,7 @@ import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createThinkingOnlyFinalTextWrapper,
+  createThinkingTextDedupWrapper,
 } from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
@@ -853,6 +854,12 @@ function applyPostPluginStreamWrappers(
       baseStreamFn: ctx.agent.streamFn,
       shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
     });
+    // MiMo V2.5 / V2.5-pro return reasoning duplicated in both thinking and
+    // text blocks. Strip the duplicated thinking prefix from text.
+    ctx.agent.streamFn = createThinkingTextDedupWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      shouldPatchModel: isMiMoThinkingTextDedupOpenAICompatibleModel,
+    });
 
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
@@ -1008,6 +1015,7 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
+const MIMO_THINKING_TEXT_DEDUP_MODEL_IDS = new Set(["mimo-v2.5", "mimo-v2.5-pro"]);
 
 function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
@@ -1026,6 +1034,15 @@ function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
     MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+  );
+}
+
+function isMiMoThinkingTextDedupOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_THINKING_TEXT_DEDUP_MODEL_IDS.has(normalizedModelId)
   );
 }
 

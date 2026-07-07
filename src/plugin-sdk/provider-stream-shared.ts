@@ -620,6 +620,129 @@ export function createThinkingOnlyFinalTextWrapper(params: {
   };
 }
 
+type ThinkingTextDedupStream = Awaited<ReturnType<StreamFn>>;
+
+/**
+ * Strip text blocks that duplicate thinking content.
+ *
+ * Some models (e.g. MiMo V2.5) return reasoning in both the `reasoning_content`
+ * (thinking) and `content` (text) fields simultaneously. This deduplicates text
+ * blocks by stripping the accumulated thinking prefix so only the unique
+ * user-facing reply remains.
+ */
+function dedupThinkingTextInFinalMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const record = message as { content?: unknown };
+  if (!Array.isArray(record.content) || record.content.length === 0) {
+    return;
+  }
+
+  let accumulatedThinking = "";
+  for (const block of record.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; thinking?: unknown };
+    if (
+      typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+    ) {
+      accumulatedThinking += typedBlock.thinking;
+    }
+  }
+  if (!accumulatedThinking.trim()) {
+    return;
+  }
+
+  record.content = record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const typedBlock = block as { type?: unknown; text?: unknown };
+      if (typedBlock.type !== "text" || typeof typedBlock.text !== "string") {
+        return block;
+      }
+      let text = typedBlock.text;
+      // Strip leading occurrences of the accumulated thinking text.
+      // The model may repeat reasoning multiple times in the text field.
+      let changed = true;
+      while (changed && text.length > 0) {
+        changed = false;
+        if (text.startsWith(accumulatedThinking) && text.length >= accumulatedThinking.length) {
+          text = text.slice(accumulatedThinking.length);
+          changed = true;
+        }
+      }
+      if (!text.trim()) {
+        return null;
+      }
+      typedBlock.text = text;
+      return typedBlock;
+    })
+    .filter((block): block is NonNullable<typeof block> => block != null);
+}
+
+function wrapThinkingTextDedupStream(stream: ThinkingTextDedupStream): ThinkingTextDedupStream {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    dedupThinkingTextInFinalMessage(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { partial?: unknown; message?: unknown };
+            dedupThinkingTextInFinalMessage(event.partial);
+            dedupThinkingTextInFinalMessage(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+    };
+  return stream;
+}
+
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
+export function createThinkingTextDedupWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+}): StreamFn | undefined {
+  if (!params.baseStreamFn) {
+    return undefined;
+  }
+  const underlying = params.baseStreamFn;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (!params.shouldPatchModel(model)) {
+      return maybeStream;
+    }
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => wrapThinkingTextDedupStream(stream));
+    }
+    return wrapThinkingTextDedupStream(maybeStream);
+  };
+}
+
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */

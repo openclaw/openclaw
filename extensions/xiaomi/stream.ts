@@ -4,8 +4,13 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createThinkingOnlyFinalTextWrapper,
+  createThinkingTextDedupWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { isMiMoProviderId, isMiMoReasoningModelRef } from "./thinking.js";
+import {
+  isMiMoProviderId,
+  isMiMoReasoningModelRef,
+  isMiMoThinkingTextDedupModelRef,
+} from "./thinking.js";
 
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
@@ -39,8 +44,15 @@ export function createMiMoThinkingWrapper(
   });
   // Legacy MiMo V2 can put the final user-visible answer in reasoning_content.
   // Only promote terminal thinking-only output; replay/tool-call reasoning stays untouched.
-  return createThinkingOnlyFinalTextWrapper({
+  const withPromote = createThinkingOnlyFinalTextWrapper({
     baseStreamFn: wrapped,
     shouldPatchModel: shouldPromoteMiMoReasoningToVisibleText,
+  });
+  // MiMo V2.5 / V2.5-pro return reasoning duplicated in both thinking and text
+  // blocks. Strip the duplicated thinking prefix from text so only the unique
+  // user-facing reply remains.
+  return createThinkingTextDedupWrapper({
+    baseStreamFn: withPromote,
+    shouldPatchModel: isMiMoThinkingTextDedupModelRef,
   });
 }

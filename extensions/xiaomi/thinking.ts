@@ -10,6 +10,11 @@ const MIMO_REASONING_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
+/** MiMo model ids where the API returns reasoning content in both
+ *  the `reasoning_content` (thinking) and `content` (text) fields
+ *  simultaneously, causing visible text duplication. */
+const MIMO_THINKING_TEXT_DEDUP_MODEL_IDS = new Set(["mimo-v2.5", "mimo-v2.5-pro"]);
+
 export function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
@@ -23,6 +28,17 @@ export function isMiMoReasoningModelRef(model: { provider?: string; id?: unknown
     isMiMoProviderId(model.provider) &&
     typeof model.id === "string" &&
     isMiMoReasoningModelId(model.id)
+  );
+}
+
+export function isMiMoThinkingTextDedupModelRef(model: {
+  provider?: string;
+  id?: unknown;
+}): boolean {
+  return (
+    isMiMoProviderId(model.provider) &&
+    typeof model.id === "string" &&
+    MIMO_THINKING_TEXT_DEDUP_MODEL_IDS.has(model.id.toLowerCase())
   );
 }
 
