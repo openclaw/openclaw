@@ -1385,7 +1385,6 @@ export async function downloadClawHubPackageArchive(params: {
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
-      tmpDir: os.tmpdir(),
     });
     await fs.writeFile(target.path, bytes);
     return {
@@ -1428,7 +1427,6 @@ export async function downloadClawHubPackageArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-package",
     fileName: `${params.name}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1475,7 +1473,6 @@ export async function downloadClawHubSkillArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
     fileName: `${params.slug}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1518,7 +1515,6 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
     fileName: "skill.zip",
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1555,7 +1551,6 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-github-skill",
     fileName: `${params.commit}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
