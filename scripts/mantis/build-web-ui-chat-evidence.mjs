@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds a Mantis evidence manifest from Control UI web chat proof artifacts.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,32 +22,17 @@ function parseArgs(argv) {
   return args;
 }
 
-function readJson(filePath) {
-  return JSON.parse(readFileSync(filePath, "utf8"));
-}
-
 function normalizeStatus(value) {
   const normalized = String(value ?? "")
     .trim()
     .toLowerCase();
-  if (normalized === "pass" || normalized === "passed" || normalized === "0") {
+  if (normalized === "pass") {
     return "pass";
   }
-  if (normalized === "fail" || normalized === "failed" || normalized === "1") {
+  if (normalized === "fail") {
     return "fail";
   }
   throw new Error(`Unsupported web UI chat proof status: ${value}`);
-}
-
-function inferStatus(outputDir) {
-  const proofPath = path.join(outputDir, "web-ui-chat-proof.json");
-  if (existsSync(proofPath)) {
-    const proof = readJson(proofPath);
-    if (proof?.status) {
-      return normalizeStatus(proof.status);
-    }
-  }
-  return existsSync(path.join(outputDir, "web-ui-chat.png")) ? "pass" : "fail";
 }
 
 function artifactEntry({ inline = false, kind, label, path: artifactPath, required, targetPath }) {
@@ -151,9 +136,12 @@ export function writeWebUiChatEvidence(rawArgs = process.argv.slice(2)) {
   if (!args.output_dir) {
     throw new Error("Missing --output-dir.");
   }
+  if (!args.status) {
+    throw new Error("Missing --status.");
+  }
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
-  const status = args.status ? normalizeStatus(args.status) : inferStatus(outputDir);
+  const status = normalizeStatus(args.status);
   const manifest = buildWebUiChatEvidenceManifest({
     candidateRef: args.candidate_ref,
     candidateSha: args.candidate_sha,

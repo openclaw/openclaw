@@ -1,18 +1,20 @@
 ---
-summary: "Mantis is the visual end-to-end verification system for reproducing OpenClaw bugs on live transports, capturing before and after evidence, and attaching artifacts to PRs."
+summary: "Mantis captures visual end-to-end evidence for live transport comparisons and focused candidate-only browser proofs, then attaches the artifacts to PRs."
 title: "Mantis"
 read_when:
   - Building or running live visual QA for OpenClaw bugs
   - Adding before and after verification for a pull request
   - Adding Discord, Slack, WhatsApp, or other live transport scenarios
+  - Running focused Control UI browser proof for a candidate ref
   - Debugging QA runs that need screenshots, browser automation, or VNC access
 ---
 
-Mantis reruns a bug scenario against a known-bad baseline ref and a candidate
-ref on a real transport, then publishes a before/after comparison as CI
-artifacts and a PR comment. Discord shipped first: real bot auth, real guild
-channels, reactions, threads, and a browser witness a human can check. Slack
-and Telegram lanes exist too; WhatsApp and Matrix are unimplemented.
+Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
+Live transport scenarios compare a known-bad baseline with a candidate ref;
+focused browser lanes may instead prove one candidate against a deterministic
+mocked transport. Discord shipped first with real bot auth, guild channels,
+reactions, threads, and a browser witness. Slack, Telegram, and focused Control
+UI chat lanes exist too; WhatsApp and Matrix are unimplemented.
 
 ## Ownership
 
@@ -380,22 +382,30 @@ rotate it after the replacement secret is stored.
 
 ## Run outcomes
 
-A scenario fails in one of two distinguishable ways, and the report separates
-them so a flaky environment does not read as a product regression:
+Before/after transport scenarios distinguish these outcomes so a flaky
+environment does not read as a product regression:
 
 - **Bug reproduced**: baseline failed the way the scenario expects.
 - **Harness failure**: environment setup, credentials, transport API, browser,
   or provider failed before the oracle was meaningful.
 
+Candidate-only browser proof reports whether the candidate passed the mocked
+Gateway and visible UI assertions; it does not claim baseline reproduction.
+
 ## Adding a scenario
 
-Scenarios are TypeScript-defined per transport (see
+Live transport scenarios are TypeScript-defined per transport (see
 `MANTIS_SCENARIO_CONFIGS` in `extensions/qa-lab/src/mantis/run.runtime.ts` for
 the Discord before/after shape), not a standalone declarative file format.
 Each scenario needs: id and title, transport, required credentials, baseline
 ref policy, candidate ref policy, OpenClaw config patch, setup/stimulus steps,
 expected baseline and candidate oracle, visual capture targets, timeout
 budget, and cleanup steps.
+
+Focused candidate-only browser proof can use a dedicated deterministic E2E test
+and workflow. Keep its scope explicit, validate the candidate ref before
+execution, isolate secret-backed publishing, and emit the same evidence
+manifest contract.
 
 Prefer small, typed oracles over vision checks: Discord reaction state or
 message references, Slack thread `ts`/reaction API state, email message ids

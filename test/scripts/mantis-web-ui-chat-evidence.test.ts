@@ -74,7 +74,7 @@ describe("build-web-ui-chat-evidence", () => {
     });
   });
 
-  it("infers pass status from the proof metadata and includes report output", () => {
+  it("uses the explicit pass status and includes report output", () => {
     withTempDir((dir) => {
       writeFileSync(path.join(dir, "web-ui-chat.png"), "png");
       writeFileSync(
@@ -82,7 +82,14 @@ describe("build-web-ui-chat-evidence", () => {
         `${JSON.stringify({ status: "pass" })}\n`,
       );
 
-      const result = writeWebUiChatEvidence(["--output-dir", dir, "--candidate-ref", "main"]);
+      const result = writeWebUiChatEvidence([
+        "--output-dir",
+        dir,
+        "--candidate-ref",
+        "main",
+        "--status",
+        "pass",
+      ]);
 
       expect(result.manifest.comparison).toMatchObject({
         candidate: { fixed: true, ref: "main", status: "pass" },

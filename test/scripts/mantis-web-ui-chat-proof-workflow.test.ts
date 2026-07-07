@@ -12,6 +12,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  permissions?: Record<string, string>;
   steps?: WorkflowStep[];
 };
 
@@ -29,6 +30,15 @@ function resolveRequestScript(): string {
   return step.with.script;
 }
 
+function workflowJob(name: string): WorkflowJob {
+  const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+  const job = workflow.jobs?.[name];
+  if (!job) {
+    throw new Error(`Missing ${name} job`);
+  }
+  return job;
+}
+
 function candidateOverridePattern(): RegExp {
   const script = resolveRequestScript();
   const match = script.match(/const candidateMatch = body\.match\((\/.*\/i)\);/);
@@ -39,6 +49,17 @@ function candidateOverridePattern(): RegExp {
 }
 
 describe("Mantis Web UI chat proof workflow", () => {
+  it("keeps candidate execution read-only and installs dependencies only in the candidate", () => {
+    const job = workflowJob("run_web_ui_chat");
+    const setup = job.steps?.find((step) => step.name === "Setup Node environment");
+
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(setup?.with).toMatchObject({
+      "install-bun": "false",
+      "install-deps": "false",
+    });
+  });
+
   it("only treats explicit candidate assignments as PR head overrides", () => {
     const pattern = candidateOverridePattern();
 

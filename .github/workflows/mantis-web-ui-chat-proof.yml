@@ -216,6 +216,8 @@ jobs:
     name: Run Control UI web chat proof
     needs: [resolve_request, validate_candidate]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    permissions:
+      contents: read
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
@@ -233,7 +235,8 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          install-bun: "false"
+          install-deps: "false"
 
       - name: Prepare candidate worktree
         env:
