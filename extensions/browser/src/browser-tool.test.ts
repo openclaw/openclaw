@@ -1116,8 +1116,10 @@ describe("browser tool snapshot maxChars", () => {
 
     const imageParams = lastMockCallArg<{
       imageSanitization?: { maxDimensionPx?: number };
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
@@ -1184,10 +1186,12 @@ describe("browser tool snapshot maxChars", () => {
     const imageParams = lastMockCallArg<{
       path: string;
       extraText?: string;
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/screen.png");
     expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(imageParams.extraText).toContain("/tmp/secret.png");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("preserves screenshot image sanitization on vision failure fallback", async () => {

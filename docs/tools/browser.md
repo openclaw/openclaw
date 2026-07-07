@@ -247,6 +247,10 @@ browser-specific model settings.
 4. If image understanding is unavailable, skipped, or fails, the browser falls
    back to returning the original image block.
 
+Screenshot image blocks are private tool results: the agent can inspect them,
+but OpenClaw does not automatically attach them to channel replies. To share a
+screenshot, ask the agent to send it explicitly with the message tool.
+
 Use the existing `tools.media.image` / `tools.media.models` fields for model
 fallbacks, timeouts, byte limits, profiles, and provider request settings.
 

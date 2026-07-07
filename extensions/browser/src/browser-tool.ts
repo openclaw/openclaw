@@ -829,6 +829,12 @@ export function createBrowserTool(opts?: {
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           const screenshotPath = result.path;
+          // Screenshots stay in the tool result for agent vision, but channel
+          // delivery must remain an explicit message-tool action.
+          const screenshotDetails = {
+            ...(result as Record<string, unknown>),
+            media: { outbound: false },
+          };
           const screenshotCfg = browserToolDeps.getRuntimeConfig();
           const imageSanitization = resolveRuntimeImageSanitization();
           try {
@@ -893,14 +899,14 @@ export function createBrowserTool(opts?: {
               label: "browser:screenshot",
               path: screenshotPath,
               extraText,
-              details: result,
+              details: screenshotDetails,
               imageSanitization,
             });
           }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: screenshotPath,
-            details: result,
+            details: screenshotDetails,
             imageSanitization,
           });
         }
