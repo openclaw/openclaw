@@ -371,6 +371,19 @@ export class NodeExecutionEnv implements ExecutionEnv {
         }
       });
 
+      // Guard stdout/stderr against stream errors (e.g. EPIPE when the
+      // child exits before all pipe data is consumed). Without listeners,
+      // Node.js throws an uncaught exception that crashes the process.
+      const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+        if (settled) return;
+        onAbort();
+        settle(
+          err(new ExecutionError("spawn_error", `${stream} read error: ${error.message}`, error)),
+        );
+      };
+      child.stdout?.on("error", (e) => onStreamError("stdout", e));
+      child.stderr?.on("error", (e) => onStreamError("stderr", e));
+
       child.on("error", (error) => {
         settle(err(new ExecutionError("spawn_error", error.message, error)));
       });
