@@ -47,6 +47,7 @@ type ScopedToolsCall = {
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentThreadParentId?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   inboundEventKind?: string;

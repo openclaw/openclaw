@@ -34,7 +34,7 @@ type McpLoopbackScopeParams = {
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
-  currentThreadParentId: string | undefined;
+  currentThreadParentId?: string | undefined;
   currentMessageId: string | number | undefined;
   currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
