@@ -1,6 +1,7 @@
 // Gateway BOOT.md runner.
 // Runs per-workspace boot checks in an isolated boot session and restores mappings.
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -78,8 +79,36 @@ async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
+
+  // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
+  // while keeping directory/permission/size-limit failures surfaced to the
+  // operator. Broken symlinks are treated as failures, not missing.
+  let resolvedPath: string;
   try {
-    const { buffer } = await readRegularFile({ filePath: bootPath, maxBytes: MAX_BOOT_FILE_BYTES });
+    resolvedPath = await fs.realpath(bootPath);
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code === "ENOENT") {
+      // Distinguish a genuinely missing BOOT.md from a broken symlink or path
+      // race: if lstat sees the path, realpath failed for a real reason.
+      try {
+        await fs.lstat(bootPath);
+      } catch (lstatErr) {
+        const lstatAnyErr = lstatErr as { code?: string };
+        if (lstatAnyErr.code === "ENOENT") {
+          return { status: "missing" };
+        }
+        throw lstatErr;
+      }
+    }
+    throw err;
+  }
+
+  try {
+    const { buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_BOOT_FILE_BYTES,
+    });
     const content = buffer.toString("utf-8");
     const trimmed = content.trim();
     if (!trimmed) {
@@ -87,13 +116,10 @@ async function loadBootFile(
     }
     return { status: "ok", content: trimmed };
   } catch (err) {
-    const anyErr = err as { code?: string; message?: string };
-    if (anyErr.code === "ENOENT") {
-      return { status: "missing" };
-    }
-    // Only an explicit size overflow should skip the boot check; symlinks,
-    // directories, permission errors, and path races keep the current failed
-    // startup behavior so operators notice misconfigured BOOT.md paths.
+    const anyErr = err as { message?: string };
+    // Only an explicit size overflow should skip the boot check; directories,
+    // permission errors, and path races keep the current failed startup behavior
+    // so operators notice misconfigured BOOT.md paths.
     if (anyErr.message?.startsWith("File exceeds")) {
       return { status: "empty" };
     }

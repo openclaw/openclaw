@@ -194,7 +194,7 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("returns failed when BOOT.md is a symlink", async () => {
+  it("runs agent command when BOOT.md is a symlink to a regular file", async () => {
     if (process.platform === "win32") {
       // Symlink support in unit tests is not guaranteed on Windows CI runners.
       return;
@@ -205,12 +205,13 @@ describe("runBootOnce", () => {
       await fs.writeFile(targetPath, "Say hello.", "utf-8");
       await fs.rm(bootPath, { force: true });
       await fs.symlink(targetPath, bootPath);
-      const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
-      expect(result.status).toBe("failed");
-      if (result.status === "failed") {
-        expect(result.reason.length).toBeGreaterThan(0);
-      }
-      expect(agentCommand).not.toHaveBeenCalled();
+      agentCommand.mockResolvedValue(undefined);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "ran",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const call = requireAgentCall();
+      expect(call.message).toContain("Say hello.");
     });
   });
   it.each([
