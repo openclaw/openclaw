@@ -219,6 +219,43 @@ describe("resolveGatewayAuthTokenForService", () => {
       "gateway.auth.token SecretRef is configured but unresolved (gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).).",
     );
   });
+
+  it("falls back to OPENCLAW_GATEWAY_TOKEN when config has a literal env-var placeholder without a SecretRef provider", async () => {
+    // A literal ${OPENCLAW_GATEWAY_TOKEN} in config matching the standard
+    // env var should resolve from the environment.
+    const resolved = await resolveGatewayAuthTokenForService(
+      {
+        gateway: {
+          auth: {
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+          },
+        },
+      } as OpenClawConfig,
+      {
+        OPENCLAW_GATEWAY_TOKEN: "env-fallback-token",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(resolved).toEqual({ token: "env-fallback-token" });
+  });
+
+  it("surfaces unresolved SecretRef when env var is absent for a bare env-var placeholder", async () => {
+    // Without the env var, the literal ${OPENCLAW_GATEWAY_TOKEN} is parsed
+    // as an env-template SecretRef and reported as unresolved.
+    const resolved = await resolveGatewayAuthTokenForService(
+      {
+        gateway: {
+          auth: {
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+          },
+        },
+      } as OpenClawConfig,
+      {} as NodeJS.ProcessEnv,
+    );
+
+    expect(resolved.token).toBeUndefined();
+    expect(resolved.unavailableReason).toBeDefined();
+  });
 });
 
 describe("shouldRequireGatewayTokenForInstall", () => {
