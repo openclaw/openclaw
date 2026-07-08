@@ -554,22 +554,21 @@ export class Agent {
    * it only emits turn_end + agent_end so subscribers receive coherent
    * terminal pairs without stale tool-use or abandoned lifecycle state.
    *
-   * The settlement message intentionally omits model/api/provider/usage
-   * metadata to avoid carrying stale toolUse-turn state into session
-   * replay or liveness observers during the retry path.
+   * The settlement message is a valid AssistantMessage so AgentSession
+   * extensions and subscriber surfaces receive a well-formed payload.
    */
   private async settleControlFlowRun(): Promise<void> {
     const settlementMessage = {
       role: "assistant" as const,
       content: [{ type: "text" as const, text: "" }],
+      api: this.mutableState.model.api,
+      provider: this.mutableState.model.provider,
+      model: this.mutableState.model.id,
+      usage: EMPTY_USAGE,
       stopReason: "stop" as const,
       timestamp: Date.now(),
-    };
-    await this.processEvents({
-      type: "turn_end",
-      message: settlementMessage as AgentMessage,
-      toolResults: [],
-    });
+    } satisfies AgentMessage;
+    await this.processEvents({ type: "turn_end", message: settlementMessage, toolResults: [] });
     await this.processEvents({ type: "agent_end", messages: [] });
   }
 

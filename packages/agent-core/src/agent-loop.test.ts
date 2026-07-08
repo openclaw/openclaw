@@ -154,13 +154,10 @@ describe("agentLoop continuation guards", () => {
     });
   });
 
-  it("settles control-flow runs cleanly — no error, no stale tool state, no stale metadata", async () => {
-    // Control-flow signals like MidTurnPrecheckSignal must settle cleanly:
-    // no error messages, no abandoned streaming state, no stale tool calls,
-    // and a clean terminal lifecycle so callers see coherent event pairs.
-    // The settlement must NOT carry stale model/api/provider/usage metadata
-    // from the toolUse turn, which would confuse session replay or liveness
-    // observers during the retry path.
+  it("settles control-flow runs cleanly — no error, no stale tool state, valid settlement", async () => {
+    // Control-flow signals like MidTurnPrecheckSignal must settle with a
+    // valid AgentMessage so AgentSession extensions and subscriber surfaces
+    // receive a well-formed turn_end payload without stale tool-use state.
     const signalError = new Error(
       "Context overflow: prompt too large for the model (mid-turn precheck).",
     );
@@ -173,7 +170,6 @@ describe("agentLoop continuation guards", () => {
       type: string;
       stopReason?: string;
       errorMessage?: string;
-      hasModelMeta?: boolean;
       agentEndMessages?: number;
     }> = [];
     const agent = new Agent({
@@ -190,15 +186,11 @@ describe("agentLoop continuation guards", () => {
         const msg = event.message as unknown as {
           stopReason?: string;
           errorMessage?: string;
-          api?: unknown;
-          provider?: unknown;
-          model?: unknown;
         };
         events.push({
           type: "turn_end",
           stopReason: msg.stopReason,
           errorMessage: msg.errorMessage,
-          hasModelMeta: msg.api !== undefined || msg.provider !== undefined || msg.model !== undefined,
         });
       }
       if (event.type === "agent_end") {
@@ -226,10 +218,8 @@ describe("agentLoop continuation guards", () => {
     for (const te of turnEnds) {
       expect(te.stopReason).toBe("stop");
       expect(te.errorMessage).toBeUndefined();
-      // Settlement must NOT carry stale model metadata from the toolUse turn.
-      expect(te.hasModelMeta).toBe(false);
     }
-    // agent_end carries empty messages — no stale data persisted.
+    // agent_end carries empty messages — no stale data persisted into session.
     for (const ae of agentEnds) {
       expect(ae.agentEndMessages).toBe(0);
     }
