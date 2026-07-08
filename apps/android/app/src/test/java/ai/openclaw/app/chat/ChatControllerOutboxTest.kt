@@ -131,11 +131,6 @@ class ChatControllerOutboxTest {
         }
       }
     }
-
-    override suspend fun clearAll() {
-      rows.clear()
-      gatewayIds.clear()
-    }
   }
 
   /** Toggleable gateway seam: records chat.send idempotency keys and echoes them as run ids. */

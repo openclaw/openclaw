@@ -40,7 +40,7 @@ function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
 }
 
 /** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
-export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
+function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
 }
 

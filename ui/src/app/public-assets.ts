@@ -1,5 +1,6 @@
 // Control UI module implements public assets behavior.
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+import { normalizeBasePath } from "../app-route-paths.ts";
+import { resolveControlUiBasePath } from "./browser.ts";
 
 type ControlUiPublicAsset =
   | "apple-touch-icon.png"
@@ -9,11 +10,6 @@ type ControlUiPublicAsset =
   | "manifest.webmanifest"
   | "sw.js"
   | `provider-icons/ProviderIcon-${string}.svg`;
-
-type WindowWithControlUiBasePath = Window &
-  typeof globalThis & {
-    [key: string]: unknown;
-  };
 
 export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,
@@ -30,20 +26,9 @@ export function inferControlUiPublicAssetPath(
     pathname?: string;
   },
 ): string {
-  const configured = params?.basePath ?? readConfiguredBasePath();
-  const inferredBasePath =
-    configured != null
-      ? configured
-      : inferBasePathFromPathname(params?.pathname ?? currentPathname());
-  return controlUiPublicAssetPath(asset, inferredBasePath);
-}
-
-function readConfiguredBasePath(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const value = (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
-  return typeof value === "string" ? value : null;
+  const basePath =
+    params?.basePath ?? resolveControlUiBasePath(params?.pathname ?? currentPathname());
+  return controlUiPublicAssetPath(asset, basePath);
 }
 
 function currentPathname(): string {

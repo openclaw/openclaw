@@ -30,6 +30,7 @@ import {
   type OpenAIToolProjection,
 } from "@openclaw/ai/internal/openai";
 import {
+  applyProviderReportedUsageCost,
   calculateCost,
   createFirstStreamEventAbortController,
   createReasoningTagTextPartitioner,
@@ -45,7 +46,9 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -61,7 +64,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import type { Api, Context, Model, Usage } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -251,7 +254,7 @@ type MutableAssistantOutput = {
     cacheWrite: number;
     reasoningTokens?: number;
     totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: Usage["cost"];
   };
   stopReason: string;
   timestamp: number;
@@ -460,7 +463,7 @@ function stringifyRedactedPayload(value: unknown): string {
       return "<empty>";
     }
     const redacted = redactSensitiveText(encoded, { mode: "tools" });
-    return redacted.length > 8000 ? `${redacted.slice(0, 8000)}…<truncated>` : redacted;
+    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";
   }
@@ -468,7 +471,7 @@ function stringifyRedactedPayload(value: unknown): string {
 
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = {
@@ -1885,6 +1888,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1907,7 +1911,20 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  return headers ?? {};
+  const resolvedHeaders = headers ?? {};
+  // This header routes ChatGPT Responses session affinity; without it requests land
+  // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
+  // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
+  if (
+    sessionId &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
+    ) &&
+    usesNativeOpenAICodexResponsesBackend(model)
+  ) {
+    resolvedHeaders.session_id = sessionId;
+  }
+  return resolvedHeaders;
 }
 
 function resolveProviderTransportTurnState(
@@ -1975,12 +1992,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -2024,6 +2042,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -4452,15 +4471,15 @@ export function buildOpenAICompletionsParams(
 }
 
 export function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
   model: Model,
-) {
+): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  const usage = {
+  const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
@@ -4472,6 +4491,7 @@ export function parseTransportChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 
@@ -4510,5 +4530,7 @@ export const testing = {
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  stringifyRedactedEvent,
+  stringifyRedactedPayload,
 };
 export { testing as __testing };

@@ -518,17 +518,18 @@ export function getSkillCuratorStatus(
       .orderBy("skill_lifecycle.skill_file", "asc"),
   ).rows;
   const counts: Record<SkillLifecycleState, number> = { active: 0, stale: 0, archived: 0 };
-  const skills = rows.map((row) => {
+  const skills = [];
+  for (const row of rows) {
     const lifecycleState = row.state as SkillLifecycleState;
     counts[lifecycleState] += 1;
-    return {
+    skills.push({
       ...row,
       state: lifecycleState,
       pinned: row.pinned === 1,
       lastUsedAtMs: row.lastUsedAtMs ?? null,
       useCount: row.useCount ?? 0,
-    };
-  });
+    });
+  }
   return {
     lastAttemptAtMs: state?.last_attempt_at_ms ?? null,
     lastSuccessAtMs: state?.last_success_at_ms ?? null,

@@ -70,6 +70,9 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const globalMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+}));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
   logMessageDispatchStarted: vi.fn(),
@@ -442,6 +445,14 @@ vi.mock("./abort.runtime.js", () => ({
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },
 }));
+
+vi.mock("../../globals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../globals.js")>();
+  return {
+    ...actual,
+    logVerbose: globalMocks.logVerbose,
+  };
+});
 
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
@@ -1598,6 +1609,43 @@ describe("dispatchReplyFromConfig", () => {
         mirror: false,
       }),
     );
+  });
+
+  it("uses accepted steered inbound audio for final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:whatsapp:direct:chat-1",
+      BodyForAgent: "text turn",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as
+          | {
+              replyOperation?: ReturnType<typeof createReplyOperation>;
+            }
+          | undefined
+      )?.replyOperation;
+      expect(operation?.acceptedSteeredInboundAudio).toBe(false);
+      operation?.markAcceptedSteeredInboundAudio();
+      return { text: "reply to steered audio" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalTtsCall = ttsMocks.maybeApplyTtsToPayload.mock.calls.find(
+      ([params]) => (params as { kind?: string }).kind === "final",
+    )?.[0] as { inboundAudio?: boolean } | undefined;
+    expect(finalTtsCall?.inboundAudio).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.mediaUrl).toBe("https://example.com/tts-synth.opus");
   });
 
   it("passes reply policy to routed block delivery", async () => {
@@ -10166,6 +10214,32 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
     expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("keeps the suppressed reply log preview UTF-16 safe", async () => {
+    setNoAbort();
+    globalMocks.logVerbose.mockClear();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const text = `${"y".repeat(159)}🚀`;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text }),
+    });
+
+    const suppressedLog = globalMocks.logVerbose.mock.calls.find(([message]) =>
+      message.includes("final reply suppressed"),
+    )?.[0];
+    expect(suppressedLog).toContain("textChars=161");
+    expect(suppressedLog).toContain(`textPreview=${JSON.stringify("y".repeat(159))}`);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("does not mark allowed group silence eligible for no-visible fallback", async () => {

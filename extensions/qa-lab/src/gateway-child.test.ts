@@ -1529,7 +1529,9 @@ describe("qa bundled plugin dir", () => {
     );
     await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "speech-core"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
+      recursive: true,
+    });
     await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
     await writeFile(
@@ -1564,9 +1566,9 @@ describe("qa bundled plugin dir", () => {
     });
 
     expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
+      "image-generation-core",
       "memory-core",
       "qa-channel",
-      "speech-core",
     ]);
     expect(bundledPluginsDir).toBe(
       path.join(
@@ -1590,7 +1592,9 @@ describe("qa bundled plugin dir", () => {
     expect(qaChannel.accountId).toBe("qa");
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
-    expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
+      true,
+    );
     const sharedChunkStat = await lstat(
       path.join(
         repoRoot,
@@ -2064,9 +2068,9 @@ describe("qa bundled plugin dir", () => {
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.8" } } }),
       "utf8",
     );
-    await mkdir(path.join(bundledRoot, "speech-core"), { recursive: true });
+    await mkdir(path.join(bundledRoot, "image-generation-core"), { recursive: true });
     await writeFile(
-      path.join(bundledRoot, "speech-core", "package.json"),
+      path.join(bundledRoot, "image-generation-core", "package.json"),
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.9" } } }),
       "utf8",
     );

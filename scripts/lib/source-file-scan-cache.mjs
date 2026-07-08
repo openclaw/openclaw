@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const DEFAULT_SOURCE_FILE_READ_CONCURRENCY = 32;
-export const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const scanCache = new Map();
 
 function normalizeRepoPath(repoRoot, filePath) {

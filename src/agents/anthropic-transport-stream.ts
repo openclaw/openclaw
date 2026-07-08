@@ -62,6 +62,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -70,6 +71,7 @@ import {
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -288,7 +290,9 @@ function adjustMaxTokensForThinking(params: {
 }
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
-  return apiKey.includes("sk-ant-oat");
+  // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
+  const resolved = looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+  return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -391,14 +395,15 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
-  options?: {
+  options: {
     allowReasoningContentReplay?: boolean;
+    cacheBreakpointOptOutMessageIndexes: Set<number>;
     replayThinkingEnabled?: boolean;
   },
-) {
+): Array<Record<string, unknown>> {
   const params: Array<Record<string, unknown>> = [];
-  const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
+  const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
+  const replayThinkingEnabled = options.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
@@ -406,12 +411,17 @@ function convertAnthropicMessages(
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          params.push({
+          const userParam = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
-          });
+          };
+          if (isRuntimeContextCarrier) {
+            options.cacheBreakpointOptOutMessageIndexes.add(params.length);
+          }
+          params.push(userParam);
         }
         continue;
       }
@@ -445,10 +455,14 @@ function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      params.push({
+      const userParam = {
         role: "user",
         content: filteredBlocks,
-      });
+      };
+      if (isRuntimeContextCarrier) {
+        options.cacheBreakpointOptOutMessageIndexes.add(params.length);
+      }
+      params.push(userParam);
       continue;
     }
     if (msg.role === "assistant") {
@@ -648,7 +662,7 @@ function tagPendingCommentaryText(content: TransportContentBlock[]): void {
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
-export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+function resolveAnthropicBaseUrl(baseUrl?: string): string {
   return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
 }
 
@@ -900,7 +914,11 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: false,
     };
   }
-  if (usesFoundryBearerAuth(model)) {
+  if (
+    usesFoundryBearerAuth(
+      unwrapModelHeaderSentinelsForProviderEgress(model, "Anthropic Foundry auth routing"),
+    )
+  ) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
@@ -998,14 +1016,17 @@ function buildAnthropicParams(
     cacheRetention: options?.cacheRetention,
     enableCacheControl: true,
   });
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const messages = convertAnthropicMessages(context.messages, model, isOAuthToken, {
+    allowReasoningContentReplay: supportsReasoningContentReplay(model),
+    cacheBreakpointOptOutMessageIndexes,
+    replayThinkingEnabled,
+  });
   const params: Record<string, unknown> = {
     model: resolveAnthropicRequestModelId(model),
-    messages: ensureNonEmptyAnthropicMessages(
-      convertAnthropicMessages(context.messages, model, isOAuthToken, {
-        allowReasoningContentReplay: supportsReasoningContentReplay(model),
-        replayThinkingEnabled,
-      }),
-    ),
+    messages: ensureNonEmptyAnthropicMessages(messages),
     max_tokens: maxTokens,
     stream: true,
   };
@@ -1078,7 +1099,7 @@ function buildAnthropicParams(
       } else {
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
         };
       }
     } else if (options?.thinkingEnabled === false) {
@@ -1100,7 +1121,7 @@ function buildAnthropicParams(
       params.tool_choice = projectedToolChoice;
     }
   }
-  applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
   return { params, toolProjection };
 }
 
@@ -1165,9 +1186,12 @@ function resolveAnthropicTransportOptions(
     reasoningLevel: reasoning,
     customBudgets: options?.thinkingBudgets,
   });
+  // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
+  // consumers (payload, replay, temperature, tool-choice) see consistent state.
+  const thinkingEnabled = adjusted.thinkingBudget >= 1024;
   resolved.maxTokens = adjusted.maxTokens;
-  resolved.thinkingEnabled = true;
-  resolved.thinkingBudgetTokens = adjusted.thinkingBudget;
+  resolved.thinkingEnabled = thinkingEnabled;
+  resolved.thinkingBudgetTokens = thinkingEnabled ? adjusted.thinkingBudget : undefined;
   return resolved;
 }
 

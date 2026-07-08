@@ -232,31 +232,7 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
 }));
 
 vi.mock("../../lib/agents/display.ts", () => ({
-  isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
-  resolveChatAvatarRenderUrl: (
-    candidate: string | null | undefined,
-    agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  ) => {
-    const isRenderableControlUiAvatarUrl = (value: string) =>
-      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-      return candidate;
-    }
-    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-        return value;
-      }
-    }
-    return null;
-  },
-  resolveAssistantTextAvatar: (value: string | null | undefined) => {
-    if (!value) {
-      return null;
-    }
-    return value.length <= 3 ? value : null;
-  },
 }));
 
 function renderQueue(params: {
@@ -669,6 +645,8 @@ function renderVoiceOptions(overrides: Partial<ChatRealtimeTalkOptionsProps> = {
         vadThreshold: "",
       },
       onRealtimeTalkOptionsChange: () => undefined,
+      onRealtimeTalkInputRefresh: () => undefined,
+      onRealtimeTalkInputSelect: () => undefined,
       ...overrides,
     }),
     container,
@@ -1277,40 +1255,6 @@ describe("chat composer workbench", () => {
     expect(voiceButton).not.toBeNull();
     expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
-  });
-
-  it("exposes the microphone input picker state from its own callback contract", () => {
-    const onToggleRealtimeTalkInput = vi.fn();
-    const collapsed = renderChatView({
-      onToggleRealtimeTalkInput,
-      realtimeTalkInputOpen: false,
-    });
-    const collapsedButton = collapsed.querySelector<HTMLButtonElement>(
-      'button[aria-label="Microphone input"]',
-    );
-    expect(collapsedButton?.getAttribute("aria-expanded")).toBe("false");
-    collapsedButton?.click();
-    expect(onToggleRealtimeTalkInput).toHaveBeenCalledOnce();
-
-    const expanded = renderChatView({
-      onToggleRealtimeTalkInput: () => undefined,
-      onRealtimeTalkInputSelect: () => undefined,
-      realtimeTalkInputOpen: true,
-    });
-    const expandedButton = expanded.querySelector<HTMLButtonElement>(
-      'button[aria-label="Microphone input"]',
-    );
-    const menu = expanded.querySelector<HTMLElement>(
-      '[role="group"][aria-label="Microphone input"]',
-    );
-    expect(expandedButton?.getAttribute("aria-expanded")).toBe("true");
-    expect(expandedButton?.getAttribute("aria-controls")).toBe(menu?.id);
-  });
-
-  it("does not render a dead microphone input button without its callback", () => {
-    const container = renderChatView({ realtimeTalkInputOpen: true });
-
-    expect(container.querySelector('button[aria-label="Start voice input"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="Microphone input"]')).toBeNull();
   });
 });
@@ -1827,60 +1771,71 @@ describe("chat voice controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("shows every available microphone in the input picker", () => {
+  it("shows every available microphone in Voice settings", () => {
     const onRealtimeTalkInputSelect = vi.fn();
-    const container = renderChatView({
-      realtimeTalkInputOpen: true,
+    const container = renderVoiceOptions({
       realtimeTalkInputDevices: [
         { deviceId: "built-in", label: "MacBook Microphone" },
         { deviceId: "usb", label: "USB Audio Interface" },
       ],
       realtimeTalkInputDeviceId: "usb",
-      onToggleRealtimeTalkInput: () => undefined,
       onRealtimeTalkInputSelect,
     });
 
-    const options = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".agent-chat__talk-input-option"),
+    const microphone = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="microphone"] select',
     );
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
-      "System default",
-      "MacBook Microphone",
-      "USB Audio Interface",
-    ]);
-    expect(options.map((option) => option.getAttribute("aria-pressed"))).toEqual([
-      "false",
-      "false",
-      "true",
-    ]);
-
-    options[1]?.click();
+    expect(microphone).toBeInstanceOf(HTMLSelectElement);
+    expect(
+      Array.from(microphone?.options ?? []).map((option) => option.textContent?.trim()),
+    ).toEqual(["System default", "MacBook Microphone", "USB Audio Interface"]);
+    expect(microphone?.value).toBe("usb");
+    if (!(microphone instanceof HTMLSelectElement)) {
+      throw new Error("expected microphone select");
+    }
+    microphone.value = "built-in";
+    microphone.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("built-in");
   });
 
+  it("keeps a persisted microphone visible before discovery can name it", () => {
+    const container = renderVoiceOptions({
+      realtimeTalkInputDeviceId: "persisted-microphone",
+    });
+
+    const microphone = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="microphone"] select',
+    );
+    expect(microphone).toBeInstanceOf(HTMLSelectElement);
+    expect(
+      Array.from(microphone?.options ?? []).map((option) => ({
+        label: option.textContent?.trim(),
+        value: option.value,
+      })),
+    ).toEqual([
+      { label: "System default", value: "" },
+      { label: "Microphone 1", value: "persisted-microphone" },
+    ]);
+    expect(microphone?.value).toBe("persisted-microphone");
+  });
+
   it("shows microphone loading, empty, and error states without hiding System default", () => {
-    const loading = renderChatView({
-      realtimeTalkInputOpen: true,
+    const loading = renderVoiceOptions({
       realtimeTalkInputLoading: true,
-      onToggleRealtimeTalkInput: () => undefined,
       onRealtimeTalkInputSelect: () => undefined,
     });
     expect(loading.textContent).toContain("System default");
     expect(loading.textContent).toContain("Loading microphones");
     expect(loading.textContent).not.toContain("No additional microphones found");
 
-    const empty = renderChatView({
-      realtimeTalkInputOpen: true,
-      onToggleRealtimeTalkInput: () => undefined,
+    const empty = renderVoiceOptions({
       onRealtimeTalkInputSelect: () => undefined,
     });
     expect(empty.textContent).toContain("No additional microphones found");
 
-    const error = renderChatView({
-      realtimeTalkInputOpen: true,
+    const error = renderVoiceOptions({
       realtimeTalkInputError: "Microphone access is blocked.",
-      onToggleRealtimeTalkInput: () => undefined,
       onRealtimeTalkInputSelect: () => undefined,
     });
     expect(error.textContent).toContain("Microphone access is blocked.");
@@ -2007,6 +1962,9 @@ describe("chat voice controls", () => {
     expect(
       voiceOptions.querySelector('[data-talk-select="sensitivity"] > span')?.textContent?.trim(),
     ).toBe(t("chat.composer.talkSensitivity"));
+    expect(
+      voiceOptions.querySelector('[data-talk-select="microphone"] > span')?.textContent?.trim(),
+    ).toBe(t("chat.composer.microphoneInput"));
     expect(
       voiceOptions.querySelector<HTMLInputElement>(".agent-chat__talk-options-primary input")
         ?.placeholder,

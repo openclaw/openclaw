@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Kết nối cổng</string>
-    <string name="connect_gateway">Kết nối cổng</string>
-    <string name="disconnect">Ngắt kết nối</string>
     <string name="trust_this_gateway">Tin cậy cổng này?</string>
     <string name="trust_and_continue">Tin cậy và tiếp tục</string>
     <string name="cancel">Hủy</string>
     <string name="new_chat_in_worktree">Trò chuyện mới trong worktree</string>
-    <string name="endpoint">Điểm cuối</string>
-    <string name="status">Trạng thái</string>
-    <string name="connected_gateway_ready">Cổng của bạn đang hoạt động và sẵn sàng.</string>
-    <string name="connect_gateway_get_started">Kết nối với cổng của bạn để bắt đầu.</string>
-    <string name="copy_report_for_claw">Sao chép báo cáo cho Claw</string>
-    <string name="advanced_controls">Điều khiển nâng cao</string>
-    <string name="connection_method">Phương thức kết nối</string>
-    <string name="setup_code">Mã thiết lập</string>
-    <string name="manual">Thủ công</string>
-    <string name="paste_setup_code">Dán mã thiết lập</string>
-    <string name="host">Máy chủ</string>
-    <string name="use_tls">Sử dụng TLS</string>
-    <string name="token_optional">Token (tùy chọn)</string>
-    <string name="password">Mật khẩu</string>
-    <string name="custom_headers_optional">Tiêu đề tùy chỉnh (không bắt buộc)</string>
-    <string name="custom_headers_explainer">Được gửi cùng mọi kết nối đến gateway này, ví dụ như các tiêu đề mã thông báo dịch vụ Cloudflare Access. Được lưu trữ ở dạng mã hóa và áp dụng trong lần kết nối lại tiếp theo.</string>
-    <string name="custom_header_value">Giá trị tiêu đề</string>
-    <string name="custom_header_reserved">Tiêu đề này do kết nối quản lý và không thể bị ghi đè.</string>
-    <string name="add_custom_header">Thêm tiêu đề</string>
-    <string name="remove_custom_header">Xóa %1$s</string>
-    <string name="run_onboarding_again">Chạy hướng dẫn thiết lập lại</string>
-    <string name="resolved_endpoint">Điểm cuối đã phân giải</string>
     <string name="gateway_trust_first_seen">Xác minh dấu vân tay chứng chỉ trước khi tin cậy cổng này.\n\n%1$s</string>
     <string name="gateway_trust_changed">Chứng chỉ cổng đã thay đổi. Chỉ tiếp tục nếu bạn mong đợi thay đổi này.\n\nSHA-256 cũ:\n%1$s\n\nSHA-256 mới:\n%2$s</string>
-    <string name="switch_gateway">Chuyển Gateway</string>
-    <string name="select_gateway">Chọn Gateway</string>
-    <string name="active_gateway">Gateway đang hoạt động</string>
 </resources>
