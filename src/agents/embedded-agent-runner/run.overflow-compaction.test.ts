@@ -2361,36 +2361,74 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("surfaces a visible blocked payload for Codex promptError overflow without assistant text", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-blocked-"));
+    const storePath = path.join(dir, "sessions.json");
     const promptError = new Error(
       "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
     );
     const terminalLifecycleMeta: Array<Record<string, unknown>> = [];
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        promptError,
-        promptErrorSource: "prompt",
-        assistantTexts: [],
-        attemptUsage: { input: 0, output: 0, total: 0 },
-        setTerminalLifecycleMeta: (meta) => {
-          terminalLifecycleMeta.push(meta);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "test-key": {
+          sessionId: "test-session",
+          updatedAt: 1,
         },
       }),
+      "utf8",
     );
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    try {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError,
+          promptErrorSource: "prompt",
+          assistantTexts: [],
+          attemptUsage: { input: 0, output: 0, total: 0 },
+          setTerminalLifecycleMeta: (meta) => {
+            terminalLifecycleMeta.push(meta);
+          },
+        }),
+      );
 
-    expect(mockedIsLikelyContextOverflowError).toHaveBeenCalledWith(promptError.message);
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: expect.stringContaining("Context overflow"),
-    });
-    expect(result.payloads?.[0]?.text).toContain("/reset");
-    expect(result.payloads?.[0]?.text).toContain("/new");
-    expect(result.meta.error?.kind).toBe("context_overflow");
-    expect(result.meta.livenessState).toBe("blocked");
-    expect(result.meta.finalAssistantVisibleText).toBe(result.payloads?.[0]?.text);
-    expect(terminalLifecycleMeta.at(-1)).toMatchObject({ livenessState: "blocked" });
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        config: {
+          session: {
+            store: storePath,
+          },
+        } as RunEmbeddedAgentParams["config"],
+      });
+
+      expect(mockedIsLikelyContextOverflowError).toHaveBeenCalledWith(promptError.message);
+      expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("Context overflow"),
+      });
+      expect(result.payloads?.[0]?.text).toContain("/reset");
+      expect(result.payloads?.[0]?.text).toContain("/new");
+      expect(result.meta.error?.kind).toBe("context_overflow");
+      expect(result.meta.livenessState).toBe("blocked");
+      expect(result.meta.finalAssistantVisibleText).toBe(result.payloads?.[0]?.text);
+      expect(terminalLifecycleMeta.at(-1)).toMatchObject({ livenessState: "blocked" });
+      const stored = JSON.parse(await fs.readFile(storePath, "utf8"))["test-key"];
+      expect(stored.lastBlockedRun).toMatchObject({
+        state: "blocked",
+        source: "embedded-agent",
+        reason: "context_overflow",
+        runId: "run-1",
+        sessionId: "test-session",
+        sessionFile: "/tmp/session.json",
+        provider: "anthropic",
+        model: "test-model",
+        message: promptError.message,
+        suggestedAction: "reset_or_new",
+      });
+      expect(stored.lastBlockedRun.blockedAt).toEqual(expect.any(Number));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {

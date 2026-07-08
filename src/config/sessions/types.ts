@@ -228,6 +228,20 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
+export type SessionBlockedRun = {
+  state: "blocked";
+  source: "embedded-agent";
+  reason: "context_overflow" | "compaction_failure";
+  blockedAt: number;
+  runId?: string;
+  sessionId?: string;
+  sessionFile?: string;
+  provider?: string;
+  model?: string;
+  message?: string;
+  suggestedAction?: "reset_or_new";
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -296,6 +310,8 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
+  /** Last embedded-agent blocked run marker for operator recovery tooling. */
+  lastBlockedRun?: SessionBlockedRun;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */

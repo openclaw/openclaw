@@ -348,6 +348,58 @@ async function resetNoRealConversationTokenSnapshot(params: {
   }
 }
 
+async function persistOverflowBlockedRunMarker(params: {
+  config?: RunEmbeddedAgentParams["config"];
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  sessionId?: string;
+  sessionFile?: string;
+  provider: string;
+  model: string;
+  reason: "context_overflow" | "compaction_failure";
+  message: string;
+}): Promise<void> {
+  if (!params.sessionKey) {
+    return;
+  }
+  const blockedAt = Date.now();
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  try {
+    await updateSessionEntry(
+      {
+        storePath,
+        sessionKey: params.sessionKey,
+      },
+      async () => ({
+        lastBlockedRun: {
+          state: "blocked",
+          source: "embedded-agent",
+          reason: params.reason,
+          blockedAt,
+          runId: params.runId,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          provider: params.provider,
+          model: params.model,
+          message: params.message,
+          suggestedAction: "reset_or_new",
+        },
+        updatedAt: blockedAt,
+      }),
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      },
+    );
+  } catch (err) {
+    log.warn(
+      `[context-overflow-recovery] failed to persist blocked marker for ` +
+        `${params.sessionKey}: ${String(err)}`,
+    );
+  }
+}
+
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
   runtimeAuthState: RuntimeAuthState | null;
@@ -3008,6 +3060,18 @@ async function runEmbeddedAgentInternal(
               `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
             );
+            await persistOverflowBlockedRunMarker({
+              config: params.config,
+              sessionKey: resolvedSessionKey,
+              agentId: sessionAgentId,
+              runId: params.runId,
+              sessionId: sessionIdUsed,
+              sessionFile: activeSessionFile,
+              provider,
+              model: modelId,
+              reason: kind,
+              message: errorText,
+            });
             setTerminalLifecycleMeta({
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
