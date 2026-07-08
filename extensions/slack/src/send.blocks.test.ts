@@ -33,11 +33,11 @@ function postedMessage(client: ReturnType<typeof createSlackSendTestClient>, cal
   return mockObjectArg(client.chat.postMessage, "chat.postMessage", callIndex);
 }
 
-function slackDnsRequestError(): Error {
-  return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
+function slackDnsRequestError(code = "EAI_AGAIN"): Error {
+  return Object.assign(new Error(`A request error occurred: getaddrinfo ${code} slack.com`), {
     code: "slack_webapi_request_error",
-    original: Object.assign(new Error("getaddrinfo EAI_AGAIN slack.com"), {
-      code: "EAI_AGAIN",
+    original: Object.assign(new Error(`getaddrinfo ${code} slack.com`), {
+      code,
       syscall: "getaddrinfo",
       hostname: "slack.com",
     }),
@@ -349,6 +349,23 @@ describe("sendMessageSlack blocks", () => {
     expect(result.channelId).toBe("C123");
     expect(result.receipt.parts[0]?.platformMessageId).toBe("171234.999");
     expect(result.receipt.parts[0]?.kind).toBe("text");
+  });
+
+  it("retries Slack postMessage undici DNS request errors", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(slackDnsRequestError("UND_ERR_DNS_RESOLVE_FAILED"))
+      .mockResolvedValueOnce({ ts: "171234.998" });
+
+    const result = await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("171234.998");
+    expect(result.channelId).toBe("C123");
   });
 
   it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
