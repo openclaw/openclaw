@@ -5748,7 +5748,6 @@ export async function runEmbeddedAttempt(
         yieldDetected,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
         heartbeatToolResponse,
-        lastToolError,
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,

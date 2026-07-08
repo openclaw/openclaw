@@ -1537,6 +1537,73 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain("without a matching tool.result");
   });
 
+  it("returns only a tool error for a declined native command without assistant text", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-declined-native-command.jsonl"),
+      path.join(tempDir, "workspace-declined-native-command"),
+    );
+
+    const declinedCommand = {
+      type: "commandExecution" as const,
+      id: "cmd-declined",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "declined" as const,
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { ...declinedCommand, status: "inProgress" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: declinedCommand,
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [declinedCommand],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+    });
+    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+  });
+
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
