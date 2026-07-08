@@ -237,6 +237,12 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /**
+   * Terminal error marker from trajectory classification.
+   * Set to {@link NON_DELIVERABLE_TERMINAL_TURN_REASON} when the attempt
+   * completed but produced no user-visible delivery or durable progress.
+   */
+  terminalError?: string;
   replayMetadata: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;

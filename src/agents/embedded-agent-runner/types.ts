@@ -152,6 +152,12 @@ export type EmbeddedAgentRunMeta = {
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  /**
+   * Terminal error classification from the attempt trajectory.
+   * Set to "non_deliverable_terminal_turn" when the run completed but
+   * produced no user-visible delivery or durable progress.
+   */
+  terminalError?: string;
   yielded?: boolean;
   error?: {
     kind:

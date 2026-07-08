@@ -42,6 +42,7 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { NON_DELIVERABLE_TERMINAL_TURN_REASON } from "../../agents/embedded-agent-runner/run/attempt-trajectory-status.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
@@ -3398,6 +3399,20 @@ export async function runAgentTurnWithFallback(params: {
               isGenericRunnerFailure: false,
               cfg: params.followupRun.run.config,
             }),
+            isError: true,
+          }),
+        ];
+      } else if (runResult.meta?.terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON) {
+        // Surface non-deliverable terminal turns as a user-visible error
+        // payload so channel plugins receive a fallback message via the
+        // normal outbound delivery path instead of going silent.
+        // Bypass resolveExternalRunFailureTextForConversation so the
+        // fallback is delivered even in group conversations where
+        // silent-reply policy would otherwise suppress generic failures.
+        // See: https://github.com/openclaw/openclaw/issues/102113
+        runResult.payloads = [
+          markAgentRunFailureReplyPayload({
+            text: "The agent run failed before producing a reply.",
             isError: true,
           }),
         ];

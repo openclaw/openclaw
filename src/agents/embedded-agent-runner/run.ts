@@ -4126,6 +4126,7 @@ async function runEmbeddedAgentInternal(
               replayInvalid,
               livenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              terminalError: attempt.terminalError,
               ...(attempt.yieldDetected ? { yielded: true } : {}),
               ...(emptyAssistantReplyIsSilent
                 ? { terminalReplyKind: "silent-empty" as const }
