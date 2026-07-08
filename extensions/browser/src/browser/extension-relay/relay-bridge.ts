@@ -41,6 +41,10 @@ type CdpRequest = {
   sessionId?: string;
 };
 
+type CdpRequestParseResult =
+  | { ok: true; request: CdpRequest }
+  | { ok: false; id: number | null; sessionId?: string; message: string; code: number };
+
 type PendingExtensionCommand = {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
@@ -74,8 +78,35 @@ type ExtensionIdentity = {
   extensionVersion: string;
 };
 
-function toErrorPayload(id: number, sessionId: string | undefined, message: string, code = -32000) {
+function toErrorPayload(
+  id: number | null,
+  sessionId: string | undefined,
+  message: string,
+  code = -32000,
+) {
   return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
+}
+
+function parseCdpRequest(raw: string): CdpRequestParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, id: null, message: "Parse error", code: -32700 };
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, id: null, message: "Invalid request", code: -32600 };
+  }
+
+  const request = parsed as Record<string, unknown>;
+  const id = typeof request.id === "number" ? request.id : null;
+  const sessionId = typeof request.sessionId === "string" ? request.sessionId : undefined;
+  if (typeof request.id !== "number" || typeof request.method !== "string") {
+    return { ok: false, id, sessionId, message: "Invalid request", code: -32600 };
+  }
+
+  return { ok: true, request: parsed as CdpRequest };
 }
 
 /**
@@ -494,16 +525,14 @@ export class ExtensionRelayBridge {
     const client: CdpClientState = { socket, autoAttach: false, announcedSessions: new Set() };
     this.clients.add(client);
     const onMessage = (raw: string) => {
-      let request: CdpRequest;
-      try {
-        request = JSON.parse(raw) as CdpRequest;
-      } catch {
+      const parsed = parseCdpRequest(raw);
+      if (!parsed.ok) {
+        client.socket.send(
+          toErrorPayload(parsed.id, parsed.sessionId, parsed.message, parsed.code),
+        );
         return;
       }
-      if (typeof request?.id !== "number" || typeof request?.method !== "string") {
-        return;
-      }
-      void this.handleCdpRequest(client, request);
+      void this.handleCdpRequest(client, parsed.request);
     };
     const onClose = () => {
       this.clients.delete(client);
