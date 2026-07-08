@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
@@ -20,6 +21,8 @@ export type SshTunnel = {
   stderr: string[];
   stop: () => Promise<void>;
 };
+
+const log = createSubsystemLogger("ssh-tunnel");
 
 // Reject hosts that would corrupt the SSH HostName field or enable argument
 // injection: a leading '-' becomes an ssh option, and a stray leading/trailing
@@ -168,7 +171,9 @@ export async function startSshPortForward(opts: {
   const stderrStream = child.stderr;
   // Child events own tunnel failure. Keep the diagnostic pipe observed so a
   // stream error cannot become an uncaught exception during active use or teardown.
-  stderrStream?.on("error", () => {});
+  stderrStream?.on("error", (err) => {
+    log.debug("SSH tunnel stderr stream error: " + formatErrorMessage(err));
+  });
   stderrStream?.setEncoding("utf8");
   stderrStream?.on("data", (chunk) => {
     const lines = normalizeStringEntries(String(chunk).split("\n"));

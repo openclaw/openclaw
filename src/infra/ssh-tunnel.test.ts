@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
   spawn: vi.fn(),
+  logDebug: vi.fn(),
 }));
 
 vi.mock("./ports.js", async (importOriginal) => ({
@@ -16,6 +17,15 @@ vi.mock("./ports.js", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: mocks.logDebug,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
 }));
 
 import { PortInUseError } from "./ports.js";
@@ -207,7 +217,7 @@ describe("startSshPortForward", () => {
   });
 
   it.each(["active", "teardown"] as const)(
-    "does not crash when stderr errors while the tunnel is %s",
+    "logs stderr stream errors without crashing while the tunnel is %s",
     async (phase) => {
       vi.useFakeTimers();
       spawnFakeSshListening();
@@ -225,7 +235,10 @@ describe("startSshPortForward", () => {
       };
       const stopping = phase === "teardown" ? tunnel.stop() : undefined;
       expect(child.killed).toBe(phase === "teardown");
-      expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
+
+      const stderrError = new Error("stderr EPIPE");
+      expect(() => child.stderr.emit("error", stderrError)).not.toThrow();
+      expect(mocks.logDebug).toHaveBeenCalledWith("SSH tunnel stderr stream error: stderr EPIPE");
 
       await expect(stopping ?? tunnel.stop()).resolves.toBeUndefined();
     },
