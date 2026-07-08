@@ -10,7 +10,7 @@ export type ThemeModeChangeDetail = {
   element: HTMLElement;
 };
 
-export class ThemeModeToggle extends LitElement {
+class ThemeModeToggle extends LitElement {
   override createRenderRoot() {
     return this;
   }

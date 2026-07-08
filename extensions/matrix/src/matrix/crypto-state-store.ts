@@ -219,7 +219,7 @@ export function readMatrixIdbSnapshotJson(storageRootDir: string): string | null
   );
 }
 
-export function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
+function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
   return isIdbSnapshotMeta(
     openSyncStore<MatrixIdbSnapshotRecord>(
       openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -352,7 +352,7 @@ function resolveRecoveryKeyStateKeyForPath(recoveryKeyPath: string): string {
   return `file:${createHash("sha256").update(basename, "utf8").digest("hex").slice(0, 32)}`;
 }
 
-export function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
+function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
   if (
     !isRecord(value) ||
     value.version !== 1 ||
@@ -383,7 +383,7 @@ export function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRe
   };
 }
 
-export function normalizeMatrixLegacyCryptoMigrationState(
+function normalizeMatrixLegacyCryptoMigrationState(
   value: unknown,
 ): MatrixLegacyCryptoMigrationState | null {
   if (!isRecord(value) || value.version !== 1 || typeof value.accountId !== "string") {

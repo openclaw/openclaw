@@ -98,7 +98,7 @@ function buildFeishuPayloadButton(
   return rendered;
 }
 
-export function buildFeishuCardElementsForBlock(
+function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
 ): Record<string, unknown>[] {
   if (block.type === "text") {

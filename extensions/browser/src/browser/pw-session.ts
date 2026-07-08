@@ -84,7 +84,7 @@ export type BrowserNetworkRequest = {
 };
 
 /** Observed browser dialog record tracked for agent-visible state. */
-export type BrowserObservedDialogRecord = {
+type BrowserObservedDialogRecord = {
   id: string;
   type: string;
   message: string;
@@ -101,7 +101,7 @@ type BrowserObservedDialogState = {
 };
 
 /** Browser state currently observable by agent responses. */
-export type BrowserObservedState = {
+type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
 };
 

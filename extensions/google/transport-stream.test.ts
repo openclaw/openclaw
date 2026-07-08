@@ -453,6 +453,7 @@ describe("google transport stream", () => {
       "x-goog-api-key": "gemini-api-key",
       "X-Provider": "google",
     });
+    expect(new Headers(init.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
 
     const payload = parseRequestJsonBody(init);
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
