@@ -115,9 +115,13 @@ function isPreResolutionJsonRpcNotificationBatch(messages: unknown[]): boolean {
 
 function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
   if (Array.isArray(parsed)) {
-    return parsed.map((message) =>
-      jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
-    );
+    const responses = parsed
+      .filter((message) => !isJsonRpcRequest(message) || !isJsonRpcNotification(message))
+      .map((message) => jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"));
+    return responses.length === 0 ? null : responses;
+  }
+  if (isJsonRpcRequest(parsed) && isJsonRpcNotification(parsed)) {
+    return null;
   }
   return jsonRpcError(readJsonRpcRequestId(parsed), -32603, "Internal error");
 }
@@ -440,8 +444,14 @@ async function startMcpLoopbackServer(port = 0): Promise<{
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
           } else {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcInternalError(parsed)));
+            const internalError = jsonRpcInternalError(parsed);
+            if (internalError === null) {
+              res.writeHead(202);
+              res.end();
+            } else {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(internalError));
+            }
           }
         }
       } finally {

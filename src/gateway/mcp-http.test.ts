@@ -2843,6 +2843,37 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("does not include notifications in internal-error batch responses", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation(() => {
+      throw new Error("tool resolution exploded");
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+    const payload = (await response.json()) as Array<{
+      id?: unknown;
+      error?: { code?: number; message?: string };
+    }>;
+
+    expect(response.status).toBe(500);
+    expect(payload).toHaveLength(1);
+    expect(payload[0]).toMatchObject({
+      id: 42,
+      error: {
+        code: -32603,
+        message: "Internal error",
+      },
+    });
+  });
+
   it("returns invalid request errors for malformed batch entries without resetting the request", async () => {
     server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
