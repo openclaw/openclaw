@@ -398,6 +398,12 @@ export async function resolveCopilotApiToken(params: {
    * still wins. Defaults to `github.com`.
    */
   githubDomain?: string;
+  /**
+   * OpenClaw config used to resolve the persisted `githubDomain` provider
+   * param when an explicit `githubDomain` is not supplied. Precedence is
+   * `COPILOT_GITHUB_DOMAIN` env > explicit `githubDomain` > config.
+   */
+  config?: OpenClawConfig;
 }): Promise<{
   /** Copilot API token, from cache or fresh exchange. */
   token: string;
@@ -410,7 +416,9 @@ export async function resolveCopilotApiToken(params: {
 }> {
   const env = params.env ?? process.env;
   const domain = normalizeGithubCopilotDomain(
-    env.COPILOT_GITHUB_DOMAIN?.trim() || params.githubDomain,
+    env.COPILOT_GITHUB_DOMAIN?.trim() ||
+      params.githubDomain ||
+      readGithubCopilotDomainFromConfig(params.config),
   );
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const tokenUrl = copilotTokenUrl(domain);
