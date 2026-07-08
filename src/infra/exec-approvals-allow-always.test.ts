@@ -1023,6 +1023,42 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("rejects stale package-manager allow-always entries for chained shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    const npmPath = makeExecutable(dir, "npm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- npm x sh -c 'id > marker'",
+      allowlist: [
+        { pattern: pnpmPath, source: "allow-always" },
+        { pattern: npmPath, source: "allow-always" },
+      ],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("requires bound args for package-manager shell script carriers", async () => {
     if (process.platform === "win32") {
       return;
@@ -1101,6 +1137,16 @@ $0 \\"$1\\"" touch {marker}`,
       platform: process.platform,
     });
     expect(npmAliasInner.allowlistSatisfied).toBe(true);
+
+    const chainedInner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- npm x -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(chainedInner.allowlistSatisfied).toBe(true);
   });
 
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {

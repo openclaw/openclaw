@@ -294,25 +294,55 @@ type SegmentMatchEvaluation = {
   match: ExecAllowlistEntry | null;
 };
 
+const MAX_PACKAGE_MANAGER_EXEC_UNWRAP_DEPTH = 6;
+
+type PackageManagerTrustTarget =
+  | { kind: "blocked" }
+  | { kind: "not-package-manager"; argv: string[] }
+  | { kind: "package-manager"; argv: string[] };
+
 // Package-manager exec keeps the outer argv for process launch, but durable
 // approval matching must use the inner trust target so stale outer-wrapper
 // allow-always entries cannot authorize a different wrapped payload.
+function resolvePackageManagerTrustTargetArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): PackageManagerTrustTarget {
+  let current = argv;
+  let sawPackageManagerExec = false;
+  for (let depth = 0; depth < MAX_PACKAGE_MANAGER_EXEC_UNWRAP_DEPTH; depth += 1) {
+    const dispatchPlan = resolveDispatchWrapperTrustPlan(current, undefined, platform);
+    if (dispatchPlan.policyBlocked) {
+      return { kind: "blocked" };
+    }
+    current = dispatchPlan.argv;
+    const packageManagerExec = resolveKnownPackageManagerExecInvocation(current);
+    if (packageManagerExec.kind === "unsafe-exec") {
+      return { kind: "blocked" };
+    }
+    if (packageManagerExec.kind !== "unwrapped") {
+      return sawPackageManagerExec
+        ? { kind: "package-manager", argv: current }
+        : { kind: "not-package-manager", argv: current };
+    }
+    sawPackageManagerExec = true;
+    current = packageManagerExec.argv;
+  }
+  return { kind: "blocked" };
+}
+
 function resolvePackageManagerAllowlistTargetArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
 ): string[] | null | undefined {
-  const dispatchPlan = resolveDispatchWrapperTrustPlan(argv, undefined, platform);
-  if (dispatchPlan.policyBlocked) {
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
+  if (packageManagerTarget.kind === "blocked") {
     return null;
   }
-  const packageManagerExec = resolveKnownPackageManagerExecInvocation(dispatchPlan.argv);
-  if (packageManagerExec.kind === "unsafe-exec") {
-    return null;
-  }
-  if (packageManagerExec.kind !== "unwrapped") {
+  if (packageManagerTarget.kind !== "package-manager") {
     return undefined;
   }
-  const trustPlan = resolveExecWrapperTrustPlan(packageManagerExec.argv, undefined, platform);
+  const trustPlan = resolveExecWrapperTrustPlan(packageManagerTarget.argv, undefined, platform);
   if (
     trustPlan.policyBlocked ||
     (trustPlan.shellWrapperExecutable && trustPlan.shellInlineCommand)
@@ -1158,16 +1188,15 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
   });
 }
 
-function resolveAllowAlwaysPatternArgv(argv: string[]): string[] | null {
-  const dispatchPlan = resolveDispatchWrapperTrustPlan(argv);
-  if (dispatchPlan.policyBlocked) {
+function resolveAllowAlwaysPatternArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] | null {
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
+  if (packageManagerTarget.kind === "blocked") {
     return null;
   }
-  const packageManagerExec = resolveKnownPackageManagerExecInvocation(dispatchPlan.argv);
-  if (packageManagerExec.kind === "unsafe-exec") {
-    return null;
-  }
-  return packageManagerExec.kind === "unwrapped" ? packageManagerExec.argv : dispatchPlan.argv;
+  return packageManagerTarget.argv;
 }
 
 function collectAllowAlwaysPatterns(params: {
@@ -1183,7 +1212,10 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const patternArgv = resolveAllowAlwaysPatternArgv(params.segment.argv);
+  const patternArgv = resolveAllowAlwaysPatternArgv(
+    params.segment.argv,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
   if (!patternArgv) {
     return;
   }

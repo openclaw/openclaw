@@ -141,6 +141,32 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it("persists chained package-manager exec approvals against the final inner executable", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["pnpm", "npm"]) {
+      makeExecutable(dir, executable);
+    }
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "pnpm exec -- npm x -- tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
   it("keeps package-manager shell carriers one-shot", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "pnpm");
@@ -203,6 +229,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     }
     const env = makePathEnv(dir);
     const command = "npm x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps chained package-manager shell carriers one-shot", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["pnpm", "npm", "sh", "echo"]) {
+      makeExecutable(dir, executable);
+    }
+    const env = makePathEnv(dir);
+    const command = "pnpm exec -- npm x sh -c 'echo warmup-ok'";
     const plan = await planShellAuthorization({ command, cwd: dir, env });
 
     const decision = resolveAllowAlwaysPersistenceDecision({
