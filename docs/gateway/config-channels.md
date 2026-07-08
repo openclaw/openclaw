@@ -409,7 +409,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       groupPolicy: "allowlist",
       groups: {
-        "spaces/AAAA": { allow: true, requireMention: true },
+        "spaces/AAAA": { enabled: true, requireMention: true },
       },
       actions: { reactions: true },
       typingIndicator: "message",
