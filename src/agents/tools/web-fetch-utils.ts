@@ -83,6 +83,7 @@ function isTagNameChar(value: string): boolean {
     (code >= 48 && code <= 57) ||
     (code >= 65 && code <= 90) ||
     (code >= 97 && code <= 122) ||
+    value === "." ||
     value === "-" ||
     value === "_" ||
     value === ":"
@@ -415,6 +416,9 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
         }
         i = rawTextStart;
         continue;
+      }
+      if (startsLikeHtmlTag(html, i)) {
+        break;
       }
       appendText(stack, decodeEntities(html.slice(i)));
       break;
