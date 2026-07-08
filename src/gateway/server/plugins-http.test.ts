@@ -1,5 +1,5 @@
 // Plugin HTTP routing tests cover route matching, gateway auth decisions, and upgrade dispatch.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
@@ -449,6 +449,71 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
+  });
+
+  it("ends a plugin route response when the route throws after sending headers", async () => {
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/partial",
+            handler: async (_req, res) => {
+              res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+              res.write("partial");
+              throw new Error("boom");
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+    const server = createServer(async (req, res) => {
+      const handled = await handler(req, res);
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("server did not bind to a TCP port");
+    }
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/partial`, {
+        signal: controller.signal,
+      });
+      const result = await Promise.race([
+        response.text().then(
+          (body) => ({ kind: "body" as const, body }),
+          (err: unknown) => ({ kind: "error" as const, message: String(err) }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            resolve({ kind: "timeout" });
+          }, 250);
+        }),
+      ]);
+
+      expect(response.status).toBe(200);
+      expect(result).toEqual({ kind: "body", body: "partial" });
+      expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 
