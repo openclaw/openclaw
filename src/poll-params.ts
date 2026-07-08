@@ -33,12 +33,12 @@ function readPollParamRaw(params: Record<string, unknown>, key: string): unknown
 // (pollDurationSeconds, pollPublic, pollAnonymous) are also exposed on the
 // shared `message` tool schema, so schema-padded plain sends may echo them.
 // Only content fields count here; action="poll" validates modifiers later.
-const CONTENT_BEARING_SHARED_POLL_PARAM_NAMES = ["pollQuestion", "pollOption"] as const;
+const POLL_PARAM_CONTENT_KEYS = ["pollQuestion", "pollOption"] as const;
 
-function hasContentBearingPollCreationParam(params: Record<string, unknown>): boolean {
-  for (const key of CONTENT_BEARING_SHARED_POLL_PARAM_NAMES) {
+export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  for (const key of POLL_PARAM_CONTENT_KEYS) {
     const def = POLL_CREATION_PARAM_DEFS[key];
-    const value = readPollParamRaw(params, key);
+    const value = readSnakeCaseParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;
     }
@@ -55,8 +55,4 @@ function hasContentBearingPollCreationParam(params: Record<string, unknown>): bo
     }
   }
   return false;
-}
-
-export function hasPollCreationParams(params: Record<string, unknown>): boolean {
-  return hasContentBearingPollCreationParam(params);
 }
