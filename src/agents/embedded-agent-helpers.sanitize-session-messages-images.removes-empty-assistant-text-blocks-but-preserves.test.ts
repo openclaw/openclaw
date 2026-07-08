@@ -346,6 +346,43 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[1]?.role).toBe("toolResult");
   });
 
+  it("preserves tool-result text blocks through images-only sanitization", async () => {
+    // Regression for #98680: mixed text+image tool results must keep their text
+    // so providers can extract it instead of falling back to media placeholders.
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [
+          { type: "text", text: "file contents" },
+          { type: "image", data: "", mimeType: "image/png" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeMode: "images-only",
+    });
+
+    expect(out).toHaveLength(1);
+    const toolResult = out[0];
+    expect(toolResult?.role).toBe("toolResult");
+    if (toolResult?.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const textBlocks = toolResult.content.filter(
+      (block): block is { type: "text"; text: string } =>
+        block != null &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+    expect(textBlocks.some((block) => block.text === "file contents")).toBe(true);
+  });
+
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
       // msg_ values are OpenClaw message ids, not provider signatures.

@@ -11,16 +11,20 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 
+function isTextBlock(block: unknown): block is { type: "text"; text: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const rec = block as { type?: unknown; text?: unknown };
+  return rec.type === "text" && typeof rec.text === "string";
+}
+
 function dropEmptyTextBlocks<T>(content: T[]): T[] {
   return content.filter((block) => {
-    if (!block || typeof block !== "object") {
+    if (!isTextBlock(block)) {
       return true;
     }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type !== "text" || typeof rec.text !== "string") {
-      return true;
-    }
-    return rec.text.trim().length > 0;
+    return block.text.trim().length > 0;
   });
 }
 
@@ -79,11 +83,34 @@ export async function sanitizeSessionMessagesImages(
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = (await sanitizeContentBlocksImages(
-        content,
-        label,
-        imageSanitization,
-      )) as unknown as typeof toolMsg.content;
+      // Keep text blocks untouched by image sanitization so mixed text+image
+      // tool results cannot lose their text during "images-only" replay.
+      // Providers extract explicit text blocks to avoid media placeholders
+      // like "(see attached image)" (see #98680).
+      const nonTextBlocks = content.filter((block) => !isTextBlock(block)) as ContentBlock[];
+      const sanitizedNonText = nonTextBlocks.length
+        ? ((await sanitizeContentBlocksImages(
+            nonTextBlocks,
+            label,
+            imageSanitization,
+          )) as ContentBlock[])
+        : [];
+      const nonTextByIndex = new Map<number, ContentBlock>();
+      let nonTextIndex = 0;
+      for (const [index, block] of content.entries()) {
+        if (!isTextBlock(block)) {
+          const sanitized = sanitizedNonText[nonTextIndex++];
+          if (sanitized !== undefined) {
+            nonTextByIndex.set(index, sanitized);
+          }
+        }
+      }
+      const nextContent = content.map((block, index) => {
+        if (isTextBlock(block)) {
+          return block;
+        }
+        return (nonTextByIndex.get(index) ?? block) as ContentBlock;
+      }) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
       continue;
     }
