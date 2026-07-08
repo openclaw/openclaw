@@ -90,9 +90,7 @@ export function buildAgentHarnessUserInputAnswers(
   }
 
   const keyed = parseKeyedAnswers(inputText);
-  const fallbackLines = inputText
-    .split(/\r?\n/)
-    .map((line) => line.trim());
+  const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
   questions.forEach((question, index) => {
     const key =
       keyed.get(question.id.toLowerCase()) ??
@@ -130,7 +128,7 @@ export function normalizeAgentHarnessUserInputAnswer(
 function parseKeyedAnswers(inputText: string): Map<string, string> {
   const answers = new Map<string, string>();
   for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
+    const match = line.match(/^\s*([^:=]+?)\s*(?:[:=]|\s+-\s+)\s*(.+?)\s*$/);
     if (!match) {
       continue;
     }

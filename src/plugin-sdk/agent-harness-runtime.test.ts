@@ -198,7 +198,6 @@ describe("agent harness user input helpers", () => {
       ].join("\n"),
     });
   });
-
   it("normalizes keyed multi-question answers with option indexes", () => {
     expect(
       buildAgentHarnessUserInputAnswers(
@@ -227,6 +226,33 @@ describe("agent harness user input helpers", () => {
     });
   });
 
+  it("normalizes keyed answers with hyphens and underscores in keys", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "my-repo",
+            header: "Repository",
+            question: "Which repo?",
+            isOther: true,
+          },
+          {
+            id: "user_mode",
+            header: "Mode",
+            question: "Which mode?",
+            isOther: false,
+            options: [{ label: "Fast" }, { label: "Deep" }],
+          },
+        ],
+        "my-repo: openclaw\nuser_mode: 2",
+      ),
+    ).toEqual({
+      answers: {
+        user_mode: { answers: ["Deep"] },
+        "my-repo": { answers: ["openclaw"] },
+      },
+    });
+  });
   it("supports runtime-specific text formatting", () => {
     expect(
       formatAgentHarnessUserInputPrompt(
