@@ -9,7 +9,6 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../agents/agent-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { initSessionState } from "./session.js";
 
 const commitConflictControl = vi.hoisted(() => ({
