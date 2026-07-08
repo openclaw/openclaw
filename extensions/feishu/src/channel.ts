@@ -6,6 +6,7 @@ import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
@@ -774,14 +775,15 @@ async function authorizeFeishuMessageReadTarget(params: {
   if (preliminary.decision === "deny") {
     throw new ToolAuthorizationError("Feishu read target is not allowed.");
   }
-  // Static policy could not distinguish group from DM. Resolve only the
-  // authoritative chat kind before fetching any message or reaction content.
-  const chatType = await resolveFeishuChatTypeById({
+  // Static policy could not distinguish group from DM. Reuse the shared
+  // metadata gate so lookup failures cannot become a target-existence oracle.
+  await getAuthorizedFeishuChatInfo({
+    ctx: params.ctx,
     account: params.account,
-    chatId: params.target.chatId,
     runtime: params.runtime,
+    chatId: params.target.chatId,
   });
-  return authorize(chatType);
+  return preliminary.chatId;
 }
 
 async function getAuthorizedFeishuChatInfo(params: {
@@ -800,7 +802,20 @@ async function getAuthorizedFeishuChatInfo(params: {
     throw new ToolAuthorizationError("Feishu read target is not allowed.");
   }
   const client = await createFeishuActionClient(params.account);
-  const chat = await params.runtime.getChatInfo(client, preliminary.chatId);
+  let chat: Awaited<ReturnType<typeof params.runtime.getChatInfo>>;
+  try {
+    chat = await params.runtime.getChatInfo(client, preliminary.chatId);
+  } catch (error) {
+    if (preliminary.decision === "needs-metadata") {
+      assertFeishuChatReadAllowed({
+        cfg: params.ctx.cfg,
+        account: params.account,
+        chatId: preliminary.chatId,
+        ctx: params.ctx,
+      });
+    }
+    throw error;
+  }
   assertFeishuChatReadAllowed({
     cfg: params.ctx.cfg,
     account: params.account,
@@ -1011,6 +1026,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         collectRuntimeConfigAssignments,
       },
       actions: {
+        conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {

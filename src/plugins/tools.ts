@@ -7,8 +7,17 @@ import {
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  supportsConversationReadPolicyV1,
+  type ConversationReadPolicy,
+} from "../channels/plugins/conversation-read-origin.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  isLegacyConversationReadTool,
+  registrationIncludesLegacyConversationReadTool,
+} from "./compat/conversation-read-policy.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -204,6 +213,39 @@ function wrapPluginToolFactoryResult(
 function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPluginToolContext) {
   return runWithPluginToolScope(entry, () =>
     wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
+  );
+}
+
+function blocksLegacyConversationReadTool(params: {
+  pluginId: string;
+  toolNames: readonly string[];
+  conversationReadPolicy?: ConversationReadPolicy;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  if (
+    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
+      "direct-operator" ||
+    supportsConversationReadPolicyV1(params.conversationReadPolicy)
+  ) {
+    return false;
+  }
+  return params.toolNames.some((toolName) =>
+    isLegacyConversationReadTool({ pluginId: params.pluginId, toolName }),
+  );
+}
+
+function blocksLegacyConversationReadRegistration(params: {
+  entry: PluginToolRegistration;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  return (
+    registrationIncludesLegacyConversationReadTool(params.entry) &&
+    blocksLegacyConversationReadTool({
+      pluginId: params.entry.pluginId,
+      toolNames: [...params.entry.names, ...(params.entry.declaredNames ?? [])],
+      conversationReadPolicy: params.entry.conversationReadPolicy,
+      ctx: params.ctx,
+    })
   );
 }
 
@@ -724,6 +766,9 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
+        if (blocksLegacyConversationReadRegistration({ entry: candidate, ctx: params.ctx })) {
+          return undefined;
+        }
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
@@ -855,6 +900,16 @@ function resolveCachedPluginTools(params: {
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
+      if (
+        blocksLegacyConversationReadTool({
+          pluginId: plugin.id,
+          toolNames: [cachedDescriptor.descriptor.name],
+          conversationReadPolicy: cachedDescriptor.conversationReadPolicy,
+          ctx: params.ctx,
+        })
+      ) {
+        continue;
+      }
       if (
         !cachedDescriptor.optional &&
         !availableToolNames.some(
@@ -1263,6 +1318,9 @@ export function resolvePluginTools(params: {
     ) {
       continue;
     }
+    if (blocksLegacyConversationReadRegistration({ entry, ctx: params.context })) {
+      continue;
+    }
     const factoryResult = resolvePluginToolFactoryEntry({
       entry,
       ctx: params.context,
@@ -1418,6 +1476,7 @@ export function resolvePluginTools(params: {
             pluginId: entry.pluginId,
             tool,
             optional,
+            conversationReadPolicy: entry.conversationReadPolicy,
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);

@@ -200,6 +200,33 @@ beforeAll(async () => {
 });
 
 describe("discordPlugin outbound", () => {
+  it("builds tool context with separate native and routable DM targets", () => {
+    const buildToolContext = discordPlugin.threading?.buildToolContext;
+    if (!buildToolContext) {
+      throw new Error("Expected discordPlugin.threading.buildToolContext to be defined");
+    }
+    const hasRepliedRef = { value: false };
+
+    expect(
+      buildToolContext({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "user:123456789",
+          NativeChannelId: "987654321",
+          ChatType: "direct",
+          CurrentMessageId: "message-1",
+        },
+        hasRepliedRef,
+      }),
+    ).toEqual({
+      currentChannelId: "987654321",
+      currentChatType: "direct",
+      currentMessagingTarget: "user:123456789",
+      currentMessageId: "message-1",
+      hasRepliedRef,
+    });
+  });
+
   it("avoids local require calls for bundled-only sibling modules", async () => {
     const source = await readFile(
       resolve(process.cwd(), "extensions/discord/src/channel.ts"),
@@ -256,6 +283,10 @@ describe("discordPlugin outbound", () => {
     expect(messaging.inferTargetChatType({ to: "channel:789" })).toBe("channel");
     expect(messaging.normalizeTarget("1470130713209602050")).toBe("channel:1470130713209602050");
     expect(messaging.inferTargetChatType({ to: "1470130713209602050" })).toBe("channel");
+  });
+
+  it("attests the provider-I/O-safe conversation read policy", () => {
+    expect(discordPlugin.actions?.conversationReadPolicy).toBe("current-or-configured-v1");
   });
 
   it("resolves Discord usernames through the messaging target resolver", async () => {

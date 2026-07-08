@@ -20,6 +20,7 @@ export type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
   ChannelMeta,
+  ConversationReadPolicy,
   ConversationReadInvocationOrigin,
   ChannelStructuredComponents,
   ChannelStatusIssue,
@@ -27,6 +28,7 @@ export type {
   ChannelThreadingToolContext,
   ChannelToolSend,
 } from "../channels/plugins/types.public.js";
+export { CONVERSATION_READ_POLICY_V1 } from "../channels/plugins/types.public.js";
 export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/legacy-state-migration.types.js";
 
 export type {

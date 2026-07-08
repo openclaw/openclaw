@@ -110,6 +110,10 @@ describe("registerFeishuChatTools", () => {
     );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
+    expect(registerTool.mock.calls[0]?.[1]).toEqual({
+      name: "feishu_chat",
+      conversationReadPolicy: "current-or-configured-v1",
+    });
     const tool = resolveRegisteredTool(registerTool);
     expect(tool?.name).toBe("feishu_chat");
 
@@ -426,6 +430,56 @@ describe("registerFeishuChatTools", () => {
       expect(contactUserGetMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      name: "an existing blocked direct chat",
+      response: {
+        code: 0,
+        data: { chat_mode: "p2p", chat_type: "private" },
+      },
+    },
+    {
+      name: "a failed metadata lookup",
+      response: {
+        code: 230001,
+        msg: "chat not found",
+      },
+    },
+  ])("does not expose whether an ambiguous target is $name", async ({ response }) => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: true },
+              groupPolicy: "open",
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+    const tool = resolveRegisteredTool(registerTool, {
+      nativeChannelId: "oc_current",
+    });
+    chatGetMock.mockResolvedValueOnce(response);
+
+    const result = await tool.execute("tc_ambiguous_target", {
+      action: "info",
+      chat_id: "oc_other",
+    });
+
+    expect(result.details.error).toContain("Feishu read target is not allowed.");
+    expect(result.details.error).not.toContain("chat not found");
+    expect(chatGetMock).toHaveBeenCalledOnce();
+    expect(chatMembersGetMock).not.toHaveBeenCalled();
+    expect(contactUserGetMock).not.toHaveBeenCalled();
+  });
 
   it("lets a direct operator read an unconfigured group", async () => {
     const registerTool = vi.fn();

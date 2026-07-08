@@ -17,6 +17,7 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { supportsConversationReadPolicyV1 } from "../channels/plugins/conversation-read-origin.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   normalizeCommandDescriptorName,
@@ -188,6 +189,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
   PluginHookHandlerMap,
   PluginHookName,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -602,7 +604,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerTool = (
     record: PluginRecord,
     tool: AnyAgentTool | OpenClawPluginToolFactory,
-    opts?: { name?: string; names?: string[]; optional?: boolean },
+    opts?: OpenClawPluginToolOptions,
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
@@ -650,6 +652,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names: normalized,
       declaredNames,
       optional,
+      ...(supportsConversationReadPolicyV1(opts?.conversationReadPolicy)
+        ? { conversationReadPolicy: opts.conversationReadPolicy }
+        : {}),
       source: record.source,
       rootDir: record.rootDir,
     });

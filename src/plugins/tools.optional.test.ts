@@ -12,6 +12,7 @@ type MockRegistryToolEntry = {
   source: string;
   names: string[];
   declaredNames?: string[];
+  conversationReadPolicy?: "current-or-configured-v1";
   factory: (ctx: unknown) => unknown;
 };
 
@@ -61,7 +62,7 @@ function createContext() {
     config: {
       plugins: {
         enabled: true,
-        allow: ["optional-demo", "message", "multi"],
+        allow: ["optional-demo", "message", "multi", "feishu"],
         load: { paths: ["/tmp/plugin.js"] },
         slots: { memory: "none" },
       },
@@ -2229,6 +2230,122 @@ describe("resolvePluginTools optional tools", () => {
         content: [{ type: "text", text: secondOrigin }],
       });
       expect(factory).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("hides an unattested legacy conversation-read tool from delegated resolution before factory execution", () => {
+    const factory = vi.fn(() => makeTool("feishu_chat"));
+    setRegistry([
+      {
+        pluginId: "feishu",
+        optional: false,
+        source: "/tmp/feishu.js",
+        names: ["feishu_chat"],
+        factory,
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          conversationReadOrigin: "delegated",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(tools, []);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unattested legacy conversation-read tool available to direct operators", () => {
+    const factory = vi.fn(() => makeTool("feishu_chat"));
+    setRegistry([
+      {
+        pluginId: "feishu",
+        optional: false,
+        source: "/tmp/feishu.js",
+        names: ["feishu_chat"],
+        factory,
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          conversationReadOrigin: "direct-operator",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["feishu_chat"]);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an attested conversation-read tool available to delegated calls", () => {
+    const factory = vi.fn(() => makeTool("feishu_chat"));
+    setRegistry([
+      {
+        pluginId: "feishu",
+        optional: false,
+        source: "/tmp/feishu.js",
+        names: ["feishu_chat"],
+        conversationReadPolicy: "current-or-configured-v1",
+        factory,
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          conversationReadOrigin: "delegated",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["feishu_chat"]);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["direct-operator", "delegated", ["feishu_chat"], []],
+    ["delegated", "direct-operator", [], ["feishu_chat"]],
+  ] as const)(
+    "does not leak an unattested legacy tool through cached %s then %s resolution",
+    (firstOrigin, secondOrigin, firstNames, secondNames) => {
+      const factory = vi.fn(() => makeTool("feishu_chat"));
+      setRegistry([
+        {
+          pluginId: "feishu",
+          optional: false,
+          source: "/tmp/feishu.js",
+          names: ["feishu_chat"],
+          factory,
+        },
+      ]);
+
+      const first = resolvePluginTools(
+        createResolveToolsParams({
+          context: {
+            ...createContext(),
+            conversationReadOrigin: firstOrigin,
+          },
+        }),
+      );
+      const second = resolvePluginTools(
+        createResolveToolsParams({
+          context: {
+            ...createContext(),
+            conversationReadOrigin: secondOrigin,
+          },
+        }),
+      );
+
+      expectResolvedToolNames(first, [...firstNames]);
+      expectResolvedToolNames(second, [...secondNames]);
+      expect(factory).toHaveBeenCalledTimes(1);
     },
   );
 

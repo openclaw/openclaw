@@ -456,6 +456,36 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it.each(["react", "reactions", "read", "list-pins"] as const)(
+    "forwards trusted tool context for %s authorization",
+    async (action) => {
+      const invoke = createInvokeSpy();
+      const toolContext = {
+        currentChannelProvider: "slack",
+        currentChannelId: "C1",
+      };
+
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action,
+          cfg: {},
+          params: {
+            channelId: "C1",
+            ...(action === "react"
+              ? { messageId: "1712345678.654321", emoji: "white_check_mark" }
+              : {}),
+            ...(action === "reactions" ? { messageId: "1712345678.654321" } : {}),
+          },
+          toolContext,
+        } as never,
+        invoke: invoke as never,
+      });
+
+      expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+    },
+  );
+
   it("rejects fractional read limits before invoking Slack actions", async () => {
     const invoke = createInvokeSpy();
 

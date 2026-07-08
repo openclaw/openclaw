@@ -103,7 +103,22 @@ async function getAuthorizedFeishuChatInfo(params: {
       ctx: params.ctx,
     });
   }
-  const chat = await getChatInfo(params.client, preliminary.chatId);
+  let chat: Awaited<ReturnType<typeof getChatInfo>>;
+  try {
+    // Only targets with at least one authorized conversation kind reach metadata.
+    // Hide lookup failures when type is needed so metadata cannot become an existence oracle.
+    chat = await getChatInfo(params.client, preliminary.chatId);
+  } catch (error) {
+    if (preliminary.decision === "needs-metadata") {
+      assertFeishuChatReadAllowed({
+        cfg: params.cfg,
+        account: params.account,
+        chatId: preliminary.chatId,
+        ctx: params.ctx,
+      });
+    }
+    throw error;
+  }
   authorizeFeishuChatInfo({
     cfg: params.cfg,
     account: params.account,
@@ -348,6 +363,9 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
         }
       },
     }),
-    { name: "feishu_chat" },
+    {
+      name: "feishu_chat",
+      conversationReadPolicy: "current-or-configured-v1",
+    },
   );
 }

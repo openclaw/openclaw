@@ -184,6 +184,7 @@ function resolveRuntimeDiscordMessageActions() {
 }
 
 const discordMessageActions = {
+  conversationReadPolicy: discordMessageActionsImpl.conversationReadPolicy,
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>
@@ -756,6 +757,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,
         fallback: "off",
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = normalizeOptionalString(context.To);
+        const currentChatType =
+          context.ChatType === "direct" ||
+          context.ChatType === "group" ||
+          context.ChatType === "channel"
+            ? context.ChatType
+            : undefined;
+        return {
+          currentChannelId:
+            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChatType,
+          currentMessagingTarget,
+          currentMessageId: context.CurrentMessageId,
+          hasRepliedRef,
+        };
       },
     },
     outbound: {

@@ -1971,6 +1971,58 @@ describe("feishuPlugin actions", () => {
     expect(removeReactionFeishuMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "message reads",
+      action: "read",
+      params: { messageId: "om_unknown", chatId: "oc_unknown" },
+    },
+    {
+      name: "pin lookup",
+      action: "list-pins",
+      params: { chatId: "oc_unknown" },
+    },
+    {
+      name: "channel info",
+      action: "channel-info",
+      params: { chatId: "oc_unknown" },
+    },
+    {
+      name: "member info",
+      action: "member-info",
+      params: { chatId: "oc_unknown", memberId: "ou_unknown" },
+    },
+  ])(
+    "does not expose failed metadata lookup details for ambiguous Feishu $name",
+    async ({ action, params }) => {
+      getChatInfoMock.mockRejectedValueOnce(new Error("chat not found"));
+
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action,
+          params,
+          cfg: {
+            channels: {
+              feishu: {
+                appId: "cli_main",
+                appSecret: "secret_main",
+                groupPolicy: "open",
+                dmPolicy: "pairing",
+              },
+            },
+          } as OpenClawConfig,
+        } as never),
+      ).rejects.toThrow("Feishu read target is not allowed.");
+
+      expect(getChatInfoMock).toHaveBeenCalledOnce();
+      expect(getMessageFeishuMock).not.toHaveBeenCalled();
+      expect(listPinsFeishuMock).not.toHaveBeenCalled();
+      expect(getChatMembersMock).not.toHaveBeenCalled();
+      expect(assertFeishuChatMemberMock).not.toHaveBeenCalled();
+      expect(getFeishuMemberInfoMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a Feishu message returned from a different chat than the authorized target", async () => {
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_other",

@@ -6,6 +6,7 @@
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
+export { CONVERSATION_READ_POLICY_V1 } from "./types.core.js";
 export type * from "./types.core.js";
 export type * from "./types.adapters.js";
 export type { ChannelMessageCapability } from "./message-capabilities.js";

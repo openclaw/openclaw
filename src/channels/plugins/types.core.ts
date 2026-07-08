@@ -19,10 +19,17 @@ import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
-import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+import type {
+  ConversationReadInvocationOrigin,
+  ConversationReadPolicy,
+} from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
-export type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+export {
+  CONVERSATION_READ_POLICY_V1,
+  type ConversationReadInvocationOrigin,
+  type ConversationReadPolicy,
+} from "./conversation-read-origin.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
@@ -760,6 +767,12 @@ export type ChannelMessagePreparedSendPayloadContext = {
 
 /** Channel-owned action surface for the shared `message` tool. */
 export type ChannelMessageActionAdapter = {
+  /**
+   * Attests that this adapter enforces the current-or-configured conversation
+   * read policy before provider I/O. Missing or unknown values use the legacy
+   * host fallback for delegated read-dependent actions.
+   */
+  conversationReadPolicy?: ConversationReadPolicy;
   /**
    * Unified discovery surface for the shared `message` tool.
    * This returns the scoped actions,

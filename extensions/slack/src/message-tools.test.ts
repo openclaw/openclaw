@@ -1,6 +1,6 @@
 // Slack tests cover message tools plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
@@ -25,6 +25,40 @@ function requireSchemaProperty(
 }
 
 describe("Slack message tools", () => {
+  it("forwards trusted current-conversation and requester-account context", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+    const toolContext = {
+      currentChannelProvider: "slack" as const,
+      currentChannelId: "C_CURRENT",
+    };
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "C_CURRENT" },
+      requesterAccountId: "work",
+      toolContext,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C_CURRENT",
+      }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        requesterAccountId: "work",
+      }),
+    );
+  });
+
   it("classifies provider-native mutation actions", () => {
     const actions = createSlackActions("slack");
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "pinMessage"]) {

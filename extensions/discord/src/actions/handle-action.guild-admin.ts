@@ -10,6 +10,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
@@ -31,7 +32,6 @@ type Ctx = Pick<
   | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
-  | "conversationReadOrigin"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -55,8 +55,9 @@ function senderParam(senderUserId: string | undefined) {
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
+  readPolicyOptions?: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId } = params;
+  const { ctx, resolveChannelId, readPolicyOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -69,7 +70,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "memberInfo", accountId: accountId ?? undefined, guildId, userId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -80,7 +81,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "roleInfo", accountId: accountId ?? undefined, guildId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -91,7 +92,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "emojiList", accountId: accountId ?? undefined, guildId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -177,7 +178,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "channelInfo", accountId: accountId ?? undefined, channelId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -188,7 +189,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "channelList", accountId: accountId ?? undefined, guildId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -316,7 +317,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "voiceStatus", accountId: accountId ?? undefined, guildId, userId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -327,7 +328,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "eventList", accountId: accountId ?? undefined, guildId },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -411,7 +412,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         limit,
       },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 
@@ -476,7 +477,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         limit: readPositiveIntegerParam(actionParams, "limit"),
       },
       cfg,
-      { conversationReadOrigin: ctx.conversationReadOrigin },
+      readPolicyOptions,
     );
   }
 

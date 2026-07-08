@@ -48,7 +48,11 @@ const discordSendMocks = {
   })),
   editMessageDiscord: vi.fn(async () => ({})),
   fetchChannelInfoDiscord: vi.fn(
-    async (channelId: string): Promise<DiscordChannelInfoTest> => ({ id: channelId, type: 0 }),
+    async (channelId: string): Promise<DiscordChannelInfoTest> => ({
+      id: channelId,
+      type: ChannelType.GuildText,
+      guild_id: "G1",
+    }),
   ),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchGuildInfoDiscord: vi.fn(async (guildId: string) => ({
@@ -186,6 +190,11 @@ function handleMessagingAction(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     conversationReadOrigin?: "delegated" | "direct-operator";
+    readContext?: {
+      requesterAccountId?: string | null;
+      currentChannelProvider?: string | null;
+      currentChannelId?: string | null;
+    };
   },
 ) {
   return handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
@@ -520,9 +529,13 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
-  it("resolves Discord DM targets for reaction listing", async () => {
+  it("resolves Discord DM targets for direct-operator reaction listing", async () => {
     const resolveReactionTarget = vi.fn(async () => "DM1");
     discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+    });
 
     await handleMessagingAction(
       "reactions",
@@ -531,6 +544,8 @@ describe("handleDiscordMessagingAction", () => {
         messageId: "M1",
       },
       enableAllActions,
+      DISCORD_TEST_CFG,
+      { conversationReadOrigin: "direct-operator" },
     );
 
     expect(resolveReactionTarget).toHaveBeenCalledWith({
@@ -543,6 +558,70 @@ describe("handleDiscordMessagingAction", () => {
       accountId: "default",
       limit: undefined,
     });
+  });
+
+  it.each([
+    { name: "DM", type: ChannelType.DM },
+    { name: "group DM", type: ChannelType.GroupDM },
+  ])("blocks delegated reads of arbitrary Discord $name targets", async ({ type }) => {
+    const resolveReactionTarget = vi.fn(async () => "DM1");
+    discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type,
+    });
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        {
+          to: "user:U1",
+          messageId: "M1",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Discord DM paired with a caller-supplied guild ID", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+    });
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        {
+          guildId: "G1",
+          channelId: "DM1",
+          messageId: "M1",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when Discord cannot verify a caller-supplied guild target", async () => {
+    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        {
+          guildId: "G1",
+          channelId: "C1",
+          messageId: "M1",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("rejects fractional Discord reaction limits before fetching reactions", async () => {
@@ -583,6 +662,108 @@ describe("handleDiscordMessagingAction", () => {
         { channelId: "444", messageId: "M1" },
         enableAllActions,
         cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("allows a delegated read of the exact current Discord channel and account", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      guild_id: "111",
+      name: "current-target",
+      type: ChannelType.GuildText,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await handleMessagingAction(
+      "reactions",
+      { channelId: "444", messageId: "M1" },
+      enableAllActions,
+      cfg,
+      {
+        readContext: {
+          requesterAccountId: "DEFAULT",
+          currentChannelProvider: "Discord",
+          currentChannelId: "channel:444",
+        },
+      },
+    );
+
+    expect(fetchReactionsDiscord).toHaveBeenCalledWith("444", "M1", {
+      cfg,
+      accountId: "default",
+      limit: undefined,
+    });
+  });
+
+  it("does not borrow current Discord visibility from another account", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      guild_id: "111",
+      name: "current-target",
+      type: ChannelType.GuildText,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        {
+          readContext: {
+            requesterAccountId: "other",
+            currentChannelProvider: "discord",
+            currentChannelId: "444",
+          },
+        },
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicitly disabled current Discord channels blocked", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      guild_id: "111",
+      name: "current-target",
+      type: ChannelType.GuildText,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "444": { enabled: false },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        {
+          readContext: {
+            requesterAccountId: "default",
+            currentChannelProvider: "discord",
+            currentChannelId: "444",
+          },
+        },
       ),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(fetchReactionsDiscord).not.toHaveBeenCalled();
@@ -1033,6 +1214,11 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("reads from allowlisted Discord target channels", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "222",
+      guild_id: "111",
+      type: ChannelType.GuildText,
+    });
     const cfg = {
       channels: {
         discord: {
@@ -1239,12 +1425,23 @@ describe("handleDiscordMessagingAction", () => {
   it("allows Discord message links in threads under allowlisted parent channels", async () => {
     fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
       if (channelId === "333") {
-        return { id: "333", name: "incident-thread", parent_id: "222", type: 11 };
+        return {
+          id: "333",
+          guild_id: "111",
+          name: "incident-thread",
+          parent_id: "222",
+          type: ChannelType.PublicThread,
+        };
       }
       if (channelId === "222") {
-        return { id: "222", name: "team-updates", type: 0 };
+        return {
+          id: "222",
+          guild_id: "111",
+          name: "team-updates",
+          type: ChannelType.GuildText,
+        };
       }
-      return { id: channelId, type: 0 };
+      return { id: channelId, guild_id: "111", type: ChannelType.GuildText };
     });
     const cfg = {
       channels: {
@@ -1531,11 +1728,17 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("resolves guildId from channel info when guildId is omitted in searchMessages", async () => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "C1",
-      type: 0,
-      guild_id: "resolved-guild",
-    });
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce({
+        id: "C1",
+        type: ChannelType.GuildText,
+        guild_id: "resolved-guild",
+      })
+      .mockResolvedValueOnce({
+        id: "C1",
+        type: ChannelType.GuildText,
+        guild_id: "resolved-guild",
+      });
     searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
 
     await handleMessagingAction(
@@ -1552,11 +1755,17 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("normalizes channel: prefixed channelId before resolving guildId in searchMessages", async () => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "C1",
-      type: 0,
-      guild_id: "resolved-guild",
-    });
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce({
+        id: "C1",
+        type: ChannelType.GuildText,
+        guild_id: "resolved-guild",
+      })
+      .mockResolvedValueOnce({
+        id: "C1",
+        type: ChannelType.GuildText,
+        guild_id: "resolved-guild",
+      });
     searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
 
     await handleMessagingAction(

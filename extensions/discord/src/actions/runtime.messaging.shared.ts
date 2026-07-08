@@ -1,4 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -31,6 +32,11 @@ export type DiscordMessagingActionOptions = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  readContext?: {
+    requesterAccountId?: string | null;
+    currentChannelProvider?: string | null;
+    currentChannelId?: string | null;
+  };
 };
 
 export type DiscordMessagingActionContext = {
@@ -152,6 +158,9 @@ function isDiscordReadTargetAllowedInGuild(params: {
   guildInfo: DiscordGuildEntryResolved | null;
   target: DiscordReadTargetContext;
 }): boolean {
+  if (!params.target.metadataKnown) {
+    return isDiscordReadTargetExplicitlyAllowedById(params);
+  }
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo: params.guildInfo,
     channelId: params.target.channelId,
@@ -218,19 +227,36 @@ export function createDiscordMessagingActionContext(params: {
     accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
   const guilds = accountConfig.guilds as Record<string, DiscordGuildEntryResolved | undefined>;
-  const hasGuildEntries = Object.keys(guilds ?? {}).length > 0;
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: accountConfig.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
   const directOperator = params.options?.conversationReadOrigin === "direct-operator";
+  const currentReadContext = params.options?.readContext;
   const directDmEnabled =
     accountConfig.dm?.enabled !== false &&
     (accountConfig.dmPolicy ?? accountConfig.dm?.policy ?? "pairing") !== "disabled";
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
+  const isCurrentReadTarget = (channelId: string): boolean => {
+    const requesterAccountId = currentReadContext?.requesterAccountId?.trim();
+    const currentChannelId = currentReadContext?.currentChannelId?.trim();
+    if (
+      currentReadContext?.currentChannelProvider?.trim().toLowerCase() !== "discord" ||
+      !requesterAccountId ||
+      !currentChannelId ||
+      normalizeAccountId(requesterAccountId) !== normalizeAccountId(resolvedReactionAccountId)
+    ) {
+      return false;
+    }
+    try {
+      return discordMessagingActionRuntime.resolveDiscordChannelId(currentChannelId) === channelId;
+    } catch {
+      return false;
+    }
+  };
   const reactionRuntimeOptions = resolvedReactionAccountId
     ? createDiscordRuntimeAccountContext({
         cfg: params.cfg,
@@ -333,18 +359,20 @@ export function createDiscordMessagingActionContext(params: {
     }
     return target;
   };
-  const isDirectReadTargetEnabled = (
+  const isExpandedReadTargetEnabled = (
     guildInfo: DiscordGuildEntryResolved | null,
     target: DiscordReadTargetContext,
+    currentConversation: boolean,
   ): boolean => {
     const groupDmEnabled =
       accountConfig.dm?.groupEnabled === true &&
-      resolveGroupDmAllow({
-        channels: accountConfig.dm?.groupChannels,
-        channelId: target.channelId,
-        channelName: target.channelName,
-        channelSlug: target.channelSlug,
-      });
+      (currentConversation ||
+        resolveGroupDmAllow({
+          channels: accountConfig.dm?.groupChannels,
+          channelId: target.channelId,
+          channelName: target.channelName,
+          channelSlug: target.channelSlug,
+        }));
     if (!target.metadataKnown) {
       // Without provider metadata, the target might be a guild channel, DM, or
       // group DM. Every plausible scope must allow it before provider content reads.
@@ -394,21 +422,17 @@ export function createDiscordMessagingActionContext(params: {
       ),
     assertReadTargetAllowed: async ({ guildId, channelId }) => {
       const targetChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(channelId);
-      if (
-        !directOperator &&
-        !hasGuildEntries &&
-        groupPolicy !== "disabled" &&
-        groupPolicy !== "allowlist"
-      ) {
-        return;
-      }
       const target = await resolveReadTargetContext(targetChannelId);
+      const currentConversation = isCurrentReadTarget(targetChannelId);
       if (guildId) {
-        if (target.guildId && target.guildId !== guildId) {
+        if (target.metadataKnown && target.guildId !== guildId) {
           throw new Error("Discord read target channel is not allowed.");
         }
         const guildInfo = await resolveReadGuildEntry(guildId);
-        if (directOperator && isDirectReadTargetEnabled(guildInfo, target)) {
+        if (
+          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
+          (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))
+        ) {
           return;
         }
         if (
@@ -424,7 +448,10 @@ export function createDiscordMessagingActionContext(params: {
       }
       if (target.guildId) {
         const guildInfo = await resolveReadGuildEntry(target.guildId);
-        if (directOperator && isDirectReadTargetEnabled(guildInfo, target)) {
+        if (
+          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
+          (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))
+        ) {
           return;
         }
         if (
@@ -445,7 +472,10 @@ export function createDiscordMessagingActionContext(params: {
           target,
         }),
       );
-      if (directOperator && isDirectReadTargetEnabled(null, target)) {
+      if (
+        (directOperator && isExpandedReadTargetEnabled(null, target, false)) ||
+        (currentConversation && isExpandedReadTargetEnabled(null, target, true))
+      ) {
         return;
       }
       if (!allowed) {

@@ -4082,6 +4082,56 @@ module.exports = { id: "throws-after-import", register() {} };`,
     delete (globalThis as Record<string, unknown>)[marker];
   });
 
+  it("retains only the known conversation-read policy tool attestation", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-read-policy-test",
+      filename: "conversation-read-policy-test.cjs",
+      body: `module.exports = {
+        id: "conversation-read-policy-test",
+        register(api) {
+          const createTool = (name) => () => ({
+            name,
+            description: name,
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+          api.registerTool(createTool("attested_tool"), {
+            name: "attested_tool",
+            conversationReadPolicy: "current-or-configured-v1",
+          });
+          api.registerTool(createTool("unknown_policy_tool"), {
+            name: "unknown_policy_tool",
+            conversationReadPolicy: "future-policy",
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["conversation-read-policy-test"],
+        },
+      },
+    });
+
+    expect(registry.tools).toEqual([
+      expect.objectContaining({
+        names: ["attested_tool"],
+        conversationReadPolicy: "current-or-configured-v1",
+      }),
+      expect.not.objectContaining({ conversationReadPolicy: expect.anything() }),
+    ]);
+  });
+
   it("rejects plugin tool registration without manifest tool ownership", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

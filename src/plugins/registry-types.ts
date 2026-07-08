@@ -58,6 +58,8 @@ type OpenClawPluginSecurityAuditCollector =
   import("./types.js").OpenClawPluginSecurityAuditCollector;
 type OpenClawPluginService = import("./types.js").OpenClawPluginService;
 type OpenClawPluginToolFactory = import("./types.js").OpenClawPluginToolFactory;
+type ConversationReadPolicy =
+  import("../channels/plugins/conversation-read-origin.js").ConversationReadPolicy;
 type PluginConversationBindingResolvedEvent =
   import("./types.js").PluginConversationBindingResolvedEvent;
 type TypedPluginHookRegistration = import("./types.js").PluginHookRegistration;
@@ -82,6 +84,7 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  conversationReadPolicy?: ConversationReadPolicy;
   source: string;
   rootDir?: string;
 };

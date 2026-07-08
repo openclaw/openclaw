@@ -1,7 +1,10 @@
 // Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
+import type {
+  ConversationReadInvocationOrigin,
+  ConversationReadPolicy,
+} from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -72,6 +75,11 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /**
+   * Attests that this tool enforces the current-or-configured conversation
+   * read policy before provider I/O. Missing or unknown values are unattested.
+   */
+  conversationReadPolicy?: ConversationReadPolicy;
 };
 
 export type OpenClawPluginHookOptions = {

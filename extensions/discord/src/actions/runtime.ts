@@ -68,6 +68,11 @@ export async function handleDiscordAction(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
+    readContext?: {
+      requesterAccountId?: string | null;
+      currentChannelProvider?: string | null;
+      currentChannelId?: string | null;
+    };
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });

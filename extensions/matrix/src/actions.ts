@@ -5,6 +5,7 @@ import {
   readStringParam,
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
+import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
@@ -118,6 +119,7 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
+  conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
     if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {

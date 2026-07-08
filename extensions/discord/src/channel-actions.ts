@@ -1,5 +1,6 @@
 // Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
+import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -175,6 +176,7 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
@@ -243,6 +245,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     params,
     cfg,
     accountId,
+    requesterAccountId,
     requesterSenderId,
     senderIsOwner,
     toolContext,
@@ -251,6 +254,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     mediaReadFile,
     sessionKey,
     inboundEventKind,
+    conversationReadOrigin,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -267,6 +271,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       mediaReadFile,
       ...(sessionKey ? { sessionKey } : {}),
       ...(inboundEventKind ? { inboundEventKind } : {}),
+      ...(requesterAccountId ? { requesterAccountId } : {}),
+      ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
     });
   },
 };
