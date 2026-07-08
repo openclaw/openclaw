@@ -1,4 +1,6 @@
-// Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
+// Covers MCP HTTP transport redirects, SSRF guardrails, auth/TLS handoff, and
+// stdio stderr stream error handling.
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -13,11 +15,15 @@ const {
   runtimeFetchMock,
   streamableTransportConstructorMock,
   sseTransportConstructorMock,
+  logDebugMock,
+  stdioTransportConstructorMock,
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
+  logDebugMock: vi.fn(),
+  stdioTransportConstructorMock: vi.fn(),
 }));
 
 vi.mock("node:dns/promises", () => ({
@@ -46,6 +52,18 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 type SseTransportOptions = {
   eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
 };
+
+vi.mock("../logger.js", () => ({
+  logDebug: logDebugMock,
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+  logSuccess: vi.fn(),
+}));
+
+vi.mock("./mcp-stdio-transport.js", () => ({
+  OpenClawStdioClientTransport: stdioTransportConstructorMock,
+}));
 
 vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: function MockSSEClientTransport(
@@ -357,5 +375,26 @@ describe("resolveMcpTransport", () => {
     );
     expect(authKeys).toEqual(["authorization"]);
     expect(sentHeaders.authorization).toBe("Bearer operator");
+  });
+
+  it("does not crash when stdio stderr stream errors while MCP server is active", () => {
+    const stderr = new EventEmitter();
+    stdioTransportConstructorMock.mockImplementation(function () {
+      return {
+        stderr,
+        start: vi.fn(),
+        close: vi.fn(),
+      };
+    });
+
+    resolveMcpTransport("test-server", {
+      command: "node",
+      args: ["-e", ""],
+    });
+
+    expect(() => stderr.emit("error", new Error("EPIPE: stderr stream broken"))).not.toThrow();
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "bundle-mcp:test-server stderr stream error: Error: EPIPE: stderr stream broken",
+    );
   });
 });

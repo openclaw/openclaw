@@ -50,6 +50,9 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
     }
   };
   stderr.on("data", onData);
+  stderr.on("error", (err) => {
+    logDebug(`bundle-mcp:${serverName} stderr stream error: ${String(err)}`);
+  });
   return () => {
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);
