@@ -28,7 +28,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -58,7 +58,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -90,7 +90,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -121,7 +121,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -157,7 +157,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -186,7 +186,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -204,7 +204,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
@@ -229,7 +229,7 @@ describe("google doctor contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     normalizeCompatibilityConfig({ cfg: config });
 
