@@ -540,31 +540,38 @@ export class Agent {
     }
   }
 
+  /**
+   * Emits a clean terminal lifecycle settlement for control-flow signals.
+   * Unlike handleRunFailure this does NOT push a synthetic error message —
+   * it only emits turn_end + agent_end so subscribers receive coherent
+   * terminal pairs without stale tool-use or abandoned lifecycle state.
+   */
+  private async settleControlFlowRun(): Promise<void> {
+    const settlementMessage = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "" }],
+      api: this.mutableState.model.api,
+      provider: this.mutableState.model.provider,
+      model: this.mutableState.model.id,
+      usage: EMPTY_USAGE,
+      stopReason: "stop" as const,
+      timestamp: Date.now(),
+    } satisfies AgentMessage;
+    await this.processEvents({ type: "turn_end", message: settlementMessage, toolResults: [] });
+    await this.processEvents({ type: "agent_end", messages: [settlementMessage] });
+  }
+
   private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
     // Control-flow signals (e.g. MidTurnPrecheckSignal) are not user-facing
-    // errors. Skip error-event forwarding so the caller's dedicated recovery
-    // path can handle truncation + retry without a visible error flash.
-    // Still emit a clean turn_end + agent_end settlement so terminal lifecycle
-    // stays consistent for callers that depend on those events.
+    // errors. Emit a clean lifecycle settlement so subscribers see matching
+    // turn_start/turn_end and agent_start/agent_end pairs, then let the
+    // caller's dedicated recovery path handle truncation + retry.
     if (
       !aborted &&
       error instanceof Error &&
       (error as Error & { [CONTROL_FLOW_ERROR]?: unknown })[CONTROL_FLOW_ERROR]
     ) {
-      // Emit clean lifecycle settlement so subscribers see matching pairs
-      // of turn_start/turn_end and agent_start/agent_end events.
-      const settlementMessage = {
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "" }],
-        api: this.mutableState.model.api,
-        provider: this.mutableState.model.provider,
-        model: this.mutableState.model.id,
-        usage: EMPTY_USAGE,
-        stopReason: "stop" as const,
-        timestamp: Date.now(),
-      } satisfies AgentMessage;
-      await this.processEvents({ type: "turn_end", message: settlementMessage, toolResults: [] });
-      await this.processEvents({ type: "agent_end", messages: [settlementMessage] });
+      await this.settleControlFlowRun();
       return;
     }
 
