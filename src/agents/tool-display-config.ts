@@ -285,6 +285,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    enter_plan_mode: {
+      emoji: "📝",
+      title: "Enter Plan Mode",
+      detailKeys: [],
+    },
+    exit_plan_mode: {
+      emoji: "✅",
+      title: "Exit Plan Mode",
+      detailKeys: ["plan_summary"],
+    },
+    ask_user_question: {
+      emoji: "❓",
+      title: "Ask Question",
+      detailKeys: ["questions.0.question"],
+    },
     skill_workshop: {
       emoji: "🧰",
       title: "Skill Workshop",

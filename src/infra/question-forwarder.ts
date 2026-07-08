@@ -4,14 +4,12 @@ import { formatAgentHarnessUserInputPrompt } from "../agents/harness/user-input-
 // without the user having to notice the text stream. Reuses the durable outbound
 // delivery path (sendDurableMessageBatch); it does not invent a new send route.
 //
-// The button contract matches the Telegram channel renderer
-// (extensions/telegram/src/question-keyboard.ts):
-// each option runs `/answer <n>` and a free-text Other runs `/answer`. Telegram needs
-// a command-type action (native-command callback), while Slack restricts command-type
-// buttons to exec-approval commands, so Slack uses a callback-value action — the exact
-// per-channel split the extension renderers encode. This module builds the portable
-// presentation core-side (core cannot import extension modules) and each channel's
-// native presentation renderer converts it on delivery.
+// Button contract: each option runs `/answer <n>` and a free-text Other runs
+// `/answer`. Telegram needs a command-type action (native-command callback),
+// while Slack restricts command-type buttons to exec-approval commands, so Slack
+// uses a callback-value action (resolved by the Slack block-action handler). This
+// module builds the portable presentation core-side (core cannot import extension
+// modules) and each channel's native presentation renderer converts it on delivery.
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

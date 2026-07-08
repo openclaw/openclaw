@@ -31,6 +31,7 @@
     "src/commands/doctor-state-integrity.ts": 2,
     "src/commands/doctor/shared/codex-route-warnings.ts": 3,
     "src/config/sessions/cleanup-service.ts": 4,
+    "src/config/sessions/pending-question.ts": 2,
     "src/config/sessions/session-accessor.ts": 25,
     "src/config/sessions/session-registry-maintenance.ts": 2,
     "src/config/sessions/store-load.ts": 5,
