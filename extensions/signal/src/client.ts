@@ -12,7 +12,7 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
 };
 
-export type SignalRpcError = {
+type SignalRpcError = {
   code?: number;
   message?: string;
   data?: unknown;

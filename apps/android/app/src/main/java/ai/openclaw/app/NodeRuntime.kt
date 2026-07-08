@@ -1742,7 +1742,11 @@ class NodeRuntime private constructor(
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
-    connect(endpoint)
+    // Cold-start fallback only: discovery can emit late, so atomically claim the very first
+    // lifecycle intent. If any explicit connect/disconnect/switch intent already exists, stand
+    // down permanently instead of overriding the user's decision with a stale auto-connect.
+    if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
@@ -2631,10 +2635,7 @@ class NodeRuntime private constructor(
 
   fun connect(endpoint: GatewayEndpoint) {
     gatewayLifecycleIntentSeq.incrementAndGet()
-    launchGatewayLifecycle {
-      prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
-    }
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   fun connect(
@@ -2642,9 +2643,16 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
   ) {
     gatewayLifecycleIntentSeq.incrementAndGet()
+    launchConnect(endpoint, explicitAuth = auth)
+  }
+
+  private fun launchConnect(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+  ) {
     launchGatewayLifecycle {
       prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, auth))
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, explicitAuth))
     }
   }
 
@@ -2704,7 +2712,7 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
         "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->

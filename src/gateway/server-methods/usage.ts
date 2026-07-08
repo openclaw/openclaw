@@ -64,7 +64,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
-const SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY = 12;
+const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
 type DateRange = { startMs: number; endMs: number };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
@@ -864,19 +864,26 @@ async function loadAllAgentCostUsageSummary(params: {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
-  const summaries = await Promise.all(
-    agentIds.map((agentId) =>
-      loadCostUsageSummaryFromCache({
-        startMs: params.startMs,
-        endMs: params.endMs,
-        dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
-        config: params.config,
-        agentId,
-        requestRefresh: true,
-        refreshMode: "background",
-      }),
+  const agentLoadResult = await runTasksWithConcurrency({
+    tasks: agentIds.map(
+      (agentId) => () =>
+        loadCostUsageSummaryFromCache({
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+          config: params.config,
+          agentId,
+          requestRefresh: true,
+          refreshMode: "background",
+        }),
     ),
-  );
+    limit: USAGE_AGENT_LOAD_CONCURRENCY,
+    errorMode: "stop",
+  });
+  if (agentLoadResult.hasError) {
+    throw agentLoadResult.firstError;
+  }
+  const summaries = agentLoadResult.results;
   const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
   const totals = createEmptyCostUsageTotals();
   let cacheStatus: UsageCacheStatus | undefined;
@@ -1280,7 +1287,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           dailyUtcOffsetMinutes,
         }),
       })),
-      limit: SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY,
+      limit: USAGE_AGENT_LOAD_CONCURRENCY,
       errorMode: "stop",
     });
     if (agentLoadResult.hasError) {

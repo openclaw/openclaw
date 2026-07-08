@@ -18,7 +18,7 @@ import {
 } from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
-export interface NpmUpdateScriptInput {
+interface NpmUpdateScriptInput {
   auth: ProviderAuth;
   expectedNeedle: string;
   updateTarget: string;

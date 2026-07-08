@@ -5,7 +5,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -510,7 +509,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -527,7 +525,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(

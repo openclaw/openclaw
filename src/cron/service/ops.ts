@@ -61,6 +61,8 @@ import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import {
   applyJobResult,
+  applyTriggerNoFireResult,
+  applyTriggerRunResult,
   armTimer,
   emit,
   executeJobCoreWithTimeout,
@@ -606,6 +608,7 @@ async function persistUpdatedJob(params: {
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    trigger: job.trigger,
     payload: job.payload,
     delivery: job.delivery,
     displayName: job.displayName,
@@ -644,6 +647,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         defaultAgentId: state.deps.defaultAgentId,
         enabledExplicit: opts?.enabledExplicit === true,
         nowMs: now,
+        cronConfig: state.deps.cronConfig,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -722,12 +726,14 @@ async function updateLoadedJob(params: {
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
+    cronConfig: state.deps.cronConfig,
   });
   finalizeUpdatedJob({
     job,
     nextJob,
     now,
-    schedulingInputsRequested: patch.schedule !== undefined || patch.enabled !== undefined,
+    schedulingInputsRequested:
+      patch.schedule !== undefined || patch.enabled !== undefined || patch.trigger !== undefined,
     scheduleChanged: patch.schedule !== undefined,
   });
   await persistUpdatedJob({ state, snapshot, nextJob });
@@ -1060,6 +1066,11 @@ async function prepareManualRun(
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
+    if (mode === "force" && executionJob.trigger) {
+      // Force means run the payload now; strip the gate only from this snapshot
+      // so persisted trigger state and future due evaluations stay intact.
+      delete executionJob.trigger;
+    }
     if (opts?.payload) {
       executionJob.payload = structuredClone(opts.payload);
     }
@@ -1120,44 +1131,61 @@ async function finishPreparedManualRun(
         return;
       }
 
-      const shouldDelete = applyJobResult(
-        state,
-        job,
-        {
-          status: coreResult.status,
-          error: coreResult.error,
-          diagnostics: coreResult.diagnostics,
-          delivered: coreResult.delivered,
-          provider: coreResult.provider,
+      let shouldDelete = false;
+      if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
+        // Manual due checks share scheduled quiet-tick semantics: persist the
+        // evaluation but create no finished event or run-history entry.
+        applyTriggerNoFireResult(state, job, {
           startedAt,
           endedAt,
-        },
-        { preserveSchedule: mode === "force" },
-      );
+          triggerEval: coreResult.triggerEval,
+        });
+      } else {
+        shouldDelete = applyJobResult(
+          state,
+          job,
+          {
+            status: coreResult.status,
+            error: coreResult.error,
+            diagnostics: coreResult.diagnostics,
+            delivered: coreResult.delivered,
+            provider: coreResult.provider,
+            startedAt,
+            endedAt,
+          },
+          { preserveSchedule: mode === "force" },
+        );
+        applyTriggerRunResult(job, {
+          status: coreResult.status,
+          endedAt,
+          triggerEval: coreResult.triggerEval,
+        });
 
-      emit(state, {
-        jobId: job.id,
-        action: "finished",
-        job,
-        status: coreResult.status,
-        error: coreResult.error,
-        summary: coreResult.summary,
-        diagnostics: coreResult.diagnostics,
-        delivered: job.state.lastDelivered,
-        deliveryStatus: job.state.lastDeliveryStatus,
-        deliveryError: job.state.lastDeliveryError,
-        failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-        delivery: coreResult.delivery,
-        sessionId: coreResult.sessionId,
-        sessionKey: coreResult.sessionKey,
-        runId,
-        runAtMs: startedAt,
-        durationMs: job.state.lastDurationMs,
-        nextRunAtMs: job.state.nextRunAtMs,
-        model: coreResult.model,
-        provider: coreResult.provider,
-        usage: coreResult.usage,
-      });
+        emit(state, {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: coreResult.status,
+          error: coreResult.error,
+          summary: coreResult.summary,
+          diagnostics: coreResult.diagnostics,
+          delivered: job.state.lastDelivered,
+          deliveryStatus: job.state.lastDeliveryStatus,
+          deliveryError: job.state.lastDeliveryError,
+          failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+          delivery: coreResult.delivery,
+          sessionId: coreResult.sessionId,
+          sessionKey: coreResult.sessionKey,
+          runId,
+          runAtMs: startedAt,
+          durationMs: job.state.lastDurationMs,
+          nextRunAtMs: job.state.nextRunAtMs,
+          ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
+          model: coreResult.model,
+          provider: coreResult.provider,
+          usage: coreResult.usage,
+        });
+      }
 
       if (shouldDelete && state.store) {
         state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);

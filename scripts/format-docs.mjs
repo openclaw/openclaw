@@ -202,7 +202,7 @@ export function runOxfmt(files, params = {}, deps = {}) {
   }
 }
 
-export function repairFiles(root, files) {
+function repairFiles(root, files) {
   const changed = [];
   for (const relativePath of files) {
     const absolutePath = path.join(root, relativePath);
