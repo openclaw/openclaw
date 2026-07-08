@@ -8,6 +8,7 @@ import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
 import "../components/exec-approval.ts";
+import "../components/question-card.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
@@ -385,6 +386,9 @@ class OpenClawShell extends LitElement {
     approvalQueue: [],
     approvalBusy: false,
     approvalError: null,
+    questionQueue: [],
+    questionBusy: false,
+    questionError: null,
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -830,6 +834,17 @@ class OpenClawShell extends LitElement {
               context.overlays.decideApproval(decision),
           }}
         ></openclaw-exec-approval>
+        <openclaw-question-card
+          .props=${{
+            queue: this.overlaySnapshot.questionQueue,
+            busy: this.overlaySnapshot.questionBusy,
+            error: this.overlaySnapshot.questionError,
+            onSubmit: (
+              id: Parameters<typeof context.overlays.submitQuestionAnswers>[0],
+              answers: Parameters<typeof context.overlays.submitQuestionAnswers>[1],
+            ) => context.overlays.submitQuestionAnswers(id, answers),
+          }}
+        ></openclaw-question-card>
         ${renderDevicePairSetup({
           open: this.overlaySnapshot.devicePairSetupOpen,
           loading: this.overlaySnapshot.devicePairSetupLoading,

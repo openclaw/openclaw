@@ -25,6 +25,16 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import {
+  enqueueQuestionCard,
+  parseQuestionPending,
+  parseQuestionRemoved,
+  removeQuestionCard,
+  setQuestionQueueFromList,
+  type QuestionCardAnswers,
+  type QuestionCardEntry,
+  type QuestionPromptState,
+} from "./question-card.ts";
 
 type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";
@@ -38,6 +48,9 @@ export type ApplicationOverlaySnapshot = {
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
   approvalError: string | null;
+  questionQueue: readonly QuestionCardEntry[];
+  questionBusy: boolean;
+  questionError: string | null;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
@@ -51,6 +64,7 @@ export type ApplicationOverlays = {
   runUpdate: () => Promise<void>;
   dismissUpdate: () => void;
   decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
+  submitQuestionAnswers: (id: string, answers: QuestionCardAnswers) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
   closeDevicePairSetup: () => void;
@@ -202,6 +216,9 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     approvalQueue: [],
     approvalBusy: false,
     approvalError: null,
+    questionQueue: [],
+    questionBusy: false,
+    questionError: null,
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -234,6 +251,12 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     execApprovalError: null,
     execApprovalExpiryTimers: new Map(),
   };
+  const questionState: QuestionPromptState = {
+    client: activeClient,
+    questionQueue: [],
+    questionBusy: false,
+    questionError: null,
+  };
 
   const publish = () => {
     snapshot = {
@@ -243,6 +266,9 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalError: promptState.execApprovalError,
+      questionQueue: questionState.questionQueue,
+      questionBusy: questionState.questionBusy,
+      questionError: questionState.questionError,
       devicePairSetupOpen: devicePairSetupState.devicePairSetupOpen,
       devicePairSetupLoading: devicePairSetupState.devicePairSetupLoading,
       devicePairSetupError: devicePairSetupState.devicePairSetupError,
@@ -298,6 +324,20 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     if (applied && !disposed) {
       publish();
     }
+  };
+
+  const refreshQuestions = async (client: NonNullable<typeof activeClient>) => {
+    let result: unknown;
+    try {
+      result = await client.request("question.list", {});
+    } catch {
+      return;
+    }
+    if (disposed || !isCurrentClient(client)) {
+      return;
+    }
+    setQuestionQueueFromList(questionState, result);
+    publish();
   };
 
   const publishUpdateBanner = (updateStatusBanner: ApplicationStatusBanner | null) => {
@@ -411,6 +451,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     const previousClient = activeClient;
     activeClient = next.client;
     promptState.client = next.client;
+    questionState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = next.connected;
     if (previousClient !== next.client || !next.connected) {
@@ -423,6 +464,9 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalError = null;
+      questionState.questionQueue = [];
+      questionState.questionBusy = false;
+      questionState.questionError = null;
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
       for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
         globalThis.clearTimeout(timer);
@@ -434,6 +478,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     snapshot = { ...snapshot, updateAvailable: readUpdateAvailable(next.hello) };
     if (previousClient !== next.client) {
       void refreshApprovals(next.client);
+      void refreshQuestions(next.client);
       if (next.client) {
         void verifyPendingUpdateVersion(next.client);
       }
@@ -476,6 +521,22 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       const resolved = parseExecApprovalResolved(event.payload);
       if (resolved) {
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
+        publish();
+      }
+      return;
+    }
+    if (event.event === "question.pending") {
+      const entry = parseQuestionPending(event.payload);
+      if (entry) {
+        enqueueQuestionCard(questionState, entry);
+        publish();
+      }
+      return;
+    }
+    if (event.event === "question.resolved" || event.event === "question.expired") {
+      const removed = parseQuestionRemoved(event.payload);
+      if (removed) {
+        removeQuestionCard(questionState, removed.id);
         publish();
       }
     }
@@ -616,6 +677,42 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         if (approvalDecision === operation) {
           approvalDecision = null;
           promptState.execApprovalBusy = false;
+          publish();
+        }
+      }
+    },
+    async submitQuestionAnswers(id, answers) {
+      const client = gateway.snapshot.client;
+      const active = questionState.questionQueue.find((entry) => entry.id === id);
+      if (!active || !client || questionState.questionBusy || disposed) {
+        return;
+      }
+      questionState.questionBusy = true;
+      questionState.questionError = null;
+      publish();
+      try {
+        await client.request("question.resolve", { id, answers });
+        if (!isCurrentClient(client)) {
+          return;
+        }
+        // The question.resolved broadcast also removes the card; do it here too so
+        // the local UI updates immediately without waiting for the round-trip event.
+        removeQuestionCard(questionState, id);
+      } catch (error) {
+        if (isStaleApprovalResolutionError(error)) {
+          if (isCurrentClient(client)) {
+            removeQuestionCard(questionState, id);
+          }
+          return;
+        }
+        if (isCurrentClient(client) && questionState.questionQueue.some((e) => e.id === id)) {
+          questionState.questionError = `Answer failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      } finally {
+        if (isCurrentClient(client)) {
+          questionState.questionBusy = false;
           publish();
         }
       }

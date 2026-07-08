@@ -457,6 +457,15 @@ export const zh_CN: TranslationMap = {
       plugin: "插件",
     },
   },
+  question: {
+    title: "The agent has a question",
+    recommended: "Recommended",
+    otherLabel: "Other…",
+    otherPlaceholder: "Type your answer",
+    secretWarning: "Your reply may be visible to other participants on this channel.",
+    submit: "Submit",
+    pending: "{count} pending",
+  },
   agentTools: {
     connectedSource: "已连接：{id}",
     connected: "已连接",

@@ -1,11 +1,19 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-07T08:47:32.656Z",
+  "fallbackKeys": [
+    "question.otherLabel",
+    "question.otherPlaceholder",
+    "question.pending",
+    "question.recommended",
+    "question.secretWarning",
+    "question.submit",
+    "question.title"
+  ],
+  "generatedAt": "2026-07-08T09:40:43.776Z",
   "locale": "ar",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "d012bf7dea64cb5e4858358eb65d806374d86512260f7e16949b761b8bc0627b",
-  "totalKeys": 1669,
+  "sourceHash": "f33f6debfeda0bce3b802123b098f8e5f2286d40e4dbc936081279c8ca591054",
+  "totalKeys": 1676,
   "translatedKeys": 1669,
   "workflow": 1
 }

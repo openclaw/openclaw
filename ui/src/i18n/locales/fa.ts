@@ -461,6 +461,15 @@ export const fa: TranslationMap = {
       plugin: "افزونه",
     },
   },
+  question: {
+    title: "The agent has a question",
+    recommended: "Recommended",
+    otherLabel: "Other…",
+    otherPlaceholder: "Type your answer",
+    secretWarning: "Your reply may be visible to other participants on this channel.",
+    submit: "Submit",
+    pending: "{count} pending",
+  },
   agentTools: {
     connectedSource: "متصل: {id}",
     connected: "متصل",

@@ -460,6 +460,15 @@ export const vi: TranslationMap = {
       plugin: "Plugin",
     },
   },
+  question: {
+    title: "The agent has a question",
+    recommended: "Recommended",
+    otherLabel: "Other…",
+    otherPlaceholder: "Type your answer",
+    secretWarning: "Your reply may be visible to other participants on this channel.",
+    submit: "Submit",
+    pending: "{count} pending",
+  },
   agentTools: {
     connectedSource: "Đã kết nối: {id}",
     connected: "Đã kết nối",
