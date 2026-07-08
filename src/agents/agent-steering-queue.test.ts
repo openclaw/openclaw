@@ -276,7 +276,7 @@ describe("agent steering queue", () => {
   });
 
   it("backs off before an emoji that crosses the metadata limit", () => {
-    const emojiLabel = "x".repeat(499) + "🧠" + "extra";
+    const emojiLabel = "x".repeat(499) + "🧠extra";
     const run = makeRun({
       runId: "emoji-run",
       task: emojiLabel,
