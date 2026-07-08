@@ -17,7 +17,7 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
-export type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
+type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
 
 export type WhatsAppDurableInboundPayload = {
   message: SerializedWhatsAppDurableInboundMessage;

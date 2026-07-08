@@ -13,13 +13,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
 /** Why a terminal cannot open, or `null` when it can. */
-export type TerminalLaunchBlock =
+type TerminalLaunchBlock =
   | { kind: "disabled" }
   | { kind: "unknown-agent"; agentId: string }
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
 /** Resolved plan for a host terminal session. */
-export type TerminalLaunchPlan = {
+type TerminalLaunchPlan = {
   agentId: string;
   cwd: string;
   shell: string;
@@ -31,7 +31,7 @@ export type TerminalLaunchResolution =
   | { ok: true; plan: TerminalLaunchPlan }
   | { ok: false; block: TerminalLaunchBlock };
 
-export type TerminalLaunchPolicy = {
+type TerminalLaunchPolicy = {
   resolve: (agentId?: string) => TerminalLaunchResolution;
   isEnabled: () => boolean;
   prepareConfig: (config: OpenClawConfig, options: { restartPending: boolean }) => void;

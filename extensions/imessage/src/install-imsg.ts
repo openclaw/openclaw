@@ -7,7 +7,7 @@ import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 
-export type IMessageInstallResult = {
+type IMessageInstallResult = {
   ok: boolean;
   cliPath?: string;
   version?: string;
