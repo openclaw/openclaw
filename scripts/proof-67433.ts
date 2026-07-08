@@ -4,9 +4,11 @@ import { execSync } from "node:child_process";
  * Real-behavior proof harness for POST /hooks/agent waitForResult (PR 67433).
  *
  * Boots the production createHooksRequestHandler on a real Node HTTP server and
- * exercises three response shapes via real sockets. dispatchAgentHook is stubbed
- * at the HookDispatchers boundary (this PR changes the HTTP contract and request
- * handler flow, not runCronIsolatedAgentTurn semantics).
+ * exercises four response shapes via real sockets: waitForResult completed,
+ * legacy async accepted, waitForResult agent error, and async idempotency
+ * replay. dispatchAgentHook is stubbed at the HookDispatchers boundary (this PR
+ * changes the HTTP contract and request handler flow, not
+ * runCronIsolatedAgentTurn semantics).
  */
 import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -34,6 +36,7 @@ type ProofCaseResult = {
 };
 
 const hookLogs: string[] = [];
+let dispatchCalls = 0;
 
 function logHooks(level: "info" | "warn", message: string, meta?: Record<string, unknown>): void {
   const line = `${new Date().toISOString()} [hooks][${level}] ${message}${
@@ -51,6 +54,7 @@ async function sleep(ms: number): Promise<void> {
 
 function createDispatchStub(): (value: HookAgentDispatchPayload) => Promise<DispatchResult> {
   return async (value) => {
+    dispatchCalls += 1;
     logHooks("info", "hook agent dispatch started", {
       runId: value.runId,
       name: value.name,
@@ -209,6 +213,40 @@ async function main(): Promise<void> {
       deliver: false,
     });
     cases.push({ label: "waitForResult_agent_error", ...test3 });
+
+    // Async idempotency replay: an identical retry must return the original
+    // accepted response (same runId and sessionKey) without re-dispatching.
+    const replayPayload = {
+      message: "replay me",
+      name: "PR67433-proof-replay",
+      agentId: "main",
+      deliver: false,
+      idempotencyKey: "proof-replay-key",
+    };
+    const dispatchCallsBefore = dispatchCalls;
+    const test4a = await postAgentHook(replayPayload);
+    cases.push({ label: "async_idempotent_first", ...test4a });
+    const test4b = await postAgentHook(replayPayload);
+    cases.push({ label: "async_idempotent_replay", ...test4b });
+    await sleep(200);
+    const replayDispatchCalls = dispatchCalls - dispatchCallsBefore;
+    const replayMatches =
+      test4b.body.runId === test4a.body.runId &&
+      test4b.body.sessionKey === test4a.body.sessionKey &&
+      test4b.body.status === "accepted" &&
+      replayDispatchCalls === 1;
+    logHooks("info", "async idempotency replay verified", {
+      runIdMatches: test4b.body.runId === test4a.body.runId,
+      sessionKeyMatches: test4b.body.sessionKey === test4a.body.sessionKey,
+      dispatchCallsForBothRequests: replayDispatchCalls,
+    });
+    if (!replayMatches) {
+      throw new Error(
+        `replay contract violated: first=${JSON.stringify(test4a.body)} replay=${JSON.stringify(
+          test4b.body,
+        )} dispatchCalls=${replayDispatchCalls}`,
+      );
+    }
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
