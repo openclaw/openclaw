@@ -368,4 +368,44 @@ describe("ExtensionRelayBridge", () => {
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
   });
+
+  it("responds with JSON-RPC parse error on malformed JSON from CDP client", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage("{");
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  });
+
+  it("responds with JSON-RPC invalid request error when CDP client frame lacks id or method", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    // Missing id and method
+    cdp.onMessage(JSON.stringify({ params: {} }));
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: null,
+      error: { code: -32600, message: "Invalid Request" },
+    });
+  });
+
+  it("responds with invalid request error when CDP client frame has id but no method", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 7 }));
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: 7,
+      error: { code: -32600, message: "Invalid Request" },
+    });
+  });
 });
