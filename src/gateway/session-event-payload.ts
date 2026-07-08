@@ -59,6 +59,9 @@ export function buildGatewaySessionEventFields(params: {
     totalTokens: sessionRow.totalTokens,
     totalTokensFresh: sessionRow.totalTokensFresh,
     ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
+    // Plan-mode state rides the same session snapshot as goal so the Control-UI plan panel
+    // (state chip + summary) reads it without a new gateway method.
+    plan: sessionRow.plan ?? null,
     contextTokens: sessionRow.contextTokens,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,

@@ -2217,6 +2217,7 @@ export function buildGatewaySessionRow(params: {
     totalTokens,
     totalTokensFresh,
     goal,
+    plan: entry?.plan ?? null,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     subagentRunState,
