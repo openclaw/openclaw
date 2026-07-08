@@ -636,6 +636,7 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "gatewaychat",
           action: "react",
           requesterSenderId: "trusted-user",
+          effectiveGatewayClientScopes: ["operator.write"],
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",

@@ -453,6 +453,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       requesterAccountId?: string;
       requesterSenderId?: string;
+      effectiveGatewayClientScopes?: string[];
       senderIsOwner?: boolean;
       sessionKey?: string;
       sessionId?: string;
@@ -528,6 +529,12 @@ export const sendHandlers: GatewayRequestHandlers = {
         // Requester provenance is trusted channel context, not public RPC input.
         // Only full-scope callers may bridge server-injected sender identity.
         const canSupplyTrustedRequester = gatewayClientScopes.includes(ADMIN_SCOPE);
+        const effectiveGatewayClientScopes =
+          canSupplyTrustedRequester && Array.isArray(request.effectiveGatewayClientScopes)
+            ? request.effectiveGatewayClientScopes
+                .map((scope) => normalizeOptionalString(scope))
+                .filter((scope): scope is string => Boolean(scope))
+            : gatewayClientScopes;
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
@@ -548,7 +555,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           toolContext: request.toolContext,
           dryRun: false,
-          gatewayClientScopes,
+          gatewayClientScopes: effectiveGatewayClientScopes,
         });
         if (!handled) {
           const error = errorShape(

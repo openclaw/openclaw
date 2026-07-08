@@ -1616,6 +1616,7 @@ describe("gateway send mirroring", () => {
         },
         requesterAccountId: "default",
         requesterSenderId: "trusted-user",
+        effectiveGatewayClientScopes: ["operator.write"],
         inboundTurnKind: "room_event",
         toolContext: {
           currentMessagingTarget: "user:15551234567",
@@ -1655,6 +1656,7 @@ describe("gateway send mirroring", () => {
         inboundEventKind: "room_event",
         requesterAccountId: "default",
         requesterSenderId: "trusted-user",
+        gatewayClientScopes: ["operator.write"],
       }),
     );
   });
@@ -1699,6 +1701,7 @@ describe("gateway send mirroring", () => {
         },
         requesterAccountId: "default",
         requesterSenderId: "spoofed-admin-user",
+        effectiveGatewayClientScopes: ["operator.admin"],
         senderIsOwner: true,
         idempotencyKey: "idem-message-action-untrusted-requester",
       },
