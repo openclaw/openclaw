@@ -1,4 +1,5 @@
 // Codex tests cover node cli sessions plugin behavior.
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -267,5 +268,94 @@ describe("codex cli node sessions", () => {
     expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"b".repeat(136)}...`);
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
+  });
+});
+
+describe("runCodexExecResume stream error handling", () => {
+  // Replace the spawned "codex" binary with a long-running real Node child so
+  // the production stdio shape (["pipe", "pipe", "pipe"]) and parent-side
+  // Readable streams are exercised end-to-end. Without this, the test
+  // environment has no "codex" binary on PATH and `spawn` would fire
+  // `child.on("error", ENOENT)` before any stream listener could be exercised.
+  const installSpawnWrapper = async (): Promise<ChildProcess[]> => {
+    const captured: ChildProcess[] = [];
+    vi.resetModules();
+    vi.doMock("node:child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      return {
+        ...actual,
+        spawn: ((
+          command: string,
+          args: readonly string[],
+          options: Parameters<typeof actual.spawn>[2],
+        ) => {
+          const evalScript =
+            "process.stdin.resume(); process.stderr.write('ready\\n'); setInterval(() => {}, 60_000);";
+          const child = actual.spawn(
+            process.execPath,
+            ["--eval", evalScript, command, ...args],
+            options,
+          );
+          captured.push(child as unknown as ChildProcess);
+          return child;
+        }) as typeof actual.spawn,
+      };
+    });
+    return captured;
+  };
+
+  it("rejects with the synthetic stream error when the child stdout pipe fails mid-run", async () => {
+    const captured = await installSpawnWrapper();
+    try {
+      const { createCodexCliSessionNodeHostCommands: loadCommands } =
+        await import("./node-cli-sessions.js");
+      const command = loadCommands().find((entry) => entry.command === "codex.cli.session.resume");
+      const handlePromise = command?.handle(
+        JSON.stringify({
+          sessionId: "stream-error-stdout",
+          prompt: "ping",
+          timeoutMs: 10_000,
+        }),
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 100);
+      });
+      const child = captured[0];
+      expect(child).toBeDefined();
+      expect(child?.stdout).not.toBeNull();
+      child?.stdout?.emit("error", new Error("synthetic parent stdout read failure"));
+      await expect(handlePromise).rejects.toThrow("synthetic parent stdout read failure");
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("rejects with the synthetic stream error when the child stderr pipe fails mid-run", async () => {
+    const captured = await installSpawnWrapper();
+    try {
+      const { createCodexCliSessionNodeHostCommands: loadCommands } =
+        await import("./node-cli-sessions.js");
+      const command = loadCommands().find((entry) => entry.command === "codex.cli.session.resume");
+      const handlePromise = command?.handle(
+        JSON.stringify({
+          sessionId: "stream-error-stderr",
+          prompt: "ping",
+          timeoutMs: 10_000,
+        }),
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 100);
+      });
+      const child = captured[0];
+      expect(child).toBeDefined();
+      expect(child?.stderr).not.toBeNull();
+      child?.stderr?.emit("error", new Error("synthetic parent stderr read failure"));
+      await expect(handlePromise).rejects.toThrow("synthetic parent stderr read failure");
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
   });
 });

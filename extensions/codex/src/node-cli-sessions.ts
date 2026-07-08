@@ -297,6 +297,15 @@ async function runCodexExecResume(params: {
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
       child.on("exit", (code) => resolve(code));
+      // Guard against unhandled EPIPE / read-failure errors on the parent-side
+      // stdout/stderr Readable. When the child terminates abruptly the pipe
+      // can break before the "exit" event fires, so the stream layer emits
+      // an asynchronous "error" that would otherwise crash the gateway.
+      const routeStreamError = (error: unknown) => {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      child.stdout?.on?.("error", routeStreamError);
+      child.stderr?.on?.("error", routeStreamError);
     }).finally(() => {
       clearTimeout(timeout);
       if (forceKillTimeout) {
