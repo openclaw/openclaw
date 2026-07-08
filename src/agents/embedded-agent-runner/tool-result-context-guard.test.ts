@@ -251,7 +251,7 @@ describe("installToolResultContextGuard", () => {
   it("drops oversized tool-result details when truncating once", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
-      makeToolResultWithDetails("call_big", "x".repeat(900), "d".repeat(8_000)),
+      makeToolResultWithDetails("call_big", "x".repeat(2_500), "d".repeat(8_000)),
     ];
 
     const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
@@ -321,7 +321,7 @@ describe("installToolResultContextGuard", () => {
     const transformed = (await applyGuardToContext(
       agent,
       contextForNextCall,
-      100_000,
+      30_000,
     )) as AgentMessage[];
 
     expectOpenClawTruncation(getToolResultText(transformed[0]));
