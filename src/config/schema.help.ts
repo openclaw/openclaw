@@ -474,7 +474,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.experimental":
     "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
   "tools.experimental.planTool":
-    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded OpenClaw runs.",
+    "Kill-switch for the structured `update_plan` tool. Default-on for all models (Codex-parity plan mode); set to false to remove it, or true to force-enable where a policy would otherwise drop it.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

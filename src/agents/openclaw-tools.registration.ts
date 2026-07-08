@@ -5,7 +5,6 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -22,7 +21,11 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Resolves the default update_plan switch from explicit config or strict execution contract. */
+/**
+ * Resolves the update_plan switch. Codex-parity plan mode promotes update_plan to default-on
+ * for every model; `tools.experimental.planTool: false` remains the explicit kill-switch (and
+ * `true` still force-enables). Strict-agentic runs stay on as a subset of the new default.
+ */
 function isUpdatePlanToolEnabledForOpenClawTools(params: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
@@ -34,13 +37,8 @@ function isUpdatePlanToolEnabledForOpenClawTools(params: {
   if (configured !== undefined) {
     return configured;
   }
-  return isStrictAgenticExecutionContractActive({
-    config: params.config,
-    sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
-    provider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  // Default-on: update_plan is the live plan-mode checklist for all models.
+  return true;
 }
 
 function mergeOpenClawToolPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -81,18 +79,24 @@ export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
     params.config?.tools?.deny,
     params.pluginToolDenylist,
   );
-  return (
-    isToolExplicitlyAllowedByOpenClawToolPolicy({
-      toolName: "update_plan",
-      allowlist,
-      denylist,
-    }) ||
-    isUpdatePlanToolEnabledForOpenClawTools({
-      config: params.config,
-      agentSessionKey: params.agentSessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    })
-  );
+  // An explicit allowlist entry always wins (even over a broad deny group).
+  if (
+    isToolExplicitlyAllowedByOpenClawToolPolicy({ toolName: "update_plan", allowlist, denylist })
+  ) {
+    return true;
+  }
+  // Otherwise an explicit deny of update_plan opts out of the default-on switch.
+  if (
+    denylist &&
+    !isToolAllowedByPolicyName("update_plan", { allow: ["update_plan"], deny: denylist })
+  ) {
+    return false;
+  }
+  return isUpdatePlanToolEnabledForOpenClawTools({
+    config: params.config,
+    agentSessionKey: params.agentSessionKey,
+    agentId: params.agentId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
 }
