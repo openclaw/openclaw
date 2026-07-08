@@ -356,22 +356,35 @@ describe("installToolResultContextGuard", () => {
     }
   });
 
-  it("does not fire mid-turn precheck for tool-heavy history that fits after boundary projection", async () => {
+  it("projects aggregate-over-cap tool history before mid-turn route selection", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [makeUser("prompt already in history")];
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 40; index += 1) {
+      contextForNextCall.push(makeAssistant(`calling tool ${index}`));
       contextForNextCall.push(makeToolResult(`call_${index}`, "x".repeat(12_500)));
     }
+    const rawToolResultChars = contextForNextCall.reduce(
+      (sum, message) => sum + getToolResultText(message).length,
+      0,
+    );
+    expect(rawToolResultChars).toBeGreaterThan(400_000);
 
-    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 200_000,
-      reserveTokens: 50_000,
-      toolResultMaxChars: 16_000,
-      prePromptMessageCount: 1,
-    });
-
-    expect(transformed).toBe(contextForNextCall);
+    try {
+      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 200_000,
+        reserveTokens: 50_000,
+        toolResultMaxChars: 16_000,
+        prePromptMessageCount: 1,
+      });
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      const signal = err as MidTurnPrecheckSignal;
+      expect(signal.request.route).toBe("compact_only");
+      expect(signal.request.toolResultReducibleChars).toBe(0);
+      expect(signal.request.estimatedPromptTokens).toBeLessThan(250_000);
+    }
   });
 
   it("uses the context window, not the pre-reserve budget, for mid-turn projection", async () => {
