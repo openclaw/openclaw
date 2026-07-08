@@ -1,6 +1,8 @@
+import { query } from "./mySQL_connector.ts";
+
 export async function getSoldComps(city: string, months = 12) {
   const sql = `
-SELECT
+ SELECT
     ListingKey, UnparsedAddress, City, CloseDate, ClosePrice,
     OriginalListPrice, ListPrice, DaysOnMarket,
     BedroomsTotal, BathroomsTotalInteger, LivingArea,

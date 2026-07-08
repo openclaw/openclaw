@@ -17,6 +17,10 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 export async function query<T>(sql: string, params: any[] = []): Promise<T[]> {
-  const [rows] = await pool.execute(sql, params);
+  const [rows] = await pool.query(sql, params);
+  //   const [tester] = await pool.query(
+  //     "SELECT PoolPrivateYN, ViewYN FROM rets_property WHERE L_Status = 'Active' AND L_City = 'Irvine' ORDER BY L_SystemPrice ASC LIMIT 10 OFFSET 0",
+  //   );
+  //   console.log("MySQL connection test result:", tester);
   return rows as T[];
 }

@@ -3,7 +3,7 @@ import { query } from "./mySQL_connector.ts";
 export async function searchActiveListings(filters: PropertyFilters, page = 1, limit = 10) {
   const offset = (page - 1) * limit;
   let sql = `
-    SELECT
+     SELECT
         L_ListingID, L_DisplayId, L_Address, L_City, L_Zip,
         L_SystemPrice AS price, L_Keyword2 AS beds, LM_Dec_3 AS baths,
         LM_Int2_3 AS sqft, L_Type_ AS type, L_Status AS status,
@@ -40,13 +40,14 @@ export async function searchActiveListings(filters: PropertyFilters, page = 1, l
   }
   if (filters.pool) {
     sql += " AND PoolPrivateYN = ?";
-    params.push(filters.pool);
+    params.push("1");
   }
   if (filters.hasView) {
     sql += " AND ViewYN = ?";
-    params.push(filters.hasView);
+    params.push("1");
   }
   sql += " ORDER BY L_SystemPrice ASC LIMIT ? OFFSET ?";
   params.push(limit, offset);
+  console.log("Executing SQL:", sql, "with params:", params);
   return query<ListingRow>(sql, params);
 }

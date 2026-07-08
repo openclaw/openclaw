@@ -1,5 +1,7 @@
 export async function parsePropertyQuery(query: string) {
-  const cityMatch = query.match(/in ([A-Za-z\s]+?)(?:\s+under|\s+with|\s+at|$)/i);
+  const cityMatch = query.match(
+    /in ([A-Za-z\s]+?)(?:\s+under|\s+with|\s+at|\s+that|\s+which|,|$)/i,
+  );
   const priceMatch = query.match(/under \$?([\d,.]+)(k|m)?/i);
   const bedsMatch = query.match(/(\d+)[\s-]*(bed|beds|bedroom|bedrooms)/i);
   const bathsMatch = query.match(/(\d+(?:\.5)?)[\s-]*(bath|baths|bathroom)/i);
@@ -31,6 +33,6 @@ export async function parsePropertyQuery(query: string) {
   };
 }
 
-const query = process.argv[2];
-const result = await parsePropertyQuery(query);
-console.log(JSON.stringify(result));
+// const query = process.argv[2];
+// const result = await parsePropertyQuery(query);
+// console.log(JSON.stringify(result));
