@@ -203,14 +203,17 @@ function isComputerUseListAppsProbe(value: unknown): boolean {
     return false;
   }
   const record = value as {
-    serverName?: unknown;
-    toolName?: unknown;
+    threadId?: unknown;
+    server?: unknown;
+    tool?: unknown;
     arguments?: unknown;
   };
   if (
-    typeof record.serverName !== "string" ||
-    record.serverName.trim().length === 0 ||
-    record.toolName !== "list_apps"
+    typeof record.threadId !== "string" ||
+    record.threadId.trim().length === 0 ||
+    typeof record.server !== "string" ||
+    record.server.trim().length === 0 ||
+    record.tool !== "list_apps"
   ) {
     return false;
   }

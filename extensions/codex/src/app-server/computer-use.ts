@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import { CodexComputerUseWindowLeaseManager } from "./computer-use-leases.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -20,15 +21,16 @@ import type {
   CodexPluginListResponse,
   CodexPluginReadResponse,
   CodexRequestObject,
+  CodexThreadStartResponse,
   JsonValue,
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
-export {
-  CodexComputerUseWindowLeaseManager,
-  type CodexComputerUseAcquireLeaseParams,
-  type CodexComputerUseLeaseAcquireResult,
-  type CodexComputerUseWindowLease,
+export { CodexComputerUseWindowLeaseManager } from "./computer-use-leases.js";
+export type {
+  CodexComputerUseAcquireLeaseParams,
+  CodexComputerUseLeaseAcquireResult,
+  CodexComputerUseWindowLease,
 } from "./computer-use-leases.js";
 
 /** Minimal app-server request function needed by Computer Use setup. */
@@ -170,7 +172,25 @@ const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curate
 const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
   "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
+const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 const execFileAsync = promisify(execFile);
+
+type ComputerUseWindowLeaseManagerState = {
+  manager?: CodexComputerUseWindowLeaseManager;
+  leaseTimeoutMs?: number;
+};
+
+const COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE = Symbol.for(
+  "openclaw.codexComputerUseWindowLeaseManager",
+);
+
+function getComputerUseWindowLeaseManagerState(): ComputerUseWindowLeaseManagerState {
+  const globalState = globalThis as typeof globalThis & {
+    [COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE]?: ComputerUseWindowLeaseManagerState;
+  };
+  globalState[COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE] ??= {};
+  return globalState[COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE];
+}
 
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
@@ -206,6 +226,7 @@ export async function ensureCodexComputerUse(
   if (!config.enabled) {
     return disabledStatus(config);
   }
+  getCodexComputerUseWindowLeaseManager(config);
   const status = await inspectCodexComputerUse({
     ...params,
     config,
@@ -267,6 +288,11 @@ async function inspectCodexComputerUse(params: {
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
+  const repairComputerUseMcpChildren =
+    params.repairComputerUseMcpChildren ??
+    (params.client
+      ? () => killStaleComputerUseMcpChildren({ ancestorPid: params.client?.getTransportPid() })
+      : undefined);
   if (params.installPlugin) {
     await request<JsonValue>("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
@@ -304,7 +330,7 @@ async function inspectCodexComputerUse(params: {
     config: params.config,
     plugin: pluginInspection.plugin,
     installPlugin: params.installPlugin,
-    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
+    repairComputerUseMcpChildren,
   });
 }
 
@@ -404,14 +430,25 @@ async function readComputerUseTools(params: {
     config: params.config,
     repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
+  const fallbackPermitted = !liveTest.ok && params.config.fallbackOnFailure;
   return {
     ...status,
-    ready: liveTest.ok,
+    ready: liveTest.ok || fallbackPermitted,
     reason: liveTest.ok ? "ready" : "live_test_failed",
     liveTest,
     ...(repair ? { repair } : {}),
-    warnings: [...status.warnings, ...(repair?.warnings ?? [])],
-    message: liveTest.ok ? "Computer Use is ready." : liveTest.message,
+    warnings: [
+      ...status.warnings,
+      ...(repair?.warnings ?? []),
+      ...(fallbackPermitted
+        ? ["Computer Use live test failed, but computerUse.fallbackOnFailure permits fallback."]
+        : []),
+    ],
+    message: liveTest.ok
+      ? "Computer Use is ready."
+      : fallbackPermitted
+        ? `${liveTest.message} Fallback is permitted by computerUse.fallbackOnFailure.`
+        : liveTest.message,
   };
 }
 
@@ -424,16 +461,31 @@ export async function runCodexComputerUseLiveTest(params: {
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
+    let threadId: string | undefined;
     try {
-      await params.request(
-        "mcpServer/tool/call",
+      const thread = await params.request<CodexThreadStartResponse>(
+        "thread/start",
         {
-          serverName: params.config.mcpServerName,
-          toolName: "list_apps",
-          arguments: {},
+          input: [],
+          developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
         },
         {
           timeoutMs: params.config.liveTestTimeoutMs,
+        },
+      );
+      threadId = thread.thread.id;
+      await params.request(
+        "mcpServer/tool/call",
+        {
+          threadId,
+          server: params.config.mcpServerName,
+          tool: "list_apps",
+          arguments: {},
+        },
+        {
+          timeoutMs: params.config.toolCallTimeoutMs,
           allowComputerUseMcpProbe: true,
         },
       );
@@ -457,7 +509,13 @@ export async function runCodexComputerUseLiveTest(params: {
         break;
       }
       if (params.config.autoRepair) {
-        repair = await (params.repairComputerUseMcpChildren ?? killStaleComputerUseMcpChildren)();
+        repair = params.repairComputerUseMcpChildren
+          ? await params.repairComputerUseMcpChildren()
+          : scopedRepairUnavailableStatus();
+      }
+    } finally {
+      if (threadId) {
+        await cleanupComputerUseProbeThread(params.request, threadId, params.config);
       }
     }
   }
@@ -477,6 +535,42 @@ export async function runCodexComputerUseLiveTest(params: {
     },
     ...(repair ? { repair } : {}),
   };
+}
+
+async function cleanupComputerUseProbeThread(
+  request: CodexComputerUseRequest,
+  threadId: string,
+  config: ResolvedCodexComputerUseConfig,
+): Promise<void> {
+  await Promise.allSettled([
+    request("thread/unsubscribe", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
+    request("thread/archive", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
+  ]);
+}
+
+function scopedRepairUnavailableStatus(): CodexComputerUseRepairStatus {
+  return {
+    attempted: false,
+    killedPids: [],
+    warnings: [
+      "Computer Use auto-repair skipped because no scoped Codex app-server process was available.",
+    ],
+    message: "Computer Use stale child repair requires a scoped local app-server PID.",
+  };
+}
+
+/** Returns the shared window-scope lease manager configured from computerUse.leaseTimeoutMs. */
+export function getCodexComputerUseWindowLeaseManager(
+  config: Pick<ResolvedCodexComputerUseConfig, "leaseTimeoutMs">,
+): CodexComputerUseWindowLeaseManager {
+  const state = getComputerUseWindowLeaseManagerState();
+  if (!state.manager || state.leaseTimeoutMs !== config.leaseTimeoutMs) {
+    state.manager = new CodexComputerUseWindowLeaseManager({
+      defaultTimeoutMs: config.leaseTimeoutMs,
+    });
+    state.leaseTimeoutMs = config.leaseTimeoutMs;
+  }
+  return state.manager;
 }
 
 async function resolveMarketplaceRef(params: {
@@ -905,7 +999,9 @@ function pluginWarnings(plugin: CodexPluginDetail): string[] {
   return warnings;
 }
 
-export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUseRepairStatus> {
+export async function killStaleComputerUseMcpChildren(
+  options: { ancestorPid?: number } = {},
+): Promise<CodexComputerUseRepairStatus> {
   if (process.platform !== "darwin") {
     return {
       attempted: true,
@@ -916,9 +1012,16 @@ export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUs
       message: "Computer Use stale child repair skipped on this platform.",
     };
   }
+  if (
+    !options.ancestorPid ||
+    !Number.isSafeInteger(options.ancestorPid) ||
+    options.ancestorPid <= 0
+  ) {
+    return scopedRepairUnavailableStatus();
+  }
   let stdout: string;
   try {
-    const result = await execFileAsync("/bin/ps", ["-axo", "pid=,command="], {
+    const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
       maxBuffer: 5 * 1024 * 1024,
     });
     stdout = result.stdout;
@@ -934,8 +1037,12 @@ export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUs
   }
   const killedPids: number[] = [];
   const warnings: string[] = [];
-  for (const processInfo of parsePsOutput(stdout)) {
+  const processInfos = parsePsOutput(stdout);
+  for (const processInfo of processInfos) {
     if (!isStaleComputerUseMcpChild(processInfo.command)) {
+      continue;
+    }
+    if (!isDescendantOfPid(processInfo.pid, options.ancestorPid, processInfos)) {
       continue;
     }
     try {
@@ -953,26 +1060,54 @@ export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUs
     warnings,
     message:
       killedPids.length === 0
-        ? "No stale Computer Use MCP children were found."
-        : `Terminated ${killedPids.length} stale Computer Use MCP child process${killedPids.length === 1 ? "" : "es"}.`,
+        ? "No stale Computer Use MCP children were found under the scoped Codex app-server process."
+        : `Terminated ${killedPids.length} stale Computer Use MCP child process${killedPids.length === 1 ? "" : "es"} under the scoped Codex app-server process.`,
   };
 }
 
-function parsePsOutput(stdout: string): Array<{ pid: number; command: string }> {
+function parsePsOutput(stdout: string): Array<{ pid: number; ppid: number; command: string }> {
   return stdout
     .split(/\r?\n/u)
     .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
       if (!match) {
         return [];
       }
-      return [{ pid: Number(match[1]), command: match[2] ?? "" }];
+      return [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
     })
-    .filter((processInfo) => Number.isSafeInteger(processInfo.pid) && processInfo.pid > 0);
+    .filter(
+      (processInfo) =>
+        Number.isSafeInteger(processInfo.pid) &&
+        processInfo.pid > 0 &&
+        Number.isSafeInteger(processInfo.ppid) &&
+        processInfo.ppid >= 0,
+    );
 }
 
 function isStaleComputerUseMcpChild(command: string): boolean {
   return command.includes("SkyComputerUseClient") && /(?:^|\s)mcp(?:\s|$)/u.test(command);
+}
+
+function isDescendantOfPid(
+  pid: number,
+  ancestorPid: number,
+  processInfos: Array<{ pid: number; ppid: number }>,
+): boolean {
+  const parents = new Map(processInfos.map((processInfo) => [processInfo.pid, processInfo.ppid]));
+  const seen = new Set<number>();
+  let current = pid;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = parents.get(current);
+    if (!parent || parent <= 0) {
+      return false;
+    }
+    if (parent === ancestorPid) {
+      return true;
+    }
+    current = parent;
+  }
+  return false;
 }
 
 function createComputerUseRequest(params: {
@@ -1014,6 +1149,12 @@ function createComputerUseRequest(params: {
       startOptions: runtime.start,
     });
 }
+
+export const testing = {
+  getComputerUseWindowLeaseManagerState,
+  isDescendantOfPid,
+  parsePsOutput,
+};
 
 function resolveComputerUseConfig(
   params: Pick<CodexComputerUseSetupParams, "pluginConfig" | "overrides" | "forceEnable">,

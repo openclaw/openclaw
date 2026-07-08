@@ -7,6 +7,7 @@ import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
+  testing,
   type CodexComputerUseStatus,
   type CodexComputerUseRequest,
 } from "./computer-use.js";
@@ -115,13 +116,34 @@ describe("Codex Computer Use setup", () => {
       repaired: false,
     });
     expect(request).toHaveBeenCalledWith(
+      "thread/start",
+      {
+        input: [],
+        developerInstructions: "OpenClaw Computer Use readiness probe",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+      { timeoutMs: 60_000 },
+    );
+    expect(request).toHaveBeenCalledWith(
       "mcpServer/tool/call",
       {
-        serverName: "computer-use",
-        toolName: "list_apps",
+        threadId: "computer-use-probe-thread-1",
+        server: "computer-use",
+        tool: "list_apps",
         arguments: {},
       },
       { timeoutMs: 60_000, allowComputerUseMcpProbe: true },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "computer-use-probe-thread-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "thread/archive",
+      { threadId: "computer-use-probe-thread-1" },
+      { timeoutMs: 60_000 },
     );
     expectRequestMethodNotCalled(request, "marketplace/add");
     expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
@@ -200,6 +222,58 @@ describe("Codex Computer Use setup", () => {
     });
     expect(status.message).toContain("Computer Use live test failed after 2 attempts");
     expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
+  });
+
+  it("permits setup to continue when fallbackOnFailure is enabled", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          fallbackOnFailure: true,
+        },
+      },
+      request,
+      repairComputerUseMcpChildren: vi.fn(async () => ({
+        attempted: true,
+        killedPids: [],
+        warnings: [],
+        message: "No stale Computer Use MCP children were found.",
+      })),
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "live_test_failed",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: true,
+    });
+    expect(status.liveTest).toMatchObject({ status: "failed", ok: false });
+    expect(status.warnings).toContain(
+      "Computer Use live test failed, but computerUse.fallbackOnFailure permits fallback.",
+    );
+    expect(status.message).toContain("Fallback is permitted by computerUse.fallbackOnFailure.");
+  });
+
+  it("parses process trees so repair can stay scoped to the app-server child tree", () => {
+    const processes = testing.parsePsOutput(`
+      100 1 /Applications/Codex.app/Contents/MacOS/Codex app-server
+      101 100 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
+      102 1 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
+      103 101 helper
+    `);
+
+    expect(processes).toContainEqual({
+      pid: 101,
+      ppid: 100,
+      command: "/Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp",
+    });
+    expect(testing.isDescendantOfPid(101, 100, processes)).toBe(true);
+    expect(testing.isDescendantOfPid(103, 100, processes)).toBe(true);
+    expect(testing.isDescendantOfPid(102, 100, processes)).toBe(false);
   });
 
   it("reports an installed but disabled Computer Use plugin separately", async () => {
@@ -563,6 +637,7 @@ function createComputerUseRequest(params: {
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
+  let threadStartCalls = 0;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -637,10 +712,21 @@ function createComputerUseRequest(params: {
         nextCursor: null,
       };
     }
+    if (method === "thread/start") {
+      threadStartCalls += 1;
+      return {
+        thread: {
+          id: `computer-use-probe-thread-${threadStartCalls}`,
+        },
+        model: "gpt-5.1",
+        modelProvider: "openai",
+      };
+    }
     if (method === "mcpServer/tool/call") {
       expect(requestParams).toEqual({
-        serverName: "computer-use",
-        toolName: "list_apps",
+        threadId: `computer-use-probe-thread-${threadStartCalls}`,
+        server: "computer-use",
+        tool: "list_apps",
         arguments: {},
       });
       if (liveTestFailures > 0) {
@@ -648,6 +734,10 @@ function createComputerUseRequest(params: {
         throw new Error("list_apps timed out");
       }
       return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "thread/unsubscribe" || method === "thread/archive") {
+      expect(requestParams).toEqual({ threadId: `computer-use-probe-thread-${threadStartCalls}` });
+      return undefined;
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
@@ -734,6 +824,7 @@ function createEmptyMarketplaceComputerUseRequest(): CodexComputerUseRequest {
 
 function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
   let installed = false;
+  let threadStartCalls = 0;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -793,8 +884,19 @@ function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
         nextCursor: null,
       };
     }
+    if (method === "thread/start") {
+      threadStartCalls += 1;
+      return {
+        thread: { id: `multi-marketplace-probe-thread-${threadStartCalls}` },
+        model: "gpt-5.1",
+        modelProvider: "openai",
+      };
+    }
     if (method === "mcpServer/tool/call") {
       return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "thread/unsubscribe" || method === "thread/archive") {
+      return undefined;
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
@@ -805,6 +907,7 @@ function createBundledMarketplaceComputerUseRequest(
 ): CodexComputerUseRequest {
   let registered = false;
   let installed = false;
+  let threadStartCalls = 0;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -877,8 +980,19 @@ function createBundledMarketplaceComputerUseRequest(
         nextCursor: null,
       };
     }
+    if (method === "thread/start") {
+      threadStartCalls += 1;
+      return {
+        thread: { id: `bundled-marketplace-probe-thread-${threadStartCalls}` },
+        model: "gpt-5.1",
+        modelProvider: "openai",
+      };
+    }
     if (method === "mcpServer/tool/call") {
       return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "thread/unsubscribe" || method === "thread/archive") {
+      return undefined;
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;

@@ -76,8 +76,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       requestCodexAppServerJson({
         method: "mcpServer/tool/call",
         requestParams: {
-          serverName: "computer-use",
-          toolName: "list_apps",
+          threadId: "thread-1",
+          server: "computer-use",
+          tool: "list_apps",
           arguments: {},
         },
         allowComputerUseMcpProbe: true,
@@ -90,9 +91,26 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       requestCodexAppServerJson({
         method: "mcpServer/tool/call",
         requestParams: {
-          serverName: "computer-use",
-          toolName: "get_app_state",
+          threadId: "thread-1",
+          server: "computer-use",
+          tool: "get_app_state",
           arguments: { app: "Google Chrome" },
+        },
+        allowComputerUseMcpProbe: true,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).rejects.toThrow(
+      "Codex-native app-server method `mcpServer/tool/call` is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "mcpServer/tool/call",
+        requestParams: {
+          serverName: "computer-use",
+          toolName: "list_apps",
+          arguments: {},
         },
         allowComputerUseMcpProbe: true,
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },

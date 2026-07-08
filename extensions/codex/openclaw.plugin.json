@@ -381,7 +381,7 @@
     },
     "computerUse.autoRepair": {
       "label": "Auto Repair",
-      "help": "When true, failed Computer Use live tests repair stale Computer Use MCP children and retry once.",
+      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children and retry once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {

@@ -22,7 +22,7 @@ import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
-import { ensureCodexComputerUse } from "./computer-use.js";
+import { ensureCodexComputerUse, killStaleComputerUseMcpChildren } from "./computer-use.js";
 import {
   resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
@@ -232,15 +232,21 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
+            const repairComputerUseMcpChildren = () =>
+              killStaleComputerUseMcpChildren({
+                ancestorPid: activeStartupClient.getTransportPid(),
+              });
             await ensureCodexComputerUse({
               client: activeStartupClient,
               pluginConfig: params.pluginConfig,
               timeoutMs: params.appServer.requestTimeoutMs,
               signal: startupAbandonController.signal,
+              repairComputerUseMcpChildren,
             });
             startCodexComputerUseHealthMonitor({
               client: activeStartupClient,
               config: params.computerUseConfig,
+              repairComputerUseMcpChildren,
             });
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({

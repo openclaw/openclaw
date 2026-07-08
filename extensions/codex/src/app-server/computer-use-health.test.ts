@@ -26,8 +26,9 @@ describe("Codex Computer Use periodic health", () => {
     expect(client.request).toHaveBeenCalledWith(
       "mcpServer/tool/call",
       {
-        serverName: "computer-use",
-        toolName: "list_apps",
+        threadId: "health-probe-thread-1",
+        server: "computer-use",
+        tool: "list_apps",
         arguments: {},
       },
       { timeoutMs: 60_000 },
@@ -35,13 +36,14 @@ describe("Codex Computer Use periodic health", () => {
 
     client.close();
     await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+    ).toHaveLength(1);
   });
 
   it("repairs stale CUA children and retries once after a failed probe", async () => {
     vi.useFakeTimers();
-    const client = createClient();
-    client.request.mockRejectedValueOnce(new Error("hung")).mockResolvedValueOnce({ apps: [] });
+    const client = createClient({ liveTestFailures: 1 });
     const repairComputerUseMcpChildren = vi.fn(async () => ({
       attempted: true,
       killedPids: [1234],
@@ -57,7 +59,9 @@ describe("Codex Computer Use periodic health", () => {
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
 
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+    ).toHaveLength(2);
     expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
   });
 
@@ -74,9 +78,38 @@ describe("Codex Computer Use periodic health", () => {
   });
 });
 
-function createClient() {
+function createClient(options: { liveTestFailures?: number } = {}) {
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
-  const request = vi.fn(async () => ({ apps: [] }));
+  let threadStarts = 0;
+  let liveTestFailures = options.liveTestFailures ?? 0;
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "thread/start") {
+      threadStarts += 1;
+      return {
+        thread: { id: `health-probe-thread-${threadStarts}` },
+        model: "gpt-5.1",
+        modelProvider: "openai",
+      };
+    }
+    if (method === "mcpServer/tool/call") {
+      expect(params).toEqual({
+        threadId: `health-probe-thread-${threadStarts}`,
+        server: "computer-use",
+        tool: "list_apps",
+        arguments: {},
+      });
+      if (liveTestFailures > 0) {
+        liveTestFailures -= 1;
+        throw new Error("hung");
+      }
+      return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "thread/unsubscribe" || method === "thread/archive") {
+      expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
+      return undefined;
+    }
+    throw new Error(`unexpected request ${method}`);
+  });
   const addCloseHandler = vi.fn((handler: (client: CodexAppServerClient) => void) => {
     closeHandlers.add(handler);
     return () => closeHandlers.delete(handler);

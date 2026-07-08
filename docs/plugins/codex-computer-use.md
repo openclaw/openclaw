@@ -119,10 +119,11 @@ turn-start check and `/codex computer-use status` report three separate layers:
 - exposure: whether Codex app-server exposes the configured MCP server/tools;
 - live test: a real `computer-use.list_apps` call.
 
-The live test uses `liveTestTimeoutMs` (default 60 seconds). If the first
-probe fails, OpenClaw terminates only stale `SkyComputerUseClient ... mcp`
-children, retries exactly once with the same timeout, and reports both the
-repair result and the final live-test result.
+The live test uses `liveTestTimeoutMs` (default 60 seconds) and calls
+`computer-use.list_apps` through a transient Codex thread. If the first probe
+fails, OpenClaw terminates only stale `SkyComputerUseClient ... mcp` descendants
+of the scoped Codex app-server process, retries exactly once with the same
+timeout, and reports both the repair result and the final live-test result.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -256,12 +257,12 @@ remote install is unsupported, run install with a local source or path:
 | `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the `computer-use.list_apps` readiness probe.                      |
-| `toolCallTimeoutMs`             | 60000          | Expected timeout budget for real Computer Use tool calls such as `list_apps`.  |
-| `leaseTimeoutMs`                | 300000         | Default window-scope Computer Use lease timeout; active calls renew it.        |
+| `toolCallTimeoutMs`             | 60000          | Timeout budget for the real `computer-use.list_apps` MCP tool call.            |
+| `leaseTimeoutMs`                | 300000         | Default timeout used by the shared window-scope Computer Use lease manager.    |
 | `healthCheckIntervalMinutes`    | 60             | Allowed periodic health cadence: 30, 60, 120, or 240 minutes.                  |
 | `pluginCacheMode`               | `symlink`      | Share the local Codex.app bundled plugin cache, or use `independent` copies.   |
 | `fallbackOnFailure`             | false          | Allow fallback inside the Computer Use setup path instead of failing closed.   |
-| `autoRepair`                    | true           | Kill stale Computer Use MCP children after a failed live probe before retry.   |
+| `autoRepair`                    | true           | Repair scoped stale Computer Use MCP children after a failed probe.            |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -279,7 +280,8 @@ When Computer Use setup passes for a shared Codex app-server client, OpenClaw
 also starts a per-client periodic health monitor. The monitor runs the same
 `computer-use.list_apps` live probe on the configured cadence, skips
 overlapping checks, clears its timer when the app-server client closes, and
-uses the same stale-child repair/retry path as `/codex computer-use status`.
+uses the same scoped stale-child repair/retry path as
+`/codex computer-use status`.
 
 OpenClaw includes a window-scope lease manager for Computer Use coordination.
 The lease is intentionally scoped to a desktop window, not an app and not the
@@ -367,11 +369,13 @@ Codex app-server MCP status, or macOS permissions.
 
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and
 MCP server are present, but the local Computer Use bridge did not answer.
-OpenClaw kills stale `SkyComputerUseClient ... mcp` children once and retries
-once. If the second probe still fails, quit or restart Codex Computer Use,
-relaunch Codex Desktop if needed, then retry in a fresh OpenClaw session. If
-the host previously ran Computer Use through an older managed Codex app-server,
-refresh the installed plugin from the desktop bundled marketplace:
+OpenClaw kills stale `SkyComputerUseClient ... mcp` descendants of the scoped
+Codex app-server process once and retries once. It does not kill host-wide
+Computer Use children from other app-server processes. If the second probe still
+fails, quit or restart Codex Computer Use, relaunch Codex Desktop if needed,
+then retry in a fresh OpenClaw session. If the host previously ran Computer Use
+through an older managed Codex app-server, refresh the installed plugin from the
+desktop bundled marketplace:
 
 ```text
 /codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
