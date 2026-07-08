@@ -2017,6 +2017,7 @@
     "kysely": "0.29.2",
     "linkedom": "0.18.12",
     "minimatch": "10.2.5",
+    "mysql2": "^3.22.5",
     "node-edge-tts": "1.2.10",
     "openai": "6.45.0",
     "partial-json": "0.1.7",
