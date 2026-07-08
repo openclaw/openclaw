@@ -579,7 +579,13 @@ export class OpenClawChannelBridge {
           type: "plugin_approval_resolved",
           raw,
         });
+        return;
       }
+      default:
+        // Unknown gateway event types are silently dropped.
+        if (this.verbose) {
+          console.warn(`[mcp-channel-bridge] unknown gateway event: ${event.event}`);
+        }
     }
   }
 

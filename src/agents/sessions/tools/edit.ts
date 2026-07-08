@@ -118,7 +118,9 @@ function prepareEditArguments(input: unknown): EditToolInput {
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }
-    } catch {}
+    } catch {
+      // Not a JSON string — model did not use the edits-as-string format.
+    }
   }
 
   const legacy = args as LegacyEditToolInput;
