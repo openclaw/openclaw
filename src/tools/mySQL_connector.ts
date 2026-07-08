@@ -1,4 +1,11 @@
+import dotenv from "dotenv";
 import mysql from "mysql2/promise";
+dotenv.config();
+
+// console.log("MYSQL_HOST:", process.env.MYSQL_HOST);
+// console.log("MYSQL_USER:", process.env.MYSQL_USER);
+// console.log("MYSQL_DATABASE:", process.env.MYSQL_DATABASE);
+// console.log("MYSQL_PASSWORD is set:", !!process.env.MYSQL_PASSWORD);
 
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST,
