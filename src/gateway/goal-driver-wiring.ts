@@ -3,17 +3,19 @@ import type { GoalDriverLogger } from "../agents/goal-driver/driver.js";
  * Gateway wiring for the autonomous goal continuation driver.
  *
  * Binds {@link createGoalDriverService} to the live gateway: it re-arms every
- * persisted `active` goal on startup, classifies each completed turn as a driver
- * continuation vs a real inbound turn (for the no-progress ceiling reset), and
- * broadcasts driver-initiated status changes as `goal.updated` events.
+ * persisted `active` goal on startup and classifies each completed turn as a
+ * driver continuation vs a real inbound turn (for the no-progress ceiling reset).
+ *
+ * Goal status/objective changes are NOT broadcast here — every goal-store write
+ * (commands, tools, and the driver's own auto-pause) flows through the global
+ * goal-events emitter, which {@link bindGoalUpdatedBroadcast} maps to the
+ * `goal.updated` gateway event. That keeps a single broadcast path.
  *
  * Returns `undefined` when `tools.experimental.goalDriver.enabled` is off so the
  * gateway wires nothing and the turn-completed seam is a zero-cost null-check.
  */
-import {
-  createGoalDriverService,
-  type GoalDriverStatusChange,
-} from "../agents/goal-driver/goal-driver-service.js";
+import { createGoalDriverService } from "../agents/goal-driver/goal-driver-service.js";
+import { setGoalUpdatedEmitter } from "../config/sessions/goal-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -38,11 +40,18 @@ function adaptLogger(log: SubsystemLogger): GoalDriverLogger {
   };
 }
 
-/** Payload broadcast to Control UI / channels on a goal status/objective change. */
-export type GoalUpdatedEventPayload = GoalDriverStatusChange & {
-  /** Origin of the change; "driver" for autonomous transitions (auto-pause). */
-  source: "driver";
-};
+/**
+ * Binds the global goal-events emitter to the gateway broadcast so every
+ * `goal.updated` change (host + driver) reaches Control UI and channels. Call
+ * once at gateway startup, regardless of the goalDriver flag.
+ */
+export function bindGoalUpdatedBroadcast(
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void,
+): void {
+  setGoalUpdatedEmitter((event) => {
+    broadcast("goal.updated", event, { dropIfSlow: true });
+  });
+}
 
 export type GoalDriverWiring = {
   /**
@@ -61,7 +70,6 @@ export function startGoalDriverWiring(params: {
   config: OpenClawConfig;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   log?: SubsystemLogger;
 }): GoalDriverWiring | undefined {
   // Sessions the driver has fired a continuation for but whose continued turn
@@ -73,10 +81,6 @@ export function startGoalDriverWiring(params: {
     chatAbortControllers: params.chatAbortControllers,
     chatQueuedTurns: params.chatQueuedTurns,
     ...(params.log ? { log: adaptLogger(params.log) } : {}),
-    onGoalStatusChange: (change) => {
-      const payload: GoalUpdatedEventPayload = { ...change, source: "driver" };
-      params.broadcast("goal.updated", payload, { dropIfSlow: true });
-    },
     onEvent: (evt) => {
       if (evt.kind === "fired") {
         firedSessions.add(evt.sessionKey);

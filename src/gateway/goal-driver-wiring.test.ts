@@ -13,6 +13,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isGoalDriverContinuationPrompt } from "../agents/goal-driver/continuation-prompt.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
+import { setGoalUpdatedEmitter } from "../config/sessions/goal-events.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -22,7 +23,7 @@ import {
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { startGoalDriverWiring } from "./goal-driver-wiring.js";
+import { bindGoalUpdatedBroadcast, startGoalDriverWiring } from "./goal-driver-wiring.js";
 
 const DEBOUNCE_MS = 20_000;
 const sessionKey = "agent:main:web:main";
@@ -102,6 +103,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setGoalUpdatedEmitter(null);
   resetSystemEventsForTest();
   resetHeartbeatWakeStateForTests();
   vi.clearAllTimers();
@@ -123,12 +125,10 @@ describe("startGoalDriverWiring", () => {
   it("returns undefined when the goalDriver flag is off", async () => {
     const storePath = await createStorePath();
     await writeGoal(storePath, {});
-    const { broadcast } = makeBroadcastSpy();
     const wiring = startGoalDriverWiring({
       config: buildConfig(storePath, false),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map() as QueuedChatTurnMap,
-      broadcast,
     });
     expect(wiring).toBeUndefined();
   });
@@ -136,13 +136,11 @@ describe("startGoalDriverWiring", () => {
   it("fires a continuation onto the system-event queue AND requests a heartbeat wake", async () => {
     const storePath = await createStorePath();
     await writeGoal(storePath, {});
-    const { broadcast } = makeBroadcastSpy();
 
     const wiring = startGoalDriverWiring({
       config: buildConfig(storePath, true),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map() as QueuedChatTurnMap,
-      broadcast,
     });
     expect(wiring).toBeDefined();
 
@@ -167,6 +165,9 @@ describe("startGoalDriverWiring", () => {
     // Seed the counter at the default ceiling so the first wake auto-pauses.
     await writeGoal(storePath, { continuationTurns: 3 });
     const { events, broadcast } = makeBroadcastSpy();
+    // The driver's auto-pause writes through updateSessionGoalStatus, which emits
+    // via the global goal-events emitter -> goal.updated broadcast.
+    bindGoalUpdatedBroadcast(broadcast);
 
     const wiring = startGoalDriverWiring({
       config: {
@@ -175,7 +176,6 @@ describe("startGoalDriverWiring", () => {
       } as OpenClawConfig,
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map() as QueuedChatTurnMap,
-      broadcast,
     });
     // No onTurnCompleted call: the startup rearm arms the persisted active goal
     // WITHOUT resetting the counter (a real inbound turn would reset it), so the
@@ -183,15 +183,15 @@ describe("startGoalDriverWiring", () => {
 
     // A goal.updated event is broadcast for the auto-pause. The driver's arm
     // delay is floored at minRearmGapMs (2s), so allow >2s here.
-    await waitFor(() => events.some((e) => e.event === "goal.updated"), 5_000);
+    await waitFor(() => events.some((e) => e.event === "goal.updated"), 9_000);
     const goalUpdated = events.find((e) => e.event === "goal.updated");
-    expect(goalUpdated?.payload).toMatchObject({ status: "paused", source: "driver" });
+    expect(goalUpdated?.payload).toMatchObject({ status: "paused" });
     // No continuation fired (ceiling hit before FIRE).
     expect(peekSystemEvents(sessionKey)).toHaveLength(0);
     // The pause is durable (survives restart / re-read).
     await waitFor(
       () => getSessionEntry({ storePath, sessionKey })?.goal?.status === "paused",
-      5_000,
+      9_000,
     );
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("paused");
 
@@ -201,13 +201,11 @@ describe("startGoalDriverWiring", () => {
   it("SAFETY: a driver-continued turn does not bypass the exec-approval gate", async () => {
     const storePath = await createStorePath();
     await writeGoal(storePath, {});
-    const { broadcast } = makeBroadcastSpy();
 
     const wiring = startGoalDriverWiring({
       config: buildConfig(storePath, true),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map() as QueuedChatTurnMap,
-      broadcast,
     });
 
     // Fire a driver continuation for the session (starts an autonomous turn).

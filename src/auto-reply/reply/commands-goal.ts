@@ -236,14 +236,16 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         return goalContinuation();
       }
       case "edit": {
-        const objective = normalizeOptionalString(parsed.text);
+        const { objective: rawObjective, tokenBudget } = extractGoalBudgetFlag(parsed.text);
+        const objective = normalizeOptionalString(rawObjective);
         if (!objective) {
-          return goalReply("Usage: /goal edit <objective>");
+          return goalReply("Usage: /goal edit <objective> [--budget N]");
         }
         const goal = await updateSessionGoalObjective({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           objective,
+          ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);

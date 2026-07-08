@@ -273,7 +273,7 @@ describe("goal commands", () => {
     });
 
     const usage = await handleGoalCommand(buildGoalParams("/goal edit", storePath), true);
-    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective>");
+    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective> [--budget N]");
 
     const missing = await handleGoalCommand(
       buildGoalParams("/goal edit new target", storePath),

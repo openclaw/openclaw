@@ -20,7 +20,6 @@ import {
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
-import type { SessionGoal } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChatAbortControllerEntry } from "../../gateway/chat-abort.js";
 import type { QueuedChatTurnMap } from "../../gateway/chat-queued-turns.js";
@@ -38,14 +37,6 @@ import {
   type GoalDriverLogger,
 } from "./driver.js";
 
-/** Broadcast payload for a driver-initiated goal status change (e.g. auto-pause). */
-export type GoalDriverStatusChange = {
-  sessionKey: string;
-  status: SessionGoal["status"];
-  objective: string;
-  note?: string;
-};
-
 export type GoalDriverServiceDeps = {
   config: OpenClawConfig;
   /** Gateway active-run registry (g2). */
@@ -53,8 +44,6 @@ export type GoalDriverServiceDeps = {
   /** Gateway inbound queued-turn registry (g3). */
   chatQueuedTurns: QueuedChatTurnMap;
   log?: GoalDriverLogger;
-  /** Emitted when the driver changes a goal's durable status (auto-pause). */
-  onGoalStatusChange?: (change: GoalDriverStatusChange) => void;
   /** Emitted for every internal driver event (test/introspection). */
   onEvent?: (evt: GoalDriverEvent) => void;
   /** Deterministic RNG override for tests. */
@@ -199,18 +188,13 @@ export function createGoalDriverService(
     },
     pauseGoal: (sessionKey, note) => {
       const { storePath } = resolveScope(config, sessionKey);
-      void updateSessionGoalStatus({ sessionKey, storePath, status: "paused", note })
-        .then((goal) => {
-          deps.onGoalStatusChange?.({
-            sessionKey,
-            status: goal.status,
-            objective: goal.objective,
-            note,
-          });
-        })
-        .catch((err: unknown) => {
+      // updateSessionGoalStatus emits the `goal.updated` change through the
+      // global goal-events emitter, so no separate broadcast is needed here.
+      void updateSessionGoalStatus({ sessionKey, storePath, status: "paused", note }).catch(
+        (err: unknown) => {
           log?.warn({ err: String(err), sessionKey }, "goal-driver: pauseGoal failed");
-        });
+        },
+      );
     },
 
     ...(deps.onEvent ? { onEvent: deps.onEvent } : {}),

@@ -6402,3 +6402,84 @@ details[open] > .ov-expandable-toggle::after {
   border-radius: 10px;
   background: var(--card);
 }
+
+/* Persistent "Pursuing goal" chip + edit dialog (goal-driver). */
+.goal-chip {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+}
+.goal-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.goal-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.goal-chip-label {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.goal-chip-objective {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-chip-status,
+.goal-chip-usage {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.goal-chip--paused .goal-chip-label,
+.goal-chip--blocked .goal-chip-label,
+.goal-chip--budget_limited .goal-chip-label,
+.goal-chip--usage_limited .goal-chip-label {
+  color: var(--danger);
+}
+.goal-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 320px;
+}
+.goal-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.goal-dialog-label {
+  font-size: var(--control-ui-text-sm);
+  color: var(--text-muted);
+}
+.goal-dialog-objective,
+.goal-dialog-budget {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.goal-dialog-error {
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+.goal-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

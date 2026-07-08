@@ -1177,7 +1177,7 @@ export async function startGatewayServer(
     const [
       { startGatewayEventSubscriptions },
       { startGatewayRuntimeServices },
-      { startGoalDriverWiring },
+      { startGoalDriverWiring, bindGoalUpdatedBroadcast },
     ] = await startupTrace.measure("runtime.post-early-imports", () =>
       Promise.all([
         import("./server-runtime-subscriptions.js"),
@@ -1185,13 +1185,15 @@ export async function startGatewayServer(
         import("./goal-driver-wiring.js"),
       ]),
     );
+    // Every goal-store write (commands, tools, driver auto-pause) broadcasts a
+    // `goal.updated` event through the global goal-events emitter.
+    bindGoalUpdatedBroadcast(broadcast);
     // Autonomous goal continuation driver (behind tools.experimental.goalDriver);
     // undefined when the flag is off, so the turn-completed seam is a no-op.
     const goalDriverWiring = startGoalDriverWiring({
       config: cfgAtStart,
       chatAbortControllers,
       chatQueuedTurns,
-      broadcast,
       log,
     });
     runtimeState.goalDriverStop = () => goalDriverWiring?.stop();

@@ -9,6 +9,7 @@ import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
 import "../components/exec-approval.ts";
 import "../components/question-card.ts";
+import "../components/goal-chip.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
@@ -389,6 +390,9 @@ class OpenClawShell extends LitElement {
     questionQueue: [],
     questionBusy: false,
     questionError: null,
+    goalChip: null,
+    goalBusy: false,
+    goalError: null,
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -845,6 +849,17 @@ class OpenClawShell extends LitElement {
             ) => context.overlays.submitQuestionAnswers(id, answers),
           }}
         ></openclaw-question-card>
+        <openclaw-goal-chip
+          .props=${{
+            goal: this.overlaySnapshot.goalChip,
+            busy: this.overlaySnapshot.goalBusy,
+            error: this.overlaySnapshot.goalError,
+            onAction: (
+              action: Parameters<typeof context.overlays.updateGoal>[0],
+              payload: Parameters<typeof context.overlays.updateGoal>[1],
+            ) => context.overlays.updateGoal(action, payload),
+          }}
+        ></openclaw-goal-chip>
         ${renderDevicePairSetup({
           open: this.overlaySnapshot.devicePairSetupOpen,
           loading: this.overlaySnapshot.devicePairSetupLoading,
