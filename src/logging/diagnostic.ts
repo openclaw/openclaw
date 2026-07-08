@@ -40,7 +40,6 @@ import {
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
-  requestStuckSessionRecoveryOutcome,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
@@ -173,26 +172,6 @@ async function recoverStuckSession(
         error: String(err),
       };
     });
-}
-
-export function isStuckSessionRecoveryEnabled(config?: OpenClawConfig): boolean {
-  return areDiagnosticsEnabledForProcess() && isDiagnosticsEnabled(config);
-}
-
-export async function requestStuckDiagnosticSessionRecovery(
-  params: StuckSessionRecoveryRequest,
-): Promise<StuckSessionRecoveryOutcome | undefined> {
-  return requestStuckSessionRecoveryOutcome({
-    recover: recoverStuckSession,
-    classification: {
-      eventType: "session.stalled",
-      reason: "visible_reply_wait_timeout",
-      classification: "stalled_agent_run",
-      activeWorkKind: "embedded_run",
-      recoveryEligible: false,
-    },
-    request: params,
-  });
 }
 
 function formatDiagnosticWorkLabel(

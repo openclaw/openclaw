@@ -184,7 +184,7 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
 // Visible human turns may reclaim only runs with no real progress for this window.
-// Timers never refresh activity; agent events and queue injection do.
+// Timers and user-message injection never refresh activity; agent events do.
 export const REPLY_RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 
 export type ReplyOperationStaleReason = "terminal_unreleased" | "no_activity";
@@ -572,7 +572,9 @@ export function createReplyOperation(params: {
       return;
     }
     // Retained terminal results get one delivery grace window, not a second
-    // lifetime. Expiry frees the lane and flushes lifecycle after-clear work.
+    // lifetime. Expiry frees the lane and flushes lifecycle after-clear work —
+    // including skipping any delivery barrier the owner never got to register;
+    // followups may then interleave with a still-draining terminal delivery.
     const timer = setTimeout(() => {
       if (replyRunState.activeRunsByKey.get(sessionKey) !== operation) {
         clearTerminalSettleTimer(operation);
@@ -581,7 +583,7 @@ export function createReplyOperation(params: {
       diag.warn(
         `reply run terminal settle: forced release sessionKey=${sessionKey} phase=${phase} result=${formatReplyOperationResult(
           result,
-        )} ageMs=${Date.now() - lastActivityAtMs}`,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
       );
       clearState();
     }, REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
@@ -795,7 +797,7 @@ export function createReplyOperation(params: {
     diag.warn(
       `reply run stale takeover: forced release sessionKey=${sessionKey} reason=${reason} phase=${phase} result=${formatReplyOperationResult(
         result,
-      )} ageMs=${Date.now() - lastActivityAtMs}`,
+      )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
     );
     clearState();
     return true;
@@ -970,8 +972,12 @@ export function queueReplyRunMessage(
   if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
-  operation.recordActivity();
-  void (options ? backend.queueMessage(text, options) : backend.queueMessage(text));
+  // Injection is user input, not run evidence: stamping activity here would let
+  // sub-10-minute user messages re-arm a wedged run's staleness window forever.
+  const queued = options ? backend.queueMessage(text, options) : backend.queueMessage(text);
+  queued.catch((error: unknown) => {
+    diag.debug(`queued reply run message rejected: sessionId=${sessionId} error=${String(error)}`);
+  });
   return true;
 }
 
