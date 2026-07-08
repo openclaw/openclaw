@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   depthBySession: new Map<string, number>(),
+  resolveAgentConfigMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
 }));
@@ -77,6 +78,7 @@ describe("subagent spawn depth + child limits", () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
+      resolveAgentConfig: (cfg, agentId) => hoisted.resolveAgentConfigMock(cfg, agentId),
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       getSubagentDepthFromSessionStore: (sessionKey) => hoisted.depthBySession.get(sessionKey) ?? 0,
@@ -91,6 +93,7 @@ describe("subagent spawn depth + child limits", () => {
     hoisted.depthBySession.clear();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
+    hoisted.resolveAgentConfigMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     persistedStore = undefined;
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
@@ -157,6 +160,95 @@ describe("subagent spawn depth + child limits", () => {
     }
     expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
     expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
+  });
+
+  it("persists configured subagent alsoAllow entries on spawned child sessions", async () => {
+    hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+      tools: {
+        subagents: {
+          tools: {
+            alsoAllow: ["custom_plugin_tool"],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace-main",
+          subagents: {
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read"],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual([
+      "sessions_spawn",
+      "read",
+      "custom_plugin_tool",
+    ]);
+  });
+
+  it("persists target agent alsoAllow entries on spawned child sessions", async () => {
+    hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace-main",
+          subagents: {
+            allowAgents: ["dennis-ritchie"],
+            maxSpawnDepth: 2,
+          },
+        },
+        list: [
+          {
+            id: "dennis-ritchie",
+            workspace: "/tmp/workspace-main",
+            tools: {
+              profile: "coding",
+              alsoAllow: ["gbrain_readonly"],
+            },
+          },
+        ],
+      },
+    });
+    hoisted.resolveAgentConfigMock.mockImplementation(
+      (cfg: { agents?: { list?: Array<Record<string, unknown>> } }, agentId: string) =>
+        cfg.agents?.list?.find((agent) => agent.id === agentId),
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        agentId: "dennis-ritchie",
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read"],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read", "gbrain_readonly"]);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {

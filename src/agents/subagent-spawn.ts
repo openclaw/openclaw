@@ -1332,7 +1332,15 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
-    ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+    ...inheritedToolAllowPatch([
+      ...(ctx.inheritedToolAllowlist ?? []),
+      ...(Array.isArray(cfg.tools?.subagents?.tools?.alsoAllow)
+        ? cfg.tools.subagents.tools.alsoAllow
+        : []),
+      ...(Array.isArray(targetAgentConfig?.tools?.alsoAllow)
+        ? targetAgentConfig.tools.alsoAllow
+        : []),
+    ]),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
   };
