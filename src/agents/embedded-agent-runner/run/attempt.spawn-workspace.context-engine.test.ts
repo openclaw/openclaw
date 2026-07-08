@@ -1542,6 +1542,74 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
   });
 
+  it("does not abort orphan repair for a dangling trailing label", async () => {
+    const marker =
+      "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
+    const olderPrompt = "OLD_TURN_76888: dangling label repair";
+    const latestPrompt = "LATEST_TURN_76888: answer after dangling label";
+    const orphanLeaf = {
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: olderPrompt, timestamp: 1 },
+    };
+    const thinkingEntry = {
+      id: "thinking-leaf",
+      parentId: "orphan-leaf",
+      type: "thinking_level_change",
+      thinkingLevel: "high",
+    };
+    const labelEntry = {
+      id: "label-leaf",
+      parentId: "thinking-leaf",
+      type: "label",
+      targetId: "missing-entry",
+      label: "stale label",
+    };
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(labelEntry);
+    hoisted.sessionManager.getEntry.mockImplementation((id: unknown) => {
+      if (id === "thinking-leaf") {
+        return thinkingEntry;
+      }
+      return id === "orphan-leaf" ? orphanLeaf : undefined;
+    });
+    hoisted.sessionManager.appendThinkingLevelChange.mockReturnValue("replayed-thinking");
+    hoisted.sessionManager.appendLabelChange.mockImplementation((targetId: unknown) => {
+      throw new Error(`Entry ${String(targetId)} not found`);
+    });
+    const seen: { modelInputPrompt?: string } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: latestPrompt,
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.modelInputPrompt = prompt;
+        const activePrompt = prompt.startsWith(`${marker}\n${olderPrompt}\n\n`)
+          ? prompt.slice(`${marker}\n${olderPrompt}\n\n`.length)
+          : "missing-active-prompt";
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: `stub-provider-target=${activePrompt}`, timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(result.finalPromptText).toBe(`${marker}\n${olderPrompt}\n\n${latestPrompt}`);
+    expect(seen.modelInputPrompt).toBe(result.finalPromptText);
+    const finalAssistant = findRecord(
+      requireRecords(result.messagesSnapshot, "messages snapshot"),
+      (message) => message.role === "assistant",
+      "final assistant",
+    );
+    expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.appendLabelChange).not.toHaveBeenCalled();
+  });
+
   it("removes the repaired orphan from assembled history when the context engine appends the active prompt", async () => {
     const marker =
       "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";

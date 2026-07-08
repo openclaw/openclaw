@@ -750,7 +750,11 @@ function appendTrailingEntryForOrphanRepair(
     return;
   }
   if (entry.type === "label") {
-    const targetId = replayedEntryIds.get(entry.targetId) ?? entry.targetId;
+    const replayedTargetId = replayedEntryIds.get(entry.targetId);
+    if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
+      return;
+    }
+    const targetId = replayedTargetId ?? entry.targetId;
     replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
   }
 }
@@ -777,7 +781,11 @@ function isUserAgentMessage(message: AgentMessage | undefined): message is UserM
   return message?.role === "user";
 }
 
-function optionalMessageFieldMatches(left: AgentMessage, right: UserMessage, field: string): boolean {
+function optionalMessageFieldMatches(
+  left: AgentMessage,
+  right: UserMessage,
+  field: string,
+): boolean {
   const leftValue = (left as unknown as Record<string, unknown>)[field];
   const rightValue = (right as unknown as Record<string, unknown>)[field];
   return rightValue === undefined || leftValue === undefined || leftValue === rightValue;
