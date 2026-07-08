@@ -64,7 +64,7 @@ export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
-export const WORKBOARD_ENGINE_MODELS = {
+const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
@@ -290,7 +290,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskStatus =
+type WorkboardTaskStatus =
   | "queued"
   | "running"
   | "completed"
@@ -315,7 +315,7 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
-export type WorkboardDependencyParent = {
+type WorkboardDependencyParent = {
   id: string;
   title: string;
   status?: WorkboardStatus;
@@ -328,7 +328,7 @@ export type WorkboardDependencyState = {
   blockedParents: WorkboardDependencyParent[];
 };
 
-export type WorkboardDispatchSummary = {
+type WorkboardDispatchSummary = {
   started: number;
   failures: number;
   promoted: number;
@@ -339,9 +339,9 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
 
-export type WorkboardRefreshSource = "initial" | "manual" | "poll";
+type WorkboardRefreshSource = "initial" | "manual" | "poll";
 
-export type WorkboardViewPresetId =
+type WorkboardViewPresetId =
   | "all"
   | "default_agent"
   | "ready"

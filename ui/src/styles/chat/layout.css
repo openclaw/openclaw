@@ -1944,6 +1944,17 @@ openclaw-chat-page {
   cursor: not-allowed;
 }
 
+/* Idle voice ring stays muted so the idle -> hover -> recording progression
+   escalates (40% -> 70% -> full ring via --stop); a full-strength idle ring
+   makes recording state indistinguishable at a glance. */
+.chat-send-btn--voice {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.chat-send-btn--voice:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
 .chat-send-btn--stop {
   border-color: var(--danger);
   background: transparent;

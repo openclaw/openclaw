@@ -20,7 +20,7 @@ import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
 
-export const googlechatMeta = {
+const googlechatMeta = {
   id: GOOGLECHAT_CHANNEL_ID,
   label: "Google Chat",
   selectionLabel: "Google Chat (Chat API)",

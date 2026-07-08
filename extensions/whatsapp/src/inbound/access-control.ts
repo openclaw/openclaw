@@ -7,7 +7,7 @@ import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
 import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
-export type BlockedInboundAccessControlResult = {
+type BlockedInboundAccessControlResult = {
   allowed: false;
   shouldMarkRead: false;
   isSelfChat: boolean;
