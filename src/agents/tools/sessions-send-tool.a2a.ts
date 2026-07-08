@@ -163,8 +163,6 @@ export async function runSessionsSendA2AFlow(params: {
         displayKey: params.requesterSessionKey,
       }).catch(() => null);
     }
-    const preDeliveryTarget = requesterTarget ?? announceTarget;
-
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
     // announce can learn stale ANNOUNCE_SKIP patterns from its own history and
@@ -199,6 +197,7 @@ export async function runSessionsSendA2AFlow(params: {
         message: primaryReply,
         runContextId,
       });
+      return;
     }
 
     if (

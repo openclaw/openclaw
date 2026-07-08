@@ -542,9 +542,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(announceSend).toHaveLength(1);
   });
 
-  it("uses requester-derived target for pre-ping-pong delivery when requester session resolves", async () => {
-    vi.mocked(runAgentStep).mockResolvedValueOnce("Target second reply");
-
+  it("uses requester-derived target for pre-delivery and skips ping-pong when requester session resolves", async () => {
     // Set up session list so requester session key resolves to Telegram channel
     sessionListRows = [
       {
@@ -579,12 +577,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       expect(p.to).toBe("6278285192");
     }
 
-    // ping-pong: one target turn
-    expect(runAgentStep).toHaveBeenCalledTimes(1);
-    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-    expect(stepInput.sessionKey).toBe("agent:main:discord:group:dev");
-
-    // announce skipped
+    // requester-target pre-delivery short-circuits the rest of the A2A flow
+    expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.filter((c) => c.method === "send")).toHaveLength(1);
   });
 });
