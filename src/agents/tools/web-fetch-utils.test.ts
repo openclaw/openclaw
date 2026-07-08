@@ -183,6 +183,12 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(rendered.match(/\[t]\(\/x\)/g)).toHaveLength(100);
   });
 
+  it("does not rescan empty anchor text on each block open", () => {
+    const rendered = htmlToMarkdown(`<a href=/x>${"<p></p>".repeat(1_000)}`).text;
+
+    expect(rendered).toBe("/x");
+  });
+
   it("closes stale anchors before structural content claims the rest of the page", () => {
     expect(
       htmlToMarkdown(`<a href=/promo>deal <p>Para one.</p><h1>Head</h1><p>Para two.</p>`).text,

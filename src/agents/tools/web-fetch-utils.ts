@@ -30,7 +30,7 @@ const MAX_RENDER_CONTEXT_DEPTH = 32;
 type RenderContext =
   | { kind: "root"; parts: string[] }
   | { kind: "title"; parts: string[] }
-  | { kind: "anchor"; href: string | undefined; parts: string[] }
+  | { kind: "anchor"; href: string | undefined; hasText: boolean; parts: string[] }
   | { kind: "heading"; level: number; parts: string[] }
   | { kind: "list-item"; parts: string[] };
 
@@ -364,7 +364,11 @@ function contextText(context: RenderContext): string {
 }
 
 function appendText(stack: RenderContext[], value: string): void {
-  stack[stack.length - 1]?.parts.push(value);
+  const context = stack[stack.length - 1];
+  context?.parts.push(value);
+  if (context?.kind === "anchor" && /\S/.test(value)) {
+    context.hasText = true;
+  }
 }
 
 function closeContext(
@@ -386,11 +390,17 @@ function closeContext(
       );
       return;
     case "heading":
-      parent.parts.push(
-        parent.kind === "anchor" ? label : `\n${"#".repeat(context.level)} ${label}\n`,
-      );
+      if (parent.kind === "anchor") {
+        parent.parts.push(label);
+        parent.hasText ||= Boolean(label);
+      } else {
+        parent.parts.push(`\n${"#".repeat(context.level)} ${label}\n`);
+      }
       return;
     case "list-item":
+      if (parent.kind === "anchor") {
+        parent.hasText ||= Boolean(label);
+      }
       parent.parts.push(`\n- ${label}`);
       return;
     case "root":
@@ -460,7 +470,7 @@ function closeOpenAnchorWithText(stack: RenderContext[], state: { title?: string
   for (let i = stack.length - 1; i > 0; i -= 1) {
     const context = stack[i];
     if (context?.kind === "anchor") {
-      if (!normalizeWhitespace(contextText(context))) {
+      if (!context.hasText) {
         return false;
       }
       while (stack.length > i) {
@@ -569,7 +579,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       closeThroughContext(stack, "anchor", state);
       pushContext(
         stack,
-        { kind: "anchor", href: readAttributeValue(token.raw, "href"), parts: [] },
+        { kind: "anchor", href: readAttributeValue(token.raw, "href"), hasText: false, parts: [] },
         state,
       );
       continue;
