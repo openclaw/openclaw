@@ -333,6 +333,7 @@ describe("installToolResultContextGuard", () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("prompt already in history"),
+      makeAssistant("h".repeat(40_000)),
       makeToolResult("call_big", "x".repeat(80_000)),
     ];
 
@@ -353,6 +354,28 @@ describe("installToolResultContextGuard", () => {
       expect(typeof signal.request.overflowTokens).toBe("number");
       expect(typeof signal.request.toolResultReducibleChars).toBe("number");
     }
+  });
+
+  it("does not raise mid-turn precheck when provider-boundary tool-result projection fits", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("prompt already in history"),
+      ...Array.from({ length: 20 }, (_, index) =>
+        makeToolResult(`call_${index}`, "x".repeat(40_000)),
+      ),
+    ];
+
+    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+      contextWindowTokens: 1_000_000,
+      contextTokenBudget: 200_000,
+      reserveTokens: 50_000,
+      toolResultMaxChars: 16_000,
+      prePromptMessageCount: 1,
+      systemPrompt: "system".repeat(200),
+    });
+
+    expect(transformed).toBe(contextForNextCall);
+    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(40_000));
   });
 
   it("does not run mid-turn precheck when no new tool result was appended", async () => {
@@ -604,7 +627,11 @@ describe("installContextEngineLoopHook", () => {
       toolResultMaxChars: 16_000,
     });
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+    const messages = [
+      makeUser("first"),
+      makeAssistant("h".repeat(40_000)),
+      makeToolResult("call_1", "x".repeat(80_000)),
+    ];
 
     await expect(callTransform(agent, messages)).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);

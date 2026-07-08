@@ -17,14 +17,16 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
 } from "../../runtime/index.js";
-import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
+import {
+  estimateToolResultReductionPotential,
+  truncateOversizedToolResultsInMessages,
+} from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
-const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
@@ -113,9 +115,7 @@ function estimateContentBlockTokenPressure(
 }
 
 function estimateToolResultStringTokenPressure(text: string): number {
-  const conservativeToolResultEstimate = Math.ceil(text.length / TOOL_RESULT_CHARS_PER_TOKEN);
-  const cjkAwareEstimate = estimateStringTokenPressure(text);
-  return Math.max(conservativeToolResultEstimate, cjkAwareEstimate);
+  return estimateStringTokenPressure(text);
 }
 
 function estimateToolResultJsonTokenPressure(value: unknown): number {
@@ -303,6 +303,45 @@ function normalizeLlmBoundaryTokenPressure(
   };
 }
 
+function estimateProjectedTranscriptTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+  contextTokenBudget: number;
+  toolResultMaxChars?: number;
+}): {
+  estimatedPromptTokens: number;
+  projected: boolean;
+  messages: AgentMessage[];
+  projectedToolResultReducibleChars: number;
+} {
+  // Fallback transcript estimates must match the provider prompt projection;
+  // otherwise mid-turn recovery can fire on tool text the model will never see.
+  const projection = truncateOversizedToolResultsInMessages(
+    params.messages,
+    params.contextTokenBudget,
+    params.toolResultMaxChars,
+  );
+  const projected = projection.messages !== params.messages;
+  const projectedToolResultReducibleChars = projected
+    ? estimateToolResultReductionPotential({
+        messages: params.messages,
+        contextWindowTokens: params.contextTokenBudget,
+        maxCharsOverride: params.toolResultMaxChars,
+      }).maxReducibleChars
+    : 0;
+  return {
+    estimatedPromptTokens: estimateLlmBoundaryTokenPressure({
+      messages: projection.messages,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+    }),
+    projected,
+    messages: projection.messages,
+    projectedToolResultReducibleChars,
+  };
+}
+
 /**
  * Decides whether a run should compact before submitting the prompt, and
  * whether reducible tool results can avoid or follow compaction. Rendered LLM
@@ -319,30 +358,48 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
 }): PreemptiveCompactionDecision {
   let messagesForPressure = params.messages;
+  const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
-  let estimatedPromptTokens =
-    llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimateLlmBoundaryTokenPressure({
+  let estimatedPromptTokens: number;
+  let pressureSource: string;
+  let projectedToolResultReducibleChars = 0;
+  if (llmBoundaryTokenPressure) {
+    estimatedPromptTokens = llmBoundaryTokenPressure.estimatedPromptTokens;
+    pressureSource = llmBoundaryTokenPressure.source;
+  } else {
+    const transcriptPressure = estimateProjectedTranscriptTokenPressure({
       messages: params.messages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
+      contextTokenBudget,
+      toolResultMaxChars: params.toolResultMaxChars,
     });
-  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
+    estimatedPromptTokens = transcriptPressure.estimatedPromptTokens;
+    messagesForPressure = transcriptPressure.messages;
+    projectedToolResultReducibleChars = transcriptPressure.projectedToolResultReducibleChars;
+    pressureSource = transcriptPressure.projected
+      ? "projected_transcript_estimate"
+      : "transcript_estimate";
+  }
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+    const unwindowedPressure = estimateProjectedTranscriptTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
+      contextTokenBudget,
+      toolResultMaxChars: params.toolResultMaxChars,
     });
-    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
-      messagesForPressure = params.unwindowedMessages;
-      pressureSource = "unwindowed_transcript_estimate";
+    if (unwindowedPressure.estimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedPressure.estimatedPromptTokens;
+      messagesForPressure = unwindowedPressure.messages;
+      projectedToolResultReducibleChars = unwindowedPressure.projectedToolResultReducibleChars;
+      pressureSource = unwindowedPressure.projected
+        ? "unwindowed_projected_transcript_estimate"
+        : "unwindowed_transcript_estimate";
     }
   }
-  const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
@@ -357,7 +414,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: messagesForPressure,
-    contextWindowTokens: params.contextTokenBudget,
+    contextWindowTokens: contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });
   const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
@@ -366,14 +423,18 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     overflowChars + truncationBufferChars,
     Math.ceil(overflowChars * 1.5),
   );
-  const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
+  const remainingToolResultReducibleChars = toolResultPotential.maxReducibleChars;
+  const toolResultReducibleChars =
+    projectedToolResultReducibleChars + remainingToolResultReducibleChars;
 
   let route: PreemptiveCompactionRoute = "fits";
   if (overflowTokens > 0) {
     // Choose truncate-only only when available reduction comfortably exceeds the overflow.
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
-    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
+    } else if (projectedToolResultReducibleChars > 0) {
+      route = "compact_then_truncate";
+    } else if (remainingToolResultReducibleChars >= truncateOnlyThresholdChars) {
       route = "truncate_tool_results_only";
     } else {
       route = "compact_then_truncate";
