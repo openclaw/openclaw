@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
+  acquireSessionWriteLockMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
   compactWithSafetyTimeoutMock,
@@ -1582,6 +1583,25 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await expect(resultPromise).rejects.toThrow("request timed out");
     expect(sessionAbortCompactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes allowReentrant:true so overflow-recovery compaction does not block on the self-held lock", async () => {
+    acquireSessionWriteLockMock.mockClear();
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      reason: "overflow",
+      reasonCode: "overflow",
+      abort: new AbortController().signal,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowReentrant: true }),
+    );
   });
 });
 

@@ -170,6 +170,7 @@ const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | und
   () => undefined,
 );
 export const resolveSandboxContextMock = vi.fn(async () => null);
+export const acquireSessionWriteLockMock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
@@ -364,6 +365,7 @@ export function resetCompactSessionStateMocks(): void {
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
+  acquireSessionWriteLockMock.mockClear();
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
   resolveSandboxContextMock.mockReset();
   resolveSandboxContextMock.mockResolvedValue(null);
@@ -448,6 +450,7 @@ export function resetCompactHooksHarnessMocks(): void {
   createPreparedEmbeddedAgentSettingsManagerMock.mockReturnValue({
     getGlobalSettings: vi.fn(() => ({})),
   });
+  acquireSessionWriteLockMock.mockClear();
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -598,7 +601,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({
