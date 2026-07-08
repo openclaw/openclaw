@@ -2,9 +2,11 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+
+type ChildKill = (signal?: NodeJS.Signals | number) => boolean;
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -97,10 +99,10 @@ describe("connectCodexAppServerEndpoint stdio transport", () => {
 
     for (const streamName of ["stdout", "stderr"] as const) {
       let proc: ChildProcessWithoutNullStreams | undefined;
-      let killSpy: ReturnType<typeof vi.spyOn> | undefined;
+      let killSpy: MockInstance<ChildKill> | undefined;
       try {
         spawnMock.mockImplementationOnce(
-          (command: string, args: string[] | undefined, options: SpawnOptions | undefined) => {
+          (command: string, args: string[] | undefined, options: SpawnOptions) => {
             proc = actual.spawn(command, args ?? [], options) as ChildProcessWithoutNullStreams;
             return proc;
           },
