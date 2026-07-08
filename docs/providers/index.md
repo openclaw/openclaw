@@ -75,6 +75,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Tencent Cloud (TokenHub / TokenPlan)](/providers/tencent)
+- [TokenLab](/providers/tokenlab)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
