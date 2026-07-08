@@ -781,7 +781,7 @@ Validation and safety notes:
 - `parallelism` defaults to `1` and is capped at `100`.
 - `sessionTarget` defaults to `"isolated"`. With the isolated target, every active item runs as its own isolated agent turn, while `sessionKey` can still choose the parent/source session used for routing and delivery context.
 - `sessionTarget: "session:<key>"` sends every queued item to one configured session key. Request payload `sessionKey` overrides are rejected for this mode.
-- Queue entries persist in the shared OpenClaw SQLite state database with `queued`, `running`, `ok`, or `error` status. The Control UI Automation tab shows queue depth, running count, and recent items.
+- Queue entries and pause state persist in the shared OpenClaw SQLite state database. Items use `queued`, `running`, `ok`, or `error` status. The Control UI Automation tab shows queue depth, running count, paused/running state, pause/resume controls, and recent items.
 - Queue payload fields match `/hooks/agent`: `message` is required after queue defaults are merged; `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, and `timeoutSeconds` may come from either the queue config or the request body.
 
 </Accordion>

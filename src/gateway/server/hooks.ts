@@ -6,7 +6,7 @@ import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runHookAgentDispatch } from "../hook-agent-runner.js";
-import { createHookQueueRuntime } from "../hook-queue-runtime.js";
+import type { HookQueueRuntime } from "../hook-queue-runtime.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
@@ -26,13 +26,10 @@ export function createGatewayHooksRequestHandler(params: {
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
+  hookQueueRuntime: HookQueueRuntime;
 }) {
-  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
-  const hookQueueRuntime = createHookQueueRuntime({
-    deps,
-    getHooksConfig,
-    logHooks,
-  });
+  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks, hookQueueRuntime } =
+    params;
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();

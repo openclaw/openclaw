@@ -1414,6 +1414,20 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("keeps webhook queue and cron tool policy independent", () => {
+    const cronOnly = createOpenClawCodingTools({
+      config: { tools: { allow: ["cron"] } },
+    });
+    expect(toolNameList(cronOnly)).toContain("cron");
+    expect(toolNameList(cronOnly)).not.toContain("hook_queue");
+
+    const queueOnly = createOpenClawCodingTools({
+      config: { tools: { allow: ["hook_queue"] } },
+    });
+    expect(toolNameList(queueOnly)).toContain("hook_queue");
+    expect(toolNameList(queueOnly)).not.toContain("cron");
+  });
+
   it("expands group shorthands in global tool deny policy", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { deny: ["group:fs"] } },

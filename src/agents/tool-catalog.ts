@@ -6,6 +6,7 @@
 import {
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
+  HOOK_QUEUE_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -239,6 +240,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "cron",
     label: "cron",
     description: CRON_TOOL_DISPLAY_SUMMARY,
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "hook_queue",
+    label: "hook_queue",
+    description: HOOK_QUEUE_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

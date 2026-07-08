@@ -97,7 +97,7 @@ Available groups:
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                              |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                      |
 | `group:ui`         | `browser`, `canvas`                                                                                                                                        |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                     |
+| `group:automation` | `heartbeat_respond`, `cron`, `hook_queue`, `gateway`                                                                                                       |
 | `group:messaging`  | `message`                                                                                                                                                  |
 | `group:nodes`      | `nodes`                                                                                                                                                    |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                                   |

@@ -11,12 +11,21 @@ import {
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
-  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+  const runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "hookQueueRuntime"
+  > = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
       cronEnabled: true,
     },
+    hookQueueRuntime: {
+      enqueueAgentHook: vi.fn(),
+      scheduleDrain: vi.fn(),
+      scheduleDrainAll: vi.fn(),
+      setQueuePaused: vi.fn(),
+    } as never,
     configReloader: { stop: vi.fn(async () => {}) },
   };
   return {
@@ -89,12 +98,21 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+    const runtimeState: Pick<
+      GatewayServerLiveState,
+      "cronState" | "configReloader" | "hookQueueRuntime"
+    > = {
       cronState: {
         cron: cronA,
         storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
+      hookQueueRuntime: {
+        enqueueAgentHook: vi.fn(),
+        scheduleDrain: vi.fn(),
+        scheduleDrainAll: vi.fn(),
+        setQueuePaused: vi.fn(),
+      } as never,
       configReloader: { stop: vi.fn(async () => {}) },
     };
 
@@ -114,12 +132,21 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("reads config hot-reload status live from runtime state", () => {
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+    const runtimeState: Pick<
+      GatewayServerLiveState,
+      "cronState" | "configReloader" | "hookQueueRuntime"
+    > = {
       cronState: {
         cron: { start: vi.fn(), stop: vi.fn() } as never,
         storePath: "/tmp/cron",
         cronEnabled: true,
       },
+      hookQueueRuntime: {
+        enqueueAgentHook: vi.fn(),
+        scheduleDrain: vi.fn(),
+        scheduleDrainAll: vi.fn(),
+        setQueuePaused: vi.fn(),
+      } as never,
       configReloader: { stop: vi.fn(async () => {}) },
     };
 

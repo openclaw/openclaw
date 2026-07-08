@@ -324,6 +324,16 @@ CREATE INDEX IF NOT EXISTS idx_hook_queue_items_status_updated
 CREATE INDEX IF NOT EXISTS idx_hook_queue_items_queue_created
   ON hook_queue_items(queue_id, created_at_ms DESC, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS hook_queue_state (
+  queue_id TEXT NOT NULL PRIMARY KEY,
+  paused INTEGER NOT NULL,
+  paused_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_queue_state_updated
+  ON hook_queue_state(updated_at_ms DESC, queue_id);
+
 CREATE TABLE IF NOT EXISTS model_capability_cache (
   provider_id TEXT NOT NULL,
   model_id TEXT NOT NULL,

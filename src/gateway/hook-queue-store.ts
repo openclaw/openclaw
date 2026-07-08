@@ -45,13 +45,21 @@ export type HookQueueSummaryCounts = Record<HookQueueItemStatus, number>;
 export type HookQueueCountSnapshot = {
   queueId: string;
   counts: HookQueueSummaryCounts;
+  paused: boolean;
+  pausedAtMs?: number;
+  stateUpdatedAtMs?: number;
   oldestQueuedAtMs?: number;
   newestQueuedAtMs?: number;
 };
 
 type HookQueueItemsTable = OpenClawStateKyselyDatabase["hook_queue_items"];
-type HookQueueStoreDatabase = Pick<OpenClawStateKyselyDatabase, "hook_queue_items">;
+type HookQueueStateTable = OpenClawStateKyselyDatabase["hook_queue_state"];
+type HookQueueStoreDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "hook_queue_items" | "hook_queue_state"
+>;
 type HookQueueItemRow = Selectable<HookQueueItemsTable>;
+type HookQueueStateRow = Selectable<HookQueueStateTable>;
 type CountRow = {
   queue_id: string;
   status: string;
@@ -78,6 +86,14 @@ function createEmptyCounts(): HookQueueSummaryCounts {
     running: 0,
     ok: 0,
     error: 0,
+  };
+}
+
+function createEmptySnapshot(queueId: string): HookQueueCountSnapshot {
+  return {
+    queueId,
+    counts: createEmptyCounts(),
+    paused: false,
   };
 }
 
@@ -160,6 +176,52 @@ function selectHookQueueItemById(db: DatabaseSync, itemId: string): HookQueueIte
   return row ? rowToHookQueueItem(row) : null;
 }
 
+function readHookQueuePausedInTransaction(db: DatabaseSync, queueId: string): boolean {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getHookQueueKysely(db)
+      .selectFrom("hook_queue_state")
+      .select("paused")
+      .where("queue_id", "=", queueId),
+  ) as { paused?: number | null } | undefined;
+  return row?.paused === 1;
+}
+
+export function setHookQueuePaused(input: { queueId: string; paused: boolean; nowMs?: number }): {
+  queueId: string;
+  paused: boolean;
+  pausedAtMs: number | null;
+  updatedAtMs: number;
+} {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const nowMs = input.nowMs ?? Date.now();
+    executeSqliteQuerySync(
+      db,
+      getHookQueueKysely(db)
+        .insertInto("hook_queue_state")
+        .values({
+          queue_id: input.queueId,
+          paused: input.paused ? 1 : 0,
+          paused_at_ms: input.paused ? nowMs : null,
+          updated_at_ms: nowMs,
+        })
+        .onConflict((oc) =>
+          oc.column("queue_id").doUpdateSet({
+            paused: input.paused ? 1 : 0,
+            paused_at_ms: input.paused ? nowMs : null,
+            updated_at_ms: nowMs,
+          }),
+        ),
+    );
+    return {
+      queueId: input.queueId,
+      paused: input.paused,
+      pausedAtMs: input.paused ? nowMs : null,
+      updatedAtMs: nowMs,
+    };
+  });
+}
+
 export function enqueueHookQueueItem(input: {
   itemId: string;
   queueId: string;
@@ -196,6 +258,9 @@ export function claimNextHookQueueItem(input: {
 }): HookQueueItem | null {
   return runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getHookQueueKysely(db);
+    if (readHookQueuePausedInTransaction(db, input.queueId)) {
+      return null;
+    }
     const row = executeSqliteQueryTakeFirstSync(
       db,
       kysely
@@ -355,7 +420,7 @@ export function listHookQueueItems(input: {
 export function summarizeHookQueueItems(queueIds: readonly string[]): HookQueueCountSnapshot[] {
   const snapshots = new Map<string, HookQueueCountSnapshot>();
   for (const queueId of queueIds) {
-    snapshots.set(queueId, { queueId, counts: createEmptyCounts() });
+    snapshots.set(queueId, createEmptySnapshot(queueId));
   }
   if (queueIds.length === 0) {
     return [];
@@ -408,8 +473,29 @@ export function summarizeHookQueueItems(queueIds: readonly string[]): HookQueueC
         snapshot.newestQueuedAtMs = newestQueuedAtMs;
       }
     }
-    return queueIds.map(
-      (queueId) => snapshots.get(queueId) ?? { queueId, counts: createEmptyCounts() },
-    );
+
+    const stateRows = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("hook_queue_state")
+        .selectAll()
+        .where("queue_id", "in", Array.from(queueIds)),
+    ).rows as HookQueueStateRow[];
+    for (const row of stateRows) {
+      const snapshot = snapshots.get(row.queue_id);
+      if (!snapshot) {
+        continue;
+      }
+      snapshot.paused = row.paused === 1;
+      const pausedAtMs = normalizeSqliteNumber(row.paused_at_ms);
+      const stateUpdatedAtMs = normalizeSqliteNumber(row.updated_at_ms);
+      if (pausedAtMs != null) {
+        snapshot.pausedAtMs = pausedAtMs;
+      }
+      if (stateUpdatedAtMs != null) {
+        snapshot.stateUpdatedAtMs = stateUpdatedAtMs;
+      }
+    }
+    return queueIds.map((queueId) => snapshots.get(queueId) ?? createEmptySnapshot(queueId));
   });
 }

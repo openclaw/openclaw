@@ -1,7 +1,14 @@
 // Hooks CLI tests cover hook command registration and output behavior.
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import {
+  formatHookInfo,
+  formatHookQueueItems,
+  formatHookQueuesList,
+  formatHookQueueState,
+  formatHooksCheck,
+  formatHooksList,
+} from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
@@ -105,5 +112,79 @@ describe("hooks cli formatting", () => {
     const output = formatHookInfo(pluginReport, "plugin-hook", {});
     expect(output).toContain("voice-call");
     expect(output).toContain("Managed by plugin");
+  });
+
+  it("formats hook queue summaries with pause state", () => {
+    const output = formatHookQueuesList(
+      {
+        queues: [
+          {
+            id: "bulk",
+            path: "/hooks/queue/bulk",
+            parallelism: 10,
+            sessionTarget: "isolated",
+            paused: true,
+            pausedAtMs: 1_000,
+            counts: { queued: 42, running: 10, ok: 7, error: 1 },
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(output).toContain("Hook Queues");
+    expect(output).toContain("bulk");
+    expect(output).toContain("paused");
+    expect(output).toContain("42");
+  });
+
+  it("formats hook queue item inspection", () => {
+    const output = formatHookQueueItems(
+      "bulk",
+      {
+        total: 1,
+        items: [
+          {
+            itemId: "item-1",
+            queueId: "bulk",
+            status: "queued",
+            runId: "run-1",
+            sourcePath: "/hooks/queue/bulk",
+            name: "Import",
+            message: "Import record",
+            messagePreview: "Import record",
+            sessionKey: "hook:bulk",
+            sessionTarget: "isolated",
+            createdAtMs: 1_000,
+            updatedAtMs: 2_000,
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(output).toContain("Hook Queue Items");
+    expect(output).toContain("item-1");
+    expect(output).toContain("Import record");
+  });
+
+  it("formats hook queue pause and resume state", () => {
+    expect(
+      formatHookQueueState(
+        { queueId: "bulk", paused: true, pausedAtMs: 1_000, updatedAtMs: 1_000 },
+        {},
+      ),
+    ).toContain("paused");
+    expect(
+      formatHookQueueState(
+        {
+          queueId: "bulk",
+          paused: false,
+          pausedAtMs: null,
+          updatedAtMs: 2_000,
+        },
+        {},
+      ),
+    ).toContain("running");
   });
 });

@@ -144,7 +144,7 @@ The compact footer keeps connection status, **Settings**, **Docs**, and mobile p
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
-    - Webhook queues: configured queue depth, status counts, parallelism, and recent queued/running/completed items (`hooks.*`).
+    - Webhook queues: configured queue depth, status counts, paused/running state, pause/resume controls, parallelism, and recent queued/running/completed items (`hooks.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: list plus caps (`node.list`), create mobile setup codes, and approve device pairing (`device.pair.*`).
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).

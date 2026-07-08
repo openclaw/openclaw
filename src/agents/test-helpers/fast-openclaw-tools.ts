@@ -26,6 +26,7 @@ const coreTools = [
   stubActionTool("canvas", ["create", "read"]),
   stubActionTool("nodes", ["list", "invoke"]),
   stubActionTool("cron", ["schedule", "cancel"]),
+  stubActionTool("hook_queue", ["list", "items", "pause", "resume"]),
   stubActionTool("message", ["send", "reply"]),
   stubTool("heartbeat_respond"),
   stubActionTool("gateway", [

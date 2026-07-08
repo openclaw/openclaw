@@ -597,6 +597,13 @@ export interface HookQueueItems {
   updated_at_ms: number;
 }
 
+export interface HookQueueState {
+  paused: number;
+  paused_at_ms: number | null;
+  queue_id: string;
+  updated_at_ms: number;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -1065,6 +1072,7 @@ export interface DB {
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
   hook_queue_items: HookQueueItems;
+  hook_queue_state: HookQueueState;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;

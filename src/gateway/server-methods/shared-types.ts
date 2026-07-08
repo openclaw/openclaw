@@ -17,6 +17,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { HookQueueRuntime } from "../hook-queue-runtime.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
@@ -69,6 +70,7 @@ export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
   cronStorePath: string;
+  hookQueueRuntime: HookQueueRuntime;
   getRuntimeConfig: () => OpenClawConfig;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;

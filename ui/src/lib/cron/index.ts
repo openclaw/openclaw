@@ -462,6 +462,22 @@ export async function loadHookQueues(state: CronState) {
   }
 }
 
+export async function setHookQueuePaused(state: CronState, queueId: string, paused: boolean) {
+  if (!state.client || !state.connected || !queueId) {
+    return;
+  }
+  state.hookQueuesLoading = true;
+  try {
+    await state.client.request(paused ? "hooks.queue.pause" : "hooks.queue.resume", { queueId });
+    state.selectedHookQueueId = queueId;
+    await loadHookQueues(state);
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.hookQueuesLoading = false;
+  }
+}
+
 export async function loadCronModelSuggestions(state: CronModelSuggestionsState) {
   if (!state.client || !state.connected) {
     return;

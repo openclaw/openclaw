@@ -370,7 +370,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadCronHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["hooks.queues", "hooks.queue.items"],
+    methods: ["hooks.queues", "hooks.queue.items", "hooks.queue.pause", "hooks.queue.resume"],
     loadHandlers: loadHooksHandlers,
   }),
   ...createLazyCoreHandlers({

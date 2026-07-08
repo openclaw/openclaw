@@ -18,6 +18,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { createHookQueueRuntime, type HookQueueRuntime } from "./hook-queue-runtime.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
@@ -71,8 +72,7 @@ type GatewayPluginUpgradeHandler = (
 
 const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
 
-/** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
-export async function createGatewayRuntimeState(params: {
+type GatewayRuntimeStateParams = {
   cfg: import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
@@ -89,6 +89,7 @@ export async function createGatewayRuntimeState(params: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
+  /** Called during runtime-state construction before live gateway state is assigned. */
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
@@ -101,7 +102,9 @@ export async function createGatewayRuntimeState(params: {
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
   isTerminalEnabled: () => boolean;
-}): Promise<{
+};
+
+type GatewayRuntimeState = {
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -127,7 +130,13 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
-}> {
+  hookQueueRuntime: HookQueueRuntime;
+};
+
+/** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
+export async function createGatewayRuntimeState(
+  params: GatewayRuntimeStateParams,
+): Promise<GatewayRuntimeState> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   pinActivePluginSessionExtensionRegistry(params.pluginRegistry);
   if (params.pinChannelRegistry !== false) {
@@ -140,6 +149,11 @@ export async function createGatewayRuntimeState(params: {
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const hookQueueRuntime = createHookQueueRuntime({
+      deps: params.deps,
+      getHooksConfig: params.hooksConfig,
+      logHooks: params.logHooks,
+    });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -163,6 +177,7 @@ export async function createGatewayRuntimeState(params: {
           bindHost: params.bindHost,
           port: params.port,
           logHooks: params.logHooks,
+          hookQueueRuntime,
         });
       }
       return await loadedHooksRequestHandler(req, res);
@@ -378,6 +393,7 @@ export async function createGatewayRuntimeState(params: {
       chatAbortControllers,
       chatQueuedTurns,
       toolEventRecipients,
+      hookQueueRuntime,
     };
   } catch (err) {
     // If state creation fails after pins are installed, release them immediately so later

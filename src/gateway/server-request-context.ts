@@ -14,7 +14,7 @@ type GatewayRequestContextClient = GatewayClient & {
 
 export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader" | "hookQueueRuntime">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
@@ -92,6 +92,9 @@ export function createGatewayRequestContext(
     },
     get cronStorePath() {
       return params.runtimeState.cronState.storePath;
+    },
+    get hookQueueRuntime() {
+      return params.runtimeState.hookQueueRuntime;
     },
     getRuntimeConfig: params.getRuntimeConfig,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,

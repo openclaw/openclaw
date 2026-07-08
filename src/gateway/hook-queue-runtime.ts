@@ -9,6 +9,7 @@ import {
   failHookQueueItem,
   finishHookQueueItem,
   requeueRunningHookQueueItems,
+  setHookQueuePaused,
   type HookQueueItem,
   type QueuedHookAgentPayload,
 } from "./hook-queue-store.js";
@@ -29,6 +30,15 @@ export type HookQueueRuntime = {
   }) => HookQueueEnqueueResult;
   scheduleDrain: (queueId: string) => void;
   scheduleDrainAll: () => void;
+  setQueuePaused: (
+    queueId: string,
+    paused: boolean,
+  ) => {
+    queueId: string;
+    paused: boolean;
+    pausedAtMs: number | null;
+    updatedAtMs: number;
+  };
 };
 
 function resolveQueue(
@@ -131,6 +141,13 @@ export function createHookQueueRuntime(params: {
       for (const queueId of queueIds) {
         runtime.scheduleDrain(queueId);
       }
+    },
+    setQueuePaused: (queueId, paused) => {
+      const result = setHookQueuePaused({ queueId, paused });
+      if (!paused) {
+        runtime.scheduleDrain(queueId);
+      }
+      return result;
     },
   };
 

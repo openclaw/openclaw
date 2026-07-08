@@ -577,6 +577,72 @@ describe("gateway server hooks", () => {
     }
   });
 
+  test("pauses and resumes hook queue processing over gateway RPC", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      queues: {
+        batch: {
+          parallelism: 1,
+          sessionKey: "hook:batch",
+        },
+      },
+    };
+    setMainAndHooksAgents();
+
+    const started = await startConnectedServerWithClient();
+    try {
+      const pause = await rpcReq(started.ws, "hooks.queue.pause", { queueId: "batch" });
+      expect(pause.ok).toBe(true);
+      expect(pause.payload).toMatchObject({ queueId: "batch", paused: true });
+
+      const run = createDeferred<{ status: "ok"; summary: string }>();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async () => await run.promise);
+
+      const response = await postHook(started.port, "/hooks/queue/batch", {
+        message: "Hold queued work",
+      });
+      expect(response.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      const pausedQueues = await rpcReq(started.ws, "hooks.queues");
+      expect(pausedQueues.ok).toBe(true);
+      const pausedQueue = (
+        ((pausedQueues.payload as { queues?: unknown[] } | undefined)?.queues ?? []) as Array<{
+          id?: string;
+          paused?: boolean;
+          counts?: { queued?: number; running?: number; ok?: number; error?: number };
+        }>
+      ).find((queue) => queue.id === "batch");
+      expect(pausedQueue).toMatchObject({
+        paused: true,
+        counts: { queued: 1, running: 0, ok: 0, error: 0 },
+      });
+
+      const resume = await rpcReq(started.ws, "hooks.queue.resume", { queueId: "batch" });
+      expect(resume.ok).toBe(true);
+      expect(resume.payload).toMatchObject({ queueId: "batch", paused: false });
+      await waitForCronIsolatedRuns(1);
+
+      run.resolve({ status: "ok", summary: "resumed" });
+      await expect
+        .poll(
+          () =>
+            peekSystemEventEntries(resolveMainKey())
+              .map((event) => event.text)
+              .join("\n"),
+          { timeout: 2_000, interval: 10 },
+        )
+        .toContain("Hook Hook queue batch: resumed");
+      drainSystemEvents(resolveMainKey());
+    } finally {
+      started.ws.close();
+      await started.server.close();
+    }
+  });
+
   test("routes explicit-agent hook completion events to the target agent main session", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     setMainAndHooksAgents();

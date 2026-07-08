@@ -10,6 +10,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { READ_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -23,6 +24,7 @@ import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
@@ -44,6 +46,74 @@ export type HooksCheckOptions = {
 export type HooksUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
+};
+
+type HookQueueStatus = "queued" | "running" | "ok" | "error";
+
+type HookQueueSummary = {
+  id: string;
+  path: string;
+  parallelism: number;
+  sessionTarget: string;
+  agentId?: string | null;
+  paused?: boolean;
+  pausedAtMs?: number | null;
+  counts: Record<HookQueueStatus, number>;
+  oldestQueuedAtMs?: number | null;
+  newestQueuedAtMs?: number | null;
+};
+
+type HookQueuesResult = {
+  queues?: HookQueueSummary[];
+};
+
+type HookQueueItem = {
+  itemId: string;
+  queueId: string;
+  status: HookQueueStatus;
+  runId: string;
+  sourcePath: string;
+  name: string;
+  message: string;
+  messagePreview: string;
+  agentId?: string | null;
+  sessionKey: string;
+  sessionTarget: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  error?: string | null;
+  summary?: string | null;
+};
+
+type HookQueueItemsResult = {
+  items?: HookQueueItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
+};
+
+type HookQueueStateResult = {
+  queueId: string;
+  paused: boolean;
+  pausedAtMs: number | null;
+  updatedAtMs: number;
+};
+
+type HooksQueueListOptions = GatewayRpcOpts & {
+  json?: boolean;
+};
+
+type HooksQueueItemsOptions = GatewayRpcOpts & {
+  json?: boolean;
+  status?: string;
+  limit?: string;
+  offset?: string;
+};
+
+type HooksQueueStateOptions = GatewayRpcOpts & {
+  json?: boolean;
 };
 
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
@@ -158,6 +228,140 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
     return;
   }
   defaultRuntime.log(value);
+}
+
+function formatOptionalTimestamp(ms: number | null | undefined): string {
+  return typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : "";
+}
+
+function hookQueueCount(queue: HookQueueSummary, status: HookQueueStatus): number {
+  return Number(queue.counts?.[status] ?? 0);
+}
+
+function hookQueueTotal(queue: HookQueueSummary): number {
+  return (["queued", "running", "ok", "error"] as const).reduce(
+    (sum, status) => sum + hookQueueCount(queue, status),
+    0,
+  );
+}
+
+function normalizeHookQueueStatuses(raw: string | undefined): HookQueueStatus[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const statuses = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(
+      (entry): entry is HookQueueStatus =>
+        entry === "queued" || entry === "running" || entry === "ok" || entry === "error",
+    );
+  return statuses.length > 0 ? statuses : undefined;
+}
+
+function parseNonNegativeCliInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+export function formatHookQueuesList(
+  result: HookQueuesResult,
+  opts: HooksQueueListOptions,
+): string {
+  const queues = Array.isArray(result.queues) ? result.queues : [];
+  if (opts.json) {
+    return JSON.stringify({ queues }, null, 2);
+  }
+  if (queues.length === 0) {
+    return "No hook queues configured.";
+  }
+  const rows = queues.map((queue) => ({
+    State: queue.paused ? theme.warn(decorativePrefix("⏸", "paused")) : theme.success("running"),
+    Queue: theme.command(queue.id),
+    Depth: String(hookQueueCount(queue, "queued")),
+    Running: String(hookQueueCount(queue, "running")),
+    Total: String(hookQueueTotal(queue)),
+    Done: String(hookQueueCount(queue, "ok")),
+    Errors: hookQueueCount(queue, "error")
+      ? theme.error(String(hookQueueCount(queue, "error")))
+      : "0",
+    Parallel: String(queue.parallelism),
+    Session: queue.sessionTarget,
+    Path: queue.path,
+  }));
+  return [
+    `${theme.heading("Hook Queues")} ${theme.muted(`(${queues.length})`)}`,
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "State", header: "State", minWidth: 9 },
+        { key: "Queue", header: "Queue", minWidth: 14, flex: true },
+        { key: "Depth", header: "Depth", minWidth: 5 },
+        { key: "Running", header: "Running", minWidth: 7 },
+        { key: "Total", header: "Total", minWidth: 5 },
+        { key: "Done", header: "Done", minWidth: 5 },
+        { key: "Errors", header: "Errors", minWidth: 6 },
+        { key: "Parallel", header: "Parallel", minWidth: 8 },
+        { key: "Session", header: "Session", minWidth: 10, flex: true },
+        { key: "Path", header: "Path", minWidth: 16, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  ].join("\n");
+}
+
+export function formatHookQueueItems(
+  queueId: string,
+  result: HookQueueItemsResult,
+  opts: HooksQueueItemsOptions,
+): string {
+  const items = Array.isArray(result.items) ? result.items : [];
+  if (opts.json) {
+    return JSON.stringify({ ...result, items }, null, 2);
+  }
+  if (items.length === 0) {
+    return `No hook queue items found for ${theme.command(queueId)}.`;
+  }
+  const total = Number(result.total ?? items.length);
+  const rows = items.map((item) => ({
+    Status: item.status === "error" ? theme.error(item.status) : item.status,
+    Item: theme.command(item.itemId),
+    Name: item.name,
+    Message: item.messagePreview,
+    Created: formatOptionalTimestamp(item.createdAtMs),
+    Updated: formatOptionalTimestamp(item.updatedAtMs),
+    Error: item.error ?? "",
+  }));
+  return [
+    `${theme.heading("Hook Queue Items")} ${theme.muted(`${queueId}: ${items.length}/${total}`)}`,
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "Status", header: "Status", minWidth: 8 },
+        { key: "Item", header: "Item", minWidth: 12, flex: true },
+        { key: "Name", header: "Name", minWidth: 12, flex: true },
+        { key: "Message", header: "Message", minWidth: 20, flex: true },
+        { key: "Created", header: "Created", minWidth: 20 },
+        { key: "Updated", header: "Updated", minWidth: 20 },
+        { key: "Error", header: "Error", minWidth: 12, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  ].join("\n");
+}
+
+export function formatHookQueueState(result: HookQueueStateResult, opts: HooksQueueStateOptions) {
+  if (opts.json) {
+    return JSON.stringify(result, null, 2);
+  }
+  const state = result.paused ? theme.warn("paused") : theme.success("running");
+  return `Hook queue ${theme.command(result.queueId)} is ${state}.`;
 }
 
 async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
@@ -532,6 +736,101 @@ export function registerHooksCli(program: Command): void {
         await disableHook(name);
       }),
     );
+
+  const queue = hooks.command("queue").description("Manage webhook queues");
+
+  addGatewayClientOptions(
+    queue
+      .command("list")
+      .description("List configured webhook queues")
+      .option("--json", "Output as JSON", false),
+  ).action(async (opts: HooksQueueListOptions) =>
+    runHooksCliAction(async () => {
+      const result = (await callGatewayFromCli(
+        "hooks.queues",
+        opts,
+        {},
+        {
+          scopes: [READ_SCOPE],
+        },
+      )) as HookQueuesResult;
+      writeHooksOutput(formatHookQueuesList(result, opts), opts.json);
+    }),
+  );
+
+  addGatewayClientOptions(
+    queue
+      .command("items <queueId>")
+      .description("Inspect webhook queue items")
+      .option("--status <status>", "Filter statuses: queued,running,ok,error")
+      .option("--limit <n>", "Maximum items to load", "50")
+      .option("--offset <n>", "Pagination offset", "0")
+      .option("--json", "Output as JSON", false),
+  ).action(async (queueId: string, opts: HooksQueueItemsOptions) =>
+    runHooksCliAction(async () => {
+      const statuses = normalizeHookQueueStatuses(opts.status);
+      const result = (await callGatewayFromCli(
+        "hooks.queue.items",
+        opts,
+        {
+          queueId,
+          ...(statuses ? { statuses } : {}),
+          limit: parseNonNegativeCliInteger(opts.limit, "limit"),
+          offset: parseNonNegativeCliInteger(opts.offset, "offset"),
+        },
+        { scopes: [READ_SCOPE] },
+      )) as HookQueueItemsResult;
+      writeHooksOutput(formatHookQueueItems(queueId, result, opts), opts.json);
+    }),
+  );
+
+  addGatewayClientOptions(
+    queue
+      .command("pause <queueId>")
+      .description("Pause webhook queue processing")
+      .option("--json", "Output as JSON", false),
+  ).action(async (queueId: string, opts: HooksQueueStateOptions) =>
+    runHooksCliAction(async () => {
+      const result = (await callGatewayFromCli(
+        "hooks.queue.pause",
+        opts,
+        { queueId },
+        { scopes: [WRITE_SCOPE] },
+      )) as HookQueueStateResult;
+      writeHooksOutput(formatHookQueueState(result, opts), opts.json);
+    }),
+  );
+
+  addGatewayClientOptions(
+    queue
+      .command("resume <queueId>")
+      .description("Resume webhook queue processing")
+      .option("--json", "Output as JSON", false),
+  ).action(async (queueId: string, opts: HooksQueueStateOptions) =>
+    runHooksCliAction(async () => {
+      const result = (await callGatewayFromCli(
+        "hooks.queue.resume",
+        opts,
+        { queueId },
+        { scopes: [WRITE_SCOPE] },
+      )) as HookQueueStateResult;
+      writeHooksOutput(formatHookQueueState(result, opts), opts.json);
+    }),
+  );
+
+  queue.action(async () =>
+    runHooksCliAction(async () => {
+      const result = (await callGatewayFromCli(
+        "hooks.queues",
+        {},
+        {},
+        {
+          scopes: [READ_SCOPE],
+        },
+      )) as HookQueuesResult;
+      defaultRuntime.log(formatHookQueuesList(result, {}));
+    }),
+  );
 
   hooks
     .command("relay", { hidden: true })

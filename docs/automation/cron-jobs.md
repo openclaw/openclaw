@@ -442,7 +442,10 @@ Query-string tokens are rejected.
     when all queued items should continue one configured session.
 
     The Control UI Automation tab shows configured webhook queues, counts by
-    status, active parallelism, and recent queued/running/completed items.
+    status, active parallelism, pause/resume controls, and recent
+    queued/running/completed items. Use `openclaw hooks queue pause <id>` to
+    stop claiming new work while allowing already running items to finish, and
+    `openclaw hooks queue resume <id>` to restart processing.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

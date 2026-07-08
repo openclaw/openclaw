@@ -699,6 +699,9 @@ export type HookQueueSummary = {
   parallelism: number;
   sessionTarget: CronSessionTarget;
   agentId?: string | null;
+  paused?: boolean;
+  pausedAtMs?: number | null;
+  stateUpdatedAtMs?: number | null;
   counts: HookQueueCounts;
   oldestQueuedAtMs?: number | null;
   newestQueuedAtMs?: number | null;

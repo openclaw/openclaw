@@ -32,15 +32,15 @@ Client                    Gateway
 
 Common methods and events:
 
-| Category   | Examples                                                   | Notes                                        |
-| ---------- | ---------------------------------------------------------- | -------------------------------------------- |
-| Core       | `connect`, `health`, `status`                              | `connect` must be first                      |
-| Messaging  | `send`, `agent`, `agent.wait`, `system-event`, `logs.tail` | side-effecting methods need `idempotencyKey` |
-| Chat       | `chat.history`, `chat.send`, `chat.abort`                  | WebChat uses these                           |
-| Sessions   | `sessions.list`, `sessions.patch`, `sessions.delete`       | session admin                                |
-| Automation | `wake`, `cron.list`, `cron.run`, `cron.runs`               | wake and cron control                        |
-| Nodes      | `node.list`, `node.invoke`, `node.pair.*`                  | Gateway WS plus node actions                 |
-| Events     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`  | server push                                  |
+| Category   | Examples                                                         | Notes                                        |
+| ---------- | ---------------------------------------------------------------- | -------------------------------------------- |
+| Core       | `connect`, `health`, `status`                                    | `connect` must be first                      |
+| Messaging  | `send`, `agent`, `agent.wait`, `system-event`, `logs.tail`       | side-effecting methods need `idempotencyKey` |
+| Chat       | `chat.history`, `chat.send`, `chat.abort`                        | WebChat uses these                           |
+| Sessions   | `sessions.list`, `sessions.patch`, `sessions.delete`             | session admin                                |
+| Automation | `wake`, `cron.list`, `cron.run`, `hooks.queues`, `hooks.queue.*` | wake, cron, and webhook queue control        |
+| Nodes      | `node.list`, `node.invoke`, `node.pair.*`                        | Gateway WS plus node actions                 |
+| Events     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`        | server push                                  |
 
 The authoritative advertised **discovery** inventory lives in `src/gateway/server-methods-list.ts` (`listGatewayMethods`, `GATEWAY_EVENTS`).
 

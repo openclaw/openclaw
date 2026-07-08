@@ -83,6 +83,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onLoadMoreRuns: () => undefined,
     onSelectHookQueue: () => undefined,
     onLoadMoreHookQueueItems: () => undefined,
+    onPauseHookQueue: () => undefined,
+    onResumeHookQueue: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };
@@ -124,6 +126,73 @@ function getElement<T extends Element>(
 }
 
 describe("cron view", () => {
+  it("renders hook queue pause and resume controls", () => {
+    const container = document.createElement("div");
+    const onPauseHookQueue = vi.fn();
+    const onResumeHookQueue = vi.fn();
+
+    render(
+      renderCron(
+        createProps({
+          hookQueues: [
+            {
+              id: "bulk",
+              path: "/hooks/queue/bulk",
+              parallelism: 10,
+              sessionTarget: "isolated",
+              paused: true,
+              counts: { queued: 12, running: 0, ok: 1, error: 0 },
+            },
+          ],
+          selectedHookQueueId: "bulk",
+          hookQueueItemsTotal: 12,
+          onPauseHookQueue,
+          onResumeHookQueue,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Webhook queues");
+    expect(container.textContent).toContain("paused");
+    const resume = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Resume queue processing"]',
+    );
+    expect(resume).toBeInstanceOf(HTMLButtonElement);
+    resume?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onResumeHookQueue).toHaveBeenCalledWith("bulk");
+    expect(onPauseHookQueue).not.toHaveBeenCalled();
+
+    render(
+      renderCron(
+        createProps({
+          hookQueues: [
+            {
+              id: "bulk",
+              path: "/hooks/queue/bulk",
+              parallelism: 10,
+              sessionTarget: "isolated",
+              paused: false,
+              counts: { queued: 12, running: 0, ok: 1, error: 0 },
+            },
+          ],
+          selectedHookQueueId: "bulk",
+          hookQueueItemsTotal: 12,
+          onPauseHookQueue,
+          onResumeHookQueue,
+        }),
+      ),
+      container,
+    );
+
+    const pause = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Pause queue processing"]',
+    );
+    expect(pause).toBeInstanceOf(HTMLButtonElement);
+    pause?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPauseHookQueue).toHaveBeenCalledWith("bulk");
+  });
+
   it("shows all-job history mode and wires run/job filters", () => {
     const container = document.createElement("div");
     const onRunsFiltersChange = vi.fn();

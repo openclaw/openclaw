@@ -12,6 +12,7 @@ import {
   loadMoreCronRuns,
   normalizeCronFormState,
   runCronJob,
+  setHookQueuePaused,
   startCronEdit,
   startCronClone,
   updateCronJobsFilter,
@@ -1848,6 +1849,45 @@ describe("cron controller", () => {
     expect(state.selectedHookQueueId).toBe("bulk");
     expect(state.hookQueueItems.map((item) => item.itemId)).toEqual(["item-1"]);
     expect(state.hookQueueItemsTotal).toBe(1);
+  });
+
+  it("pauses a hook queue and reloads queue state", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "hooks.queue.pause") {
+        expectRecordFields(requireRecord(payload, "hooks.queue.pause payload"), {
+          queueId: "bulk",
+        });
+        return { queueId: "bulk", paused: true };
+      }
+      if (method === "hooks.queues") {
+        return {
+          queues: [
+            {
+              id: "bulk",
+              path: "/hooks/queue/bulk",
+              parallelism: 10,
+              sessionTarget: "isolated",
+              paused: true,
+              counts: { queued: 2, running: 0, ok: 0, error: 0 },
+            },
+          ],
+        };
+      }
+      if (method === "hooks.queue.items") {
+        return { items: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await setHookQueuePaused(state, "bulk", true);
+
+    expect(request).toHaveBeenNthCalledWith(1, "hooks.queue.pause", { queueId: "bulk" });
+    expect(state.selectedHookQueueId).toBe("bulk");
+    expect(state.hookQueues[0]?.paused).toBe(true);
+    expect(state.hookQueuesLoading).toBe(false);
   });
 
   it("appends hook queue items using the next queue offset", async () => {

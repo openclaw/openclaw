@@ -52,6 +52,7 @@ import {
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { createHookQueueTool } from "./tools/hook-queue-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -441,6 +442,7 @@ export function createOpenClawTools(
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
           }),
+          createHookQueueTool(),
         ]),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),

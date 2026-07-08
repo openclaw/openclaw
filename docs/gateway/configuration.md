@@ -474,7 +474,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     - `hooks.path` cannot be `/`; keep webhook ingress on a dedicated subpath such as `/hooks`.
     - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
     - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to bound caller-selected session keys.
-    - Use `hooks.queues` for high-volume hook producers that need durable backlog visibility and bounded parallelism.
+    - Use `hooks.queues` for high-volume hook producers that need durable backlog visibility, pause/resume controls, and bounded parallelism.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.

@@ -219,6 +219,10 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.remove",
   "cron.run",
   "cron.runs",
+  "hooks.queues",
+  "hooks.queue.items",
+  "hooks.queue.pause",
+  "hooks.queue.resume",
 ]);
 
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
@@ -291,7 +295,7 @@ function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
-    throw new Error("agent cron gateway calls require the trusted local gateway context");
+    throw new Error("agent runtime gateway calls require the trusted local gateway context");
   }
   return mintAgentRuntimeIdentityToken(identity);
 }
@@ -315,7 +319,7 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
 function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
   return new Error(
     [
-      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata.",
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata.",
       "Restart the Gateway with `openclaw gateway restart`, then retry.",
     ].join(" "),
     { cause },

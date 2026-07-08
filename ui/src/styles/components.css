@@ -1386,6 +1386,19 @@
   min-width: 0;
 }
 
+.hook-queue-detail__title,
+.hook-queue-detail__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hook-queue-detail__controls {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .hook-queue-counts {
   justify-content: flex-end;
 }

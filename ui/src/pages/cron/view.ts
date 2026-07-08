@@ -115,6 +115,8 @@ export type CronProps = {
   onLoadMoreRuns: () => void;
   onSelectHookQueue: (queueId: string) => void | Promise<void>;
   onLoadMoreHookQueueItems: () => void;
+  onPauseHookQueue: (queueId: string) => void | Promise<void>;
+  onResumeHookQueue: (queueId: string) => void | Promise<void>;
   onRunsFiltersChange: (patch: {
     cronRunsScope?: CronRunScope;
     cronRunsStatuses?: CronRunsStatusValue[];
@@ -398,6 +400,12 @@ function renderHookQueueCounts(queue: HookQueueSummary) {
   `;
 }
 
+function renderHookQueueStateChip(queue: HookQueueSummary) {
+  return queue.paused
+    ? html`<span class="chip chip-warn">paused</span>`
+    : html`<span class="chip chip-ok">running</span>`;
+}
+
 function renderHookQueueItem(item: HookQueueItem) {
   const duration =
     item.startedAtMs && item.finishedAtMs && item.finishedAtMs >= item.startedAtMs
@@ -459,6 +467,7 @@ function renderHookQueues(props: CronProps) {
                     @click=${() => props.onSelectHookQueue(queue.id)}
                   >
                     <span>${queue.id}</span>
+                    ${queue.paused ? html`<span class="chip chip-warn">paused</span>` : nothing}
                     <span class="muted">${queue.counts.queued}/${queue.parallelism}</span>
                   </button>
                 `,
@@ -468,13 +477,35 @@ function renderHookQueues(props: CronProps) {
               ? html`
                   <div class="hook-queue-detail">
                     <div class="hook-queue-detail__main">
-                      <div class="list-title">${selected.id}</div>
+                      <div class="hook-queue-detail__title">
+                        <div class="list-title">${selected.id}</div>
+                        ${renderHookQueueStateChip(selected)}
+                      </div>
                       <div class="list-sub">${selected.path}</div>
                       <div class="muted">
                         ${hookQueueTotal(selected)} total - ${selected.sessionTarget}
                       </div>
                     </div>
-                    ${renderHookQueueCounts(selected)}
+                    <div class="hook-queue-detail__controls">
+                      ${renderHookQueueCounts(selected)}
+                      <button
+                        class="btn btn--icon"
+                        type="button"
+                        ?disabled=${props.busy || props.hookQueuesLoading}
+                        title=${selected.paused
+                          ? "Resume queue processing"
+                          : "Pause queue processing"}
+                        aria-label=${selected.paused
+                          ? "Resume queue processing"
+                          : "Pause queue processing"}
+                        @click=${() =>
+                          selected.paused
+                            ? props.onResumeHookQueue(selected.id)
+                            : props.onPauseHookQueue(selected.id)}
+                      >
+                        ${selected.paused ? icon("play") : icon("pause")}
+                      </button>
+                    </div>
                   </div>
                   <div class="hook-queue-items-head">
                     <div class="card-sub">

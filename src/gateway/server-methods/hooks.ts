@@ -47,6 +47,47 @@ function compactHookQueueItem(item: HookQueueItem) {
   };
 }
 
+function readQueueIdParam(params: Record<string, unknown>, method: string) {
+  const queueId = typeof params.queueId === "string" ? params.queueId.trim() : undefined;
+  if (!queueId) {
+    return {
+      ok: false as const,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params: empty queueId`),
+    };
+  }
+  return { ok: true as const, queueId };
+}
+
+function findConfiguredQueue(
+  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
+  queueId: string,
+) {
+  const hooksConfig = resolveHooksConfig(context.getRuntimeConfig());
+  return hooksConfig?.queues.find((queue) => queue.id === queueId) ?? null;
+}
+
+function setQueuePausedHandler(paused: boolean): GatewayRequestHandlers[string] {
+  const method = paused ? "hooks.queue.pause" : "hooks.queue.resume";
+  return ({ params, respond, context }) => {
+    const parsed = readQueueIdParam(params, method);
+    if (!parsed.ok) {
+      respond(false, undefined, parsed.error);
+      return;
+    }
+    const queue = findConfiguredQueue(context, parsed.queueId);
+    if (!queue) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `hook queue not found: ${parsed.queueId}`),
+      );
+      return;
+    }
+    const result = context.hookQueueRuntime.setQueuePaused(queue.id, paused);
+    respond(true, result);
+  };
+}
+
 export const hooksHandlers: GatewayRequestHandlers = {
   "hooks.queues": ({ respond, context }) => {
     const hooksConfig = resolveHooksConfig(context.getRuntimeConfig());
@@ -69,6 +110,9 @@ export const hooksHandlers: GatewayRequestHandlers = {
           parallelism: queue.parallelism,
           sessionTarget: queue.sessionTarget,
           agentId: queue.agentId ?? null,
+          paused: snapshot?.paused ?? false,
+          pausedAtMs: snapshot?.pausedAtMs ?? null,
+          stateUpdatedAtMs: snapshot?.stateUpdatedAtMs ?? null,
           counts: snapshot?.counts ?? { queued: 0, running: 0, ok: 0, error: 0 },
           oldestQueuedAtMs: snapshot?.oldestQueuedAtMs ?? null,
           newestQueuedAtMs: snapshot?.newestQueuedAtMs ?? null,
@@ -99,4 +143,6 @@ export const hooksHandlers: GatewayRequestHandlers = {
       items: result.items.map(compactHookQueueItem),
     });
   },
+  "hooks.queue.pause": setQueuePausedHandler(true),
+  "hooks.queue.resume": setQueuePausedHandler(false),
 };

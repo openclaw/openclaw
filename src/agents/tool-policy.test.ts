@@ -34,6 +34,7 @@ describe("tool-policy", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
     expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("hook_queue");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });

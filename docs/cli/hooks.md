@@ -50,6 +50,22 @@ openclaw hooks check [--json]
 
 Prints a ready/not-ready count summary; with hooks not ready, lists each with its blocking reason.
 
+## Manage webhook queues
+
+```bash
+openclaw hooks queue list [--json]
+openclaw hooks queue items <queueId> [--status queued,running,ok,error] [--limit 50] [--offset 0] [--json]
+openclaw hooks queue pause <queueId> [--json]
+openclaw hooks queue resume <queueId> [--json]
+```
+
+Queue commands inspect and control configured `hooks.queues` entries through Gateway RPC.
+
+- `list`: shows queue state, backlog depth, running count, totals, errors, parallelism, session target, and hook path.
+- `items`: shows recent queue items for one queue; use `--status` to filter and `--limit`/`--offset` for pagination.
+- `pause`: stops claiming new work for the queue. Already running items continue.
+- `resume`: restarts processing and schedules pending work up to the queue's configured `parallelism`.
+
 ## Enable a hook
 
 ```bash
@@ -116,7 +132,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 
 ## Notes
 
-- `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- `hooks list --json`, `info --json`, `check --json`, and `hooks queue ... --json` write structured JSON directly to stdout.
 
 ## Related
 

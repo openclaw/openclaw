@@ -880,6 +880,11 @@ export async function startGatewayServer(
   });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
+  // Hook queue runtime is created before runtimeState is assigned and reads hooks config
+  // synchronously for restart recovery, so this getter must fall back to startup config.
+  const getCurrentHooksConfig = () => runtimeState?.hooksConfig ?? initialHooksConfig;
+  const getCurrentHookClientIpConfig = () =>
+    runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig;
   const {
     releasePluginRouteRegistry,
     httpServer,
@@ -902,6 +907,7 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    hookQueueRuntime,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -920,8 +926,8 @@ export async function startGatewayServer(
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       gatewayTls,
       getResolvedAuth,
-      hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
-      getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
+      hooksConfig: getCurrentHooksConfig,
+      getHookClientIpConfig: getCurrentHookClientIpConfig,
       pluginRegistry,
       getPluginRouteRegistry: () => pluginRegistry,
       getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
@@ -965,6 +971,7 @@ export async function startGatewayServer(
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
+    hookQueueRuntime,
     cronState: createLazyGatewayCronState({
       cfg: cfgAtStart,
       deps,
@@ -1753,12 +1760,16 @@ export async function startGatewayServer(
       }),
       setState: (nextState) => {
         const cronStateChanged = nextState.cronState !== runtimeState.cronState;
+        const hooksConfigChanged = nextState.hooksConfig !== runtimeState.hooksConfig;
         runtimeState.hooksConfig = nextState.hooksConfig;
         runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
         runtimeState.heartbeatRunner = nextState.heartbeatRunner;
         runtimeState.cronState = nextState.cronState;
         deps.cron = runtimeState.cronState.cron;
         runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
+        if (hooksConfigChanged) {
+          runtimeState.hookQueueRuntime.scheduleDrainAll();
+        }
         if (cronStateChanged) {
           gatewayCronStartHandled = true;
         }

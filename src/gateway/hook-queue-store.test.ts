@@ -8,6 +8,8 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   claimNextHookQueueItem,
   enqueueHookQueueItem,
+  setHookQueuePaused,
+  summarizeHookQueueItems,
   type QueuedHookAgentPayload,
 } from "./hook-queue-store.js";
 
@@ -80,5 +82,37 @@ describe("hook queue store", () => {
         claimNextHookQueueItem({ queueId }),
       ].map((item) => item?.itemId),
     ).toEqual(["z-first", "a-second", "m-third"]);
+  });
+
+  test("does not claim queued items while queue is paused", () => {
+    const queueId = "batch";
+    enqueueHookQueueItem({
+      itemId: "queued-paused",
+      queueId,
+      runId: "run-paused",
+      jobId: "job-paused",
+      sourcePath: "/hooks/queue/batch",
+      payload: queuedPayload("paused"),
+      nowMs: 1_000,
+    });
+
+    setHookQueuePaused({ queueId, paused: true, nowMs: 2_000 });
+
+    expect(claimNextHookQueueItem({ queueId })).toBeNull();
+    expect(summarizeHookQueueItems([queueId])[0]).toMatchObject({
+      queueId,
+      paused: true,
+      pausedAtMs: 2_000,
+      counts: { queued: 1, running: 0, ok: 0, error: 0 },
+    });
+
+    setHookQueuePaused({ queueId, paused: false, nowMs: 3_000 });
+
+    expect(claimNextHookQueueItem({ queueId })?.itemId).toBe("queued-paused");
+    expect(summarizeHookQueueItems([queueId])[0]).toMatchObject({
+      queueId,
+      paused: false,
+      counts: { queued: 0, running: 1, ok: 0, error: 0 },
+    });
   });
 });

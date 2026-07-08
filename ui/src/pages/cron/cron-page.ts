@@ -26,6 +26,7 @@ import {
   removeCronJob,
   resolveConfiguredCronModelSuggestions,
   runCronJob,
+  setHookQueuePaused,
   startCronClone,
   startCronEdit,
   toggleCronJob,
@@ -440,6 +441,10 @@ class CronPage extends LitElement {
               void this.runCronTask((cronState) =>
                 loadHookQueueItems(cronState, cronState.selectedHookQueueId, { append: true }),
               ),
+            onPauseHookQueue: (queueId) =>
+              void this.runCronTask((cronState) => setHookQueuePaused(cronState, queueId, true)),
+            onResumeHookQueue: (queueId) =>
+              void this.runCronTask((cronState) => setHookQueuePaused(cronState, queueId, false)),
             onRunsFiltersChange: (patch) =>
               void this.runCronTask(async (cronState) => {
                 updateCronRunsFilter(cronState, patch);
