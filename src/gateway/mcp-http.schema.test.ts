@@ -25,9 +25,10 @@ describe("buildMcpToolSchema", () => {
     const inputSchema = entry?.inputSchema as
       | { properties?: Record<string, unknown>; required?: string[] }
       | undefined;
+    const propertySchema = inputSchema?.properties?.["toString"];
 
     expect(Object.hasOwn(inputSchema?.properties ?? {}, "toString")).toBe(true);
-    expect(inputSchema?.properties?.toString).toEqual({ type: "string" });
+    expect(propertySchema).toEqual({ type: "string" });
     expect(inputSchema?.required).toEqual(["toString"]);
   });
 
