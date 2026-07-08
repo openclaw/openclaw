@@ -58,7 +58,7 @@ import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
-export type MonitorMatrixOpts = {
+type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;

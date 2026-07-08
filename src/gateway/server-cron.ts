@@ -31,6 +31,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
+import { createCronTriggerEvaluator } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
@@ -356,6 +357,10 @@ export function buildGatewayCronService(params: {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+  const triggerEvaluator =
+    params.cfg.cron?.triggers?.enabled === true
+      ? createCronTriggerEvaluator({ config: params.cfg })
+      : undefined;
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
@@ -399,6 +404,19 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
+    ...(triggerEvaluator
+      ? {
+          evaluateCronTrigger: ({ job, script, state, abortSignal }) =>
+            triggerEvaluator({
+              jobId: job.id,
+              agentId: job.agentId,
+              script,
+              state,
+              toolsAllow: job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined,
+              abortSignal,
+            }),
+        }
+      : {}),
     defaultAgentId,
     resolveSessionStorePath,
     sessionStorePath,
@@ -731,6 +749,7 @@ export function buildGatewayCronService(params: {
             runAtMs: evt.runAtMs,
             durationMs: evt.durationMs,
             nextRunAtMs: evt.nextRunAtMs,
+            triggerFired: evt.triggerFired,
             model: evt.model,
             provider: evt.provider,
             usage: evt.usage,

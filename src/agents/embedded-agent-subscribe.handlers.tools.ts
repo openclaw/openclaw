@@ -29,6 +29,7 @@ import {
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
@@ -38,6 +39,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -451,6 +453,118 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function isOpenClawExecutable(token: string | undefined): boolean {
+  const executable = normalizeOptionalLowercaseString(token);
+  return executable?.split(/[\\/]/).at(-1) === "openclaw";
+}
+
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  const packageSpec = normalizeOptionalLowercaseString(token);
+  return packageSpec?.startsWith("openclaw@") === true && packageSpec.length > "openclaw@".length;
+}
+
+function skipOpenClawPackageRunner(
+  tokens: string[],
+  startIndex: number,
+): { commandIndex: number; acceptsPackageSpec: boolean } {
+  let commandIndex = startIndex;
+  let acceptsPackageSpec = false;
+  let runner = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    runner === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 1;
+    runner = "pnpm";
+  }
+  if (runner === "pnpm") {
+    const subcommand = normalizeOptionalLowercaseString(tokens[commandIndex + 1]);
+    if (subcommand === "exec" || subcommand === "dlx") {
+      commandIndex += 2;
+      acceptsPackageSpec = subcommand === "dlx";
+    } else {
+      commandIndex = startIndex;
+    }
+  } else if (runner === "npx" || runner === "bunx") {
+    commandIndex += 1;
+    acceptsPackageSpec = true;
+    while (true) {
+      const option = normalizeOptionalLowercaseString(tokens[commandIndex]);
+      if (
+        option === "-y" ||
+        option === "--yes" ||
+        option === "--no-install" ||
+        option === "--bun"
+      ) {
+        commandIndex += 1;
+        continue;
+      }
+      if (option === "-p" || option === "--package") {
+        commandIndex += 2;
+        continue;
+      }
+      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
+        commandIndex += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[commandIndex] === "--") {
+    commandIndex += 1;
+  }
+  return { commandIndex, acceptsPackageSpec };
+}
+
+function isOpenClawCronAddShellCommand(args: unknown): boolean {
+  const record = asOptionalObjectRecord(args);
+  const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
+  if (!command || hasTopLevelShellControlOperator(command)) {
+    return false;
+  }
+  const tokens = splitShellArgs(command);
+  if (!tokens || tokens.length < 3) {
+    return false;
+  }
+
+  // Compound shell programs need a real shell AST; only count direct CLI invocations.
+  let commandIndex = 0;
+  if (normalizeOptionalLowercaseString(tokens[commandIndex]) === "env") {
+    commandIndex += 1;
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
+    commandIndex += 1;
+  }
+  const packageRunner = skipOpenClawPackageRunner(tokens, commandIndex);
+  commandIndex = packageRunner.commandIndex;
+
+  let cliArgIndex = commandIndex + 1;
+  for (
+    let consumed = consumeRootOptionToken(tokens, cliArgIndex);
+    consumed > 0;
+    consumed = consumeRootOptionToken(tokens, cliArgIndex)
+  ) {
+    cliArgIndex += consumed;
+  }
+  const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
+  const actionArgs = tokens.slice(cliArgIndex + 2);
+  return (
+    (isOpenClawExecutable(tokens[commandIndex]) ||
+      (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
+    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (action === "add" || action === "create") &&
+    !actionArgs.some((token) => token === "-h" || token === "--help")
+  );
+}
+
+function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
+  if (!isOpenClawCronAddShellCommand(args)) {
+    return false;
+  }
+  const details = readExecToolDetails(result);
+  return details?.status === "completed" && details.exitCode === 0;
 }
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
@@ -1352,7 +1466,11 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {

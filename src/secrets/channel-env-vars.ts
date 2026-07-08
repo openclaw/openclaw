@@ -18,7 +18,7 @@ type ChannelEnvVarLookupParams = {
  * Resolves plugin-declared channel environment variable names keyed by channel id.
  * The result is deterministic so env-shell docs and prompt snapshots stay stable.
  */
-export function resolveChannelEnvVars(
+function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
   const snapshot = loadPluginMetadataSnapshot({

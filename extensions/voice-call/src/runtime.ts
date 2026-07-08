@@ -11,6 +11,7 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
   type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -26,11 +27,13 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
+import type { CallRecord } from "./types.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
@@ -234,6 +237,58 @@ async function resolveRealtimeProvider(params: {
   });
 }
 
+function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfig): string[] {
+  const agentIds = new Set<string>([normalizeAgentId(config.agentId)]);
+  for (const agent of coreConfig.agents?.list ?? []) {
+    agentIds.add(normalizeAgentId(agent.id));
+  }
+  for (const route of Object.values(config.numbers)) {
+    if (route.agentId) {
+      agentIds.add(normalizeAgentId(route.agentId));
+    }
+  }
+  return [...agentIds];
+}
+
+async function createRealtimeInstructionsResolver(params: {
+  config: VoiceCallConfig;
+  coreConfig: OpenClawConfig;
+  agentRuntime: CoreAgentDeps;
+}): Promise<(call: CallRecord) => string> {
+  const genericConfig: VoiceCallConfig = {
+    ...params.config,
+    realtime: {
+      ...params.config.realtime,
+      agentContext: { ...params.config.realtime.agentContext, enabled: false },
+    },
+  };
+  const genericInstructions = await buildRealtimeVoiceInstructions({
+    baseInstructions: params.config.realtime.instructions,
+    config: genericConfig,
+    coreConfig: params.coreConfig,
+    agentRuntime: params.agentRuntime,
+  });
+  const entries = await Promise.all(
+    listRealtimeAgentIds(params.config, params.coreConfig).map(async (agentId) => {
+      const instructions = await buildRealtimeVoiceInstructions({
+        baseInstructions: params.config.realtime.instructions,
+        config: { ...params.config, agentId },
+        coreConfig: params.coreConfig,
+        agentRuntime: params.agentRuntime,
+      });
+      return [agentId, instructions] as const;
+    }),
+  );
+  const instructionsByAgentId = new Map(entries);
+  return (call) => {
+    const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+    const effectiveConfig = resolveVoiceCallEffectiveConfig(params.config, numberRouteKey).config;
+    return (
+      instructionsByAgentId.get(resolveCallAgentId(call, effectiveConfig)) ?? genericInstructions
+    );
+  };
+}
+
 export async function createVoiceCallRuntime(params: {
   config: VoiceCallConfig;
   coreConfig: CoreConfig;
@@ -299,15 +354,13 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
-    const realtimeInstructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: config.realtime.instructions,
+    const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
-      coreConfig,
+      coreConfig: cfg,
       agentRuntime,
     });
     const realtimeConfig = {
       ...config.realtime,
-      instructions: realtimeInstructions,
       tools: resolveRealtimeVoiceAgentConsultTools(
         config.realtime.toolPolicy,
         config.realtime.tools,
@@ -321,6 +374,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeProvider.providerConfig,
       config.serve.path,
       cfg,
+      resolveRealtimeInstructions,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -332,10 +386,10 @@ export async function createVoiceCallRuntime(params: {
           }
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-          const agentId = effectiveConfig.agentId ?? "main";
+          const agentId = resolveCallAgentId(call, effectiveConfig);
           const sessionKey = resolveVoiceCallConsultSessionKey({
             ...call,
-            config: effectiveConfig,
+            config: { ...effectiveConfig, agentId },
             coreSession: cfg.session,
           });
           const requesterSessionKey =

@@ -346,6 +346,8 @@ export interface CronJobs {
   stagger_ms: number | null;
   state_json: Generated<string>;
   store_key: string;
+  trigger_once: number | null;
+  trigger_script: string | null;
   updated_at: number;
   wake_mode: string;
 }

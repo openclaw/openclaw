@@ -94,13 +94,13 @@ type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
 
-export type PublishedInstallScenario = {
+type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
   expectedVersion: string;
 };
 
-export type OpenClawNpmPostpublishVerifyArgs =
+type OpenClawNpmPostpublishVerifyArgs =
   | {
       help: false;
       version: string;
@@ -644,7 +644,7 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   return [];
 }
 
-export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
   const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
   const errors: string[] = [];
   const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];

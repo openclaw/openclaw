@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
@@ -175,6 +176,110 @@ describe("buildGuardedModelFetch", () => {
 
   afterEach(() => {
     delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
+  });
+
+  function sentinelModel(): Model<"openai-responses"> {
+    return {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+  }
+
+  it("swaps sentinels in Request-form headers", async () => {
+    const sentinel = mintSecretSentinel("request-form-secret", { label: "request-form" });
+    const request = new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sentinel}` },
+    });
+
+    const response = await buildGuardedModelFetch(sentinelModel())(request);
+    await response.text();
+
+    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
+    expect(headers.get("authorization")).toBe("Bearer request-form-secret");
+  });
+
+  it("swaps sentinels in record init headers", async () => {
+    const recordSentinel = mintSecretSentinel("record-header-secret", { label: "record-header" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: { "x-api-key": recordSentinel },
+      },
+    );
+    await response.text();
+    expect(
+      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
+    ).toBe("record-header-secret");
+    expect(
+      new Headers(ensureModelProviderLocalServiceMock.mock.calls[0]?.[1] as HeadersInit).get(
+        "x-api-key",
+      ),
+    ).toBe(recordSentinel);
+  });
+
+  it("swaps sentinels in tuple init headers", async () => {
+    const tupleSentinel = mintSecretSentinel("tuple-header-secret", { label: "tuple-header" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: [["x-api-key", tupleSentinel]],
+      },
+    );
+    await response.text();
+    expect(
+      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
+    ).toBe("tuple-header-secret");
+  });
+
+  it("swaps sentinels in Headers init and composed Cloudflare auth values", async () => {
+    const sentinel = mintSecretSentinel("cloudflare-upstream-secret", { label: "cloudflare" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: new Headers({ "cf-aig-authorization": `Bearer ${sentinel}` }),
+      },
+    );
+    await response.text();
+
+    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
+    expect(headers.get("cf-aig-authorization")).toBe("Bearer cloudflare-upstream-secret");
+  });
+
+  it("swaps sentinels in URL query parameters", async () => {
+    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      `https://api.openai.com/v1/responses?key=${sentinel}`,
+    );
+    await response.text();
+
+    expect(latestGuardedFetchParams().url).toBe(
+      "https://api.openai.com/v1/responses?key=gemini%26scope%3Dtwo%2B%23%25",
+    );
+  });
+
+  it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
+    const unknown = "oc-sent-v1-fedcba987654321001234567";
+    await expect(
+      buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
+        headers: { Authorization: `Bearer ${unknown}` },
+      }),
+    ).rejects.toThrow(
+      `Secret sentinel ${unknown} is not registered in this process; refusing to send request`,
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the no-sentinel fast path request init untouched", async () => {
+    const init: RequestInit = { headers: { Authorization: "Bearer plain-env-key" } };
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      init,
+    );
+    await response.text();
+    expect(latestGuardedFetchParams().init).toStrictEqual(init);
   });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
@@ -1590,6 +1695,47 @@ describe("buildGuardedModelFetch", () => {
     const text = await response.text();
     expect(text.length).toBeLessThanOrEqual(64 * 1024);
     expect(text.length).toBeLessThan(OVER_LIMIT);
+  });
+
+  it("returns a capped body before guarded cleanup finishes", async () => {
+    const OVER_LIMIT = 100 * 1024;
+    let finishRelease!: () => void;
+    const releasePending = new Promise<void>((resolve) => {
+      finishRelease = resolve;
+    });
+    const release = vi.fn(() => releasePending);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(new Uint8Array(OVER_LIMIT), {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release,
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+    const timeout = Symbol("timeout");
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      response.text(),
+      new Promise<typeof timeout>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    clearTimeout(timeoutHandle);
+    finishRelease();
+
+    expect(result).not.toBe(timeout);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("preserves SDK ability to cancel retryable non-OK responses before reading body", async () => {

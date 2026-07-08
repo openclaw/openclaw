@@ -73,6 +73,7 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -249,6 +250,37 @@ function parseAgentCommandModelRef(
 
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+
+function resolveAgentRunLifecycleEndLogLevel(meta: {
+  aborted?: unknown;
+  error?: unknown;
+  stopReason?: unknown;
+  livenessState?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
+}): "info" | "warn" | "error" | undefined {
+  const status =
+    meta.stopReason === "timeout" || meta.timeoutPhase
+      ? "timeout"
+      : meta.aborted === true || meta.error || meta.stopReason === "error"
+        ? "error"
+        : "ok";
+  const outcome = buildAgentRunTerminalOutcome({
+    status,
+    error: meta.error,
+    stopReason: meta.stopReason,
+    livenessState: meta.livenessState,
+    timeoutPhase: meta.timeoutPhase,
+    providerStarted: meta.providerStarted,
+  });
+  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
+    return undefined;
+  }
+  if (outcome.reason === "completed") {
+    return "info";
+  }
+  return outcome.status === "timeout" ? "warn" : "error";
+}
 
 function applyAgentRunAbortMetadata<T extends { meta: object }>(
   result: T,
@@ -1874,8 +1906,9 @@ async function agentCommandInternal(
         }
         attemptLifecycleState.lifecycleEnded = true;
         const stopReason = runResult.meta.stopReason;
-        if (stopReason && stopReason !== "end_turn") {
-          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        const logLevel = resolveAgentRunLifecycleEndLogLevel(runResult.meta);
+        if (logLevel) {
+          log[logLevel](`[agent] run ${runId} ended with stopReason=${stopReason}`);
         }
         emitAgentEvent({
           runId,
@@ -2736,6 +2769,7 @@ export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
+  resolveAgentRunLifecycleEndLogLevel,
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
 };
