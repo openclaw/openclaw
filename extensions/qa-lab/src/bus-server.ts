@@ -27,11 +27,12 @@ const QA_BUS_POLL_TIMEOUT_MAX_MS = 30_000;
 const QA_BUS_POLL_LIMIT_MAX = 500;
 const QA_BUS_SEARCH_LIMIT_MAX = 100;
 
-export class QaMalformedJsonBodyError extends Error {
+class QaMalformedJsonBodyError extends Error {
   readonly statusCode = 400;
 
   constructor() {
     super("Malformed JSON body.");
+    this.name = "QaMalformedJsonBodyError";
   }
 }
 
@@ -68,11 +69,11 @@ export function writeError(res: ServerResponse, statusCode: number, error: unkno
 }
 
 export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+  if (error instanceof QaMalformedJsonBodyError) {
+    writeError(res, error.statusCode, error.message);
+    return true;
+  }
   if (!isRequestBodyLimitError(error)) {
-    if (error instanceof QaMalformedJsonBodyError) {
-      writeError(res, error.statusCode, error.message);
-      return true;
-    }
     return false;
   }
   writeError(res, error.statusCode, requestBodyErrorToText(error.code));
