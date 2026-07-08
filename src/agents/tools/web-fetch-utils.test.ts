@@ -122,6 +122,9 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
 
   it("continues href scanning after unsupported framework-style attributes", () => {
     expect(htmlToMarkdown(`<a @click="track" href="/real">Read</a>`).text).toBe("[Read](/real)");
+    expect(htmlToMarkdown(`<a @click="track(); href='/bad'" href="/real">Read</a>`).text).toBe(
+      "[Read](/real)",
+    );
   });
 
   it("preserves slashes in unquoted href attributes", () => {

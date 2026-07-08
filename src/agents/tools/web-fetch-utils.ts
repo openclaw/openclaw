@@ -249,9 +249,7 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
       pos += 1;
     }
     if (pos === attrStart) {
-      while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
-        pos += 1;
-      }
+      pos = skipUnsupportedAttribute(rawTag, pos);
       continue;
     }
     const attrName = rawTag.slice(attrStart, pos).toLowerCase();
@@ -297,6 +295,20 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function skipUnsupportedAttribute(rawTag: string, start: number): number {
+  let pos = start;
+  while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
+    const quote = rawTag[pos];
+    if (quote === '"' || quote === "'") {
+      const valueEnd = rawTag.indexOf(quote, pos + 1);
+      pos = valueEnd === -1 ? rawTag.length : valueEnd + 1;
+      continue;
+    }
+    pos += 1;
+  }
+  return pos;
 }
 
 function contextText(context: RenderContext): string {
