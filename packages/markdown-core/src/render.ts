@@ -200,7 +200,11 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end, escapeText: item.escapeText });
+        if (item.kind === "link") {
+          stack.push({ close: item.close, end: item.end, escapeText: item.escapeText });
+        } else {
+          stack.push({ close: item.close, end: item.end });
+        }
       }
     }
 
