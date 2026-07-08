@@ -2,7 +2,9 @@
 import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
+import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { Agent } from "./agent.js";
+import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
   type AssistantMessage,
   createAssistantMessageEventStream,
@@ -97,6 +99,59 @@ describe("agentLoop EventStream failures", () => {
     const result = await stream.result();
 
     expectTerminalFailure(events, result);
+  });
+});
+
+describe("agentLoop continuation guards", () => {
+  const assistantTailContext: AgentContext = {
+    systemPrompt: "",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: TEST_USAGE,
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ],
+  };
+
+  it("throws a coded error from the public continue stream guard", () => {
+    expect(() => agentLoopContinue(assistantTailContext, config)).toThrowError(
+      TranscriptNotContinuableError,
+    );
+    try {
+      agentLoopContinue(assistantTailContext, config);
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
+        role: "assistant",
+      });
+    }
+  });
+
+  it("throws a coded error from the async continue runner guard", async () => {
+    await expect(
+      runAgentLoopContinue(assistantTailContext, config, async () => undefined),
+    ).rejects.toMatchObject({
+      code: TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
+      role: "assistant",
+    });
+  });
+
+  it("throws a coded error from Agent.continue", async () => {
+    const agent = new Agent({
+      initialState: { messages: assistantTailContext.messages },
+      streamFn: failingStreamFn,
+    });
+
+    await expect(agent.continue()).rejects.toMatchObject({
+      code: TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
+      role: "assistant",
+    });
   });
 });
 

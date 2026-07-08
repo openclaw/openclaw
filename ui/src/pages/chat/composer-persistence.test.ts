@@ -15,7 +15,6 @@ function createState(overrides: Partial<Parameters<typeof persistChatComposerSta
     sessionKey: "agent:lily:main",
     chatMessage: "",
     chatQueue: [],
-    realtimeTalkOptions: { model: "", voice: "", vadThreshold: "" },
     ...overrides,
   };
 }
@@ -100,51 +99,6 @@ describe("chat composer persistence", () => {
 
   it("scopes persisted composers by gateway and session key", () => {
     persistChatComposerState(createState({ chatMessage: "main draft" }));
-
-    expect(
-      loadChatComposerSnapshot(
-        { settings: { gatewayUrl: "ws://gateway.test/control" } },
-        "agent:lily:other",
-      ),
-    ).toBeNull();
-    expect(
-      loadChatComposerSnapshot(
-        { settings: { gatewayUrl: "ws://other-gateway.test/control" } },
-        "agent:lily:main",
-      ),
-    ).toBeNull();
-  });
-
-  it("restores Talk launch choices after the chat route remounts", () => {
-    persistChatComposerState(
-      createState({
-        realtimeTalkOptions: {
-          model: "gpt-realtime-2",
-          voice: "marin",
-          vadThreshold: "0.35",
-        },
-      }),
-    );
-
-    const restored = createState();
-    expect(restoreChatComposerState(restored)).toBe(true);
-    expect(restored.realtimeTalkOptions).toEqual({
-      model: "gpt-realtime-2",
-      voice: "marin",
-      vadThreshold: "0.35",
-    });
-  });
-
-  it("keeps Talk launch choices scoped to the gateway and chat session", () => {
-    persistChatComposerState(
-      createState({
-        realtimeTalkOptions: {
-          model: "gpt-realtime-2",
-          voice: "marin",
-          vadThreshold: "0.5",
-        },
-      }),
-    );
 
     expect(
       loadChatComposerSnapshot(

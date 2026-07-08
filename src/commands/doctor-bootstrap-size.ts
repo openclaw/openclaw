@@ -37,12 +37,14 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
  * Returns the raw budget analysis for tests and callers that need structured evidence.
  */
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, defaultAgentId);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, defaultAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, defaultAgentId);
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: cfg,
+    agentId: defaultAgentId,
   });
   const stats = buildBootstrapInjectionStats({
     bootstrapFiles,
@@ -96,10 +98,14 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     lines.push("");
   }
   if (needsPerFileTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits.");
+    lines.push(
+      "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+    );
   }
   if (needsTotalTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapTotalMaxChars` for total-budget limits.");
+    lines.push(
+      "- Tip: tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+    );
   }
 
   note(lines.join("\n"), "Bootstrap file size");

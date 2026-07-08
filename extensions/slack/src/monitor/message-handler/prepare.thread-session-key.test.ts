@@ -140,6 +140,7 @@ describe("thread-level session keys", () => {
         accountId: "default",
         sessionKey: "agent:main:slack:channel:c123",
         mainSessionKey: "agent:main:main",
+        dmScope: "main",
         lastRoutePolicy: "session",
         matchedBy: "default",
       },

@@ -1,4 +1,4 @@
-// Gateway methods expose files referenced by one session transcript.
+// Gateway methods expose session files and workspace browsing.
 import path from "node:path";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -303,6 +303,7 @@ async function toSessionFileEntry(
   }
   const entry: SessionFileEntry = {
     ...base,
+    workspacePath: browserPath,
     missing: false,
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
@@ -538,26 +539,40 @@ async function findSessionFile(
       }),
     };
   }
-  const resolved = resolveWorkspacePath(loaded.root, params.path);
-  if (!resolved || !loaded.root) {
-    return loaded.root ? { root: loaded.root } : {};
+  if (!loaded.root) {
+    return {};
+  }
+  // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
+  // rejection, and the 256 KB cap.
+  const candidates = [
+    resolveTouchedFilePath({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: params.path,
+    }),
+    resolveWorkspacePath(loaded.root, params.path),
+  ].filter((candidate, index, all): candidate is string => {
+    return candidate !== undefined && all.indexOf(candidate) === index;
+  });
+  if (candidates.length === 0) {
+    return { root: loaded.root };
   }
   const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
-  const browserPath = toDisplayPath(loaded.root, resolved);
-  const sessionKind = relevance.get(browserPath);
-  if (!sessionKind) {
-    return loaded.root ? { root: loaded.root } : {};
-  }
-  const touched: TouchedFile = {
-    path: browserPath,
-    kind: sessionKind === "modified" ? "modified" : "read",
-  };
-  return {
-    ...(loaded.root ? { root: loaded.root } : {}),
-    file: await toSessionFileEntry(touched, loaded.root, loaded.root, {
+  for (const candidate of candidates) {
+    const browserPath = toDisplayPath(loaded.root, candidate);
+    const sessionKind = relevance.get(browserPath);
+    const touched: TouchedFile = {
+      path: browserPath,
+      kind: sessionKind === "modified" ? "modified" : "read",
+    };
+    const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
       includeContent: true,
-    }),
-  };
+    });
+    if (!file.missing) {
+      return { root: loaded.root, file };
+    }
+  }
+  return { root: loaded.root };
 }
 
 function respondSessionFileNotFound(respond: RespondFn, filePath: string) {
@@ -580,7 +595,7 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
   );
 }
 
-/** Gateway handlers for files referenced by session transcripts. */
+/** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.list": async ({ params, respond }) => {
     if (

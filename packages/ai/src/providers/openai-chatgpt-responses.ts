@@ -95,7 +95,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // Types
 // ============================================================================
 
-export interface OpenAICodexResponsesOptions extends StreamOptions {
+interface OpenAICodexResponsesOptions extends StreamOptions {
   reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -275,6 +275,10 @@ export const streamOpenAICodexResponses: StreamFunction<
       if (nextBody !== undefined) {
         body = nextBody as RequestBody;
       }
+      // NOTE: when options.sessionId is absent, this falls back to a fresh random id
+      // per request, which forfeits session-affinity routing on the WS transport (the
+      // backend routes by session_id/x-client-request-id). Left as-is for this fix;
+      // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const websocketRequestId = options?.sessionId || createCodexRequestId();
       const sseHeaders = buildSSEHeaders(
         model.headers,
@@ -910,7 +914,7 @@ type WebSocketConstructor = new (
   protocols?: string | string[] | { headers?: Record<string, string> },
 ) => WebSocketLike;
 
-export interface OpenAICodexWebSocketDebugStats {
+interface OpenAICodexWebSocketDebugStats {
   requests: number;
   connectionsCreated: number;
   connectionsReused: number;

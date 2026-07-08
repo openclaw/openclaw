@@ -517,6 +517,8 @@ export async function resolveMedia(params: {
     trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork,
   });
-  const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
+  const placeholder = saved.contentType?.startsWith("audio/")
+    ? "<media:audio>"
+    : (resolveTelegramMediaPlaceholder(msg) ?? "<media:document>");
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }

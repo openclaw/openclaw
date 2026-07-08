@@ -23,7 +23,7 @@ export function resolveHostIp(explicit = ""): string {
   return output;
 }
 
-export function allocateHostPort(): number {
+function allocateHostPort(): number {
   return Number(
     run(
       "python3",
@@ -36,7 +36,7 @@ export function allocateHostPort(): number {
   );
 }
 
-export async function isHostPortFree(port: number): Promise<boolean> {
+async function isHostPortFree(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));

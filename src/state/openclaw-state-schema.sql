@@ -21,6 +21,45 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
   ON diagnostic_events(scope, created_at, event_key);
 
+CREATE TABLE IF NOT EXISTS skill_usage (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_source TEXT NOT NULL,
+  first_used_at_ms INTEGER NOT NULL,
+  last_used_at_ms INTEGER NOT NULL,
+  use_count INTEGER NOT NULL,
+  last_agent_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_usage_key
+  ON skill_usage(skill_key, skill_file);
+
+CREATE TABLE IF NOT EXISTS skill_lifecycle (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'stale', 'archived')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  state_changed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  archived_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_key
+  ON skill_lifecycle(skill_key, skill_file);
+
+CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_state
+  ON skill_lifecycle(state, skill_file);
+
+CREATE TABLE IF NOT EXISTS skill_curator_state (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  last_attempt_at_ms INTEGER NOT NULL,
+  last_success_at_ms INTEGER,
+  last_error TEXT,
+  last_result_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -489,6 +528,24 @@ CREATE TABLE IF NOT EXISTS config_health_entries (
   updated_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  etag TEXT,
+  payload_json TEXT,
+  feed_sequence INTEGER,
+  last_checked_at_ms INTEGER,
+  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
+  slug TEXT NOT NULL PRIMARY KEY,
+  provider TEXT,
+  model_keys_json TEXT NOT NULL,
+  ends_at_ms INTEGER NOT NULL,
+  claimed_at_ms INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS installed_plugin_index (
   index_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -938,6 +995,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   stagger_ms INTEGER,
   session_target TEXT NOT NULL,
   wake_mode TEXT NOT NULL,
+  trigger_script TEXT,
+  trigger_once INTEGER,
   payload_kind TEXT NOT NULL,
   payload_message TEXT,
   payload_model TEXT,

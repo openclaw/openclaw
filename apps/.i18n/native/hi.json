@@ -709,6 +709,11 @@
       "translated": "पासवर्ड (वैकल्पिक)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Dreaming"
@@ -2189,9 +2194,29 @@
       "translated": "स्थान"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "उपयोग करते समय"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "OpenClaw के बैकग्राउंड में होने पर अनुरोधित स्थान जांचों की हमेशा अनुमति देता है; Android इसे लगातार दिखाई देने वाली नोड सूचना में दिखाता है।"
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "बैकग्राउंड स्थान की अनुमति दें?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw केवल तब स्थान जांचता है जब आपका पेयर किया गया Gateway इसका अनुरोध करता है। "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "सेटिंग्स खोलें"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "अभी नहीं"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",
@@ -2202,6 +2227,11 @@
       "id": "native.android.869c8be127ce5282",
       "source": "Replace setup",
       "translated": "सेटअप बदलें"
+    },
+    {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Gateway भूलें?"
     },
     {
       "id": "native.android.c6c8e0c4b8a9a7cf",
@@ -2244,14 +2274,34 @@
       "translated": "डिस्कनेक्ट करें"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "इस फ़ोन की सहेजी गई gateway एक्सेस साफ़ करें और नया सेटअप कोड स्कैन करें।"
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateways"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "नया Gateway पेयर करें"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "कोई युग्मित gateways नहीं।"
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "भूलें"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Gateway सेटअप"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Gateway जोड़ें"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -2357,6 +2407,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "अपडेट"
+    },
+    {
+      "id": "native.android.aac3310699b496c8",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — MIT License."
+    },
+    {
+      "id": "native.android.a157bbb606e9b398",
+      "source": "OpenClaw logo",
+      "translated": "OpenClaw लोगो"
+    },
+    {
+      "id": "native.android.7b78b4869baf2160",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.ad4c14835d1b71ca",
+      "source": "Personal AI on your devices",
+      "translated": "आपके डिवाइसों पर निजी AI"
     },
     {
       "id": "native.android.13f70e22b5648308",
@@ -2614,9 +2684,9 @@
       "translated": "SMS"
     },
     {
-      "id": "native.android.51b5f4cf7eaa5c86",
-      "source": "Send and search SMS from this device.",
-      "translated": "इस डिवाइस से SMS भेजें और खोजें।"
+      "id": "native.android.cba20518e9758043",
+      "source": "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+      "translated": "Android SMS एक्सेस देता है। Gateway को अलग से `sms.search` की अनुमति देनी होगी और, केवल आवश्यकता होने पर, `sms.send` की।"
     },
     {
       "id": "native.android.8c32ca1f11a93a25",
@@ -2977,6 +3047,16 @@
       "id": "native.android.7178756ffe9e4c72",
       "source": "Recent conversations",
       "translated": "हाल की बातचीत"
+    },
+    {
+      "id": "native.android.cbdaff5e476b7dad",
+      "source": "Browse",
+      "translated": "ब्राउज़ करें"
+    },
+    {
+      "id": "native.android.c093a2297a02405a",
+      "source": "Offline",
+      "translated": "ऑफ़लाइन"
     },
     {
       "id": "native.android.1196e848f04a3dc1",
@@ -3474,6 +3554,56 @@
       "translated": "OpenClaw सोच रहा है…"
     },
     {
+      "id": "native.android.eb6ff96aba8f67b4",
+      "source": "Files unavailable",
+      "translated": "फ़ाइलें उपलब्ध नहीं हैं"
+    },
+    {
+      "id": "native.android.fefb4a6c1717210d",
+      "source": "Empty folder",
+      "translated": "खाली फ़ोल्डर"
+    },
+    {
+      "id": "native.android.b74f90dc5f65b1da",
+      "source": "This folder has no files yet.",
+      "translated": "इस फ़ोल्डर में अभी कोई फ़ाइल नहीं है."
+    },
+    {
+      "id": "native.android.8f0b5317c75e334d",
+      "source": "Could not load this folder.",
+      "translated": "यह फ़ोल्डर लोड नहीं हो सका."
+    },
+    {
+      "id": "native.android.4e48916e1b0f86ab",
+      "source": "Load more",
+      "translated": "और लोड करें"
+    },
+    {
+      "id": "native.android.f26b7b179d4765b0",
+      "source": "${entries.size} of $totalEntries",
+      "translated": "${entries.size} में से $totalEntries"
+    },
+    {
+      "id": "native.android.b2a525ca00a799df",
+      "source": "Back",
+      "translated": "वापस"
+    },
+    {
+      "id": "native.android.737edf881bc586d5",
+      "source": "Share file",
+      "translated": "फ़ाइल शेयर करें"
+    },
+    {
+      "id": "native.android.095574301bf487a1",
+      "source": "No preview",
+      "translated": "कोई प्रीव्यू नहीं"
+    },
+    {
+      "id": "native.android.f57b231996a10d14",
+      "source": "This image could not be decoded.",
+      "translated": "इस इमेज को डिकोड नहीं किया जा सका."
+    },
+    {
       "id": "native.android.4949d6815387ee5c",
       "source": "Type a message…",
       "translated": "संदेश टाइप करें…"
@@ -3929,6 +4059,11 @@
       "translated": "बोल रहा है…"
     },
     {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "माइक चालू · gateway की प्रतीक्षा में"
+    },
+    {
       "id": "native.android.d84c6c14e42763ff",
       "source": "Mic off",
       "translated": "माइक बंद"
@@ -4114,6 +4249,36 @@
       "translated": "पासवर्ड"
     },
     {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "कस्टम हेडर (वैकल्पिक)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "इस gateway से हर कनेक्शन के साथ भेजा जाता है, उदाहरण के लिए Cloudflare Access service token headers. एन्क्रिप्ट करके संग्रहीत किया जाता है और अगले reconnect पर लागू किया जाता है।"
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "हेडर मान"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "यह हेडर कनेक्शन द्वारा प्रबंधित है और इसे ओवरराइड नहीं किया जा सकता।"
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "हेडर जोड़ें"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "%1$s हटाएँ"
+    },
+    {
       "id": "native.android.a43f43c1338a6960",
       "source": "Run onboarding again",
       "translated": "ऑनबोर्डिंग फिर से चलाएँ"
@@ -4132,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "gateway प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इसकी अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Gateway बदलें"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Gateway चुनें"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "सक्रिय gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -4624,6 +4804,16 @@
       "translated": "उपयोग"
     },
     {
+      "id": "native.apple.f48d33a93f53ae56",
+      "source": "Files",
+      "translated": "फ़ाइलें"
+    },
+    {
+      "id": "native.apple.b84aa382768fe819",
+      "source": "Workspace files",
+      "translated": "वर्कस्पेस फ़ाइलें"
+    },
+    {
       "id": "native.apple.98306aca23d04451",
       "source": "Dreaming",
       "translated": "ड्रीमिंग"
@@ -4999,6 +5189,41 @@
       "translated": "तैयार"
     },
     {
+      "id": "native.apple.9c4e8b82edf0b324",
+      "source": "Files",
+      "translated": "फ़ाइलें"
+    },
+    {
+      "id": "native.apple.ada58d7ce8866f71",
+      "source": "This folder is empty.",
+      "translated": "यह फ़ोल्डर खाली है।"
+    },
+    {
+      "id": "native.apple.35512c4d46a2da28",
+      "source": "Load More",
+      "translated": "और लोड करें"
+    },
+    {
+      "id": "native.apple.e617cdacc3bce5ea",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "translated": "\\(self.totalEntries) में से \\(self.entries.count)"
+    },
+    {
+      "id": "native.apple.336a7eeb12d6e5f4",
+      "source": "Share file",
+      "translated": "फ़ाइल साझा करें"
+    },
+    {
+      "id": "native.apple.0ab324ff650d720c",
+      "source": "Could not share this file.",
+      "translated": "यह फ़ाइल साझा नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.8218f673399060cc",
+      "source": "OK",
+      "translated": "ठीक है"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "प्रतिलेख निर्यात नहीं किया जा सका"
@@ -5059,14 +5284,19 @@
       "translated": "अनुपलब्ध"
     },
     {
-      "id": "native.apple.889fe76e02b8ad5d",
-      "source": "Connect to a gateway",
-      "translated": "Gateway से कनेक्ट करें"
-    },
-    {
-      "id": "native.apple.e8173c7d24457256",
+      "id": "native.apple.4dcedefea4b49a1c",
       "source": "Message \\(self.agentDisplayName)...",
       "translated": "\\(self.agentDisplayName) को संदेश भेजें..."
+    },
+    {
+      "id": "native.apple.84767ec18054524b",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "translated": "\\(self.agentDisplayName) को संदेश भेजें; कनेक्ट होने पर भेजता है"
+    },
+    {
+      "id": "native.apple.11b20bef7e51ab69",
+      "source": "Connect to a gateway",
+      "translated": "Gateway से कनेक्ट करें"
     },
     {
       "id": "native.apple.14492e334b87e4f2",
@@ -5934,6 +6164,11 @@
       "translated": "इंस्टेंस"
     },
     {
+      "id": "native.apple.3f2726ccd1acd987",
+      "source": "Files",
+      "translated": "फ़ाइलें"
+    },
+    {
       "id": "native.apple.614c9b40919fb103",
       "source": "Dreaming",
       "translated": "ड्रीमिंग"
@@ -6682,6 +6917,11 @@
       "id": "native.apple.92a1a902541660c4",
       "source": "Gateway Password",
       "translated": "Gateway Password"
+    },
+    {
+      "id": "native.apple.438ae7e5b8544548",
+      "source": "Custom Headers",
+      "translated": "कस्टम हेडर"
     },
     {
       "id": "native.apple.c9cd035bc39af480",
@@ -8109,6 +8349,11 @@
       "translated": "इंस्टैंसेस"
     },
     {
+      "id": "native.apple.d1a5c9b0c4acbfe2",
+      "source": "Files",
+      "translated": "फ़ाइलें"
+    },
+    {
       "id": "native.apple.ad3c65353227b63e",
       "source": "Dreaming",
       "translated": "सपना देख रहा है"
@@ -8199,6 +8444,11 @@
       "translated": "सत्र"
     },
     {
+      "id": "native.apple.253cb2debeb51859",
+      "source": "Files",
+      "translated": "फ़ाइलें"
+    },
+    {
       "id": "native.apple.f7e04202c3e37bd8",
       "source": "Dreaming",
       "translated": "स्वप्न देख रहा है"
@@ -8237,6 +8487,41 @@
       "id": "native.apple.e69088f1f2dcbd99",
       "source": "Connection",
       "translated": "कनेक्शन"
+    },
+    {
+      "id": "native.apple.41e812a22a1b042d",
+      "source": "Value",
+      "translated": "मान"
+    },
+    {
+      "id": "native.apple.acc5936e406af08c",
+      "source": "Headers",
+      "translated": "हेडर"
+    },
+    {
+      "id": "native.apple.8896386269ac4882",
+      "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
+      "translated": "इस Gateway पर अग्रभूमि ऐप कनेक्शन के साथ भेजा गया। बदलाव अगले रीकनेक्ट पर लागू होंगे; Share extension डिलीवरी अभी समर्थित नहीं है."
+    },
+    {
+      "id": "native.apple.319594454c1ff701",
+      "source": "Header name",
+      "translated": "हेडर का नाम"
+    },
+    {
+      "id": "native.apple.7c4ff27cd7fa2c96",
+      "source": "Header value",
+      "translated": "हेडर का मान"
+    },
+    {
+      "id": "native.apple.a1368ad2d29a1152",
+      "source": "Add Header",
+      "translated": "हेडर जोड़ें"
+    },
+    {
+      "id": "native.apple.19fba912c31023b5",
+      "source": "Custom Headers",
+      "translated": "कस्टम हेडर"
     },
     {
       "id": "native.apple.4dac301c7e0c921c",
@@ -13379,6 +13664,26 @@
       "translated": "लिख रहा है"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "ऑडियो तैयार किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "बोला जा रहा है…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "ऑडियो तैयार किया जा रहा है, रद्द करने के लिए टैप करें"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "बोला जा रहा है, रोकने के लिए टैप करें"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "कतार में"
@@ -13387,6 +13692,16 @@
       "id": "native.apple.a85f179b35d39d8f",
       "source": "Sending…",
       "translated": "भेजा जा रहा है…"
+    },
+    {
+      "id": "native.apple.38722ea25417ad4f",
+      "source": "Confirming…",
+      "translated": "पुष्टि हो रही है…"
+    },
+    {
+      "id": "native.apple.78682085b14232f8",
+      "source": "Delivery unknown",
+      "translated": "डिलीवरी अज्ञात"
     },
     {
       "id": "native.apple.2888a268bfa49e9e",
@@ -13402,6 +13717,16 @@
       "id": "native.apple.00e673b9c5263c5c",
       "source": "Sending",
       "translated": "भेजा जा रहा है"
+    },
+    {
+      "id": "native.apple.bfe7aab77abe9a2c",
+      "source": "Sent, waiting for chat history confirmation",
+      "translated": "भेजा गया, चैट इतिहास की पुष्टि की प्रतीक्षा है"
+    },
+    {
+      "id": "native.apple.7eb6eca416d33bb4",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "translated": "डिलीवरी की पुष्टि नहीं हुई, फिर से प्रयास करने या हटाने के लिए स्पर्श करके दबाए रखें"
     },
     {
       "id": "native.apple.df1a81bd7a0bca36",
@@ -13434,6 +13759,16 @@
       "translated": "मिटाएँ"
     },
     {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "सुनना बंद करें"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "सुनें"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "नवीनतम पर जाएँ"
@@ -13462,6 +13797,16 @@
       "id": "native.apple.82c2287cd78da56f",
       "source": "\\(baseName).jpg",
       "translated": "\\(baseName).jpg"
+    },
+    {
+      "id": "native.apple.2b45abdc56b2caed",
+      "source": "delivery unconfirmed",
+      "translated": "डिलीवरी की पुष्टि नहीं हुई"
+    },
+    {
+      "id": "native.apple.722f1f90b97e8e45",
+      "source": "queued after route change",
+      "translated": "रूट बदलने के बाद कतार में रखा गया"
     },
     {
       "id": "native.apple.59aa8697b933d6b6",

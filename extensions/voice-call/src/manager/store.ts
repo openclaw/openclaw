@@ -38,7 +38,7 @@ type CallRecordEventChunk = {
 };
 
 /** Call record plus stable ordering metadata read from persistence. */
-export type PersistedCallRecord = {
+type PersistedCallRecord = {
   call: CallRecord;
   persistedAt: number;
   sequence: number;

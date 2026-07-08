@@ -6,7 +6,10 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown.ts";
+import {
+  handleMarkdownCodeBlockCopy,
+  markdownFileLinkFromEvent,
+} from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
@@ -63,7 +66,7 @@ type ChatThreadState = {
   historyRenderAnchorFrame: number | null;
 };
 
-export type ChatThreadProps = {
+type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
   loading: boolean;
@@ -91,6 +94,7 @@ export type ChatThreadProps = {
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
@@ -684,7 +688,13 @@ export function renderChatThread(props: ChatThreadProps) {
         );
       })}
       @scroll=${handleChatThreadScroll}
-      @click=${handleMarkdownCodeBlockCopy}
+      @click=${(event: Event) => {
+        handleMarkdownCodeBlockCopy(event);
+        const target = markdownFileLinkFromEvent(event);
+        if (target) {
+          props.onOpenWorkspaceFile?.(target);
+        }
+      }}
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
     >
       <div class="chat-thread-inner">

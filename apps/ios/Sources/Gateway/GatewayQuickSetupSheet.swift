@@ -155,7 +155,7 @@ struct GatewayQuickSetupSheet: View {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         }
         guard problem.retryable else { return }

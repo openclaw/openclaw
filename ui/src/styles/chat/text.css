@@ -87,6 +87,21 @@
   opacity: 0.8;
 }
 
+.chat-text :where(a.markdown-file-link) {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.chat-text :where(a.markdown-file-link:hover) {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.chat-text :where(a.markdown-file-link > code) {
+  color: var(--accent);
+}
+
 .chat-text :where(code) {
   font-family: var(--mono);
   font-size: 0.9em;

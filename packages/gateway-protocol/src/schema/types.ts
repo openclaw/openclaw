@@ -180,6 +180,8 @@ export type TalkSessionCloseParams = SchemaType<"TalkSessionCloseParams">;
 export type TalkSessionOkResult = SchemaType<"TalkSessionOkResult">;
 export type TalkSpeakParams = SchemaType<"TalkSpeakParams">;
 export type TalkSpeakResult = SchemaType<"TalkSpeakResult">;
+export type TtsSpeakParams = SchemaType<"TtsSpeakParams">;
+export type TtsSpeakResult = SchemaType<"TtsSpeakResult">;
 
 /** Channel control and web-login payloads. */
 export type ChannelsStatusParams = SchemaType<"ChannelsStatusParams">;
@@ -274,6 +276,10 @@ export type SkillsProposalRequestRevisionResult = SchemaType<"SkillsProposalRequ
 export type SkillsProposalActionParams = SchemaType<"SkillsProposalActionParams">;
 export type SkillsProposalApplyResult = SchemaType<"SkillsProposalApplyResult">;
 export type SkillsProposalRecordResult = SchemaType<"SkillsProposalRecordResult">;
+export type SkillsCuratorStatusParams = SchemaType<"SkillsCuratorStatusParams">;
+export type SkillsCuratorStatusResult = SchemaType<"SkillsCuratorStatusResult">;
+export type SkillsCuratorActionParams = SchemaType<"SkillsCuratorActionParams">;
+export type SkillsCuratorActionResult = SchemaType<"SkillsCuratorActionResult">;
 export type SkillsSecurityVerdictsParams = SchemaType<"SkillsSecurityVerdictsParams">;
 export type SkillsSecurityVerdictsResult = SchemaType<"SkillsSecurityVerdictsResult">;
 export type SkillsSkillCardParams = SchemaType<"SkillsSkillCardParams">;
@@ -304,6 +310,7 @@ export type LogsTailResult = SchemaType<"LogsTailResult">;
 export type ExecApprovalsGetParams = SchemaType<"ExecApprovalsGetParams">;
 export type ExecApprovalsSetParams = SchemaType<"ExecApprovalsSetParams">;
 export type ExecApprovalsNodeGetParams = SchemaType<"ExecApprovalsNodeGetParams">;
+export type ExecApprovalsNodeSnapshot = SchemaType<"ExecApprovalsNodeSnapshot">;
 export type ExecApprovalsNodeSetParams = SchemaType<"ExecApprovalsNodeSetParams">;
 export type ExecApprovalsSnapshot = SchemaType<"ExecApprovalsSnapshot">;
 export type ExecApprovalGetParams = SchemaType<"ExecApprovalGetParams">;

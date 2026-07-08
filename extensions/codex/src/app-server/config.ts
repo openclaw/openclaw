@@ -21,7 +21,13 @@ import {
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  CodexServiceTier,
+  JsonObject,
+  JsonValue,
+} from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -60,17 +66,7 @@ type CodexAppServerDefaultPolicy = {
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy =
-  | CodexAppServerApprovalPolicy
-  | {
-      granular: {
-        mcp_elicitations: boolean;
-        rules: boolean;
-        sandbox_approval: boolean;
-        request_permissions?: boolean;
-        skill_approval?: boolean;
-      };
-    };
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
@@ -111,6 +107,7 @@ export type CodexPluginEntryConfig = {
 
 export type CodexPluginsConfig = {
   enabled?: boolean;
+  allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
@@ -159,6 +156,7 @@ export type ResolvedCodexPluginPolicy = {
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
+  allowAllPlugins: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
@@ -288,6 +286,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
 
 export const CODEX_PLUGINS_CONFIG_KEYS = [
   "enabled",
+  "allow_all_plugins",
   "allow_destructive_actions",
   "plugins",
 ] as const;
@@ -369,6 +368,7 @@ const codexPluginEntryConfigSchema = z
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    allow_all_plugins: z.boolean().optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
@@ -496,6 +496,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
+    allowAllPlugins: enabled && config?.allow_all_plugins === true,
     allowDestructiveActions: destructivePolicy.allowDestructiveActions,
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
@@ -1048,6 +1049,8 @@ export function withMcpElicitationsApprovalPolicy(
         mcp_elicitations: true,
         rules: false,
         sandbox_approval: false,
+        request_permissions: false,
+        skill_approval: false,
       },
     };
   }
@@ -1056,6 +1059,8 @@ export function withMcpElicitationsApprovalPolicy(
       mcp_elicitations: true,
       rules: true,
       sandbox_approval: true,
+      request_permissions: true,
+      skill_approval: true,
     },
   };
 }

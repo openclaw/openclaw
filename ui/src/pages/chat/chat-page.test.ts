@@ -9,9 +9,13 @@ vi.mock("./chat-pane.ts", () => {
   return {};
 });
 
+import { loadSettings } from "../../app/settings.ts";
 import type { ResizableDivider } from "../../components/resizable-divider.ts";
+import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
+import type { SplitDropZone } from "./split-drop-zone.ts";
 import { createSplitLayout, type ChatSplitLayout } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
@@ -23,6 +27,33 @@ type RenderedPane = HTMLElement & {
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
   (page as unknown as { layout: ChatSplitLayout | undefined }).layout = layout;
+}
+
+function getLayout(page: ChatPage): ChatSplitLayout | undefined {
+  return (page as unknown as { layout: ChatSplitLayout | undefined }).layout;
+}
+
+function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {
+  (
+    page as unknown as {
+      applySessionDrop: (sessionKey: string, paneId: string, zone: SplitDropZone) => void;
+    }
+  ).applySessionDrop(sessionKey, paneId, zone);
+}
+
+function handleDrop(page: ChatPage, event: DragEvent) {
+  (page as unknown as { handleDrop: (event: DragEvent) => void }).handleDrop(event);
+}
+
+function setNavigationContext(page: ChatPage) {
+  const navigate = vi.fn();
+  const replace = vi.fn();
+  (page as unknown as { context: { navigate: typeof navigate; replace: typeof replace } }).context =
+    {
+      navigate,
+      replace,
+    };
+  return { navigate, replace };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -111,5 +142,132 @@ describe("chat page split layout host", () => {
     expect(panes[0].active).toBe(true);
     expect(panes[0].chrome).toBe("pane");
     expect(page.querySelector("resizable-divider")).toBeNull();
+  });
+
+  it("routes a classic-mode center drop without creating a layout", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    const navigation = setNavigationContext(page);
+
+    applySessionDrop(page, "agent:main:work", "single", { kind: "center" });
+
+    expect(getLayout(page)).toBeUndefined();
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
+    expect(navigation.navigate).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("creates and persists a classic-mode edge drop on the chosen side", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    const navigation = setNavigationContext(page);
+
+    applySessionDrop(page, "agent:main:work", "single", { kind: "edge", edge: "left" });
+
+    const layout = getLayout(page);
+    expect(layout?.columns.map((column) => column.panes.map((pane) => pane.sessionKey))).toEqual([
+      ["agent:main:work"],
+      ["main"],
+    ]);
+    expect(layout?.activePaneId).toBe("p2");
+    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+  });
+
+  it("inserts and persists a dropped session at a layout edge", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    setLayout(page, createSplitLayout("main"));
+    const navigation = setNavigationContext(page);
+
+    applySessionDrop(page, "agent:main:work", "p1", { kind: "edge", edge: "down" });
+
+    const layout = getLayout(page);
+    expect(layout?.columns[0].panes.map((pane) => pane.sessionKey)).toEqual([
+      "main",
+      "agent:main:work",
+    ]);
+    expect(layout?.activePaneId).toBe("p3");
+    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+  });
+
+  it("replaces and activates the pane under a layout center drop", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    setLayout(page, createSplitLayout("main"));
+    const navigation = setNavigationContext(page);
+
+    applySessionDrop(page, "agent:main:work", "p1", { kind: "center" });
+
+    const layout = getLayout(page);
+    expect(layout?.columns[0].panes[0].sessionKey).toBe("agent:main:work");
+    expect(layout?.activePaneId).toBe("p1");
+    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+  });
+
+  it("leaves a same-session center drop unchanged", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    const layout = createSplitLayout("main");
+    setLayout(page, layout);
+    const navigation = setNavigationContext(page);
+
+    applySessionDrop(page, "main", "p1", { kind: "center" });
+
+    expect(getLayout(page)).toBe(layout);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("resolves the pane and zone from the drop event", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    const navigation = setNavigationContext(page);
+    await page.updateComplete;
+
+    const pane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
+      (candidate) => candidate.paneId === "p1",
+    );
+    const container = page.querySelector<HTMLElement>(".chat-split-view__drop-container");
+    expect(pane).toBeDefined();
+    expect(container).not.toBeNull();
+    const paneRect = { left: 100, top: 50, width: 200, height: 100 } as DOMRect;
+    const containerRect = { left: 100, top: 50, width: 400, height: 100 } as DOMRect;
+    vi.spyOn(pane!, "getBoundingClientRect").mockReturnValue(paneRect);
+    vi.spyOn(container!, "getBoundingClientRect").mockReturnValue(containerRect);
+    const preventDefault = vi.fn();
+
+    handleDrop(page, {
+      target: pane,
+      clientX: 105,
+      clientY: 100,
+      preventDefault,
+      dataTransfer: {
+        types: [SESSION_DRAG_MIME],
+        getData: (type: string) => (type === SESSION_DRAG_MIME ? "agent:main:work" : ""),
+      } as unknown as DataTransfer,
+    } as unknown as DragEvent);
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(getLayout(page)?.columns.map((column) => column.panes[0].sessionKey)).toEqual([
+      "agent:main:work",
+      "main",
+      "main",
+    ]);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
   });
 });

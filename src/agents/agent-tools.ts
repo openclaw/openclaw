@@ -23,7 +23,7 @@ import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../skills/types.js";
+import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -470,6 +470,8 @@ export function createOpenClawCodingTools(options?: {
   currentMessageId?: string | number;
   /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
+  /** Dynamic audio state for runs that can accept steered input after tool creation. */
+  hasCurrentInboundAudio?: () => boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -537,6 +539,8 @@ export function createOpenClawCodingTools(options?: {
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Original identities for sandbox-materialized skill instruction paths. */
+  skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }): AnyAgentTool[] {
@@ -1008,6 +1012,7 @@ export function createOpenClawCodingTools(options?: {
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,
+          hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,
@@ -1155,6 +1160,7 @@ export function createOpenClawCodingTools(options?: {
     cwd: codingRoot,
     workspaceDir: workspaceRoot,
     ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
+    ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
     ...(sandboxRoot && allowWorkspaceWrites
       ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
       : {}),

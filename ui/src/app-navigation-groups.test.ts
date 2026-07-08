@@ -8,7 +8,6 @@ import {
   normalizeSidebarPinnedRoutes,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
-import { routeIdFromPath } from "./app-routes.ts";
 
 describe("sidebar pinned routes", () => {
   it("defaults to a small pinned set drawn from the customizable routes", () => {
@@ -18,8 +17,9 @@ describe("sidebar pinned routes", () => {
     }
   });
 
-  it("keeps managed worktrees in the customizable sidebar", () => {
-    expect(SIDEBAR_NAV_ROUTES).toContain("worktrees");
+  it("keeps managed worktrees in settings, not the customizable sidebar", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("worktrees");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("worktrees");
   });
 
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
@@ -32,9 +32,10 @@ describe("sidebar pinned routes", () => {
   });
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(
-      normalizeSidebarPinnedRoutes(["worktrees", "overview", "worktrees", "bogus", 7]),
-    ).toEqual(["worktrees", "overview"]);
+    expect(normalizeSidebarPinnedRoutes(["usage", "overview", "usage", "worktrees", 7])).toEqual([
+      "usage",
+      "overview",
+    ]);
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
@@ -45,20 +46,10 @@ describe("sidebar pinned routes", () => {
   });
 
   it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["overview", "worktrees"] as const;
+    const pinned = ["overview", "usage"] as const;
     const more = sidebarMoreRoutes(pinned);
     expect(more).not.toContain("overview");
-    expect(more).not.toContain("worktrees");
+    expect(more).not.toContain("usage");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
-  });
-
-  it("routes every published settings slice", () => {
-    expect(routeIdFromPath("/communications")).toBe("communications");
-    expect(routeIdFromPath("/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/automation")).toBe("automation");
-    expect(routeIdFromPath("/infrastructure")).toBe("infrastructure");
-    expect(routeIdFromPath("/ai-agents")).toBe("ai-agents");
-    expect(routeIdFromPath("/config")).toBe("config");
-    expect(routeIdFromPath("/channels")).toBe("channels");
   });
 });

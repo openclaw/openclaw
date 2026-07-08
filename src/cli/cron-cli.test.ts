@@ -1384,14 +1384,17 @@ describe("cron cli", () => {
   });
 
   it.each([
-    { flag: "--best-effort-deliver", expectedBestEffort: true },
-    { flag: "--no-best-effort-deliver", expectedBestEffort: false },
-  ])("applies $flag on cron edit message updates", async ({ flag, expectedBestEffort }) => {
-    const patch = await runCronEditAndGetPatch(["--message", "Updated message", flag]);
-    expect(patch?.patch?.payload?.message).toBe("Updated message");
-    expect(patch?.patch?.delivery?.mode).toBe("announce");
-    expect(patch?.patch?.delivery?.bestEffort).toBe(expectedBestEffort);
-  });
+    { flag: "--best-effort-deliver", expectedBestEffort: true, expectedMode: "announce" },
+    { flag: "--no-best-effort-deliver", expectedBestEffort: false, expectedMode: undefined },
+  ])(
+    "applies $flag on cron edit message updates",
+    async ({ flag, expectedBestEffort, expectedMode }) => {
+      const patch = await runCronEditAndGetPatch(["--message", "Updated message", flag]);
+      expect(patch?.patch?.payload?.message).toBe("Updated message");
+      expect(patch?.patch?.delivery?.mode).toBe(expectedMode);
+      expect(patch?.patch?.delivery?.bestEffort).toBe(expectedBestEffort);
+    },
+  );
 
   it("sets explicit stagger for cron add", async () => {
     const params = await runCronAddAndGetParams([

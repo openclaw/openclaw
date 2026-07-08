@@ -709,6 +709,11 @@
       "translated": "비밀번호(선택 사항)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Dreaming"
@@ -2189,9 +2194,29 @@
       "translated": "위치"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "사용 중"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "OpenClaw가 백그라운드에 있는 동안 요청된 위치 확인을 항상 허용합니다. Android는 이를 지속적인 노드 알림에 표시합니다."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "백그라운드 위치를 허용하시겠어요?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw는 페어링된 Gateway가 요청할 때만 위치를 확인합니다. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "설정 열기"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "나중에"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",
@@ -2202,6 +2227,11 @@
       "id": "native.android.869c8be127ce5282",
       "source": "Replace setup",
       "translated": "설정 교체"
+    },
+    {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Gateway를 잊어버리시겠습니까?"
     },
     {
       "id": "native.android.c6c8e0c4b8a9a7cf",
@@ -2244,14 +2274,34 @@
       "translated": "연결 해제"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "이 휴대폰에 저장된 gateway 액세스를 지우고 새 설정 코드를 스캔하세요."
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateways"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "새 Gateway 페어링"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "페어링된 Gateway가 없습니다."
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "잊어버리기"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Gateway 설정"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Gateway 추가"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -2357,6 +2407,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "업데이트"
+    },
+    {
+      "id": "native.android.aac3310699b496c8",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — MIT 라이선스."
+    },
+    {
+      "id": "native.android.a157bbb606e9b398",
+      "source": "OpenClaw logo",
+      "translated": "OpenClaw 로고"
+    },
+    {
+      "id": "native.android.7b78b4869baf2160",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.ad4c14835d1b71ca",
+      "source": "Personal AI on your devices",
+      "translated": "내 기기에서 사용하는 개인용 AI"
     },
     {
       "id": "native.android.13f70e22b5648308",
@@ -2614,9 +2684,9 @@
       "translated": "SMS"
     },
     {
-      "id": "native.android.51b5f4cf7eaa5c86",
-      "source": "Send and search SMS from this device.",
-      "translated": "이 기기에서 SMS를 보내고 검색합니다."
+      "id": "native.android.cba20518e9758043",
+      "source": "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+      "translated": "Android SMS 접근 권한을 부여합니다. Gateway에서 별도로 `sms.search`를 허용해야 하며, 필요한 경우에만 `sms.send`도 허용해야 합니다."
     },
     {
       "id": "native.android.8c32ca1f11a93a25",
@@ -2977,6 +3047,16 @@
       "id": "native.android.7178756ffe9e4c72",
       "source": "Recent conversations",
       "translated": "최근 대화"
+    },
+    {
+      "id": "native.android.cbdaff5e476b7dad",
+      "source": "Browse",
+      "translated": "찾아보기"
+    },
+    {
+      "id": "native.android.c093a2297a02405a",
+      "source": "Offline",
+      "translated": "오프라인"
     },
     {
       "id": "native.android.1196e848f04a3dc1",
@@ -3474,6 +3554,56 @@
       "translated": "OpenClaw가 생각 중입니다…"
     },
     {
+      "id": "native.android.eb6ff96aba8f67b4",
+      "source": "Files unavailable",
+      "translated": "파일을 사용할 수 없음"
+    },
+    {
+      "id": "native.android.fefb4a6c1717210d",
+      "source": "Empty folder",
+      "translated": "빈 폴더"
+    },
+    {
+      "id": "native.android.b74f90dc5f65b1da",
+      "source": "This folder has no files yet.",
+      "translated": "이 폴더에는 아직 파일이 없습니다."
+    },
+    {
+      "id": "native.android.8f0b5317c75e334d",
+      "source": "Could not load this folder.",
+      "translated": "이 폴더를 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.4e48916e1b0f86ab",
+      "source": "Load more",
+      "translated": "더 불러오기"
+    },
+    {
+      "id": "native.android.f26b7b179d4765b0",
+      "source": "${entries.size} of $totalEntries",
+      "translated": "${entries.size} / $totalEntries"
+    },
+    {
+      "id": "native.android.b2a525ca00a799df",
+      "source": "Back",
+      "translated": "뒤로"
+    },
+    {
+      "id": "native.android.737edf881bc586d5",
+      "source": "Share file",
+      "translated": "파일 공유"
+    },
+    {
+      "id": "native.android.095574301bf487a1",
+      "source": "No preview",
+      "translated": "미리보기 없음"
+    },
+    {
+      "id": "native.android.f57b231996a10d14",
+      "source": "This image could not be decoded.",
+      "translated": "이 이미지를 디코딩할 수 없습니다."
+    },
+    {
       "id": "native.android.4949d6815387ee5c",
       "source": "Type a message…",
       "translated": "메시지를 입력하세요…"
@@ -3929,6 +4059,11 @@
       "translated": "말하는 중…"
     },
     {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "마이크 켜짐 · Gateway 대기 중"
+    },
+    {
       "id": "native.android.d84c6c14e42763ff",
       "source": "Mic off",
       "translated": "마이크 꺼짐"
@@ -4114,6 +4249,36 @@
       "translated": "비밀번호"
     },
     {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "사용자 지정 헤더(선택 사항)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "이 Gateway에 연결할 때마다 전송됩니다. 예: Cloudflare Access 서비스 토큰 헤더. 암호화되어 저장되며 다음 재연결 시 적용됩니다."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "헤더 값"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "이 헤더는 연결에서 관리되며 재정의할 수 없습니다."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "헤더 추가"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "%1$s 제거"
+    },
+    {
       "id": "native.android.a43f43c1338a6960",
       "source": "Run onboarding again",
       "translated": "온보딩 다시 실행"
@@ -4132,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "게이트웨이 인증서가 변경되었습니다. 예상한 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Gateway 전환"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Gateway 선택"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "활성 Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -4624,6 +4804,16 @@
       "translated": "사용량"
     },
     {
+      "id": "native.apple.f48d33a93f53ae56",
+      "source": "Files",
+      "translated": "파일"
+    },
+    {
+      "id": "native.apple.b84aa382768fe819",
+      "source": "Workspace files",
+      "translated": "워크스페이스 파일"
+    },
+    {
       "id": "native.apple.98306aca23d04451",
       "source": "Dreaming",
       "translated": "구상 중"
@@ -4999,6 +5189,41 @@
       "translated": "준비됨"
     },
     {
+      "id": "native.apple.9c4e8b82edf0b324",
+      "source": "Files",
+      "translated": "파일"
+    },
+    {
+      "id": "native.apple.ada58d7ce8866f71",
+      "source": "This folder is empty.",
+      "translated": "이 폴더는 비어 있습니다."
+    },
+    {
+      "id": "native.apple.35512c4d46a2da28",
+      "source": "Load More",
+      "translated": "더 불러오기"
+    },
+    {
+      "id": "native.apple.e617cdacc3bce5ea",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "translated": "\\(self.entries.count) / \\(self.totalEntries)"
+    },
+    {
+      "id": "native.apple.336a7eeb12d6e5f4",
+      "source": "Share file",
+      "translated": "파일 공유"
+    },
+    {
+      "id": "native.apple.0ab324ff650d720c",
+      "source": "Could not share this file.",
+      "translated": "이 파일을 공유할 수 없습니다."
+    },
+    {
+      "id": "native.apple.8218f673399060cc",
+      "source": "OK",
+      "translated": "확인"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "대화 기록을 내보낼 수 없음"
@@ -5059,14 +5284,19 @@
       "translated": "사용할 수 없음"
     },
     {
-      "id": "native.apple.889fe76e02b8ad5d",
-      "source": "Connect to a gateway",
-      "translated": "Gateway에 연결"
-    },
-    {
-      "id": "native.apple.e8173c7d24457256",
+      "id": "native.apple.4dcedefea4b49a1c",
       "source": "Message \\(self.agentDisplayName)...",
       "translated": "\\(self.agentDisplayName)에게 메시지 보내기..."
+    },
+    {
+      "id": "native.apple.84767ec18054524b",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "translated": "\\(self.agentDisplayName)에게 메시지 보내기; 연결되면 전송됩니다"
+    },
+    {
+      "id": "native.apple.11b20bef7e51ab69",
+      "source": "Connect to a gateway",
+      "translated": "Gateway에 연결"
     },
     {
       "id": "native.apple.14492e334b87e4f2",
@@ -5934,6 +6164,11 @@
       "translated": "인스턴스"
     },
     {
+      "id": "native.apple.3f2726ccd1acd987",
+      "source": "Files",
+      "translated": "파일"
+    },
+    {
       "id": "native.apple.614c9b40919fb103",
       "source": "Dreaming",
       "translated": "드리밍"
@@ -6682,6 +6917,11 @@
       "id": "native.apple.92a1a902541660c4",
       "source": "Gateway Password",
       "translated": "Gateway 비밀번호"
+    },
+    {
+      "id": "native.apple.438ae7e5b8544548",
+      "source": "Custom Headers",
+      "translated": "사용자 지정 헤더"
     },
     {
       "id": "native.apple.c9cd035bc39af480",
@@ -8109,6 +8349,11 @@
       "translated": "인스턴스"
     },
     {
+      "id": "native.apple.d1a5c9b0c4acbfe2",
+      "source": "Files",
+      "translated": "파일"
+    },
+    {
       "id": "native.apple.ad3c65353227b63e",
       "source": "Dreaming",
       "translated": "꿈꾸는 중"
@@ -8199,6 +8444,11 @@
       "translated": "세션"
     },
     {
+      "id": "native.apple.253cb2debeb51859",
+      "source": "Files",
+      "translated": "파일"
+    },
+    {
       "id": "native.apple.f7e04202c3e37bd8",
       "source": "Dreaming",
       "translated": "Dreaming"
@@ -8237,6 +8487,41 @@
       "id": "native.apple.e69088f1f2dcbd99",
       "source": "Connection",
       "translated": "연결"
+    },
+    {
+      "id": "native.apple.41e812a22a1b042d",
+      "source": "Value",
+      "translated": "값"
+    },
+    {
+      "id": "native.apple.acc5936e406af08c",
+      "source": "Headers",
+      "translated": "헤더"
+    },
+    {
+      "id": "native.apple.8896386269ac4882",
+      "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
+      "translated": "이 Gateway에 대한 포그라운드 앱 연결과 함께 전송됩니다. 변경 사항은 다음 재연결 시 적용되며, Share extension 전달은 아직 지원되지 않습니다."
+    },
+    {
+      "id": "native.apple.319594454c1ff701",
+      "source": "Header name",
+      "translated": "헤더 이름"
+    },
+    {
+      "id": "native.apple.7c4ff27cd7fa2c96",
+      "source": "Header value",
+      "translated": "헤더 값"
+    },
+    {
+      "id": "native.apple.a1368ad2d29a1152",
+      "source": "Add Header",
+      "translated": "헤더 추가"
+    },
+    {
+      "id": "native.apple.19fba912c31023b5",
+      "source": "Custom Headers",
+      "translated": "사용자 지정 헤더"
     },
     {
       "id": "native.apple.4dac301c7e0c921c",
@@ -13379,6 +13664,26 @@
       "translated": "작성 중"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "오디오 준비 중…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "말하는 중…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "오디오 준비 중, 탭하여 취소"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "말하는 중, 탭하여 중지"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "대기 중"
@@ -13387,6 +13692,16 @@
       "id": "native.apple.a85f179b35d39d8f",
       "source": "Sending…",
       "translated": "전송 중…"
+    },
+    {
+      "id": "native.apple.38722ea25417ad4f",
+      "source": "Confirming…",
+      "translated": "확인 중…"
+    },
+    {
+      "id": "native.apple.78682085b14232f8",
+      "source": "Delivery unknown",
+      "translated": "전송 여부 알 수 없음"
     },
     {
       "id": "native.apple.2888a268bfa49e9e",
@@ -13402,6 +13717,16 @@
       "id": "native.apple.00e673b9c5263c5c",
       "source": "Sending",
       "translated": "전송 중"
+    },
+    {
+      "id": "native.apple.bfe7aab77abe9a2c",
+      "source": "Sent, waiting for chat history confirmation",
+      "translated": "전송됨, 채팅 기록 확인을 기다리는 중"
+    },
+    {
+      "id": "native.apple.7eb6eca416d33bb4",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "translated": "전송 확인 안 됨, 다시 시도하거나 삭제하려면 길게 터치"
     },
     {
       "id": "native.apple.df1a81bd7a0bca36",
@@ -13434,6 +13759,16 @@
       "translated": "삭제"
     },
     {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "듣기 중지"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "듣기"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "최신 항목으로 이동"
@@ -13462,6 +13797,16 @@
       "id": "native.apple.82c2287cd78da56f",
       "source": "\\(baseName).jpg",
       "translated": "\\(baseName).jpg"
+    },
+    {
+      "id": "native.apple.2b45abdc56b2caed",
+      "source": "delivery unconfirmed",
+      "translated": "전송 확인 안 됨"
+    },
+    {
+      "id": "native.apple.722f1f90b97e8e45",
+      "source": "queued after route change",
+      "translated": "경로 변경 후 대기열에 추가됨"
     },
     {
       "id": "native.apple.59aa8697b933d6b6",
