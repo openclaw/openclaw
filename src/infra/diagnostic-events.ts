@@ -62,6 +62,22 @@ export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
   suspended?: boolean;
 };
 
+export type DiagnosticCrossContextDeniedEvent = DiagnosticBaseEvent & {
+  type: "outbound.cross_context_denied";
+  /** Target provider channel (e.g., "discord") */
+  channel: string;
+  /** Message action that was denied */
+  action: string;
+  /** Specific target if available (e.g., "C123456") */
+  target?: string;
+  /** Provider channel the turn was bound to (e.g., "webchat") */
+  boundChannel?: string;
+  /** Target the turn was bound to (e.g., channel id) */
+  boundTarget?: string;
+  /** Error message for diagnostics */
+  message: string;
+};
+
 export type DiagnosticSecurityEventActor = {
   kind: "operator" | "node" | "agent" | "plugin" | "channel_sender" | "system";
   idHash?: string;
@@ -798,7 +814,8 @@ export type DiagnosticEventPayload =
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticCrossContextDeniedEvent;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
