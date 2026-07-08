@@ -16,6 +16,7 @@ import {
   filterCodexDynamicToolsForAllowlist,
   hasWildcardCodexToolsAllow,
   includeForcedCodexDynamicToolAllow,
+  isInternalCodexMessageTurn,
   mapCodexAppServerRemoteWorkspacePath,
   resetOpenClawCodingToolsFactoryForTests,
   resolveCodexAppServerExecutionCwd,
@@ -165,6 +166,88 @@ describe("Codex app-server dynamic tool build", () => {
         messageProvider: "discord-voice",
       }),
     ).toBe("discord");
+  });
+
+  it("keeps the internal channel bound for real webchat user turns", () => {
+    // A genuine WebChat UI conversation (trigger "user", no inter-session
+    // provenance) stays bound so cross-context containment still applies.
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "user",
+      }),
+    ).toBe("webchat");
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+      }),
+    ).toBe("webchat");
+  });
+
+  it("drops the internal channel binding for heartbeat and cron turns", () => {
+    // Autonomous scheduler turns are not bound to the internal webchat
+    // conversation, so cross-provider notifications (e.g. heartbeat -> Discord)
+    // are not treated as a cross-context leak (#102206).
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "heartbeat",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCodexMessageToolProvider({
+        messageProvider: "webchat",
+        trigger: "cron",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("drops the internal channel binding for sessions_send inter-session turns", () => {
+    // sessions_send/ln-injected turns arrive on the internal webchat channel with
+    // trigger "user"; only their inter-session provenance separates them from a
+    // real WebChat UI turn.
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "user",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a real delivery channel bound even for internal triggers", () => {
+    // A heartbeat that delivers to a real channel is bound to that provider, not
+    // the internal channel, so the binding (and same-provider guard) is preserved.
+    expect(
+      resolveCodexMessageToolProvider({
+        messageProvider: "discord",
+        trigger: "heartbeat",
+      }),
+    ).toBe("discord");
+  });
+
+  it("classifies internal-turn kinds for cross-context binding", () => {
+    expect(isInternalCodexMessageTurn({ trigger: "heartbeat" })).toBe(true);
+    expect(isInternalCodexMessageTurn({ trigger: "cron" })).toBe(true);
+    expect(
+      isInternalCodexMessageTurn({
+        trigger: "user",
+        inputProvenance: { kind: "inter_session" },
+      }),
+    ).toBe(true);
+    expect(isInternalCodexMessageTurn({ trigger: "user" })).toBe(false);
+    expect(isInternalCodexMessageTurn({ trigger: "manual" })).toBe(false);
+    expect(isInternalCodexMessageTurn({ trigger: "overflow" })).toBe(false);
+    expect(
+      isInternalCodexMessageTurn({
+        trigger: "user",
+        inputProvenance: { kind: "external_user" },
+      }),
+    ).toBe(false);
   });
 
   it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {

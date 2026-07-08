@@ -8,6 +8,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
+  isInternalMessageChannel,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
@@ -108,11 +109,39 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+/**
+ * Detects turns delivered on the internal `webchat` channel that are not bound to
+ * a real user conversation: autonomous scheduler runs (heartbeat/cron) and
+ * `sessions_send`/`ln`-injected inter-session handoffs. Real user turns — including
+ * owner WebChat UI conversations — carry a `user`/`manual` trigger and no
+ * inter-session provenance, so they stay bound for cross-context containment.
+ */
+export function isInternalCodexMessageTurn(
+  params: Pick<EmbeddedRunAttemptParams, "trigger" | "inputProvenance">,
+): boolean {
+  if (params.inputProvenance?.kind === "inter_session") {
+    return true;
+  }
+  return params.trigger === "heartbeat" || params.trigger === "cron";
+}
+
 /** Returns the canonical channel used for Codex message routing and receipts. */
 export function resolveCodexMessageToolProvider(
-  params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    "messageChannel" | "messageProvider" | "trigger" | "inputProvenance"
+  >,
 ): string | undefined {
-  return params.messageChannel ?? params.messageProvider;
+  const provider = params.messageChannel ?? params.messageProvider;
+  // Internal turns arrive on the internal `webchat` channel but are not bound to
+  // that conversation. Binding them makes enforceCrossContextPolicy treat an
+  // autonomous notification (e.g. a heartbeat send to Discord) as a cross-context
+  // leak and deny delivery (#102206). Fall back to no binding for those turns,
+  // matching the pre-v2026.6.9 Codex path, while keeping real user turns bound.
+  if (isInternalMessageChannel(provider) && isInternalCodexMessageTurn(params)) {
+    return undefined;
+  }
+  return provider;
 }
 
 /** Resolves the channel id that hook events should target for this Codex app-server turn. */

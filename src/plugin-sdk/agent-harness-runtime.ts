@@ -142,6 +142,7 @@ export {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
+export { isInternalMessageChannel } from "../utils/message-channel.js";
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,

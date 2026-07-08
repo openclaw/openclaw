@@ -506,6 +506,56 @@ describe("runCodexAppServerAttempt", () => {
     expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
+  it("does not bind the message tool to the internal channel for internal turns", async () => {
+    // Regression for #102206: internal turns (heartbeat polls, sessions_send
+    // handoffs) are delivered on the internal `webchat` channel but must not be
+    // treated as bound to that conversation, or enforceCrossContextPolicy denies
+    // autonomous cross-provider sends (e.g. a heartbeat notification to Discord).
+    const capturedProviders: Array<string | undefined> = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedProviders.push(options?.messageProvider);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const buildFor = async (
+      overrides: Partial<EmbeddedRunAttemptParams>,
+    ): Promise<string | undefined> => {
+      capturedProviders.length = 0;
+      const params = {
+        ...createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+        disableTools: false,
+        runtimePlan: createCodexRuntimePlanFixture(),
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        ...overrides,
+      } as EmbeddedRunAttemptParams;
+      await testing.buildDynamicTools({
+        params,
+        resolvedWorkspace: params.workspaceDir,
+        effectiveWorkspace: params.workspaceDir,
+        sandboxSessionKey: params.sessionKey!,
+        sandbox: { enabled: false, backendId: "docker" } as never,
+        nativeToolSurfaceEnabled: false,
+        runAbortController: new AbortController(),
+        sessionAgentId: "main",
+        pluginConfig: {},
+        onYieldDetected: () => undefined,
+      });
+      return capturedProviders[0];
+    };
+
+    // Real WebChat UI user turn keeps the binding.
+    expect(await buildFor({ trigger: "user" })).toBe("webchat");
+    // Heartbeat poll drops the internal-channel binding.
+    expect(await buildFor({ trigger: "heartbeat" })).toBeUndefined();
+    // sessions_send/ln inter-session handoff (trigger stays "user") drops it too.
+    expect(
+      await buildFor({
+        trigger: "user",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
