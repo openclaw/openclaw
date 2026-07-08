@@ -748,13 +748,13 @@ describe("CronService restart catch-up", () => {
     ]);
 
     const state = createCronServiceState({
+      cronEnabled: true,
       storePath: store.storePath,
-      deps: {
-        log: noopLogger,
-        nowMs: () => startNow,
-        enqueueSystemEvent,
-        requestHeartbeat,
-      },
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     try {
