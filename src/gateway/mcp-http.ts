@@ -98,14 +98,19 @@ function isJsonRpcNotification(message: JsonRpcRequest): boolean {
   return !Object.hasOwn(message, "id");
 }
 
-function isResponseOnlyJsonRpcNotification(message: unknown): message is JsonRpcRequest {
+function isPreResolutionJsonRpcNotification(message: unknown): message is JsonRpcRequest {
+  if (!isJsonRpcRequest(message) || !isJsonRpcNotification(message)) {
+    return false;
+  }
   return (
-    isJsonRpcRequest(message) && isJsonRpcNotification(message) && message.method === "tools/list"
+    message.method === "tools/list" ||
+    message.method === "notifications/initialized" ||
+    message.method === "notifications/cancelled"
   );
 }
 
-function isResponseOnlyJsonRpcNotificationBatch(messages: unknown[]): boolean {
-  return messages.every(isResponseOnlyJsonRpcNotification);
+function isPreResolutionJsonRpcNotificationBatch(messages: unknown[]): boolean {
+  return messages.every(isPreResolutionJsonRpcNotification);
 }
 
 function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
@@ -221,7 +226,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
         const messages = Array.isArray(parsed) ? parsed : [parsed];
-        if (isResponseOnlyJsonRpcNotificationBatch(messages)) {
+        if (isPreResolutionJsonRpcNotificationBatch(messages)) {
           markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
           res.writeHead(202);
           res.end();

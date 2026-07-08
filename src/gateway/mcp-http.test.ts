@@ -2903,6 +2903,27 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
+  it.each(["notifications/initialized", "notifications/cancelled"])(
+    "does not resolve tools for %s notification-only requests",
+    async (method) => {
+      resolveGatewayScopedToolsMock.mockImplementation(() => {
+        throw new Error("tool resolution exploded");
+      });
+      server = await startMcpLoopbackServer(0);
+      const runtime = getActiveMcpLoopbackRuntime();
+      const response = await sendRaw({
+        port: server.port,
+        token: runtime?.ownerToken,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method }),
+      });
+
+      expect(response.status).toBe(202);
+      await expect(response.text()).resolves.toBe("");
+      expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("dispatches tools/call notifications without returning a response", async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: "text", text: "ok" }],
