@@ -658,7 +658,7 @@ public struct MessageActionParams: Codable, Sendable {
         accountid: String?,
         requesteraccountid: String? = nil,
         requestersenderid: String?,
-        effectivegatewayclientscopes: [String]?,
+        effectivegatewayclientscopes: [String]? = nil,
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
