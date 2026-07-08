@@ -356,6 +356,7 @@ const TELEGRAM_RICH_ATTR_HTML_TAG_PATTERNS = new Map([
     /^(?=.*\ssrc="https?:\/\/[^"]+")(?:\s+src="https?:\/\/[^"]+"|\s+title="[^"]*"|\s+tg-spoiler)*\s*\/?\s*$/,
   ],
 ]);
+const TELEGRAM_HTML_TEXT_URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
 
@@ -678,6 +679,20 @@ function wrapSegmentFileRefs(
   if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
     return text;
   }
+  TELEGRAM_HTML_TEXT_URL_PATTERN.lastIndex = 0;
+  let result = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TELEGRAM_HTML_TEXT_URL_PATTERN.exec(text)) !== null) {
+    result += wrapPlainTextFileRefs(text.slice(lastIndex, match.index));
+    result += match[0];
+    lastIndex = TELEGRAM_HTML_TEXT_URL_PATTERN.lastIndex;
+  }
+  result += wrapPlainTextFileRefs(text.slice(lastIndex));
+  return result;
+}
+
+function wrapPlainTextFileRefs(text: string): string {
   const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
   return wrappedStandalone.replace(getOrphanedTldPattern(), (match, prefix: string, tld: string) =>
     prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,

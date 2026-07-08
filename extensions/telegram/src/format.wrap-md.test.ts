@@ -306,6 +306,16 @@ describe("edge cases", () => {
     }
   });
 
+  it("preserves file-like paths inside bare query URLs", () => {
+    const url = "https://github.com/openclaw/openclaw/blob/main/README.md?plain=1&x=2";
+    const result = markdownToTelegramHtml(`${url} and CHANGELOG.md`);
+    expect(result).toContain(
+      "https://github.com/openclaw/openclaw/blob/main/README.md?plain=1&amp;x=2",
+    );
+    expect(result).not.toContain("<code>README.md</code>?plain=1");
+    expect(result).toContain("and <code>CHANGELOG.md</code>");
+  });
+
   it("handles wrapFileRefs: false (plain text output)", () => {
     const result = markdownToTelegramHtml("README.md", { wrapFileRefs: false });
     // buildTelegramLink returns null, so no <a> tag; wrapFileRefs: false skips <code>
