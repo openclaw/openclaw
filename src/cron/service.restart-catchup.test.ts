@@ -270,6 +270,114 @@ describe("CronService restart catch-up", () => {
     }
   });
 
+  it("does not defer stale due isolated cron slot that already succeeded before restart", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T04:02:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "startup-isolated-already-ran",
+        name: "startup isolated already ran",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+        schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "already sent" },
+        state: {
+          nextRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+          lastRunStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+      nowMs: () => startNow,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "startup-isolated-already-ran");
+      expect(updated?.state.lastRunStatus).toBe("ok");
+      expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("replays newer missed cron slot when stale due slot already succeeded before restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:10:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-stale-success-newer-miss",
+          name: "stale success with newer miss",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "newer slot missed" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+            lastRunStatus: "ok",
+          },
+        },
+      ],
+      async ({ enqueueSystemEvent, requestHeartbeat }) => {
+        expectQueuedSystemEvent(enqueueSystemEvent, "newer slot missed");
+        expect(requestHeartbeat).toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("replays cron slot due exactly at restart when prior stale slot already succeeded", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-stale-success-boundary-miss",
+          name: "stale success with boundary miss",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "boundary slot missed" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+            lastRunStatus: "ok",
+          },
+        },
+      ],
+      async ({ enqueueSystemEvent, requestHeartbeat }) => {
+        expectQueuedSystemEvent(enqueueSystemEvent, "boundary slot missed");
+        expect(requestHeartbeat).toHaveBeenCalled();
+      },
+    );
+  });
+
   it("marks interrupted recurring jobs failed instead of replaying them on startup", async () => {
     const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
     const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");

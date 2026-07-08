@@ -1640,6 +1640,18 @@ function isRunnableJob(params: {
     return false;
   }
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
+    if (
+      params.skipAtIfAlreadyRan &&
+      params.allowCronMissedRunByLastRun &&
+      job.schedule.kind === "cron" &&
+      lastRunStatus === "ok"
+    ) {
+      const lastRunAtMs = job.state.lastRunAtMs;
+      if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs) && lastRunAtMs >= next) {
+        const previousRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+        return typeof previousRunAtMs === "number" && previousRunAtMs > lastRunAtMs;
+      }
+    }
     return true;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
@@ -1660,6 +1672,34 @@ function isRunnableJob(params: {
     return false;
   }
   return previousRunAtMs > lastRunAtMs;
+}
+
+function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
+  let previousRunAtMs: number | undefined;
+  try {
+    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+  } catch {
+    return undefined;
+  }
+
+  try {
+    // `computeJobPreviousRunAtMs` is strict-before. Probe just past `nowMs`
+    // so startup catch-up still sees a cron slot due exactly at restart.
+    const probeMs = nowMs + (nowMs % 1000 === 0 ? 1_000 : 1);
+    const boundaryRunAtMs = computeJobPreviousRunAtMs(job, probeMs);
+    if (
+      typeof boundaryRunAtMs === "number" &&
+      Number.isFinite(boundaryRunAtMs) &&
+      boundaryRunAtMs <= nowMs &&
+      (previousRunAtMs === undefined || boundaryRunAtMs > previousRunAtMs)
+    ) {
+      previousRunAtMs = boundaryRunAtMs;
+    }
+  } catch {
+    // The strict-before result is still usable when a boundary probe fails.
+  }
+
+  return previousRunAtMs;
 }
 
 function isErrorBackoffPending(state: CronServiceState, job: CronJob, nowMs: number): boolean {
