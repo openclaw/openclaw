@@ -44,6 +44,10 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -73,6 +77,24 @@ const inflightByContext = new WeakMap<
 >();
 
 const TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES = [WRITE_SCOPE];
+
+async function withMessageActionGatewayClientScopes<T>(
+  scopes: readonly string[],
+  run: () => Promise<T>,
+): Promise<T> {
+  const current = getPluginRuntimeGatewayRequestScope();
+  if (!current?.client?.connect) {
+    return await run();
+  }
+  const client = {
+    ...current.client,
+    connect: {
+      ...current.client.connect,
+      scopes: [...scopes],
+    },
+  };
+  return await withPluginRuntimeGatewayRequestScope({ ...current, client }, run);
+}
 
 const getInflightMap = (context: GatewayRequestContext) => {
   let inflight = inflightByContext.get(context);
@@ -554,24 +576,28 @@ export const sendHandlers: GatewayRequestHandlers = {
         const dispatchGatewayClientScopes = isTrustedBackendBridge
           ? TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES
           : gatewayClientScopes;
-        const handled = await dispatchChannelMessageAction({
-          channel,
-          action: request.action as never,
-          cfg,
-          params: request.params,
-          accountId,
-          requesterAccountId,
-          requesterSenderId,
-          senderIsOwner,
-          sessionKey,
-          sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-          inboundEventKind: request.inboundTurnKind,
-          agentId,
-          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-          toolContext: request.toolContext,
-          dryRun: false,
-          gatewayClientScopes: dispatchGatewayClientScopes,
-        });
+        const handled = await withMessageActionGatewayClientScopes(
+          dispatchGatewayClientScopes,
+          async () =>
+            await dispatchChannelMessageAction({
+              channel,
+              action: request.action as never,
+              cfg,
+              params: request.params,
+              accountId,
+              requesterAccountId,
+              requesterSenderId,
+              senderIsOwner,
+              sessionKey,
+              sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+              inboundEventKind: request.inboundTurnKind,
+              agentId,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+              toolContext: request.toolContext,
+              dryRun: false,
+              gatewayClientScopes: dispatchGatewayClientScopes,
+            }),
+        );
         if (!handled) {
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,
