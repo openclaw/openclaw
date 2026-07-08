@@ -268,14 +268,14 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
-      reserveTokens: 20_000,
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
     });
 
     expect(result.route).not.toBe("fits");
@@ -323,12 +323,12 @@ describe("preemptive-compaction", () => {
       messages,
       systemPrompt: "system".repeat(200),
       prompt: "continue",
-      contextTokenBudget: 200_000,
-      reserveTokens: 32_000,
+      contextTokenBudget: 130_000,
+      reserveTokens: 0,
     });
 
-    expect(result.estimatedPromptTokens).toBeGreaterThan(200_000);
-    expect(result.promptBudgetBeforeReserve).toBe(168_000);
+    expect(result.estimatedPromptTokens).toBeGreaterThan(130_000);
+    expect(result.promptBudgetBeforeReserve).toBe(130_000);
     expect(result.route).not.toBe("fits");
     expect(result.overflowTokens).toBeGreaterThan(0);
   });
@@ -454,5 +454,37 @@ describe("preemptive-compaction", () => {
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
+  });
+
+  it("does not false-positive overflow for a tool-result-heavy turn well within the context window (#101929)", () => {
+    // ~250k chars of tool result text across ~20 messages, plus assistant turns.
+    // With TOOL_RESULT_CHARS_PER_TOKEN=4, this should estimate far below the
+    // 150k prompt budget (200k context − 50k reserve) instead of the ~162k
+    // false overflow the old TOOL_RESULT_CHARS_PER_TOKEN=2 would produce.
+    const toolCharsPerMessage = Math.ceil(250_000 / 20);
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 43; i += 1) {
+      if (i % 2 === 0) {
+        messages.push(makeToolResultMessage("x".repeat(toolCharsPerMessage)));
+      } else {
+        messages.push(makeAssistantHistory("y".repeat(500)));
+      }
+    }
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 200_000,
+      reserveTokens: 50_000,
+    });
+
+    // The prompt budget before reserve is 150k. The corrected estimator
+    // should produce an estimate comfortably below that for ~250k chars
+    // of tool results plus minor assistant overhead.
+    expect(result.estimatedPromptTokens).toBeLessThan(150_000);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
   });
 });
