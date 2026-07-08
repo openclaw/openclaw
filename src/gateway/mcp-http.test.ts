@@ -149,7 +149,7 @@ import {
   recordMcpLoopbackToolCallResult,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "./mcp-http.loopback-runtime.js";
-import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import { McpLoopbackToolCache, resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
@@ -2157,6 +2157,28 @@ describe("mcp loopback server", () => {
       fetchSite: "cross-site",
       status: 200,
     });
+  });
+
+  it("passes authProfileStore through to resolveGatewayScopedTools", () => {
+    const mockStore = { profiles: {} } as never;
+    resolveMcpLoopbackScopedTools({
+      cfg: { session: { mainKey: "main" } } as never,
+      sessionKey: "agent:main:session-1",
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: undefined,
+      accountId: undefined,
+      senderIsOwner: undefined,
+      authProfileStore: mockStore,
+    });
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileStore: mockStore }),
+    );
   });
 });
 
