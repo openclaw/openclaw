@@ -7,6 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
+  isMutatingToolCall,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -2538,7 +2539,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
   return isJsonObject(error) ? readString(error, "message") : undefined;
@@ -2791,9 +2791,10 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
   if (item.type === "commandExecution") {
-    // Codex commandActions describe presentation, not safety. Upstream may
-    // classify mutating commands as read/search, so native commands fail closed.
-    return true;
+    // Classify mutating commands via OpenClaw's shared read-only command
+    // list so simple inspection (grep, ls, rg) can retry while shell
+    // writes fail closed.
+    return isMutatingToolCall("exec", itemToolArgs(item));
   }
   return (
     item.type === "fileChange" ||

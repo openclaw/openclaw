@@ -461,4 +461,47 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       expect(classifyProjectedAttemptResult(result) !== null).toBe(replaySafe);
     },
   );
+
+  it.each([
+    { command: "rg TODO src/agents", replaySafe: true },
+    { command: "grep -r foo .", replaySafe: true },
+    { command: "ls -la", replaySafe: true },
+    { command: "cat package.json", replaySafe: true },
+    { command: "echo hello > /tmp/out", replaySafe: false },
+    { command: "rm -rf /tmp/cache", replaySafe: false },
+    { command: "npm install", replaySafe: false },
+  ])(
+    "classifies commandExecution turns from command mutability (%s)",
+    async ({ command, replaySafe }) => {
+      const projector = await createProjector();
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: {
+            id: TURN_ID,
+            status: "completed",
+            items: [
+              {
+                type: "commandExecution",
+                id: "cmd-1",
+                command,
+                commandActions: [],
+                cwd: "/tmp/project",
+                status: "completed",
+                aggregatedOutput: "",
+                exitCode: 0,
+                durationMs: 1,
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = projector.buildResult(buildToolTelemetry());
+
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: !replaySafe,
+        replaySafe,
+      });
+    },
+  );
 });
