@@ -6384,8 +6384,7 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     // out from under it; with the fence it must be interrupted and drained first.
     let interrupted = false;
     let released = false;
-    let lease: SessionWorkAdmissionLease | undefined;
-    lease = await beginSessionWorkAdmission({
+    const lease: SessionWorkAdmissionLease = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey],
       assertAllowed: () => {},
