@@ -20,6 +20,7 @@ import {
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -1923,9 +1924,9 @@ function truncatePreviewText(text: string, maxChars: number): string {
     return text;
   }
   if (maxChars <= 3) {
-    return text.slice(0, maxChars);
+    return truncateUtf16Safe(text, maxChars);
   }
-  return `${text.slice(0, maxChars - 3)}...`;
+  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
