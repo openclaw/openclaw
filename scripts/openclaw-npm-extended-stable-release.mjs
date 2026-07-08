@@ -74,12 +74,13 @@ export function validateExtendedStableNpmReleaseRequest(request) {
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
   const shaPreflight =
     request.preflightOnly === true && /^[0-9a-f]{40}$/iu.test(request.releaseTag);
-  if (
-    shaPreflight &&
-    request.checkoutSha &&
-    request.releaseTag.toLowerCase() !== request.checkoutSha.toLowerCase()
-  ) {
-    throw new Error("Validation-only SHA must match the checked-out commit exactly.");
+  if (shaPreflight) {
+    if (!/^[0-9a-f]{40}$/iu.test(request.checkoutSha)) {
+      throw new Error("Validation-only SHA preflight requires the full checked-out commit SHA.");
+    }
+    if (request.releaseTag.toLowerCase() !== request.checkoutSha.toLowerCase()) {
+      throw new Error("Validation-only SHA must match the checked-out commit exactly.");
+    }
   }
   const effectiveReleaseTag = shaPreflight ? `v${request.packageVersion}` : request.releaseTag;
   const taggedVersion = effectiveReleaseTag.startsWith("v")
@@ -112,24 +113,26 @@ export function validateExtendedStableNpmReleaseRequest(request) {
 
   const releaseVersion = taggedVersion.version;
   const extendedStableBranch = `extended-stable/${taggedVersion.year}.${taggedVersion.month}.33`;
-  const expectedWorkflowRef = `refs/heads/${extendedStableBranch}`;
-  if (request.npmWorkflowRef !== expectedWorkflowRef) {
-    throw new Error(
-      `Extended-stable npm workflow ref mismatch: expected ${expectedWorkflowRef}, got ${request.npmWorkflowRef}.`,
-    );
-  }
   if (request.packageVersion !== releaseVersion) {
     throw new Error(
       `Extended-stable npm package version mismatch: expected ${releaseVersion}, got ${request.packageVersion}.`,
     );
   }
 
-  const shaValues = [request.checkoutSha, request.tagSha, request.extendedStableBranchSha];
-  if (shaValues.some((sha) => !/^[0-9a-f]{40}$/iu.test(sha))) {
-    throw new Error("Extended-stable npm release identity requires full 40-character Git SHAs.");
-  }
-  if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
-    throw new Error("Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.");
+  if (!shaPreflight) {
+    const expectedWorkflowRef = `refs/heads/${extendedStableBranch}`;
+    if (request.npmWorkflowRef !== expectedWorkflowRef) {
+      throw new Error(
+        `Extended-stable npm workflow ref mismatch: expected ${expectedWorkflowRef}, got ${request.npmWorkflowRef}.`,
+      );
+    }
+    const shaValues = [request.checkoutSha, request.tagSha, request.extendedStableBranchSha];
+    if (shaValues.some((sha) => !/^[0-9a-f]{40}$/iu.test(sha))) {
+      throw new Error("Extended-stable npm release identity requires full 40-character Git SHAs.");
+    }
+    if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
+      throw new Error("Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.");
+    }
   }
 
   if (bypassExtendedStableGuard) {
@@ -344,17 +347,13 @@ function validateRequestFromRepository() {
   }
   const extendedStableBranch = `extended-stable/${parsed.year}.${parsed.month}.33`;
   if (shaPreflight) {
-    execFileSync(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-        ...(bypassExtendedStableGuard ? [] : ["+refs/heads/main:refs/remotes/origin/main"]),
-      ],
-      { stdio: "inherit" },
-    );
+    if (!bypassExtendedStableGuard) {
+      execFileSync(
+        "git",
+        ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+        { stdio: "inherit" },
+      );
+    }
     const checkoutSha = git(["rev-parse", "HEAD"]);
     return validateExtendedStableNpmReleaseRequest({
       npmDistTag,
@@ -364,7 +363,7 @@ function validateRequestFromRepository() {
       npmWorkflowRef,
       checkoutSha,
       tagSha: checkoutSha,
-      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
+      extendedStableBranchSha: "",
       packageVersion,
       mainPackageVersion: bypassExtendedStableGuard
         ? ""
