@@ -75,6 +75,7 @@ function makeHandler(
     provider?: Partial<VoiceCallProvider>;
     providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
+    resolveInstructions?: (call: CallRecord) => string;
   },
 ) {
   const config: VoiceCallRealtimeConfig = {
@@ -124,6 +125,8 @@ function makeHandler(
     deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
     deps?.providerConfig ?? { apiKey: "test-key" },
     "/voice/webhook",
+    undefined,
+    deps?.resolveInstructions,
   );
 }
 
@@ -406,9 +409,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("joins Telnyx realtime streams to the token-bound call", async () => {
     const processEvent = vi.fn();
+    const resolveInstructions = vi.fn((call: CallRecord) => `instructions:${call.agentId}`);
     const getCall = vi.fn(
       (): CallRecord => ({
         callId: "call-1",
+        agentId: "support",
         providerCallId: "v3:call-1",
         provider: "telnyx",
         direction: "inbound",
@@ -421,7 +426,7 @@ describe("RealtimeCallHandler path routing", () => {
         metadata: { initialMessage: "hello" },
       }),
     );
-    const createBridge = vi.fn(() => makeBridge());
+    const createBridge = vi.fn((_request: RealtimeBridgeRequest) => makeBridge());
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
@@ -431,6 +436,7 @@ describe("RealtimeCallHandler path routing", () => {
         name: "telnyx",
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
+      resolveInstructions,
     });
     handler.setPublicUrl("https://public.example/voice/webhook");
     const session = handler.issueStreamSession({
@@ -463,6 +469,13 @@ describe("RealtimeCallHandler path routing", () => {
         expect((processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined)?.callId).toBe(
           "call-1",
         );
+        expect(resolveInstructions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "call-1",
+            agentId: "support",
+          }),
+        );
+        expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

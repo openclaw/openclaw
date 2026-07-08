@@ -121,7 +121,7 @@ function readFirstLine(filePath: string): string | undefined {
 }
 
 /** Reads session start time from a transcript header when store metadata is missing. */
-export function readSessionHeaderStartedAtMs(params: {
+function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
   storePath?: string;

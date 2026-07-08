@@ -115,7 +115,7 @@ export type WikiPageSummary = {
   updatedAt?: string;
 };
 
-export type WikiPageSummaryScanResult =
+type WikiPageSummaryScanResult =
   | { status: "valid"; page: WikiPageSummary }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };

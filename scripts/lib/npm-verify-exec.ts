@@ -1,7 +1,7 @@
 // Npm Verify Exec script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 
-export type NpmVerifyCommandInvocation = {
+type NpmVerifyCommandInvocation = {
   command: string;
   args: string[];
   windowsVerbatimArguments?: boolean;

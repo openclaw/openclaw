@@ -225,7 +225,7 @@ function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error
   };
 }
 
-export function resolveDiagnosticStabilityBundleDir(
+function resolveDiagnosticStabilityBundleDir(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): string {
   return path.join(

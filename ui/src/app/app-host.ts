@@ -127,7 +127,7 @@ function isTerminalAvailable(
   );
 }
 
-export class OpenClawApp extends LitElement {
+class OpenClawApp extends LitElement {
   @state() private gatewayConnected = false;
   @state() private gatewayReconnecting = false;
   @state() private gatewayLastError: string | null = null;

@@ -1,5 +1,5 @@
 // Crestodian TUI backend tests cover rescue status integration with the TUI backend.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianOverview } from "./overview.js";
 import { runCrestodianTui } from "./tui-backend.js";
@@ -135,5 +135,169 @@ describe("runCrestodianTui", () => {
     }
 
     expect(unhandled).toHaveLength(0);
+  });
+
+  it("exits to masked model setup and then resumes Crestodian", async () => {
+    const runModelSetup = vi.fn(async () => ({
+      model: "openai/gpt-5.5",
+    }));
+    let runTuiCalls = 0;
+
+    await runCrestodianTui(
+      {
+        deps: { loadOverview: async () => ({ ...overview, defaultModel: undefined }) },
+        runModelSetup,
+        runTui: async (opts) => {
+          runTuiCalls += 1;
+          if (runTuiCalls > 1) {
+            return { exitReason: "exit" };
+          }
+          const backend = opts.backend as unknown as {
+            setRequestExitHandler: (handler: () => void) => void;
+            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+            engine: {
+              handle: () => Promise<{
+                text: string;
+                action: "open-tui";
+                handoff: { kind: "model-setup"; workspace: string };
+              }>;
+            };
+          };
+          backend.engine.handle = async () => ({
+            text: "Opening masked model-provider setup in the terminal.",
+            action: "open-tui",
+            handoff: { kind: "model-setup", workspace: "/tmp/work" },
+          });
+          await new Promise<void>((resolve) => {
+            backend.setRequestExitHandler(resolve);
+            void backend.sendChat({ message: "yes" });
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+
+    expect(runModelSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/work",
+        runtime: expect.anything(),
+        prompter: expect.anything(),
+      }),
+    );
+    expect(runTuiCalls).toBe(2);
+  });
+
+  it("turns embedded model setup exits into errors and resumes Crestodian", async () => {
+    const exit = vi.fn();
+    const error = vi.fn();
+    const runModelSetup = vi.fn(async (params: { runtime: RuntimeEnv }) => {
+      params.runtime.exit(1);
+      return {};
+    });
+    let runTuiCalls = 0;
+
+    await runCrestodianTui(
+      {
+        deps: { loadOverview: async () => ({ ...overview, defaultModel: undefined }) },
+        runModelSetup,
+        runTui: async (opts) => {
+          runTuiCalls += 1;
+          if (runTuiCalls > 1) {
+            return { exitReason: "exit" };
+          }
+          const backend = opts.backend as unknown as {
+            setRequestExitHandler: (handler: () => void) => void;
+            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+            engine: {
+              handle: () => Promise<{
+                text: string;
+                action: "open-tui";
+                handoff: { kind: "model-setup" };
+              }>;
+            };
+          };
+          backend.engine.handle = async () => ({
+            text: "Opening masked model-provider setup in the terminal.",
+            action: "open-tui",
+            handoff: { kind: "model-setup" },
+          });
+          await new Promise<void>((resolve) => {
+            backend.setRequestExitHandler(resolve);
+            void backend.sendChat({ message: "yes" });
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      { log: vi.fn(), error, exit },
+    );
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "Model provider setup failed: embedded model setup exited with code 1",
+    );
+    expect(runTuiCalls).toBe(2);
+  });
+
+  it("consumes a returned model-setup request before resuming after the wizard", async () => {
+    const runModelSetup = vi.fn(async () => ({
+      model: "openai/gpt-5.5",
+    }));
+    const runAgentTui = vi.fn(async () => ({
+      exitReason: "return-to-crestodian" as const,
+      crestodianMessage: "configure model provider",
+    }));
+    const messages: Array<string | undefined> = [];
+    let runTuiCalls = 0;
+
+    await runCrestodianTui(
+      {
+        deps: {
+          loadOverview: async () => ({ ...overview, defaultModel: undefined }),
+          runTui: runAgentTui,
+        },
+        runModelSetup,
+        runTui: async (opts) => {
+          runTuiCalls += 1;
+          messages.push(opts.message);
+          if (runTuiCalls === 3) {
+            return { exitReason: "exit" };
+          }
+          const backend = opts.backend as unknown as {
+            setRequestExitHandler: (handler: () => void) => void;
+            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+            engine: {
+              handle: () => Promise<{
+                text: string;
+                action: "open-tui";
+                handoff: { kind: "open-tui" } | { kind: "model-setup"; workspace?: string };
+              }>;
+            };
+          };
+          backend.engine.handle = async () =>
+            runTuiCalls === 1
+              ? {
+                  text: "Opening agent.",
+                  action: "open-tui",
+                  handoff: { kind: "open-tui" },
+                }
+              : {
+                  text: "Opening masked model-provider setup in the terminal.",
+                  action: "open-tui",
+                  handoff: { kind: "model-setup" },
+                };
+          await new Promise<void>((resolve) => {
+            backend.setRequestExitHandler(resolve);
+            void backend.sendChat({ message: opts.message ?? "talk to agent" });
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+
+    expect(runAgentTui).toHaveBeenCalledOnce();
+    expect(runModelSetup).toHaveBeenCalledOnce();
+    expect(messages).toEqual([undefined, "configure model provider", undefined]);
   });
 });

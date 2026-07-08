@@ -290,7 +290,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskStatus =
+type WorkboardTaskStatus =
   | "queued"
   | "running"
   | "completed"
@@ -315,7 +315,7 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
-export type WorkboardDependencyParent = {
+type WorkboardDependencyParent = {
   id: string;
   title: string;
   status?: WorkboardStatus;
@@ -328,7 +328,7 @@ export type WorkboardDependencyState = {
   blockedParents: WorkboardDependencyParent[];
 };
 
-export type WorkboardDispatchSummary = {
+type WorkboardDispatchSummary = {
   started: number;
   failures: number;
   promoted: number;
@@ -339,9 +339,9 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
 
-export type WorkboardRefreshSource = "initial" | "manual" | "poll";
+type WorkboardRefreshSource = "initial" | "manual" | "poll";
 
-export type WorkboardViewPresetId =
+type WorkboardViewPresetId =
   | "all"
   | "default_agent"
   | "ready"

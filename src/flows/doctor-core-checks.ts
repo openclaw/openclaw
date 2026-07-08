@@ -464,18 +464,20 @@ const bootstrapSizeCheck: HealthCheck = {
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
+      agentId: defaultAgentId,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles,
         injectedFiles: contextFiles,
       }),
-      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg),
+      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
@@ -484,7 +486,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars/TotalMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -496,7 +499,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -505,7 +509,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: analysis.hasTruncation ? "warning" : "info",
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
-        fixHint: "Reduce bootstrap file sizes or tune agents.defaults.bootstrapTotalMaxChars.",
+        fixHint:
+          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
