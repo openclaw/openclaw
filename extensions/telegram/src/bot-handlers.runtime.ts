@@ -180,12 +180,22 @@ import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
-type TelegramPromptContextMessageForDedupe = {
+export type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
   timestamp_ms?: unknown;
 };
 
-function resolvePromptContextTextDedupeKey(
+/**
+ * Strip Markdown emphasis / code formatting characters so that the same
+ * message stored with different formatting in the session transcript vs
+ * the Telegram message cache produces the same dedup key. Only strips
+ * inline formatting characters: * _ ` ~
+ */
+export function stripMarkdownFormatting(text: string): string {
+  return text.replace(/[*_`~]/g, "");
+}
+
+export function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
   if (typeof message.body !== "string") {
@@ -198,7 +208,8 @@ function resolvePromptContextTextDedupeKey(
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  return `${message.timestamp_ms}:${visibleBody}`;
+  const normalisedBody = stripMarkdownFormatting(visibleBody);
+  return `${message.timestamp_ms}:${normalisedBody}`;
 }
 
 export const registerTelegramHandlers = ({

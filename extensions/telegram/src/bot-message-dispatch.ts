@@ -58,6 +58,7 @@ import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-ch
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { stripMarkdownFormatting } from "./bot-handlers.runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
   findModelInCatalog,
@@ -1582,7 +1583,7 @@ export const dispatchTelegramMessage = async ({
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
     (await resolveCurrentTurnTranscriptFinal())?.text;
   const normalizePromptContextTimestampText = (text: string): string =>
-    stripInlineDirectiveTagsForDelivery(text).text.trim();
+    stripMarkdownFormatting(stripInlineDirectiveTagsForDelivery(text).text.trim());
   const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
     const final = await resolveCurrentTurnTranscriptFinal();
     if (
