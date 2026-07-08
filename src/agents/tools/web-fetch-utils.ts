@@ -379,6 +379,12 @@ function closeRawTextTagEnd(html: string, tagName: string, contentStart: number)
   return html.length;
 }
 
+function skipRawTextElement(html: string, start: number, tagName: string): number {
+  const openerEnd = findTagEnd(html, start);
+  const contentStart = openerEnd === -1 ? start + tagName.length + 1 : openerEnd + 1;
+  return closeRawTextTagEnd(html, tagName, contentStart);
+}
+
 function htmlFragmentToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
@@ -396,7 +402,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
 
     const rawTextTagName = readRawTextOpenTagName(html, i);
     if (rawTextTagName) {
-      i = closeRawTextTagEnd(html, rawTextTagName, i + rawTextTagName.length + 1);
+      i = skipRawTextElement(html, i, rawTextTagName);
       continue;
     }
 
