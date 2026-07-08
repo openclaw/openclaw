@@ -7,7 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
-  isMutatingToolCall,
+  isReplaySafeToolCall,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -2791,10 +2791,7 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
   if (item.type === "commandExecution") {
-    // Classify mutating commands via OpenClaw's shared read-only command
-    // list so simple inspection (grep, ls, rg) can retry while shell
-    // writes fail closed.
-    return isMutatingToolCall("exec", itemToolArgs(item));
+    return !isReplaySafeToolCall("exec", itemToolArgs(item));
   }
   return (
     item.type === "fileChange" ||

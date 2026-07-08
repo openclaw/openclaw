@@ -50,7 +50,9 @@ describe("tool mutation helpers", () => {
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -211,7 +213,12 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("nodes", { action: "describe" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "pending" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "approve" })).toBe(false);
-    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(false);
+    // Read-only shell commands are replay-safe after the exec/bash replay
+    // safety alignment (https://github.com/openclaw/openclaw/issues/101890).
+    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(true);
+    expect(isReplaySafeToolCall("exec", { command: "cat package.json" })).toBe(true);
+    expect(isReplaySafeToolCall("exec", { command: "rm -rf /tmp" })).toBe(false);
+    expect(isReplaySafeToolCall("exec", { command: "echo hi > /tmp/x" })).toBe(false);
     expect(isReplaySafeToolCall("process", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "log", sessionId: "run-1" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "poll", sessionId: "run-1" })).toBe(false);
