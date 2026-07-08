@@ -1,5 +1,4 @@
 /** Non-blocking worker-thread writer for Gateway audit metadata. */
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
@@ -38,11 +37,6 @@ function resolveAuditEventWriterUrl(currentModuleUrl = import.meta.url): URL {
   return new URL(`./audit-event-writer.worker${extension}`, currentModuleUrl);
 }
 
-function resolveSourceWorkerExecArgv(): string[] {
-  const require = createRequire(import.meta.url);
-  return ["--import", require.resolve("tsx")];
-}
-
 /** Start one bounded worker queue. SQLite contention never blocks the agent-event callback. */
 export function createAuditEventWriter(
   options: {
@@ -60,9 +54,14 @@ export function createAuditEventWriter(
       workerData: { stateDir: options.stateDir ?? resolveStateDir(process.env) },
     };
     if (workerUrl.pathname.endsWith(".ts")) {
-      workerOptions.execArgv = resolveSourceWorkerExecArgv();
+      const sourceWorkerUrl = workerUrl.href;
+      worker = new Worker(
+        `import { tsImport } from "tsx/esm/api"; await tsImport(${JSON.stringify(sourceWorkerUrl)}, import.meta.url);`,
+        { ...workerOptions, eval: true },
+      );
+    } else {
+      worker = new Worker(workerUrl, workerOptions);
     }
-    worker = new Worker(workerUrl, workerOptions);
   } catch (error) {
     options.onError?.(error instanceof Error ? error.message : String(error));
     return {
