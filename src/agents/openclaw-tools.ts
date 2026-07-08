@@ -41,8 +41,10 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createCrestodianTool } from "./tools/crestodian-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
+import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import {
   createCreateGoalTool,
@@ -121,6 +123,8 @@ export function createOpenClawTools(
     currentMessageId?: string | number;
     /** True when the current inbound turn carried audio media. */
     currentInboundAudio?: boolean;
+    /** Dynamic audio state for runs that can accept steered input after tool creation. */
+    hasCurrentInboundAudio?: () => boolean;
     /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -133,6 +137,11 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
+    /**
+     * Ring-zero Crestodian setup tool. Only the Crestodian agent runner sets
+     * this; normal agents must never receive it (wildcard allowlists included).
+     */
+    crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -351,6 +360,7 @@ export function createOpenClawTools(
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
+        hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
         agentThreadId: options?.agentThreadId,
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,
@@ -416,6 +426,7 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
+    ...(options?.crestodianTool ? [createCrestodianTool(options.crestodianTool)] : []),
     ...(embedded
       ? []
       : [
@@ -580,10 +591,17 @@ export function createOpenClawTools(
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  if (options?.wrapBeforeToolCallHook === false) {
-    return allTools;
-  }
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
+  const gatewayCallerIdentity =
+    hookAgentId && options?.agentSessionKey?.trim()
+      ? { agentId: hookAgentId, sessionKey: options.agentSessionKey.trim() }
+      : undefined;
+  const wrapGatewayCallerIdentity = (tool: AnyAgentTool) =>
+    wrapToolWithGatewayCallerIdentity(tool, gatewayCallerIdentity);
+
+  if (options?.wrapBeforeToolCallHook === false) {
+    return allTools.map(wrapGatewayCallerIdentity);
+  }
   const defaultHookContext: HookContext = {
     ...(hookAgentId ? { agentId: hookAgentId } : {}),
     ...(resolvedConfig ? { config: resolvedConfig } : {}),
@@ -597,11 +615,13 @@ export function createOpenClawTools(
     ...options?.beforeToolCallHookContext,
   };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
-  return allTools.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? tool
-      : wrapToolWithBeforeToolCallHook(tool, hookContext),
-  );
+  return allTools
+    .map((tool) =>
+      isToolWrappedWithBeforeToolCallHook(tool)
+        ? tool
+        : wrapToolWithBeforeToolCallHook(tool, hookContext),
+    )
+    .map(wrapGatewayCallerIdentity);
 }
 
 export const testing = {

@@ -101,6 +101,7 @@ function getSnapshotGetHandler() {
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         extraArgs: [],
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       },
@@ -130,6 +131,8 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
     expect(routeState.profileCtx.ensureTabAvailable).toHaveBeenCalledWith(undefined, {
       allowPlaywrightFallback: false,
+      signal: undefined,
+      timeoutMs: undefined,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "http://127.0.0.1:8080/admin",

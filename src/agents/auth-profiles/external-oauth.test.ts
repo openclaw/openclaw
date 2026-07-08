@@ -187,6 +187,9 @@ describe("auth external oauth helpers", () => {
     expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
     expect(overlaidProfile.accountId).toBe("acct-cli");
     const managedCredential = readExternalCliBootstrapCredential({
+      store: createStore({
+        "openai:default": tokenlessCredential,
+      }),
       profileId: "openai:default",
       credential: tokenlessCredential,
     });

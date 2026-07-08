@@ -24,7 +24,7 @@ import {
   downloadMSTeamsGraphMedia,
   extractMSTeamsHtmlAttachmentIds,
 } from "../attachments.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import { resolveMSTeamsInboundMedia, resolveMSTeamsInboundMediaBody } from "./inbound-media.js";
 
 const baseParams = {
   maxBytes: 1024 * 1024,
@@ -52,6 +52,39 @@ function firstBotFrameworkAttachmentCall() {
 }
 
 describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
+  it("replaces a failed attachment placeholder without marking mention-only HTML", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "<media:document>",
+        mediaPlaceholder: "<media:document>",
+        materializedMediaPlaceholder: "",
+        expectedMediaCount: 1,
+        mediaCount: 0,
+      }),
+    ).toBe("[msteams attachment unavailable]");
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "hello",
+        mediaPlaceholder: "<media:document>",
+        materializedMediaPlaceholder: "",
+        expectedMediaCount: 0,
+        mediaCount: 0,
+      }),
+    ).toBe("hello");
+  });
+
+  it("preserves successful media while exposing partial download failures", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "<media:document> (2 files)",
+        mediaPlaceholder: "<media:document> (2 files)",
+        materializedMediaPlaceholder: "<media:document>",
+        expectedMediaCount: 2,
+        mediaCount: 1,
+      }),
+    ).toBe("<media:document>\n\n[msteams attachment unavailable]");
+  });
+
   it("triggers Graph fallback when HTML contains <attachment> tags", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);

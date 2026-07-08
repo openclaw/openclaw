@@ -102,4 +102,16 @@ describe("windows output encoding", () => {
     expect(decoder.decode(raw.subarray(3))).toBe("试");
     expect(decoder.flush()).toBe("");
   });
+
+  it("keeps split UTF-8 output intact on POSIX", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+    const raw = Buffer.from(JSON.stringify({ text: "hello 世" }), "utf8");
+    const splitIndex = raw.indexOf(Buffer.from("世", "utf8")[0]);
+
+    expect(decoder.decode(raw.subarray(0, splitIndex + 1))).toBe(
+      raw.subarray(0, splitIndex).toString("utf8"),
+    );
+    expect(decoder.decode(raw.subarray(splitIndex + 1))).toBe('世"}');
+    expect(decoder.flush()).toBe("");
+  });
 });

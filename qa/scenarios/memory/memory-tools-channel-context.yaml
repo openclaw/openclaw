@@ -25,7 +25,7 @@ scenario:
       channelId: qa-memory-room
       channelTitle: QA Memory Room
       memoryFact: "Hidden QA fact: the project codename is ORBIT-9."
-      memoryQuery: "project codename ORBIT-9"
+      memoryQuery: "hidden project codename"
       expectedNeedle: ORBIT-9
       prompt: "@openclaw Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first."
       promptSnippet: "Memory tools check"
@@ -56,18 +56,17 @@ flow:
           args:
             - ref: env
             - 60000
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.channelId
-                kind: channel
-                title:
-                  expr: config.channelTitle
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.prompt
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.channelId
+              kind: channel
+              title:
+                expr: config.channelTitle
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
         - call: waitForOutboundMessage
           saveAs: outbound
           args:

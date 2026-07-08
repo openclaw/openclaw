@@ -274,8 +274,10 @@ private struct SettingsWindowOpenRegistrar: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
@@ -313,7 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func openDashboardFromDockMenu(_: Any?) {
-        AppNavigationActions.openDashboard()
+        self.openDashboardAction()
     }
 
     @objc
@@ -339,16 +341,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if flag {
+            return true
+        }
+        self.openDashboardAction()
+        return false
+    }
+
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {
+            NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return
         }
         self.state = AppStateStore.shared
+        if let state {
+            MacNodeModeCoordinator.prepareNodeIdentityProfile(
+                isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
+        }
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
+            Task {
+                // Validate PATH selection before local startup. Existing installs may not
+                // have the validation cache yet, and a stale external CLI must not win.
+                if state.connectionMode == .local {
+                    _ = await CLIInstaller.status()
+                }
+                await ConnectionModeCoordinator.shared.apply(
+                    mode: state.connectionMode,
+                    paused: state.isPaused)
+            }
         }
         TerminationSignalWatcher.shared.start()
         NodePairingApprovalPrompter.shared.start()
@@ -408,7 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
-        if AppStateStore.shared.connectionMode != .unconfigured {
+        if AppStateStore.shared.connectionMode != .unconfigured,
+           AppStateStore.shared.onboardingSeen
+        {
             OnboardingController.markComplete()
             return
         }

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -149,6 +149,7 @@ async function writeScriptProducerEvidence(params: {
 
 describe("qa test file scenario runner", () => {
   afterEach(async () => {
+    qaTestFileScenarioRunnerTesting.resetTimeoutCleanupTimings();
     await Promise.all([
       cleanupTempDirs(),
       ...tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -163,7 +164,7 @@ describe("qa test file scenario runner", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       runCommand: async (command) => {
         commands.push(command);
         return {
@@ -187,7 +188,7 @@ describe("qa test file scenario runner", () => {
         "test/vitest/vitest.ui-e2e.config.ts",
         "--configLoader",
         "runner",
-        "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+        "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
       ],
     ]);
@@ -202,7 +203,7 @@ describe("qa test file scenario runner", () => {
         kind: "playwright-test",
         id: "scenario-playwright",
         source: {
-          path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+          path: "ui/src/e2e/chat-flow.e2e.test.ts",
         },
       },
       coverage: [
@@ -222,7 +223,7 @@ describe("qa test file scenario runner", () => {
         },
         {
           kind: "code",
-          path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+          path: "ui/src/e2e/chat-flow.e2e.test.ts",
         },
       ],
       execution: {
@@ -248,7 +249,7 @@ describe("qa test file scenario runner", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,
       runCommand: async () => ({
         exitCode: 0,
@@ -457,17 +458,52 @@ describe("qa test file scenario runner", () => {
     });
   });
 
-  it("times out script scenarios and kills descendant process groups", async () => {
-    if (process.platform === "win32") {
-      return;
+  it("uses script scenario timeout overrides when running producer commands", async () => {
+    const repoRoot = await makeTempRepo("qa-script-scenario-timeout-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-timeout");
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
     }
+    scenario.execution.timeoutMs = 3 * 60 * 60_000;
 
-    const repoRoot = process.cwd();
-    const tempRoot = await makeTempDir("qa-script-timeout-");
-    const scriptPath = path.join(tempRoot, "hanging-producer.ts");
-    const descendantPidPath = path.join(tempRoot, "descendant.pid");
+    const commands: QaScenarioCommandExecution[] = [];
+    await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      commandTimeoutMs: 30 * 60_000,
+      runCommand: async (command) => {
+        commands.push(command);
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "pass",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script pass\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
+  });
+
+  describe.skipIf(process.platform === "win32")("script timeout process groups", () => {
+    const commandTimeoutMs = 1_500;
     let descendantPid: number | undefined;
-    try {
+    let result: Awaited<ReturnType<typeof runQaTestFileScenarios>>;
+
+    beforeAll(async () => {
+      const tempRoot = await makeTempDir("qa-script-timeout-");
+      const scriptPath = path.join(tempRoot, "hanging-producer.ts");
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
       const descendantScript = [
         "process.on('SIGTERM', () => {});",
         "setInterval(() => {}, 1000);",
@@ -486,26 +522,39 @@ describe("qa test file scenario runner", () => {
         "utf8",
       );
 
+      qaTestFileScenarioRunnerTesting.setTimeoutCleanupTimings({
+        forceSettleMs: 25,
+        killGraceMs: 50,
+      });
       const run = runQaTestFileScenarios({
-        repoRoot,
+        repoRoot: process.cwd(),
         outputDir: path.join(tempRoot, "out"),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
         scenarios: [makeTestFileScenario("script", scriptPath)],
-        commandTimeoutMs: 500,
+        commandTimeoutMs,
       });
-      descendantPid = await readPid(descendantPidPath, 2_000);
-
-      const result = await run;
-
-      expect(result.results[0]?.status).toBe("fail");
-      expect(result.results[0]?.failureMessage).toMatch(/timed out after 500ms/u);
+      descendantPid = await readPid(descendantPidPath, commandTimeoutMs);
+      result = await run;
       await waitForDead(descendantPid, 2_000);
-    } finally {
+    });
+
+    afterAll(() => {
       if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
-    }
+    });
+
+    it("times out script scenarios and kills descendant process groups", () => {
+      expect(result.results[0]?.status).toBe("fail");
+      expect(result.results[0]?.failureMessage).toMatch(
+        new RegExp(`timed out after ${commandTimeoutMs}ms`, "u"),
+      );
+      if (descendantPid === undefined) {
+        throw new Error("descendant pid was not captured");
+      }
+      expect(isProcessRunning(descendantPid)).toBe(false);
+    });
   });
 
   it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
@@ -1022,64 +1071,71 @@ describe("qa test file scenario runner", () => {
     expect(artifactPath?.includes("..")).toBe(false);
   });
 
-  it("runs the UX Matrix script producer and imports its evidence bundle", async () => {
-    const repoRoot = process.cwd();
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-script-"));
-    tempRoots.push(outputDir);
-    const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
+  describe("UX Matrix scenario composition", () => {
+    let outputDir: string;
+    let result: Awaited<ReturnType<typeof runQaTestFileScenarios>>;
+    let evidence: ReturnType<typeof validateQaEvidenceSummaryJson>;
 
-    expect(scenario.execution.kind).toBe("script");
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [scenario],
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
+    beforeAll(async () => {
+      outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-script-"));
+      tempRoots.push(outputDir);
+      const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
+
+      expect(scenario.execution.kind).toBe("script");
+      result = await runQaTestFileScenarios({
+        repoRoot: process.cwd(),
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        scenarios: [scenario],
+        env: {
+          OPENCLAW_QA_REF: "scenario-ref",
+        } as NodeJS.ProcessEnv,
+      });
+      evidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+      );
     });
 
-    expect(result.executionKind).toBe("script");
-    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
-    );
-    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
-      "ux-matrix.qa-lab.producer-artifact-fixture",
-      "ux-matrix.control-ui.screenshot-artifact",
-      "ux-matrix.cli.entrypoint-help",
-    ]);
-    expect(
-      evidence.entries.flatMap((entry) => entry.coverage.map((coverage) => coverage.id)),
-    ).toEqual(
-      expect.arrayContaining([
-        "qa.artifact-safety",
-        "tools.evidence",
-        "workspace.artifacts",
-        "ui.control",
-        "gateway.control-ui-hosting",
-        "cli.entrypoint",
-        "cli.status-snapshots",
-      ]),
-    );
-    const artifactKinds = evidence.entries.flatMap(
-      (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
-    );
-    expect(artifactKinds).toEqual(expect.arrayContaining(["html", "log"]));
-    const fixtureEntry = evidence.entries.find(
-      (entry) => entry.test.id === "ux-matrix.qa-lab.producer-artifact-fixture",
-    );
-    expect(fixtureEntry?.execution?.artifacts.map((artifact) => artifact.path)).toContain(
-      path.join(
-        outputDir,
-        "ux-matrix-evidence-dashboard",
-        "surfaces",
-        "qa-lab",
-        "stages",
-        "producer-artifact-fixture",
-        "producer-artifact-fixture.html",
-      ),
-    );
+    it("runs the checked-in producer and imports its evidence bundle", () => {
+      expect(result.executionKind).toBe("script");
+      expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+      expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+        "ux-matrix.qa-lab.producer-artifact-fixture",
+        "ux-matrix.control-ui.screenshot-artifact",
+        "ux-matrix.cli.entrypoint-help",
+      ]);
+      expect(
+        evidence.entries.flatMap((entry) => entry.coverage.map((coverage) => coverage.id)),
+      ).toEqual(
+        expect.arrayContaining([
+          "qa.artifact-safety",
+          "tools.evidence",
+          "workspace.artifacts",
+          "ui.control",
+          "gateway.control-ui-hosting",
+          "cli.entrypoint",
+          "cli.status-snapshots",
+        ]),
+      );
+      const artifactKinds = evidence.entries.flatMap(
+        (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
+      );
+      expect(artifactKinds).toEqual(expect.arrayContaining(["html", "log"]));
+      const fixtureEntry = evidence.entries.find(
+        (entry) => entry.test.id === "ux-matrix.qa-lab.producer-artifact-fixture",
+      );
+      expect(fixtureEntry?.execution?.artifacts.map((artifact) => artifact.path)).toContain(
+        path.join(
+          outputDir,
+          "ux-matrix-evidence-dashboard",
+          "surfaces",
+          "qa-lab",
+          "stages",
+          "producer-artifact-fixture",
+          "producer-artifact-fixture.html",
+        ),
+      );
+    });
   });
 });

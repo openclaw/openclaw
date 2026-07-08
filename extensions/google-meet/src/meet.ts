@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -22,7 +23,7 @@ export type GoogleMeetSpaceConfig = {
   entryPointAccess?: GoogleMeetEntryPointAccess;
 };
 
-export type GoogleMeetSpace = {
+type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
@@ -30,7 +31,7 @@ export type GoogleMeetSpace = {
   config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
+type GoogleMeetPreflightReport = {
   input: string;
   resolvedSpaceName: string;
   meetingCode?: string;
@@ -41,17 +42,17 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-export type GoogleMeetCreateSpaceResult = {
+type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-export type GoogleMeetEndActiveConferenceResult = {
+type GoogleMeetEndActiveConferenceResult = {
   space: string;
   ended: true;
 };
 
-export type GoogleMeetConferenceRecord = {
+type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
   startTime?: string;
@@ -289,7 +290,7 @@ async function fetchGoogleMeetJson<T>(params: {
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, params.errorPrefix);
   } finally {
     await release();
   }
@@ -354,7 +355,10 @@ export async function fetchGoogleMeetSpace(params: {
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.get",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.get response was missing name");
     }
@@ -397,7 +401,10 @@ export async function createGoogleMeetSpace(params: {
             : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.create",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.create response was missing name");
     }

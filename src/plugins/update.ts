@@ -82,7 +82,7 @@ export type PluginUpdateLogger = {
 /** Outcome status for one plugin update attempt. */
 export type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
+type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
   requestedLabel: string;
@@ -398,6 +398,38 @@ function compareNpmSemverForUpdate(left: string, right: string): number {
     return releaseCmp;
   }
   return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right)) ?? 0;
+}
+
+async function resolveNewerExactPinnedNpmDefaultLine(params: {
+  currentVersion: string | undefined;
+  effectiveSpec: string | undefined;
+  probeNpmVersion: string | undefined;
+  timeoutMs?: number;
+}): Promise<{ packageName: string; version: string } | undefined> {
+  if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
+    return undefined;
+  }
+  const packageName = resolveNpmSpecPackageName(params.effectiveSpec);
+  const exactVersion = resolveExactNpmSpecVersion(params.effectiveSpec);
+  const probeNpmVersion = normalizeExactNpmVersion(params.probeNpmVersion);
+  if (!packageName || !exactVersion || probeNpmVersion !== exactVersion) {
+    return undefined;
+  }
+
+  const metadataResult = await resolveNpmSpecMetadata({
+    spec: packageName,
+    timeoutMs: params.timeoutMs,
+  }).catch(() => undefined);
+  if (
+    !metadataResult?.ok ||
+    metadataResult.metadata.name !== packageName ||
+    !metadataResult.metadata.version
+  ) {
+    return undefined;
+  }
+  return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
+    ? { packageName, version: metadataResult.metadata.version }
+    : undefined;
 }
 
 async function loadNpmPackageVersionsForUpdate(params: {
@@ -876,7 +908,20 @@ function resolveNpmSpecPackageName(spec: string | undefined): string | undefined
 
 function resolveExactNpmSpecVersion(spec: string | undefined): string | undefined {
   const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  return parsed?.selectorKind === "exact-version" ? parsed.selector : undefined;
+  return parsed?.selectorKind === "exact-version"
+    ? normalizeExactNpmVersion(parsed.selector)
+    : undefined;
+}
+
+function normalizeExactNpmVersion(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!isExactSemverVersion(trimmed)) {
+    return undefined;
+  }
+  return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
 function resolveNpmResultVersion(result: {
@@ -902,6 +947,7 @@ function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {
   effectiveClawHubSpec?: string;
   recordClawHubSpec?: string;
   updateChannel?: UpdateChannel;
+  coreVersion?: string;
 }): {
   installSpec: string;
   recordSpec: string;
@@ -950,6 +996,8 @@ function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: officialSpec,
     updateChannel: params.updateChannel,
+    officialPackageName,
+    coreVersion: params.coreVersion,
   });
 }
 
@@ -1014,25 +1062,35 @@ function resolveNpmUpdateSpecs(params: {
   specOverride?: string;
   officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
+  officialPackageName?: string;
+  coreVersion?: string;
 }): {
   installSpec?: string;
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  const recordSpec = params.specOverride ?? params.officialSpecOverride ?? params.record.spec;
+  const recordSpec =
+    params.specOverride ??
+    (params.updateChannel === "extended-stable" && params.record.spec
+      ? params.record.spec
+      : (params.officialSpecOverride ?? params.record.spec));
   if (!recordSpec) {
     return {};
   }
   if (params.specOverride) {
-    return {
-      installSpec: recordSpec,
-      recordSpec,
-    };
+    return resolveNpmInstallSpecsForUpdateChannel({
+      spec: recordSpec,
+      updateChannel: params.updateChannel,
+      officialPackageName: params.officialPackageName,
+      coreVersion: params.coreVersion,
+    });
   }
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
+    officialPackageName: params.officialPackageName,
+    coreVersion: params.coreVersion,
   });
 }
 
@@ -1322,6 +1380,7 @@ export async function updateNpmInstalledPlugins(params: {
   dryRun?: boolean;
   updateChannel?: UpdateChannel;
   officialPluginUpdateChannel?: UpdateChannel;
+  coreVersion?: string;
   dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -1398,13 +1457,13 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
-      : undefined;
+    const trustedOfficialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+    const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
       ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
       : undefined;
     const officialSyncUpdateChannel = params.officialPluginUpdateChannel ?? params.updateChannel;
+    const officialNpmPackageName = resolveNpmSpecPackageName(trustedOfficialNpmSpec);
 
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
@@ -1439,6 +1498,8 @@ export async function updateNpmInstalledPlugins(params: {
             specOverride: params.specOverrides?.[pluginId],
             officialSpecOverride: officialNpmSpec,
             updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
+            officialPackageName: officialNpmPackageName,
+            coreVersion: params.coreVersion,
           })
         : undefined;
     const clawhubSpecs =
@@ -1461,6 +1522,10 @@ export async function updateNpmInstalledPlugins(params: {
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
+    const preserveNpmRecordIntent =
+      record.source === "npm" &&
+      npmSpecs?.installSpec !== npmSpecs?.recordSpec &&
+      (officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel) === "extended-stable";
     const officialNpmFallbackSpecs =
       record.source === "clawhub"
         ? resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate({
@@ -1471,6 +1536,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel: params.syncOfficialPluginInstalls
               ? officialSyncUpdateChannel
               : params.updateChannel,
+            coreVersion: params.coreVersion,
           })
         : null;
     let officialNpmFallbackInstallSpec = officialNpmFallbackSpecs?.installSpec;
@@ -1637,7 +1703,7 @@ export async function updateNpmInstalledPlugins(params: {
             const nextRecordSpec = resolveNpmInstallRecordSpec({
               requestedSpec: recordSpec,
               resolution: metadataResult.metadata,
-              pinResolvedRegistrySpec: true,
+              pinResolvedRegistrySpec: !preserveNpmRecordIntent,
             });
             if (nextRecordSpec !== record.spec) {
               const resolutionFields = buildNpmResolutionInstallFields(metadataResult.metadata);
@@ -1950,13 +2016,32 @@ export async function updateNpmInstalledPlugins(params: {
           : Boolean(
               currentVersion && resolvedProbeVersion && currentVersion === resolvedProbeVersion,
             );
+      const newerExactPinnedDefaultLine =
+        unchanged &&
+        record.source === "npm" &&
+        !params.specOverrides?.[pluginId] &&
+        !officialNpmSpec
+          ? await resolveNewerExactPinnedNpmDefaultLine({
+              currentVersion,
+              effectiveSpec,
+              probeNpmVersion: npmProbeVersion,
+              timeoutMs: params.timeoutMs,
+            })
+          : undefined;
       if (unchanged) {
+        const message =
+          newerExactPinnedDefaultLine && effectiveSpec
+            ? `${pluginId} is pinned to ${effectiveSpec} (installed ${currentLabel}); ` +
+              `registry default resolves to ${newerExactPinnedDefaultLine.version}. ` +
+              `Pass \`openclaw plugins update ${newerExactPinnedDefaultLine.packageName}@latest\` to follow the registry default line.` +
+              channelFallbackSuffix
+            : `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}`;
         outcomes.push({
           pluginId,
           status: "unchanged",
           currentVersion: currentVersion ?? undefined,
           nextVersion: resolvedProbeVersion,
-          message: `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}`,
+          message,
           ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
         });
       } else {
@@ -2228,8 +2313,10 @@ export async function updateNpmInstalledPlugins(params: {
             requestedSpec: usedOfficialNpmFallback ? officialNpmFallbackRecordSpec : recordSpec,
             resolution: npmResult.npmResolution,
             pinResolvedRegistrySpec:
-              (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) ||
-              usedOfficialNpmFallback,
+              (params.syncOfficialPluginInstalls &&
+                trustedSourceLinkedOfficialInstall &&
+                !preserveNpmRecordIntent) ||
+              (usedOfficialNpmFallback && officialSyncUpdateChannel !== "extended-stable"),
           }),
           installPath: result.targetDir,
           version: nextVersion,
@@ -2318,6 +2405,7 @@ export async function updateNpmInstalledPlugins(params: {
 export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
+  coreVersion?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
@@ -2440,8 +2528,18 @@ export async function syncPluginsForUpdateChannel(params: {
         targetPluginId,
         npmSpec,
       });
+      const channelNpmSpecs =
+        npmSpec && trustedSourceLinkedOfficialInstall
+          ? resolveNpmInstallSpecsForUpdateChannel({
+              spec: npmSpec,
+              updateChannel: params.channel,
+              officialPackageName: resolveNpmSpecPackageName(npmSpec),
+              coreVersion: params.coreVersion,
+            })
+          : null;
+      const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
       let installSource = preferredSource;
-      let installSpec = preferredSource === "clawhub" ? clawhubSpec : npmSpec;
+      let installSpec = preferredSource === "clawhub" ? clawhubSpec : effectiveNpmSpec;
       let result:
         | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
         | Awaited<ReturnType<typeof installPluginFromClawHub>>;
@@ -2464,13 +2562,13 @@ export async function syncPluginsForUpdateChannel(params: {
           logger,
         });
         if (!result.ok && npmSpec && shouldFallbackClawHubBridgeToNpm({ result, npmSpec })) {
-          const warning = `ClawHub ${clawhubSpec} unavailable for ${targetPluginId}; falling back to npm ${npmSpec}.`;
+          const warning = `ClawHub ${clawhubSpec} unavailable for ${targetPluginId}; falling back to npm ${effectiveNpmSpec}.`;
           summary.warnings.push(warning);
           logger.warn?.(warning);
           installSource = "npm";
-          installSpec = npmSpec;
+          installSpec = effectiveNpmSpec;
           result = await installPluginFromNpmSpec({
-            spec: npmSpec,
+            spec: effectiveNpmSpec,
             config: params.config,
             mode: "update",
             expectedPluginId: targetPluginId,
@@ -2480,7 +2578,7 @@ export async function syncPluginsForUpdateChannel(params: {
         }
       } else {
         result = await installPluginFromNpmSpec({
-          spec: npmSpec,
+          spec: effectiveNpmSpec,
           config: params.config,
           mode: "update",
           expectedPluginId: targetPluginId,
@@ -2545,9 +2643,13 @@ export async function syncPluginsForUpdateChannel(params: {
           pluginId: resolvedPluginId,
           source: "npm",
           spec: resolveNpmInstallRecordSpec({
-            requestedSpec: installSpec,
+            requestedSpec:
+              params.channel === "extended-stable" && installSource === "npm"
+                ? (channelNpmSpecs?.recordSpec ?? installSpec)
+                : installSpec,
             resolution: npmResult.npmResolution,
-            pinResolvedRegistrySpec: trustedSourceLinkedOfficialInstall,
+            pinResolvedRegistrySpec:
+              trustedSourceLinkedOfficialInstall && params.channel !== "extended-stable",
           }),
           installPath: result.targetDir,
           version: nextVersion,

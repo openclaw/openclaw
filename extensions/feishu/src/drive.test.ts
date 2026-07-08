@@ -62,6 +62,7 @@ function mockCallArg<T>(
 type FeishuDriveTool = {
   execute: (callId: string, input: Record<string, unknown>) => Promise<{ details?: unknown }>;
   name?: string;
+  parameters?: unknown;
 };
 
 type FeishuDriveToolFactory = (context: {
@@ -71,6 +72,26 @@ type FeishuDriveToolFactory = (context: {
 
 function firstToolFactory(mock: { mock: { calls: unknown[][] } }): FeishuDriveToolFactory {
   return mockCallArg<FeishuDriveToolFactory>(mock, 0, 0);
+}
+
+function buildDriveTool(): FeishuDriveTool {
+  const registerTool = vi.fn();
+  registerFeishuDriveTools(
+    createDriveToolApi({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "app_id",
+            appSecret: "app_secret", // pragma: allowlist secret
+            tools: { drive: true },
+          },
+        },
+      },
+      registerTool,
+    }),
+  );
+  return firstToolFactory(registerTool)({ agentAccountId: undefined });
 }
 
 function firstLogMessage(mock: { mock: { calls: unknown[][] } }): string {
@@ -105,6 +126,25 @@ function expectRequestCall(
   if ("params" in expected) {
     expect(request.params).toEqual(expected.params);
   }
+}
+
+function schemaForAction(
+  schema: unknown,
+  action: string,
+): { properties?: Record<string, unknown> } {
+  const variants =
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).anyOf ??
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).oneOf ??
+    [];
+  const variant = variants.find((entry) => {
+    const actionSchema = (entry as { properties?: { action?: { const?: unknown } } }).properties
+      ?.action;
+    return actionSchema?.const === action;
+  });
+  if (!variant) {
+    throw new Error(`Missing schema variant for action ${action}`);
+  }
+  return variant as { properties?: Record<string, unknown> };
 }
 
 describe("registerFeishuDriveTools", () => {
@@ -358,6 +398,91 @@ describe("registerFeishuDriveTools", () => {
       true,
     );
     expect((replyCommentResult.details as { reply_id?: string }).reply_id).toBe("r4");
+  });
+
+  it("lists a folder continuation page when page_token is provided", async () => {
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+        next_page_token: "page-3",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles } },
+    });
+    const tool = buildDriveTool();
+    const listSchema = schemaForAction(tool.parameters, "list");
+    expect(listSchema.properties?.page_token).toMatchObject({ type: "string" });
+    expect(listSchema.properties?.page_size).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+
+    const result = await tool.execute("call-list-page-2", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: 25,
+      page_token: "page-2",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({
+      params: { folder_token: "folder_1", page_size: 25, page_token: "page-2" },
+    });
+    expect(result.details).toMatchObject({
+      files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+      next_page_token: "page-3",
+    });
+  });
+
+  it("normalizes folder pagination and suppresses it for root listings", async () => {
+    const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });
+    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
+    const tool = buildDriveTool();
+
+    await tool.execute("call-list-normalized", {
+      action: "list",
+      folder_token: " folder_1 ",
+      page_size: "25",
+      page_token: "   ",
+    });
+    for (const [callId, folderToken] of [
+      ["call-list-root", undefined],
+      ["call-list-empty", "   "],
+      ["call-list-zero", " 0 "],
+    ] as const) {
+      await tool.execute(callId, {
+        action: "list",
+        folder_token: folderToken,
+        page_size: 25,
+        page_token: "page-2",
+      });
+    }
+
+    expect(listFiles).toHaveBeenNthCalledWith(1, {
+      params: { folder_token: "folder_1", page_size: 25 },
+    });
+    for (const callIndex of [2, 3, 4]) {
+      expect(listFiles).toHaveBeenNthCalledWith(callIndex, { params: {} });
+    }
+  });
+
+  it.each([0, 201, 1.5])("rejects invalid folder page_size %s", async (pageSize) => {
+    const listFiles = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-list-invalid-page-size", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: pageSize,
+    });
+
+    expect(result.details).toMatchObject({
+      error: "page_size must be a positive integer between 1 and 200",
+    });
+    expect(listFiles).not.toHaveBeenCalled();
   });
 
   it("defaults add_comment file_type to docx when omitted", async () => {

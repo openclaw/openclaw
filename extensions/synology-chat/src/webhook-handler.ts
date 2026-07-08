@@ -6,6 +6,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
@@ -503,7 +504,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
     respondNoContent(params.res);
     return { ok: false };
   }
-  const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
+  const preview = cleanText.length > 100 ? `${truncateUtf16Safe(cleanText, 100)}...` : cleanText;
   return {
     ok: true,
     message: {
@@ -574,7 +575,7 @@ async function processAuthorizedSynologyWebhook(params: {
       deliveryUserId,
       params.account.allowInsecureSsl,
     );
-    const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
+    const replyPreview = reply.length > 100 ? `${truncateUtf16Safe(reply, 100)}...` : reply;
     params.log?.info?.(
       `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
     );

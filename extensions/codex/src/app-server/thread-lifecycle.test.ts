@@ -6,6 +6,10 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -18,9 +22,15 @@ import {
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
   shouldWarnCodexThreadLifecycleTimingSummary,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
   type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 let tempDir: string;
 
@@ -223,8 +233,14 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models; the instructions must teach the retrieval path or models fall
+    // back to the always-direct sessions_spawn.
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+    );
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
   });
 
@@ -289,12 +305,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain(
-      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-    );
-    expect(instructions).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
-    );
+    expect(instructions).toContain("Route durable skill work");
+    expect(instructions).toContain("through the `skill_workshop` tool");
+    expect(instructions).toContain("Generated skills are pending proposals.");
+    expect(instructions).toContain("only when the user explicitly asks");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -559,6 +573,44 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.personality).toBe("none");
+  });
+
+  it("honors an explicit top-level reviewer on thread start and resume", () => {
+    const appServer = {
+      ...createAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
+    const config = { approvals_reviewer: "user" };
+
+    const started = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+
+    expect(started.approvalsReviewer).toBe("user");
+    expect(resumed.approvalsReviewer).toBe("user");
+  });
+
+  it("keeps the configured runtime reviewer on turn start", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        approvalsReviewer: "auto_review",
+      } as never,
+    });
+
+    expect(request.approvalsReviewer).toBe("auto_review");
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {
@@ -866,7 +918,6 @@ describe("Codex app-server turn params", () => {
       serviceTier: "flex",
       personality: "none",
       developerInstructions: resumeParams.developerInstructions,
-      persistExtendedHistory: true,
     });
     expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
@@ -914,6 +965,25 @@ describe("Codex app-server turn params", () => {
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
+
+    params.bootstrapContextRunKind = "commitment-only";
+    const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "Turn-only workspace instructions.",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
+      "This is an OpenClaw heartbeat turn",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
       "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
     );
 
@@ -1127,6 +1197,9 @@ describe("Codex app-server model provider selection", () => {
 describe("Codex app-server thread lifecycle timing", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-lifecycle-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {
@@ -1296,14 +1369,32 @@ describe("Codex app-server thread lifecycle timing", () => {
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] as const)(
+    it.each([
+      "gpt-5.6",
+      "gpt-5.6-sol-oai",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ] as const)(
       "translates 'minimal' -> 'low' for %s so the first request is accepted",
       (modelId) => {
         expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
       },
     );
 
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] as const)(
+    it.each([
+      "gpt-5.6",
+      "gpt-5.6-sol-oai",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ] as const)(
       "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
       (modelId) => {
         expect(resolveReasoningEffort("low", modelId)).toBe("low");
@@ -1316,6 +1407,25 @@ describe("resolveReasoningEffort (#71946)", () => {
     it("normalizes case-variant model ids", () => {
       expect(resolveReasoningEffort("minimal", "GPT-5.5")).toBe("low");
       expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
+    });
+
+    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+      "uses the %s minimum effort when metadata is unavailable",
+      (modelId) => {
+        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
+      },
+    );
+
+    it("honors stricter app-server reasoning metadata", () => {
+      const supported = ["medium", "high", "xhigh"];
+
+      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
     });
   });
 
@@ -1344,7 +1454,11 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
     });
 
-    it("returns null for 'max' (non-effort enum value)", () => {
+    it("passes max for the GPT-5.6 series", () => {
+      expect(resolveReasoningEffort("max", "gpt-5.6")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-terra")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-luna")).toBe("max");
       expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
       expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
     });

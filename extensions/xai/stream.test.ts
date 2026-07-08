@@ -625,4 +625,31 @@ describe("xai stream wrappers", () => {
       },
     ]);
   });
+
+  it("uses audio fallback text for audio-only tool outputs", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_audio",
+          output: [
+            {
+              type: "input_audio",
+              mimeType: "audio/wav",
+              data: "QUJDRA==",
+            },
+          ],
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload, input: ["text"] });
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_audio",
+        output: "(see attached audio)",
+      },
+    ]);
+  });
 });

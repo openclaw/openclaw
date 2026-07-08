@@ -14,10 +14,7 @@ import (
 const defaultDocChunkMaxBytes = 12000
 const defaultDocChunkPromptBudget = 15000
 
-var (
-	docsFenceRE        = regexp.MustCompile(`^\s*(` + "```" + `|~~~)`)
-	docsComponentTagRE = regexp.MustCompile(`<(/?)([A-Z][A-Za-z0-9]*)\b[^>]*?/?>`)
-)
+var docsComponentTagRE = regexp.MustCompile(`<(/?)([A-Z][A-Za-z0-9]*)\b[^>]*?/?>`)
 
 var docsProtocolTokens = []string{
 	frontmatterTagStart,

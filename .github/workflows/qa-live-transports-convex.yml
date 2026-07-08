@@ -497,7 +497,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
+      - &qa_live_required_credentials_step
+        name: Validate required QA credential env
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -592,27 +593,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -690,27 +671,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -785,27 +746,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288

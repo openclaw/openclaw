@@ -12,20 +12,24 @@ import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "./live-artifacts.j
 
 async function stopQaLiveLaneResources(
   resources: {
-    gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+    gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | null;
     mock: { baseUrl: string; stop(): Promise<void> } | null;
   },
   opts?: { keepTemp?: boolean; preserveToDir?: string },
 ) {
   const errors: string[] = [];
-  try {
-    await resources.gateway.stop(opts);
-  } catch (error) {
-    appendLiveLaneIssue(errors, "gateway stop failed", error);
+  if (resources.gateway) {
+    try {
+      await resources.gateway.stop(opts);
+      resources.gateway = null;
+    } catch (error) {
+      appendLiveLaneIssue(errors, "gateway stop failed", error);
+    }
   }
   if (resources.mock) {
     try {
       await resources.mock.stop();
+      resources.mock = null;
     } catch (error) {
       appendLiveLaneIssue(errors, "mock provider stop failed", error);
     }
@@ -99,6 +103,7 @@ export async function startQaLiveLaneGateway(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
+  mockAuthAgentIds?: readonly string[];
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
   const mock = await startQaProviderServer(params.providerMode);
@@ -117,14 +122,16 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
+      mockAuthAgentIds: params.mockAuthAgentIds,
       mutateConfig: (cfg) =>
         prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });
+    const resources = { gateway, mock };
     return {
       gateway,
       mock,
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
-        await stopQaLiveLaneResources({ gateway, mock }, opts);
+        await stopQaLiveLaneResources(resources, opts);
       },
     };
   } catch (error) {

@@ -223,7 +223,7 @@ Use the compact directory surface instead for OpenClaw runs:
 }
 ```
 
-Tune code-mode timeout and search result limits:
+Tune code-mode timeout and search result limits (values shown are the defaults):
 
 ```json5
 {
@@ -237,6 +237,9 @@ Tune code-mode timeout and search result limits:
   },
 }
 ```
+
+The runtime clamps `codeTimeoutMs` to 1000-60000, `maxSearchLimit` to 1-50, and
+`searchDefaultLimit` to 1..`maxSearchLimit`.
 
 Disable it:
 
@@ -267,10 +270,10 @@ Session logs should make it possible to answer:
 
 ## E2E validation
 
-The gateway E2E runner proves both paths with the OpenClaw runtime:
+The QA Lab gateway scenario proves both paths with the OpenClaw runtime:
 
 ```bash
-node --import tsx scripts/tool-search-gateway-e2e.ts
+pnpm openclaw qa suite --provider-mode mock-openai --scenario tool-search-gateway-e2e
 ```
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock

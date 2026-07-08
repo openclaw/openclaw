@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -316,6 +317,151 @@ describe("gateway tool defaults", () => {
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("does not mark direct cron helper calls with agent runtime identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "job-1" });
+
+    await callGatewayTool("cron.remove", {}, { id: "job-1" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("cron.remove");
+    expect(call.params).toEqual({ id: "job-1" });
+    expect(call).not.toHaveProperty("agentRuntimeIdentityToken");
+  });
+
+  it("marks local cron calls from trusted tool context with agent runtime identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "job-1" });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+      async () => {
+        await callGatewayTool("cron.remove", {}, { id: "job-1" });
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("cron.remove");
+    expect(call.params).toEqual({ id: "job-1" });
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("marks local wake calls from trusted tool context with agent runtime identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+      async () => {
+        await callGatewayTool("wake", {}, { mode: "now", text: "ping" });
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("wake");
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("explains stale gateway cron connection metadata rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("explains fail-closed stale gateway cron identity rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("does not rewrite stale gateway validation errors for unscoped cron calls", async () => {
+    const originalError = new Error(
+      "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    );
+    mocks.callGateway.mockRejectedValueOnce(originalError);
+
+    await expect(callGatewayTool("cron.remove", {}, { id: "job-1" })).rejects.toBe(originalError);
+  });
+
+  it("fails contextual cron calls closed for gatewayUrl overrides", async () => {
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool(
+            "cron.remove",
+            { gatewayUrl: "ws://127.0.0.1:18789" },
+            { id: "job-1" },
+          );
+        },
+      ),
+    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails contextual cron calls closed for explicit gateway tokens", async () => {
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", { gatewayToken: "token" }, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails contextual cron calls closed for configured remote gateways", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("marks local approval wait calls as approval runtime calls", async () => {

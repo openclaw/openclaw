@@ -5,12 +5,14 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -242,7 +244,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
   if (result.code !== 0) {
     return {
       ok: false,
-      error: `brew install signal-cli failed (exit ${result.code}): ${result.stderr.trim().slice(0, 200)}`,
+      error: `brew install signal-cli failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
     };
   }
 
@@ -303,7 +305,7 @@ export async function installSignalCliFromRelease(
       };
     }
     try {
-      payload = (await response.json()) as ReleaseResponse;
+      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
     } catch {
       return {
         ok: false,

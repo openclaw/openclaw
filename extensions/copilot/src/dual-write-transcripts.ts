@@ -15,9 +15,9 @@
  * assistant + toolResult) into the OpenClaw transcript via the same
  * plugin-sdk primitives that the codex extension uses
  * (extensions/codex/src/app-server/transcript-mirror.ts). Both writers
- * cooperate via idempotency-key dedupe: each mirrored entry carries a
- * stable `${idempotencyScope}:${identity}` key, and we skip any key
- * already present in the transcript on disk before appending. Both
+ * cooperate via idempotency-key dedupe: user entries retain a gateway
+ * turn key when present; other entries use `${idempotencyScope}:${identity}`.
+ * We skip any key already present in the transcript on disk. Both
  * attempt-execution's untagged entries (no idempotencyKey) and our
  * tagged mirror entries can coexist; attempt-execution dedupes its own
  * final-assistant append via `embeddedAssistantGapFill` content match.
@@ -93,7 +93,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
   return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
 }
 
-export interface MirrorCopilotTranscriptParams {
+interface MirrorCopilotTranscriptParams {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
@@ -129,9 +129,17 @@ export async function mirrorCopilotTranscript(
       const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await transcript.readEvents());
       for (const message of messages) {
         const dedupeIdentity = buildMirrorDedupeIdentity(message);
-        const idempotencyKey = params.idempotencyScope
-          ? `${params.idempotencyScope}:${dedupeIdentity}`
-          : undefined;
+        const sourceIdempotencyKey = (message as unknown as { idempotencyKey?: unknown })
+          .idempotencyKey;
+        const sourceUserIdempotencyKey =
+          message.role === "user" &&
+          typeof sourceIdempotencyKey === "string" &&
+          sourceIdempotencyKey.trim()
+            ? sourceIdempotencyKey.trim()
+            : undefined;
+        const idempotencyKey =
+          sourceUserIdempotencyKey ??
+          (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
         if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
           continue;
         }

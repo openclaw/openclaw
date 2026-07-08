@@ -95,7 +95,7 @@ If you pass `--build-number` to `pnpm ios:release:archive`, the local archive pa
 Archive locally without upload:
 
 ```bash
-pnpm ios:release:archive
+pnpm ios:release:archive -- --version 2026.6.11 --build-number 3
 ```
 
 Generate deterministic App Store screenshots:
@@ -109,12 +109,12 @@ The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters
 Upload to App Store Connect:
 
 ```bash
-pnpm ios:release:upload
+pnpm ios:release:upload -- --version 2026.6.11
 ```
 
-Direct Fastlane TestFlight upload is disabled. Use the package script so the
-release wrapper, App Store push mode, and exported-IPA validation gate all run
-in the same path.
+Direct Fastlane upload is disabled. Use the package script so the release
+wrapper, App Store push mode, and exported-IPA validation gate all run in the
+same path.
 
 Maintainer recovery path for a fresh clone on the same Mac:
 
@@ -135,16 +135,16 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-4. If you are starting a brand-new production release train, pin iOS to the current gateway version:
+4. If you are starting a brand-new production release train, validate iOS release notes for the release version:
 
 ```bash
-pnpm ios:version:pin -- --from-gateway
+pnpm ios:version:check -- --version 2026.6.11
 ```
 
 5. Upload:
 
 ```bash
-pnpm ios:release:upload
+pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 ```
 
 Quick verification after upload:
@@ -152,19 +152,19 @@ Quick verification after upload:
 - confirm `apps/ios/build/app-store/OpenClaw-<version>.ipa` exists
 - confirm Fastlane validates the exported IPA before upload
 - confirm Fastlane prints `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
-- remember that App Store Connect/TestFlight processing can take a few minutes after the upload succeeds
+- remember that App Store Connect processing can take a few minutes after the upload succeeds
 
 Versioning rules:
 
-- `apps/ios/version.json` is the pinned iOS release version source
+- App Store release uploads require an explicit `--version`
+- local defaults derive from root `package.json`
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Supported pinned iOS versions use CalVer: `YYYY.M.D`
-- `pnpm ios:version:pin -- --from-gateway` promotes the current root gateway version into the pinned iOS release version
-- Fastlane uses the pinned iOS version only; changing `package.json.version` alone does not change the iOS app version
-- Fastlane sets `CFBundleShortVersionString` to the pinned iOS version, for example `2026.4.10`
+- Supported iOS release versions use CalVer: `YYYY.M.D`
+- Fastlane uses the explicit release version for App Store upload
+- Fastlane sets `CFBundleShortVersionString` to the release version, for example `2026.4.10`
 - Fastlane resolves `CFBundleVersion` as the next integer App Store Connect build number for that short version
-- Run `pnpm ios:version:sync` after changing `apps/ios/version.json` or `apps/ios/CHANGELOG.md`
-- `pnpm ios:version:check` validates that checked-in iOS version artifacts are in sync
+- Run `pnpm ios:version:check -- --version <release-version>` after changing `apps/ios/CHANGELOG.md`
+- `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.

@@ -3,6 +3,7 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -88,10 +89,10 @@ type GatewayTaskCancelResult = {
   task?: GatewayTaskCancelSummary;
 };
 
-async function tryCancelCronTaskViaGateway(
+async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron") {
+  if (task.runtime !== "cron" && task.runtime !== "acp") {
     return null;
   }
   try {
@@ -101,7 +102,16 @@ async function tryCancelCronTaskViaGateway(
       params: { taskId: task.taskId },
       timeoutMs: 5_000,
     });
-  } catch {
+  } catch (error) {
+    if (task.runtime === "acp") {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        found: true,
+        cancelled: false,
+        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+        task,
+      };
+    }
     return null;
   }
 }
@@ -196,10 +206,7 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
-    return value.slice(0, maxChars);
-  }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -468,7 +475,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const gatewayResult = await tryCancelCronTaskViaGateway(task);
+  const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
   if (gatewayResult) {
     if (!gatewayResult.found) {
       runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));

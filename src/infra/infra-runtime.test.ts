@@ -230,19 +230,59 @@ describe("infra runtime", () => {
       }
     });
 
-    it("preserves update restart reason when a scheduled restart coalesces", async () => {
+    it.each(["update.run", "update.auto"] as const)(
+      "preserves %s restart reason when a scheduled restart coalesces",
+      async (reason) => {
+        const handler = () => {};
+        process.on("SIGUSR1", handler);
+        try {
+          const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+          const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason });
+
+          expect(first.coalesced).toBe(false);
+          expect(second.coalesced).toBe(true);
+
+          await vi.advanceTimersByTimeAsync(1_000);
+
+          expect(peekGatewaySigusr1RestartReason()).toBe(reason);
+        } finally {
+          process.removeListener("SIGUSR1", handler);
+        }
+      },
+    );
+
+    it("promotes update.auto while restart preparation is in flight", async () => {
+      let releasePreparation: () => void = () => {};
+      const preparationBlocked = new Promise<void>((resolve) => {
+        releasePreparation = resolve;
+      });
+      const beforeEmit = vi.fn(async () => {
+        await preparationBlocked;
+      });
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "update.run" });
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "config.patch",
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
 
-        expect(first.coalesced).toBe(false);
-        expect(second.coalesced).toBe(true);
+        const update = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.auto",
+          skipDeferral: true,
+        });
+        expect(update.coalesced).toBe(true);
 
-        await vi.advanceTimersByTimeAsync(1_000);
+        releasePreparation();
+        await Promise.resolve();
+        await Promise.resolve();
 
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

@@ -6,6 +6,8 @@ const flushKeyMock = vi.fn(async (_key: string) => {});
 const onFlushCallbacks: Array<(entries: Array<Record<string, unknown>>) => Promise<void>> = [];
 const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
 const dispatchPreparedSlackMessageMock = vi.fn(async () => {});
+const hasSlackInboundMessageDeliveryMock = vi.fn(async () => false);
+const recordSlackInboundMessageDeliveriesMock = vi.fn(async () => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
@@ -45,8 +47,8 @@ vi.mock("./message-handler/pipeline.runtime.js", () => ({
 }));
 
 vi.mock("./inbound-delivery-state.js", () => ({
-  hasSlackInboundMessageDelivery: vi.fn(async () => false),
-  recordSlackInboundMessageDeliveries: vi.fn(async () => {}),
+  hasSlackInboundMessageDelivery: hasSlackInboundMessageDeliveryMock,
+  recordSlackInboundMessageDeliveries: recordSlackInboundMessageDeliveriesMock,
 }));
 
 function createContext(overrides?: {
@@ -101,6 +103,9 @@ describe("createSlackMessageHandler", () => {
     onFlushCallbacks.length = 0;
     prepareSlackMessageMock.mockClear();
     dispatchPreparedSlackMessageMock.mockClear();
+    hasSlackInboundMessageDeliveryMock.mockReset();
+    hasSlackInboundMessageDeliveryMock.mockResolvedValue(false);
+    recordSlackInboundMessageDeliveriesMock.mockClear();
     resolveThreadTsMock.mockClear();
   });
 
@@ -269,5 +274,139 @@ describe("createSlackMessageHandler", () => {
     const handledFailure = expect(handled).rejects.toThrow("dispatch failed");
     const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("dispatch failed");
     await Promise.all([handledFailure, flushFailure]);
+  });
+
+  it("retries native session initialization conflicts through the delivery gates", async () => {
+    const releaseSeenMessage = vi.fn();
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("Slack dispatch failed", {
+        cause: new Error(
+          "reply session initialization conflicted for agent:main:main:thread:123.456",
+        ),
+      }),
+    );
+    const { handler } = createHandlerWithTracker({ releaseSeenMessage });
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000700",
+        text: "native message",
+      } as never,
+      { source: "message" },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      await expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("Slack dispatch failed");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(releaseSeenMessage).toHaveBeenCalledWith("C111", "1709000000.000700");
+      expect(recordSlackInboundMessageDeliveriesMock).not.toHaveBeenCalled();
+      expect(hasSlackInboundMessageDeliveryMock).toHaveBeenCalledTimes(2);
+      expect(enqueueMock).toHaveBeenCalledTimes(2);
+      expect(enqueueMock.mock.calls[1]?.[0]).toMatchObject({
+        opts: {
+          retryAttempt: 1,
+        },
+      });
+      expect(enqueueMock.mock.calls[1]?.[0]).not.toHaveProperty("opts.dispatchCompletion");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves relay session conflict retries to unacknowledged redelivery", async () => {
+    const releaseSeenMessage = vi.fn();
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("Slack dispatch failed", {
+        cause: new Error(
+          "reply session initialization conflicted for agent:main:main:thread:123.456",
+        ),
+      }),
+    );
+    const { handler } = createHandlerWithTracker({ releaseSeenMessage });
+    const handled = handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000800",
+        text: "relay message",
+      } as never,
+      { source: "message", awaitDispatch: true },
+    );
+
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      const handledFailure = expect(handled).rejects.toThrow("Slack dispatch failed");
+      const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow(
+        "Slack dispatch failed",
+      );
+      await Promise.all([handledFailure, flushFailure]);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(releaseSeenMessage).toHaveBeenCalledWith("C111", "1709000000.000800");
+      expect(recordSlackInboundMessageDeliveriesMock).not.toHaveBeenCalled();
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles an already-delivered relay event without enqueueing", async () => {
+    hasSlackInboundMessageDeliveryMock.mockResolvedValueOnce(true);
+    const { handler } = createHandlerWithTracker();
+
+    await expect(
+      handler(
+        {
+          type: "message",
+          channel: "C111",
+          user: "U111",
+          ts: "1709000000.000850",
+          text: "relay replay",
+        } as never,
+        { source: "message", awaitDispatch: true },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("skips a native retry when another delivery already succeeded", async () => {
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:main:thread:123.456"),
+    );
+    hasSlackInboundMessageDeliveryMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { handler } = createHandlerWithTracker();
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000900",
+        text: "native message",
+      } as never,
+      { source: "message" },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      await expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow(
+        "reply session initialization conflicted",
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(hasSlackInboundMessageDeliveryMock).toHaveBeenCalledTimes(2);
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

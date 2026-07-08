@@ -250,17 +250,24 @@ function buildExecForegroundResult(params: {
     return failedTextResult(`${warningText}${params.outcome.reason}`, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
+      exitSignal: params.outcome.exitSignal,
+      failureKind: params.outcome.failureKind,
+      exitReason: params.outcome.exitReason,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
       timedOut: params.outcome.timedOut,
+      noOutputTimedOut: params.outcome.noOutputTimedOut,
       cwd: params.cwd,
     });
   }
   return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
     status: "completed",
     exitCode: params.outcome.exitCode,
+    exitSignal: params.outcome.exitSignal,
+    exitReason: params.outcome.exitReason,
     durationMs: params.outcome.durationMs,
     aggregated: params.outcome.aggregated,
+    noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
   });
 }
@@ -1576,9 +1583,10 @@ export function createExecTool(
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
-      if (!allowBackground && (backgroundRequested || yieldRequested)) {
-        warnings.push("Warning: background execution is disabled; running synchronously.");
-      }
+      const foregroundFallbackWarning =
+        !allowBackground && (backgroundRequested || yieldRequested)
+          ? "Warning: background execution is disabled; running synchronously."
+          : undefined;
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
@@ -1878,6 +1886,7 @@ export function createExecTool(
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
+            foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
@@ -1938,6 +1947,12 @@ export function createExecTool(
           if (gatewayResult.allowWithoutEnforcedCommand) {
             execCommandOverride = undefined;
           }
+        }
+
+        // Pending approvals have not started the command. Add fallback warnings only
+        // after approval routing proves this call will execute in the foreground.
+        if (foregroundFallbackWarning) {
+          warnings.push(foregroundFallbackWarning);
         }
 
         const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;

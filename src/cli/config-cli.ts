@@ -23,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -42,8 +41,12 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -516,6 +519,16 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
     current = record[segment];
   }
   return { found: true, value: current };
+}
+
+function formatConfigUnsetMissingPathMessage(params: {
+  path: string;
+  runtimeOnly: boolean;
+}): string {
+  if (params.runtimeOnly) {
+    return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
+  }
+  return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
 }
 
 type JsonSchemaRecord = {
@@ -999,6 +1012,114 @@ function pruneInactiveGatewayAuthCredentials(params: {
 
 function toDotPath(path: PathSegment[]): string {
   return path.join(".");
+}
+
+const RESTART_HINT = "Restart the gateway to apply.";
+const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
+const NO_RELOAD_HINT = "No gateway restart needed.";
+
+function isPluginEntryConfigPath(path: string): boolean {
+  // CLI hints are operator guidance. Keep plugin entry writes conservative
+  // because the CLI cannot prove every plugin's reload metadata is loaded.
+  return path === "plugins.entries" || path.startsWith("plugins.entries.");
+}
+
+function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): string {
+  if (paths.length === 0) {
+    return RESTART_HINT;
+  }
+  if (paths.some(isPluginEntryConfigPath)) {
+    return RESTART_HINT;
+  }
+  const plan = buildGatewayReloadPlan(paths);
+  if (plan.restartGateway) {
+    return RESTART_HINT;
+  }
+  if (plan.hotReasons.length > 0) {
+    const { mode } = resolveGatewayReloadSettings(afterConfig);
+    if (mode === "off" || mode === "restart") {
+      return RESTART_HINT;
+    }
+    return HOT_RELOAD_HINT;
+  }
+  return NO_RELOAD_HINT;
+}
+
+function configApplyHintForOperations(
+  operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string {
+  const requestedPaths: string[] = [];
+  for (const operation of operations) {
+    if (!operation.requestedPath) {
+      return RESTART_HINT;
+    }
+    requestedPaths.push(toDotPath(operation.requestedPath));
+  }
+  return configApplyHintForPaths(
+    expandActualChangedPathsWithRequestedDescendants(
+      diffConfigPaths(beforeConfig, afterConfig),
+      requestedPaths,
+      beforeConfig,
+      afterConfig,
+    ),
+    afterConfig,
+  );
+}
+
+function expandActualChangedPathsWithRequestedDescendants(
+  actualChangedPaths: string[],
+  requestedPaths: string[],
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const expanded = new Set<string>();
+  for (const actualPath of actualChangedPaths) {
+    const requestedDescendants = requestedPaths.filter(
+      (requestedPath) => requestedPath !== actualPath && requestedPath.startsWith(`${actualPath}.`),
+    );
+    if (requestedDescendants.length > 0) {
+      for (const requestedPath of requestedDescendants) {
+        expanded.add(requestedPath);
+      }
+      continue;
+    }
+    for (const expandedPath of expandWholeValueChangePath(actualPath, beforeConfig, afterConfig)) {
+      expanded.add(expandedPath);
+    }
+  }
+  return [...expanded];
+}
+
+function expandWholeValueChangePath(
+  actualPath: string,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const path = actualPath === "<root>" ? [] : actualPath.split(".");
+  const before = getAtPath(beforeConfig, path);
+  const after = getAtPath(afterConfig, path);
+  if (before.found && !after.found) {
+    return collectChangedLeafPaths(before.value, actualPath);
+  }
+  if (!before.found && after.found) {
+    return collectChangedLeafPaths(after.value, actualPath);
+  }
+  return [actualPath];
+}
+
+function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
+  if (!isPlainRecord(value)) {
+    return [prefix];
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return [prefix];
+  }
+  return entries.flatMap(([key, child]) =>
+    collectChangedLeafPaths(child, prefix ? `${prefix}.${key}` : key),
+  );
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -2011,6 +2132,9 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+    structuredClone(snapshot.resolved) as OpenClawConfig,
+  );
   const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
@@ -2197,16 +2321,16 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(
-      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
-    );
+    const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
+    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
     return;
   }
+  const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
   if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
     return;
   }
-  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+  runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
 }
 
 function handleConfigMutationError(params: {
@@ -2367,8 +2491,16 @@ export async function runConfigUnset(opts: {
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+      structuredClone(snapshot.resolved) as OpenClawConfig,
+    );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
+      const missingPathMessage = formatConfigUnsetMissingPathMessage({
+        path: opts.path,
+        runtimeOnly,
+      });
       if (cliOptions.dryRun && cliOptions.json) {
         throw new ConfigSetDryRunValidationError({
           ok: false,
@@ -2385,16 +2517,14 @@ export async function runConfigUnset(opts: {
           errors: [
             {
               kind: "missing-path",
-              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+              message: runtimeOnly
+                ? missingPathMessage
+                : `Config path not found: ${opts.path}. Nothing was changed.`,
             },
           ],
         });
       }
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
-        ),
-      );
+      runtime.error(danger(missingPathMessage));
       runtime.exit(1);
       return;
     }
@@ -2414,13 +2544,18 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+    const hint = configApplyHintForOperations(
+      [buildUnsetOperation(parsedPath)],
+      currentConfigForApplyHint,
+      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+    );
+    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
 }
 
-export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
@@ -2445,7 +2580,7 @@ async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
   return schema;
 }
 
-export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     writeRuntimeJson(runtime, await buildCliConfigSchema());
@@ -2455,7 +2590,7 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 

@@ -40,6 +40,7 @@ import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-forma
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -86,7 +87,12 @@ function resolveNodeDefaults(
     return { host, port: null };
   }
   const port = portOverride ?? config?.gateway?.port ?? 18789;
-  return { host, port };
+  const retargeted = opts.host !== undefined || opts.port !== undefined;
+  const explicitContextPath = opts.contextPath !== undefined;
+  const contextPath =
+    normalizeOptionalString(opts.contextPath) ||
+    (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
+  return { host, port, contextPath };
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
@@ -96,7 +102,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath } = resolveNodeDefaults(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -143,6 +149,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       env: process.env,
       host,
       port: port ?? 18789,
+      contextPath,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,

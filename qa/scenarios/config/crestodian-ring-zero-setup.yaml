@@ -24,7 +24,7 @@ scenario:
   codeRefs:
     - src/crestodian/operations.ts
     - scripts/e2e/crestodian-first-run-spec.json
-    - scripts/e2e/crestodian-first-run-docker-client.ts
+    - test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts
     - extensions/qa-lab/src/suite-runtime-agent-process.ts
   execution:
     kind: flow

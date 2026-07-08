@@ -62,6 +62,7 @@ const SessionsListToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
+  archived: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -128,6 +129,7 @@ export function createSessionsListTool(opts?: {
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
+      const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -142,6 +144,7 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          archived,
           includeDerivedTitles: false,
           includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
@@ -317,6 +320,10 @@ export function createSessionsListTool(opts?: {
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          archived: entry.archived === true,
+          archivedAt: typeof entry.archivedAt === "number" ? entry.archivedAt : undefined,
+          pinned: entry.pinned === true,
+          pinnedAt: typeof entry.pinnedAt === "number" ? entry.pinnedAt : undefined,
           sessionId,
           model: readStringValue(entry.model),
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,

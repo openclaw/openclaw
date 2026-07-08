@@ -1,8 +1,7 @@
 // Crestodian audit tests cover filesystem-backed rescue audit scenarios.
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
 
 describe("Crestodian audit log", () => {
@@ -17,23 +16,24 @@ describe("Crestodian audit log", () => {
   });
 
   it("writes jsonl records under the OpenClaw audit dir", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-audit-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    await withTempDir({ prefix: "crestodian-audit-" }, async (tempDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
 
-    const auditPath = await appendCrestodianAuditEntry({
-      operation: "config.setDefaultModel",
-      summary: "Set default model to openai/gpt-5.2",
-      configHashBefore: "before",
-      configHashAfter: "after",
+      const auditPath = await appendCrestodianAuditEntry({
+        operation: "config.setDefaultModel",
+        summary: "Set default model to openai/gpt-5.2",
+        configHashBefore: "before",
+        configHashAfter: "after",
+      });
+
+      expect(auditPath).toBe(resolveCrestodianAuditPath());
+      const lines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const entry = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+      expect(entry.operation).toBe("config.setDefaultModel");
+      expect(entry.summary).toBe("Set default model to openai/gpt-5.2");
+      expect(entry.configHashBefore).toBe("before");
+      expect(entry.configHashAfter).toBe("after");
     });
-
-    expect(auditPath).toBe(resolveCrestodianAuditPath());
-    const lines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-    expect(lines).toHaveLength(1);
-    const entry = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
-    expect(entry.operation).toBe("config.setDefaultModel");
-    expect(entry.summary).toBe("Set default model to openai/gpt-5.2");
-    expect(entry.configHashBefore).toBe("before");
-    expect(entry.configHashAfter).toBe("after");
   });
 });

@@ -3423,9 +3423,6 @@ rules:
         - src/plugins/web-fetch-providers*.ts
         - src/media/**
         - src/infra/net/**
-      exclude:
-        - src/media/read-response-with-limit.ts
-        - src/media/read-response-with-limit.test.ts
     patterns:
       - pattern-either:
           - pattern: $RESP.text()
