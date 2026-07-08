@@ -10,19 +10,33 @@ import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 /** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 
-const HTML_TAG_RE = /<[^>]+>/g;
-const SCRIPT_TAG_BLOCK_RE = /<script[\s\S]*?<\/script>/gi;
-const STYLE_TAG_BLOCK_RE = /<style[\s\S]*?<\/style>/gi;
-const NOSCRIPT_TAG_BLOCK_RE = /<noscript[\s\S]*?<\/noscript>/gi;
-const SCRIPT_STYLE_NOSCRIPT_OPEN_RE = /<(?:script|style|noscript)\b/i;
-const ANCHOR_OPEN_RE = /<a\s/i;
-const ANCHOR_RE = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-const HEADING_OPEN_RE = /<h[1-6]\b/i;
-const HEADING_RE = /<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi;
-const LIST_ITEM_OPEN_RE = /<li\b/i;
-const LIST_ITEM_RE = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-const BLOCK_BREAK_RE =
-  /<(?:br|hr)\s*\/?>|<\/(?:p|div|section|article|header|footer|table|tr|ul|ol)>/gi;
+const RAW_TEXT_TAGS = new Set(["script", "style", "noscript"]);
+const BLOCK_BREAK_TAGS = new Set([
+  "p",
+  "div",
+  "section",
+  "article",
+  "header",
+  "footer",
+  "table",
+  "tr",
+  "ul",
+  "ol",
+]);
+
+type RenderContext =
+  | { kind: "root"; parts: string[] }
+  | { kind: "title"; parts: string[] }
+  | { kind: "anchor"; href: string | undefined; parts: string[] }
+  | { kind: "heading"; level: number; parts: string[] }
+  | { kind: "list-item"; parts: string[] };
+
+type HtmlTagToken = {
+  closing: boolean;
+  name: string;
+  raw: string;
+  selfClosing: boolean;
+};
 
 // Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
 // renderer share one entity contract — the divergent hand-rolled copy here was what truncated astral
@@ -53,9 +67,294 @@ function decodeEntities(value: string): string {
   return out;
 }
 
+function isAsciiWhitespace(value: string): boolean {
+  return value === " " || value === "\n" || value === "\r" || value === "\t" || value === "\f";
+}
+
+function isTagNameChar(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    value === "-" ||
+    value === ":"
+  );
+}
+
+function isTagBoundary(value: string | undefined): boolean {
+  return !value || isAsciiWhitespace(value) || value === ">" || value === "/";
+}
+
+function findTagEnd(html: string, start: number): number {
+  let quote: string | null = null;
+  for (let i = start + 1; i < html.length; i += 1) {
+    const ch = html[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ">") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function readTagToken(html: string, start: number): { token: HtmlTagToken; next: number } | null {
+  const end = findTagEnd(html, start);
+  if (end === -1) {
+    return null;
+  }
+
+  let pos = start + 1;
+  while (pos < end && isAsciiWhitespace(html[pos])) {
+    pos += 1;
+  }
+  const closing = html[pos] === "/";
+  if (closing) {
+    pos += 1;
+    while (pos < end && isAsciiWhitespace(html[pos])) {
+      pos += 1;
+    }
+  }
+
+  if (pos >= end || html[pos] === "!" || html[pos] === "?") {
+    return {
+      token: {
+        closing: false,
+        name: "",
+        raw: html.slice(start + 1, end),
+        selfClosing: false,
+      },
+      next: end + 1,
+    };
+  }
+
+  const nameStart = pos;
+  while (pos < end && isTagNameChar(html[pos])) {
+    pos += 1;
+  }
+  if (pos === nameStart) {
+    return null;
+  }
+
+  const raw = html.slice(start + 1, end);
+  return {
+    token: {
+      closing,
+      name: html.slice(nameStart, pos).toLowerCase(),
+      raw,
+      selfClosing: raw.trimEnd().endsWith("/"),
+    },
+    next: end + 1,
+  };
+}
+
+function readAttributeValue(rawTag: string, name: string): string | undefined {
+  const lower = rawTag.toLowerCase();
+  let pos = 0;
+  while (pos < lower.length) {
+    const match = lower.indexOf(name, pos);
+    if (match === -1) {
+      return undefined;
+    }
+    const before = match === 0 ? " " : lower[match - 1];
+    const after = lower[match + name.length] ?? "";
+    if (!isTagNameChar(before) && !isTagNameChar(after)) {
+      pos = match + name.length;
+      while (pos < lower.length && isAsciiWhitespace(lower[pos])) {
+        pos += 1;
+      }
+      if (rawTag[pos] !== "=") {
+        continue;
+      }
+      pos += 1;
+      while (pos < lower.length && isAsciiWhitespace(lower[pos])) {
+        pos += 1;
+      }
+      const quote = rawTag[pos];
+      if (quote === '"' || quote === "'") {
+        const valueStart = pos + 1;
+        const valueEnd = rawTag.indexOf(quote, valueStart);
+        return valueEnd === -1
+          ? decodeEntities(rawTag.slice(valueStart))
+          : decodeEntities(rawTag.slice(valueStart, valueEnd));
+      }
+      const valueStart = pos;
+      while (
+        pos < rawTag.length &&
+        !isAsciiWhitespace(rawTag[pos]) &&
+        rawTag[pos] !== ">" &&
+        rawTag[pos] !== "/"
+      ) {
+        pos += 1;
+      }
+      return valueStart === pos ? undefined : decodeEntities(rawTag.slice(valueStart, pos));
+    }
+    pos = match + name.length;
+  }
+  return undefined;
+}
+
+function contextText(context: RenderContext): string {
+  return context.parts.join("");
+}
+
+function appendText(stack: RenderContext[], value: string): void {
+  stack[stack.length - 1]?.parts.push(value);
+}
+
+function closeContext(
+  context: RenderContext,
+  parent: RenderContext,
+  state: { title?: string },
+): void {
+  const label = normalizeWhitespace(contextText(context));
+  if (!label && context.kind !== "title") {
+    return;
+  }
+  switch (context.kind) {
+    case "title":
+      state.title ??= label || undefined;
+      return;
+    case "anchor":
+      parent.parts.push(
+        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+      );
+      return;
+    case "heading":
+      parent.parts.push(`\n${"#".repeat(context.level)} ${label}\n`);
+      return;
+    case "list-item":
+      parent.parts.push(`\n- ${label}`);
+      return;
+    case "root":
+      parent.parts.push(label);
+  }
+}
+
+function closeMatchingContext(
+  stack: RenderContext[],
+  kind: RenderContext["kind"],
+  state: { title?: string },
+): boolean {
+  const top = stack[stack.length - 1];
+  if (!top || top.kind !== kind || stack.length < 2) {
+    return false;
+  }
+  const context = stack.pop();
+  const parent = stack[stack.length - 1];
+  if (!context || !parent) {
+    return false;
+  }
+  closeContext(context, parent, state);
+  return true;
+}
+
+function closeRawTextTagEnd(lowerHtml: string, tagName: string, contentStart: number): number {
+  let closeStart = lowerHtml.indexOf(`</${tagName}`, contentStart);
+  while (closeStart !== -1) {
+    const closeNameEnd = closeStart + tagName.length + 2;
+    if (isTagBoundary(lowerHtml[closeNameEnd])) {
+      const closeEnd = lowerHtml.indexOf(">", closeNameEnd);
+      return closeEnd === -1 ? lowerHtml.length : closeEnd + 1;
+    }
+    closeStart = lowerHtml.indexOf(`</${tagName}`, closeNameEnd);
+  }
+  return lowerHtml.length;
+}
+
+function htmlFragmentToMarkdown(html: string): { text: string; title?: string } {
+  const lowerHtml = html.toLowerCase();
+  const root: RenderContext = { kind: "root", parts: [] };
+  const stack: RenderContext[] = [root];
+  const state: { title?: string } = {};
+
+  for (let i = 0; i < html.length; ) {
+    const ch = html[i];
+    if (ch !== "<") {
+      const nextTag = html.indexOf("<", i);
+      const end = nextTag === -1 ? html.length : nextTag;
+      appendText(stack, decodeEntities(html.slice(i, end)));
+      i = end;
+      continue;
+    }
+
+    const read = readTagToken(html, i);
+    if (!read) {
+      appendText(stack, decodeEntities(ch));
+      i += 1;
+      continue;
+    }
+    const { token, next } = read;
+    i = next;
+    if (!token.name) {
+      continue;
+    }
+
+    if (token.closing) {
+      if (token.name === "title") {
+        closeMatchingContext(stack, "title", state);
+      } else if (token.name === "a") {
+        closeMatchingContext(stack, "anchor", state);
+      } else if (/^h[1-6]$/.test(token.name)) {
+        closeMatchingContext(stack, "heading", state);
+      } else if (token.name === "li") {
+        closeMatchingContext(stack, "list-item", state);
+      } else if (BLOCK_BREAK_TAGS.has(token.name)) {
+        appendText(stack, "\n");
+      }
+      continue;
+    }
+
+    if (RAW_TEXT_TAGS.has(token.name)) {
+      i = closeRawTextTagEnd(lowerHtml, token.name, i);
+      continue;
+    }
+    if (token.name === "br" || token.name === "hr") {
+      appendText(stack, "\n");
+      continue;
+    }
+    if (token.name === "title" && !token.selfClosing) {
+      stack.push({ kind: "title", parts: [] });
+      continue;
+    }
+    if (token.name === "a" && !token.selfClosing) {
+      stack.push({ kind: "anchor", href: readAttributeValue(token.raw, "href"), parts: [] });
+      continue;
+    }
+    if (/^h[1-6]$/.test(token.name) && !token.selfClosing) {
+      stack.push({ kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] });
+      continue;
+    }
+    if (token.name === "li" && !token.selfClosing) {
+      stack.push({ kind: "list-item", parts: [] });
+    }
+  }
+
+  while (stack.length > 1) {
+    const context = stack.pop();
+    const parent = stack[stack.length - 1];
+    if (context && parent) {
+      closeContext(context, parent, state);
+    }
+  }
+
+  return {
+    text: normalizeWhitespace(contextText(root)),
+    title: state.title,
+  };
+}
+
 function stripTags(value: string): string {
-  const withoutTags = value.includes("<") ? value.replace(HTML_TAG_RE, "") : value;
-  return decodeEntities(withoutTags);
+  return htmlFragmentToMarkdown(value).text;
 }
 
 /** Collapses display whitespace while preserving paragraph breaks. */
@@ -70,42 +369,7 @@ export function normalizeWhitespace(value: string): string {
 
 /** Converts sanitized HTML into coarse markdown plus an optional title. */
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
-  let text = html;
-  if (SCRIPT_STYLE_NOSCRIPT_OPEN_RE.test(text)) {
-    text = text
-      .replace(SCRIPT_TAG_BLOCK_RE, "")
-      .replace(STYLE_TAG_BLOCK_RE, "")
-      .replace(NOSCRIPT_TAG_BLOCK_RE, "");
-  }
-  if (ANCHOR_OPEN_RE.test(text)) {
-    text = text.replace(ANCHOR_RE, (_, href, body) => {
-      const label = normalizeWhitespace(stripTags(body));
-      if (!label) {
-        return href;
-      }
-      // Preserve link targets in markdown mode so fetched pages remain source-auditable.
-      return `[${label}](${href})`;
-    });
-  }
-  if (HEADING_OPEN_RE.test(text)) {
-    text = text.replace(HEADING_RE, (_, level, body) => {
-      const prefix = "#".repeat(Math.max(1, Math.min(6, Number.parseInt(level, 10))));
-      const label = normalizeWhitespace(stripTags(body));
-      return `\n${prefix} ${label}\n`;
-    });
-  }
-  if (LIST_ITEM_OPEN_RE.test(text)) {
-    text = text.replace(LIST_ITEM_RE, (_, body) => {
-      const label = normalizeWhitespace(stripTags(body));
-      return label ? `\n- ${label}` : "";
-    });
-  }
-  text = text.replace(BLOCK_BREAK_RE, "\n");
-  text = stripTags(text);
-  text = normalizeWhitespace(text);
-  return { text, title };
+  return htmlFragmentToMarkdown(html);
 }
 
 /** Removes markdown decoration for plain text extraction. */
@@ -113,9 +377,17 @@ export function markdownToText(markdown: string): string {
   let text = markdown;
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
   text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
-  text = text.replace(/```[\s\S]*?```/g, (block) =>
-    block.replace(/```[^\n]*\n?/g, "").replace(/```/g, ""),
-  );
+  while (text.includes("```")) {
+    const open = text.indexOf("```");
+    const afterOpen = open + 3;
+    const close = text.indexOf("```", afterOpen);
+    if (close === -1) {
+      break;
+    }
+    const firstLineEnd = text.indexOf("\n", afterOpen);
+    const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
+    text = `${text.slice(0, open)}${text.slice(contentStart, close)}${text.slice(close + 3)}`;
+  }
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^\s*[-*+]\s+/gm, "");

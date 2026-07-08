@@ -40,6 +40,26 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>&#39x; end</p>`).text).toBe("&#39x; end");
   });
 
+  it("renders basic HTML structure with a forward-only scanner", () => {
+    const rendered = htmlToMarkdown(
+      `<title>My &amp; Page</title><h1>Intro</h1><p>Go <a href="/docs?x=1&amp;y=2">there</a></p><ul><li>One</li><li>Two</li></ul>`,
+    );
+
+    expect(rendered.title).toBe("My & Page");
+    expect(rendered.text).toBe("# Intro\nGo [there](/docs?x=1&y=2)\n\n- One\n- Two");
+  });
+
+  it("drops script, style, and noscript raw-text blocks even when one is unterminated", () => {
+    const payload = "x".repeat(10_000);
+
+    expect(
+      htmlToMarkdown(
+        `<p>Before</p><script>${payload}</script><style>${payload}</style><noscript>${payload}</noscript><p>After</p>`,
+      ).text,
+    ).toBe("Before\nAfter");
+    expect(htmlToMarkdown(`<p>Before</p><script>${payload}<p>After</p>`).text).toBe("Before");
+  });
+
   it("truncates without splitting a boundary emoji", () => {
     const prefix = "a".repeat(79);
     const result = truncateText(`${prefix}${grin}tail`, 80);
