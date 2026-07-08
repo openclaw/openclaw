@@ -674,6 +674,91 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("keeps CLI gateway-executed actions least-privileged when they carry sender ownership", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat CLI reaction test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        senderIsOwner: true,
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      expectRecordFields(
+        gatewayCall,
+        {
+          method: "message.action",
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        "gateway call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        gatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "react",
+          senderIsOwner: true,
+        },
+        "gateway call params",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
+      expectRecordFields(
+        result,
+        {
+          kind: "action",
+          channel: "gatewaychat",
+          action: "react",
+          handledBy: "plugin",
+        },
+        "result",
+      );
+    });
+
     it("ignores gateway url overrides for backend plugin actions", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",

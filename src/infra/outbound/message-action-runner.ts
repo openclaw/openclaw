@@ -47,6 +47,8 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
   type GatewayClientMode,
   type GatewayClientName,
@@ -214,10 +216,14 @@ async function callGatewayMessageAction<T>(params: {
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
   };
+  const isTrustedBackendBridge =
+    gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
   const carriesTrustedRequester =
-    params.actionParams.requesterAccountId !== undefined ||
-    params.actionParams.requesterSenderId !== undefined ||
-    params.actionParams.senderIsOwner !== undefined;
+    isTrustedBackendBridge &&
+    (params.actionParams.requesterAccountId !== undefined ||
+      params.actionParams.requesterSenderId !== undefined ||
+      params.actionParams.senderIsOwner !== undefined);
   if (!carriesTrustedRequester) {
     return await callGatewayLeastPrivilege<T>(callParams);
   }
