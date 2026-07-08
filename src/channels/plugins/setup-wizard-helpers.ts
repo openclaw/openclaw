@@ -978,13 +978,22 @@ export async function promptSingleChannelToken(params: {
   keepPrompt: string;
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
-  const promptToken = async (): Promise<string> =>
-    (
-      await params.prompter.text({
-        message: params.inputPrompt,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim();
+  const promptToken = async (): Promise<string> => {
+    // Defensive: although `WizardPrompter.text` is typed as
+    // `Promise<string>`, some prompter implementations and reported
+    // production paths have surfaced non-string values (`undefined`) here —
+    // calling `.trim()` directly crashed `openclaw onboard` during the
+    // Telegram token replace flow with
+    // `TypeError: Cannot read properties of undefined (reading 'trim')`
+    // (#67366). `normalizeOptionalString` returns the trimmed string or
+    // `undefined` for non-strings; fall back to "" so the caller's
+    // truthy-check downgrades the result to "keep current".
+    const raw = await params.prompter.text({
+      message: params.inputPrompt,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    return normalizeOptionalString(raw) ?? "";
+  };
 
   if (params.canUseEnv) {
     const keepEnv = await params.prompter.confirm({
