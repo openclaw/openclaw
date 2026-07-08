@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, createWriteToolDefinition, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -154,5 +154,79 @@ describe("write tool", () => {
     const tc1 = result.content[0];
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully wrote");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new\n");
+  });
+
+  it("advertises append mode in write tool description", () => {
+    const definition = createWriteToolDefinition(tmpDir);
+
+    expect(definition.description).toContain("append");
+    expect(definition.promptSnippet).toContain("append");
+    expect((definition.promptGuidelines ?? []).join("\n")).toContain("append: true");
+  });
+
+  it("appends content when append mode is enabled", async () => {
+    const filePath = await createTempPath("append.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      undefined,
+    );
+
+    expect("text" in (result.content[0] ?? {}) ? (result.content[0] as any).text : "").toContain(
+      "Successfully appended",
+    );
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+  });
+
+  it("creates a new file when appending to a non-existent path", async () => {
+    const filePath = await createTempPath("append-new.txt");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "first line\n", append: true },
+      undefined,
+    );
+
+    expect("text" in (result.content[0] ?? {}) ? (result.content[0] as any).text : "").toContain(
+      "Successfully appended",
+    );
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("first line\n");
+  });
+
+  it("overwrites by default when append is not set", async () => {
+    const filePath = await createTempPath("overwrite.txt");
+    await fs.writeFile(filePath, "old\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute("call-1", { path: filePath, content: "new\n" }, undefined);
+
+    expect("text" in (result.content[0] ?? {}) ? (result.content[0] as any).text : "").toContain(
+      "Successfully wrote",
+    );
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new\n");
+  });
+
+  it("returns no-op when overwriting with identical content", async () => {
+    const filePath = await createTempPath("noop.txt");
+    await fs.writeFile(filePath, "same\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute("call-1", { path: filePath, content: "same\n" }, undefined);
+
+    const tc0 = result.content[0];
+    expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("same\n");
+  });
+
+  it("rejects malformed append parameter", async () => {
+    const tool = createWriteTool(tmpDir);
+
+    await expect(
+      tool.execute("call-1", { path: "/tmp/test.txt", content: "hello", append: "true" as any }),
+    ).rejects.toThrow("Invalid append parameter");
   });
 });

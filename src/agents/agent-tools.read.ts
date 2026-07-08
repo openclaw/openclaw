@@ -938,6 +938,27 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
     writeFile: async (absolutePath: string, content: string) => {
       await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
     },
+    appendFile: async (absolutePath: string, content: string) => {
+      // Sandbox bridge does not expose a native append; read-modify-write
+      // through the bridge instead.
+      let existing = "";
+      try {
+        const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+        existing = buf.toString("utf8");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
+        // File does not exist — append creates it.
+      }
+      await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
+      await params.bridge.writeFile({
+        filePath: absolutePath,
+        cwd: params.root,
+        data: existing + content,
+      });
+    },
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     statFile: (absolutePath: string) =>
@@ -1023,6 +1044,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
+      appendFile: async (absolutePath: string, content: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+        await fs.mkdir(path.dirname(resolved), { recursive: true });
+        await fs.appendFile(resolved, content, "utf-8");
+      },
       readFile: async (absolutePath: string) =>
         fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
       statFile: (absolutePath: string) =>
@@ -1045,6 +1071,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     },
     writeFile: (absolutePath: string, content: string) =>
       writeWorkspaceFile(root, getRoot, absolutePath, content),
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await (await getRoot()).append(relative, content, { mkdir: true });
+    },
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return (await (await getRoot()).read(relative)).buffer;
