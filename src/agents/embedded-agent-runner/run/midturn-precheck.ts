@@ -21,6 +21,15 @@ export const MID_TURN_PRECHECK_ERROR_MESSAGE =
   "Context overflow: prompt too large for the model (mid-turn precheck).";
 
 /**
+ * Symbol.for sentinel shared with agent-core so the loop runner
+ * can skip error-forwarding for control-flow signals without a
+ * cross-package import dependency.
+ */
+export const CONTROL_FLOW_SIGNAL_SENTINEL: unique symbol = Symbol.for(
+  "agent-core.controlFlowError",
+);
+
+/**
  * Internal control-flow signal thrown after a tool result makes the next prompt
  * exceed budget. The attempt runner catches it and routes through the overflow
  * recovery path instead of treating it as an ordinary provider failure.
@@ -32,6 +41,10 @@ export class MidTurnPrecheckSignal extends Error {
     super(MID_TURN_PRECHECK_ERROR_MESSAGE);
     this.name = "MidTurnPrecheckSignal";
     this.request = request;
+    // Mark as a control-flow signal so agent-core (agent.ts) skips
+    // error-forwarding. Symbol.for keeps the key identical across packages
+    // without import dependencies.
+    (this as Record<symbol, unknown>)[CONTROL_FLOW_SIGNAL_SENTINEL] = true;
   }
 }
 

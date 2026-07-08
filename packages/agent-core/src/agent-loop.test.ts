@@ -1255,6 +1255,140 @@ describe("agentLoop tool termination", () => {
   });
 });
 
+describe("control-flow signal handling", () => {
+  const CONTROL_FLOW_SENTINEL = Symbol.for("agent-core.controlFlowError");
+
+  function createControlFlowSignal(message: string): Error {
+    const error = new Error(message);
+    error.name = "TestControlSignal";
+    Object.assign(error, { [CONTROL_FLOW_SENTINEL]: true });
+    return error;
+  }
+
+  async function throwingTransformContext(): Promise<AgentMessage[]> {
+    throw createControlFlowSignal("test control interruption");
+  }
+
+  describe("Agent class", () => {
+    it("rejects prompt for control-flow signals without emitting any events", async () => {
+      const agent = new Agent({
+        transformContext: throwingTransformContext,
+        streamFn: async () => {
+          const stream = createAssistantMessageEventStream();
+          queueMicrotask(() => {
+            stream.push({
+              type: "done",
+              reason: "stop",
+              message: {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "ok" }],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              },
+            });
+            stream.end();
+          });
+          return stream;
+        },
+      });
+
+      const events: AgentEvent[] = [];
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      let rejection: unknown;
+      try {
+        await agent.prompt("test message");
+      } catch (err) {
+        rejection = err;
+      }
+
+      // prompt must reject with the control-flow signal
+      expect(rejection).toBeDefined();
+      expect(CONTROL_FLOW_SENTINEL in (rejection as object)).toBe(true);
+
+      // No events of any kind should have reached subscribers
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).not.toContain("turn_end");
+      expect(eventTypes).not.toContain("agent_end");
+
+      // Agent must be in a clean state ready for the next run
+      expect(agent.state.isStreaming).toBe(false);
+      expect(agent.state.errorMessage).toBeUndefined();
+
+      // Agent must be able to accept a new prompt after the signal rejection
+      let secondRunEvents = 0;
+      const agent2 = new Agent({
+        streamFn: async () => {
+          const stream = createAssistantMessageEventStream();
+          queueMicrotask(() => {
+            stream.push({
+              type: "done",
+              reason: "stop",
+              message: {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "recovered" }],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              },
+            });
+            stream.end();
+          });
+          return stream;
+        },
+      });
+      let recovered = false;
+      agent2.subscribe((e) => {
+        if (e.type === "message_end") recovered = true;
+      });
+      // Must not throw — Agent must be reusable after signal rejection
+      await agent2.prompt("retry after signal");
+      expect(recovered).toBe(true);
+    });
+
+    it("still emits failure events for real errors", async () => {
+      const realError = new Error("real provider failure");
+      const agent = new Agent({
+        streamFn: async () => {
+          throw realError;
+        },
+      });
+
+      let errorEvent: AgentEvent | undefined;
+      agent.subscribe((event) => {
+        if (
+          event.type === "turn_end" &&
+          (event.message as unknown as { stopReason?: string }).stopReason === "error"
+        ) {
+          errorEvent = event;
+        }
+      });
+
+      // prompt should complete without rejecting (Agent catches internally)
+      await agent.prompt("test message");
+
+      // Error event should have been emitted for a real error
+      expect(errorEvent).toBeDefined();
+      expect(
+        (errorEvent as unknown as { message: { stopReason: string; errorMessage: string } })
+          ?.message,
+      ).toMatchObject({
+        stopReason: "error",
+        errorMessage: "real provider failure",
+      });
+    });
+  });
+});
+
 describe("agentLoop thinking state", () => {
   function makeAssistantMessage(
     activeModel: Model,

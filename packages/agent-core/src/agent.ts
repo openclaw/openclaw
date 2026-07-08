@@ -38,6 +38,22 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
   );
 }
 
+/**
+ * Sentinel carried by errors that signal a control-flow decision rather than
+ * a terminal failure. When the agent loop runner catches an error that carries
+ * this symbol, it skips the normal failure-event path so the caller can handle
+ * recovery via a side channel.
+ *
+ * The embedded runner uses this for MidTurnPrecheckSignal: the signal
+ * interrupts `transformContext` before a model call and the attempt runner
+ * recovers via the `pendingMidTurnPrecheckRequest` callback.
+ */
+const AGENT_CORE_CONTROL_FLOW_SENTINEL = Symbol.for("agent-core.controlFlowError");
+
+function isControlFlowError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && AGENT_CORE_CONTROL_FLOW_SENTINEL in error);
+}
+
 const EMPTY_USAGE = {
   input: 0,
   output: 0,
@@ -524,12 +540,25 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.errorMessage = undefined;
 
+    let controlFlowError: unknown = undefined;
     try {
       await executor(abortController.signal);
     } catch (error) {
-      await this.handleRunFailure(error, abortController.signal.aborted);
+      if (isControlFlowError(error)) {
+        // Control-flow signals (e.g. MidTurnPrecheckSignal) are handled
+        // by the caller via a side channel. Let finishRun() clean up the
+        // Agent's internal state, then re-throw so the embedded attempt
+        // runner can catch it and perform recovery. No synthetic failure
+        // or terminal agent_end is emitted — the run is not ending.
+        controlFlowError = error;
+      } else {
+        await this.handleRunFailure(error, abortController.signal.aborted);
+      }
     } finally {
       this.finishRun();
+    }
+    if (controlFlowError) {
+      throw controlFlowError;
     }
   }
 
