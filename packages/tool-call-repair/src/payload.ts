@@ -34,6 +34,7 @@ export type PlainTextToolCallParseOptions = {
 };
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
+const utf8Encoder = new TextEncoder();
 
 type PlainTextToolCallOpening = {
   allowsOptionalXmlishClose?: boolean;
@@ -252,7 +253,8 @@ function consumeXmlishParameterBlock(
   if (!bounds) {
     return null;
   }
-  if (bounds.end - bounds.start > maxPayloadBytes) {
+  const rawBlock = text.slice(bounds.start, bounds.end);
+  if (utf8Encoder.encode(rawBlock).byteLength > maxPayloadBytes) {
     return null;
   }
   return {
@@ -344,7 +346,8 @@ function parseXmlishPlainTextToolCallBlockAt(
     if (!parameter) {
       break;
     }
-    if (parameter.end - opening.end > maxPayloadBytes) {
+    const rawPayload = text.slice(opening.end, parameter.end);
+    if (utf8Encoder.encode(rawPayload).byteLength > maxPayloadBytes) {
       return null;
     }
     args[parameter.name] = parameter.value;
