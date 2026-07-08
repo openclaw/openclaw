@@ -2259,7 +2259,7 @@ export async function runEmbeddedAttempt(
 
       await prewarmSessionFile(params.sessionFile);
       const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+      sessionManager = guardSessionManager(SessionManager.openCompactedTail(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         config: params.config,

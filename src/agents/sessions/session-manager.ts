@@ -28,7 +28,9 @@ import {
 } from "../../config/sessions/transcript-jsonl.js";
 import {
   isSessionTranscriptSideAppendEntry,
+  scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
+  selectSessionTranscriptTreePathNodes,
 } from "../../config/sessions/transcript-tree.js";
 import {
   canAdvanceOwnedSessionEntryCache,
@@ -53,6 +55,7 @@ export { CURRENT_SESSION_VERSION };
 
 const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+const COMPACTED_TAIL_SESSION_LOAD_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface SessionHeader {
   type: "session";
@@ -442,10 +445,13 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
   return hasReadableSessionHeader(entries) ? entries : [];
 }
 
-function loadEntriesFromFileWithSnapshot(filePath: string): {
+type LoadedSessionFile = {
   entries: FileEntry[];
   snapshot: SessionFileSnapshot | undefined;
-} {
+  compactedTail?: true;
+};
+
+function loadEntriesFromFileWithSnapshot(filePath: string): LoadedSessionFile {
   const resolvedPath = resolve(filePath);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let beforeReadSnapshot: SessionFileSnapshot;
@@ -483,6 +489,114 @@ function loadEntriesFromFileWithSnapshot(filePath: string): {
 
   sessionEntriesCache.delete(resolvedPath);
   throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
+}
+
+function readTailEntriesFromFileSnapshot(
+  filePath: string,
+  snapshot: SessionFileSnapshot,
+): FileEntry[] | undefined {
+  const bytesToRead = Math.min(COMPACTED_TAIL_SESSION_LOAD_MAX_BYTES, Number(snapshot.size));
+  if (bytesToRead <= 0 || snapshot.size <= BigInt(bytesToRead)) {
+    return undefined;
+  }
+
+  const readStart = snapshot.size - BigInt(bytesToRead);
+  const fd = openSync(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    const bytesRead = readSync(fd, buffer, 0, bytesToRead, readStart);
+    if (bytesRead <= 0) {
+      return undefined;
+    }
+
+    let text = buffer.toString("utf8", 0, bytesRead);
+    const firstNewline = text.indexOf("\n");
+    if (firstNewline < 0) {
+      return undefined;
+    }
+    text = text.slice(firstNewline + 1);
+    return text.trim() ? parseJsonlEntries(text) : undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function isCurrentSessionHeader(header: SessionHeader | undefined): header is SessionHeader {
+  return header?.version === CURRENT_SESSION_VERSION;
+}
+
+function tailEntriesRequireEarlierCursor(entries: readonly FileEntry[]): boolean {
+  return entries.some(
+    (entry) =>
+      isIndexedSessionEntry(entry) && !Object.hasOwn(entry as Record<string, unknown>, "parentId"),
+  );
+}
+
+function isCompactedTailReplayComplete(entries: readonly FileEntry[]): boolean {
+  const bodyEntries = entries.filter((entry) => entry.type !== "session");
+  if (bodyEntries.length === 0 || tailEntriesRequireEarlierCursor(bodyEntries)) {
+    return false;
+  }
+
+  const tree = scanSessionTranscriptTree(bodyEntries);
+  if (tree.hasInvalidLeafControl || !tree.hasLeafUpdate || tree.leafId === null) {
+    return false;
+  }
+
+  const path = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const branchEntries = path
+    .map((node) => node.entry)
+    .filter((entry): entry is SessionEntry => isIndexedSessionEntry(entry));
+  const latestCompactionIndex = branchEntries.findLastIndex((entry) => entry.type === "compaction");
+  const latestCompaction = branchEntries[latestCompactionIndex];
+  if (latestCompaction?.type !== "compaction") {
+    return false;
+  }
+
+  return branchEntries
+    .slice(0, latestCompactionIndex + 1)
+    .some((entry) => entry.id === latestCompaction.firstKeptEntryId);
+}
+
+function loadCompactedTailEntriesFromFileWithSnapshot(filePath: string): LoadedSessionFile | null {
+  const resolvedPath = resolve(filePath);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let beforeReadSnapshot: SessionFileSnapshot;
+    try {
+      beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+    } catch {
+      sessionEntriesCache.delete(resolvedPath);
+      return null;
+    }
+    if (
+      beforeReadSnapshot.size <= MAX_CACHED_SESSION_BYTES ||
+      beforeReadSnapshot.size <= BigInt(COMPACTED_TAIL_SESSION_LOAD_MAX_BYTES)
+    ) {
+      return null;
+    }
+
+    const header = readSessionHeaderFromFile(resolvedPath);
+    if (!isCurrentSessionHeader(header)) {
+      return null;
+    }
+
+    const tailEntries = readTailEntriesFromFileSnapshot(resolvedPath, beforeReadSnapshot);
+    if (!tailEntries) {
+      return null;
+    }
+
+    const entries = [header, ...tailEntries];
+    if (!isCompactedTailReplayComplete(entries)) {
+      return null;
+    }
+
+    const afterReadSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    if (afterReadSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)) {
+      return { entries, snapshot: afterReadSnapshot, compactedTail: true };
+    }
+  }
+
+  return null;
 }
 
 interface SessionFileSnapshot {
@@ -1497,6 +1611,7 @@ export class SessionManager {
   private promptReleasedSideBranchParentId: string | null | undefined;
   private recoveredCorruptHeader = false;
   private sessionFileSnapshot: SessionFileSnapshot | undefined;
+  private loadedFromCompactedTail = false;
 
   private constructor(
     cwd: string,
@@ -1506,6 +1621,7 @@ export class SessionManager {
     loadedSessionFile?: {
       entries: FileEntry[];
       snapshot: SessionFileSnapshot | undefined;
+      compactedTail?: true;
     },
   ) {
     this.cwd = cwd;
@@ -1535,10 +1651,12 @@ export class SessionManager {
     loaded: {
       entries: FileEntry[];
       snapshot: SessionFileSnapshot | undefined;
+      compactedTail?: true;
     },
   ): void {
     this.sessionFile = resolve(sessionFile);
     this.sessionFileSnapshot = undefined;
+    this.loadedFromCompactedTail = loaded.compactedTail === true;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
       const partitioned = partitionSessionFileEntries(loaded.entries);
@@ -1595,6 +1713,7 @@ export class SessionManager {
   newSession(options?: NewSessionOptions): string | undefined {
     this.recoveredCorruptHeader = false;
     this.sessionFileSnapshot = undefined;
+    this.loadedFromCompactedTail = false;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -1940,6 +2059,10 @@ export class SessionManager {
     return this.getPersistedFileEntries().map(serializeJsonlLine);
   }
 
+  prepareForFullFileRewrite(): void {
+    this.ensureFullFileLoadedForRewrite();
+  }
+
   clearPreservedOpaqueFileEntries(): void {
     this.opaqueFileEntries = [];
     this.opaqueParentsById.clear();
@@ -2012,6 +2135,7 @@ export class SessionManager {
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
+    this.ensureFullFileLoadedForRewrite();
     let preservedStart = this.fileEntries.length;
     while (preservedStart > 1) {
       const entry = this.fileEntries[preservedStart - 1];
@@ -2116,6 +2240,15 @@ export class SessionManager {
     this.appendParentId = replacementParentId;
     this.rewriteFile();
     return removedEntries.length;
+  }
+
+  private ensureFullFileLoadedForRewrite(): void {
+    if (!this.loadedFromCompactedTail || !this.sessionFile) {
+      return;
+    }
+    // Tail loading is only safe for append-only run startup. Any rewrite must
+    // operate on the complete file so older transcript history is preserved.
+    this.setLoadedSessionFile(this.sessionFile, loadEntriesFromFileWithSnapshot(this.sessionFile));
   }
 
   private persistRecord(
@@ -2976,10 +3109,43 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+    return SessionManager.openLoaded(
+      path,
+      sessionDir,
+      cwdOverride,
+      loadEntriesFromFileWithSnapshot(path),
+    );
+  }
+
+  /**
+   * Open a run transcript from its compacted replay tail when the tail proves complete.
+   *
+   * Falls back to the full loader for migrations, corrupt/legacy rows, missing
+   * compaction boundaries, or any tail that cannot preserve provider replay.
+   */
+  static openCompactedTail(
+    path: string,
+    sessionDir?: string,
+    cwdOverride?: string,
+  ): SessionManager {
+    return SessionManager.openLoaded(
+      path,
+      sessionDir,
+      cwdOverride,
+      loadCompactedTailEntriesFromFileWithSnapshot(path) ?? loadEntriesFromFileWithSnapshot(path),
+    );
+  }
+
+  private static openLoaded(
+    path: string,
+    sessionDir: string | undefined,
+    cwdOverride: string | undefined,
+    initialLoad: LoadedSessionFile,
+  ): SessionManager {
     // Re-stat before construction so the single parsed load cannot become
     // stale while deriving cwd/session metadata. Stable warm opens pay only
     // the extra stat; changed files retry through the normal loader.
-    const loaded = revalidateLoadedSessionFile(path, loadEntriesFromFileWithSnapshot(path));
+    const loaded = revalidateLoadedSessionFile(path, initialLoad);
     const header = loaded.entries.find((e) => e.type === "session");
     const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
     // If no sessionDir provided, derive from file's parent directory

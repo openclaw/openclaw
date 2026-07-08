@@ -159,6 +159,134 @@ describe("SessionManager.open", () => {
     expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
   });
 
+  it("opens large compacted run transcripts from the bounded replay tail", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "large-compacted-session.jsonl");
+    const header = buildSessionHeader(dir, "large-compacted-session");
+    const oldEntries = Array.from({ length: 1_000 }, (_, index) => ({
+      type: "message",
+      id: `old-user-${index}`,
+      parentId: index === 0 ? null : `old-user-${index - 1}`,
+      timestamp: `2026-06-04T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(
+        index % 60,
+      ).padStart(2, "0")}.000Z`,
+      message: { role: "user", content: `old prompt ${index}`, timestamp: index },
+    }));
+    const largePrefix = {
+      type: "custom",
+      id: "large-prefix",
+      parentId: "old-user-999",
+      timestamp: "2026-06-04T00:00:02.000Z",
+      customType: "test:padding",
+      data: { padding: "x".repeat(33 * 1024 * 1024) },
+    };
+    const keptUser = {
+      type: "message",
+      id: "kept-user",
+      parentId: "large-prefix",
+      timestamp: "2026-06-04T00:00:03.000Z",
+      message: { role: "user", content: "kept prompt", timestamp: 3 },
+    };
+    const keptAssistant = {
+      type: "message",
+      id: "kept-assistant",
+      parentId: "kept-user",
+      timestamp: "2026-06-04T00:00:04.000Z",
+      message: buildAssistantMessage("kept answer"),
+    };
+    const compaction = {
+      type: "compaction",
+      id: "compaction-1",
+      parentId: "kept-assistant",
+      timestamp: "2026-06-04T00:00:05.000Z",
+      summary: "older turns summarized",
+      firstKeptEntryId: "kept-user",
+      tokensBefore: 123,
+    };
+    const afterUser = {
+      type: "message",
+      id: "after-user",
+      parentId: "compaction-1",
+      timestamp: "2026-06-04T00:00:06.000Z",
+      message: { role: "user", content: "after compaction", timestamp: 6 },
+    };
+    const transcriptEntries = [
+      header,
+      ...oldEntries,
+      largePrefix,
+      keptUser,
+      keptAssistant,
+      compaction,
+      afterUser,
+    ];
+    await fs.writeFile(
+      sessionFile,
+      `${transcriptEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+    expect((await fs.stat(sessionFile)).size).toBeGreaterThan(32 * 1024 * 1024);
+
+    const fullManager = SessionManager.open(sessionFile, dir, dir);
+    expect(fullManager.getEntries()).toHaveLength(1_005);
+    expect(fullManager.getEntries().map((entry) => entry.id)).toContain("large-prefix");
+
+    const tailManager = SessionManager.openCompactedTail(sessionFile, dir, dir);
+    expect(tailManager.getEntries().map((entry) => entry.id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "compaction-1",
+      "after-user",
+    ]);
+
+    const messages = tailManager.buildSessionContext().messages;
+    expect(messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(JSON.stringify(messages)).toContain("kept prompt");
+    expect(JSON.stringify(messages)).toContain("after compaction");
+    expect(JSON.stringify(messages)).not.toContain("old prompt");
+
+    await prepareSessionManagerForRun({
+      sessionManager: tailManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "rewritten-session",
+      cwd: "/tmp/task-repo",
+    });
+    expect((await fs.stat(sessionFile)).size).toBeGreaterThan(32 * 1024 * 1024);
+    const rewrittenHeader = JSON.parse(
+      (await fs.readFile(sessionFile, "utf8")).split("\n")[0] ?? "{}",
+    ) as { id?: unknown; cwd?: unknown };
+    expect(rewrittenHeader).toMatchObject({
+      id: "rewritten-session",
+      cwd: "/tmp/task-repo",
+    });
+    const fullAfterHeaderRewrite = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
+    expect(fullAfterHeaderRewrite.getEntries().map((entry) => entry.id)).toContain("large-prefix");
+
+    tailManager.appendMessage(buildAssistantMessage("new answer"));
+    const lastLine = (await fs.readFile(sessionFile, "utf8")).trim().split("\n").at(-1);
+    const appended = JSON.parse(lastLine ?? "{}") as { parentId?: unknown; message?: unknown };
+    expect(appended.parentId).toBe("after-user");
+    expect(appended.message).toMatchObject({ role: "assistant" });
+
+    const removed = tailManager.removeTrailingEntries(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        JSON.stringify(entry.message).includes("new answer"),
+    );
+    expect(removed).toBe(1);
+    expect((await fs.stat(sessionFile)).size).toBeGreaterThan(32 * 1024 * 1024);
+
+    const fullAfterRewrite = SessionManager.open(sessionFile, dir, dir);
+    expect(fullAfterRewrite.getEntries().map((entry) => entry.id)).toContain("large-prefix");
+    expect(JSON.stringify(fullAfterRewrite.getEntries())).not.toContain("new answer");
+  });
+
   it("does not continue a different cwd from a colliding session directory", async () => {
     const dir = await makeTempDir();
     const cwdA = "/home/alice/dev/client/app";

@@ -116,6 +116,7 @@ export async function prepareSessionManagerForRun(params: {
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
     clearPreservedOpaqueFileEntries?: () => void;
+    prepareForFullFileRewrite?: () => void;
     getSerializedFileLinesForRewrite?: () => string[];
     syncSnapshotAfterHeaderRewrite?: (expectedContent?: string) => void;
   };
@@ -139,8 +140,14 @@ export async function prepareSessionManagerForRun(params: {
     if (sm.wasRecoveredFromCorruptHeader?.() || preservesForkedBranch) {
       // Fork transcripts can intentionally select a user-only or empty branch.
       // Keep their copied tree so the first run appends at the preserved cursor.
-      header.id = params.sessionId;
-      header.cwd = params.cwd;
+      sm.prepareForFullFileRewrite?.();
+      const rewriteHeader = sm.fileEntries.find(
+        (entry): entry is SessionHeaderEntry => entry.type === "session",
+      );
+      if (rewriteHeader) {
+        rewriteHeader.id = params.sessionId;
+        rewriteHeader.cwd = params.cwd;
+      }
       sm.sessionId = params.sessionId;
       sm.cwd = params.cwd;
       const content = await writeJsonlLines(
@@ -174,14 +181,24 @@ export async function prepareSessionManagerForRun(params: {
 
   if (params.hadSessionFile && header) {
     const headerChanged = header.id !== params.sessionId || header.cwd !== params.cwd;
-    header.id = params.sessionId;
-    header.cwd = params.cwd;
-    sm.sessionId = params.sessionId;
-    sm.cwd = params.cwd;
     if (!headerChanged) {
+      header.id = params.sessionId;
+      header.cwd = params.cwd;
+      sm.sessionId = params.sessionId;
+      sm.cwd = params.cwd;
       sm.flushed = true;
       return;
     }
+    sm.prepareForFullFileRewrite?.();
+    const rewriteHeader = sm.fileEntries.find(
+      (entry): entry is SessionHeaderEntry => entry.type === "session",
+    );
+    if (rewriteHeader) {
+      rewriteHeader.id = params.sessionId;
+      rewriteHeader.cwd = params.cwd;
+    }
+    sm.sessionId = params.sessionId;
+    sm.cwd = params.cwd;
     const content = await writeJsonlLines(
       params.sessionFile,
       sm.getSerializedFileLinesForRewrite?.() ?? sm.fileEntries.map(serializeJsonlLine),
