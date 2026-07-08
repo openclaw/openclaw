@@ -1,9 +1,10 @@
 // Auth-profile plumbing tests for MCP loopback runtime tool resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn((_params: { authProfileStore?: AuthProfileStore }) => ({
     agentId: "main",
     tools: [],
   })),
@@ -15,12 +16,17 @@ vi.mock("./tool-resolution.js", () => ({
 
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
-function createAuthProfileStore(): {
-  profiles: Record<string, { provider: string; type: string }>;
-} {
+function createAuthProfileStore(): AuthProfileStore {
   return {
+    version: 1,
     profiles: {
-      "xai-oauth": { provider: "xai", type: "oauth" },
+      "xai-oauth": {
+        type: "oauth",
+        provider: "xai",
+        access: "xai-access-token",
+        refresh: "xai-refresh-token",
+        expires: 1_900_000_000_000,
+      },
     },
   };
 }

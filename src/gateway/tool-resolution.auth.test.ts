@@ -1,8 +1,11 @@
 // Auth-profile plumbing tests for gateway-scoped tool resolution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const createOpenClawToolsMock = vi.hoisted(() => vi.fn(() => []));
+const createOpenClawToolsMock = vi.hoisted(() =>
+  vi.fn((_options: { authProfileStore?: AuthProfileStore }) => []),
+);
 
 vi.mock("../agents/openclaw-tools.js", () => ({
   createOpenClawTools: createOpenClawToolsMock,
@@ -52,12 +55,17 @@ vi.mock("../agents/tool-policy-pipeline.js", async () => {
 
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-function createAuthProfileStore(): {
-  profiles: Record<string, { provider: string; type: string }>;
-} {
+function createAuthProfileStore(): AuthProfileStore {
   return {
+    version: 1,
     profiles: {
-      "xai-oauth": { provider: "xai", type: "oauth" },
+      "xai-oauth": {
+        provider: "xai",
+        type: "oauth",
+        access: "xai-access-token",
+        refresh: "xai-refresh-token",
+        expires: 1_900_000_000_000,
+      },
     },
   };
 }

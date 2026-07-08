@@ -10,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
