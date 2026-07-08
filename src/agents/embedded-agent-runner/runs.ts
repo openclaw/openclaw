@@ -12,6 +12,7 @@ import {
   queueReplyRunMessage,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { emitRuntimeTurnActivityLease } from "../../infra/runtime-activity-emitter.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -804,6 +805,7 @@ export function setActiveEmbeddedRun(
     reason: wasActive ? "run_replaced" : "run_started",
   });
   markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+  emitRuntimeTurnActivityLease({ sessionId, sessionKey, runId: handle.runId });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
