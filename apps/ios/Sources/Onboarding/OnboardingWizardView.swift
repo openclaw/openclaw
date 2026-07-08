@@ -69,6 +69,13 @@ private enum OnboardingFocusedField: Hashable {
     case gatewayPassword
 }
 
+private enum OnboardingConnectPhase {
+    case connecting(detail: String)
+    case failed(GatewayConnectionProblem)
+    case failedStatus(message: String)
+    case ready
+}
+
 struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
@@ -133,6 +140,39 @@ struct OnboardingWizardView: View {
 
     private var currentProblem: GatewayConnectionProblem? {
         self.appModel.lastGatewayProblem
+    }
+
+    private var connectPhase: OnboardingConnectPhase {
+        if self.connectingGatewayID != nil {
+            return .connecting(detail: self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
+        }
+        if let problem = self.currentProblem {
+            return .failed(problem)
+        }
+        if self.issue != .none {
+            let message = self.connectMessage
+                ?? (self.statusLine.isEmpty ? nil : self.statusLine)
+                ?? self.issueFallbackMessage
+            return .failedStatus(message: message)
+        }
+        return .ready
+    }
+
+    private var issueFallbackMessage: String {
+        switch self.issue {
+        case .none:
+            ""
+        case .tokenMissing:
+            "Gateway auth token is missing."
+        case .unauthorized:
+            "Gateway rejected credentials."
+        case let .pairingRequired(requestId):
+            requestId.map { "Pairing required (request \($0))." } ?? "Pairing required."
+        case .network:
+            "Could not reach the gateway."
+        case let .unknown(message):
+            message
+        }
     }
 
     var body: some View {
@@ -535,18 +575,12 @@ struct OnboardingWizardView: View {
     private var connectStep: some View {
         if let selectedMode {
             Section {
+                self.connectPhaseView
                 self.onboardingLabeledContent("Mode", value: selectedMode.title)
                 self.onboardingLabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
-                self.onboardingLabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
-                self.onboardingLabeledContent("Progress", value: self.statusLine.isEmpty ? "Ready" : self.statusLine)
             } header: {
                 Text("Status")
                     .font(OpenClawType.footnoteSemiBold)
-            } footer: {
-                if let connectMessage {
-                    Text(connectMessage)
-                        .font(OpenClawType.footnote)
-                }
             }
 
             if let stagedLink = self.setupLinkStaging.link {
@@ -572,6 +606,53 @@ struct OnboardingWizardView: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var connectPhaseView: some View {
+        switch self.connectPhase {
+        case let .connecting(detail):
+            HStack(spacing: 10) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connecting…")
+                        .font(OpenClawType.subheadSemiBold)
+                    Text(verbatim: detail)
+                        .font(OpenClawType.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        case let .failed(problem):
+            let actionTitle = self.gatewayProblemPrimaryActionTitle(problem)
+            GatewayProblemBanner(
+                problem: problem,
+                primaryActionTitle: actionTitle ?? (problem.retryable ? "Retry" : nil),
+                onPrimaryAction: {
+                    if actionTitle != nil {
+                        Task { await self.handleGatewayProblemPrimaryAction(problem) }
+                    } else {
+                        Task { await self.retryLastAttempt() }
+                    }
+                },
+                onShowDetails: {
+                    self.showGatewayProblemDetails = true
+                })
+        case let .failedStatus(message):
+            OpenClawNoticeBanner(
+                icon: "exclamationmark.triangle.fill",
+                title: "Connection Failed",
+                message: message,
+                ownerLabel: "Needs attention",
+                tint: OpenClawBrand.danger,
+                primaryActionTitle: "Retry",
+                onPrimaryAction: {
+                    Task { await self.retryLastAttempt() }
+                })
+        case .ready:
+            OpenClawStatusBadge(label: "Ready to Connect", tone: .muted)
         }
     }
 
