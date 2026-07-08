@@ -339,4 +339,15 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
     expect(lastNodeInvokeCall).toBeNull();
   });
+
+  it("rejects nodes invoke with malformed --params JSON", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON");
+    expect(lastNodeInvokeCall).toBeNull();
+  });
 });
