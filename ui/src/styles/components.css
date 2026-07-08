@@ -6585,7 +6585,7 @@ details[open] > .ov-expandable-toggle::after {
 }
 .goal-chip-status,
 .goal-chip-usage {
-  color: var(--text-muted);
+  color: var(--muted);
   white-space: nowrap;
 }
 .goal-chip--paused .goal-chip-label,
