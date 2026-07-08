@@ -22,21 +22,11 @@ class ThemeModeToggle extends LitElement {
     this.style.display = "contents";
   }
 
-  private readonly nextMode = (): ThemeMode => {
-    switch (this.mode) {
-      case "system":
-        return "light";
-      case "light":
-        return "dark";
-      case "dark":
-        return "system";
-    }
-  };
-
   private readonly handleModeChange = (event: Event) => {
+    const mode = this.mode === "system" ? "light" : this.mode === "light" ? "dark" : "system";
     this.dispatchEvent(
       new CustomEvent<ThemeModeChangeDetail>("theme-change", {
-        detail: { mode: this.nextMode(), element: event.currentTarget as HTMLElement },
+        detail: { mode, element: event.currentTarget as HTMLElement },
         bubbles: true,
         composed: true,
       }),
