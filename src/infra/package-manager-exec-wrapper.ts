@@ -53,7 +53,7 @@ export const PNPM_FLAG_OPTIONS = new Set([
 export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
-const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["run"]);
+const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["restart", "run", "start", "stop", "test"]);
 const PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
   "add",
   "audit",
