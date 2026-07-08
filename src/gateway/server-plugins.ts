@@ -195,6 +195,10 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function isBackendClient(client: GatewayRequestOptions["client"] | undefined): boolean {
+  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+}
+
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
@@ -355,8 +359,12 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.allowSyntheticModelOverride ||
+      options?.runtimePluginToolGrant
       ? {
+          ...(options?.allowSyntheticModelOverride ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
@@ -521,9 +529,16 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       });
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
+      const hasBackendRequestScopeClient = isBackendClient(scope?.client);
+      const hasExternalPluginHttpRequestScope = scope?.pluginHttpRoute === true;
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
       let allowSyntheticModelOverride = false;
-      if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+      if (
+        overrideRequested &&
+        !allowOverride &&
+        (!hasRequestScopeClient ||
+          (hasBackendRequestScopeClient && !hasExternalPluginHttpRequestScope))
+      ) {
         const fallbackAuth = authorizeFallbackModelOverride({
           pluginId: scope?.pluginId,
           provider: params.provider,

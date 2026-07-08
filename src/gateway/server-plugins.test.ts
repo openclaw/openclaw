@@ -1493,6 +1493,107 @@ describe("loadGatewayPlugins", () => {
     expect(params.model).toBe("claude-haiku-4-5");
   });
 
+  test("allows trusted provider/model overrides from backend request scopes", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const scope = {
+      context: createTestContext("scoped-trusted-overrides"),
+      client: {
+        connect: {
+          client: {
+            id: "gateway-client",
+            version: "test",
+            platform: "node",
+            mode: "backend",
+          },
+          scopes: ["operator.write"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-scoped-trusted-override",
+          message: "use trusted scoped override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      ),
+    );
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-scoped-trusted-override");
+    expect(params.provider).toBe("anthropic");
+    expect(params.model).toBe("claude-haiku-4-5");
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientInternal()).toMatchObject({
+      allowModelOverride: true,
+      pluginRuntimeOwnerId: "voice-call",
+    });
+  });
+
+  test("rejects trusted plugin model overrides from plugin HTTP request scopes", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const scope = {
+      context: createTestContext("scoped-plugin-http-trusted-overrides"),
+      client: {
+        connect: {
+          client: {
+            id: "gateway-client",
+            version: "test",
+            platform: "node",
+            mode: "backend",
+          },
+          scopes: ["operator.write"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+      pluginHttpRoute: true,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+          runtime.run({
+            sessionKey: "s-scoped-plugin-http-trusted-override",
+            message: "try scoped override",
+            provider: "anthropic",
+            model: "claude-haiku-4-5",
+            deliver: false,
+          }),
+        ),
+      ),
+    ).rejects.toThrow("provider/model override is not authorized for this plugin subagent run.");
+
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
