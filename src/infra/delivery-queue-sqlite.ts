@@ -242,6 +242,41 @@ export function updateDeliveryQueueEntry(
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
 }
 
+/** Dead-lettered entry counts for one queue namespace. */
+export type FailedDeliveryQueueCount = {
+  queueName: string;
+  count: number;
+  oldestFailedAt: number | null;
+};
+
+/** Count dead-lettered (failed) entries per queue namespace for health reporting. */
+export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => [
+        "queue_name",
+        eb.fn.countAll().as("failed_count"),
+        eb.fn.min("failed_at").as("oldest_failed_at"),
+      ])
+      .where("status", "=", "failed")
+      .groupBy("queue_name")
+      .orderBy("queue_name", "asc"),
+  ).rows as Array<{
+    queue_name: string;
+    failed_count: number | bigint;
+    oldest_failed_at: number | bigint | null;
+  }>;
+  return rows.map((row) => ({
+    queueName: row.queue_name,
+    count: Number(row.failed_count),
+    oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
+  }));
+}
+
 /** Mark a pending delivery queue entry as failed for later diagnostics. */
 export function moveDeliveryQueueEntryToFailed(
   queueName: string,

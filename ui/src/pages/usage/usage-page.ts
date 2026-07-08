@@ -79,7 +79,7 @@ function toErrorMessage(error: unknown): string {
   return "request failed";
 }
 
-export class UsagePage extends LitElement {
+class UsagePage extends LitElement {
   override createRenderRoot() {
     return this;
   }

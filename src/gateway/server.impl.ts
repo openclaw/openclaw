@@ -108,7 +108,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { GatewaySidecarStartupMode } from "./server-startup-post-attach.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -1027,6 +1027,7 @@ export async function startGatewayServer(
       ...optsResult,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
+      getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
     });
   const stopRegisteredPostReadySidecars = async () => {
     const postReadySidecars = runtimeState.postReadySidecars;
@@ -1065,10 +1066,12 @@ export async function startGatewayServer(
       dedupeCleanup: runtimeState.dedupeCleanup,
       mediaCleanup: runtimeState.mediaCleanup,
       worktreeCleanup: runtimeState.worktreeCleanup,
+      skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
+      taskUnsub: runtimeState.taskUnsub,
       chatRunState,
       chatAbortControllers,
       chatQueuedTurns,
@@ -1813,6 +1816,7 @@ export async function startGatewayServer(
               clearInterval(maintenance.mediaCleanup);
             }
             clearInterval(maintenance.worktreeCleanup);
+            maintenance.skillCuratorCleanup();
             return;
           }
           runtimeState.tickInterval = maintenance.tickInterval;
@@ -1820,6 +1824,7 @@ export async function startGatewayServer(
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
           runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
+          runtimeState.skillCuratorCleanup = maintenance.skillCuratorCleanup;
         },
         shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {

@@ -1874,10 +1874,10 @@ surfaces:
         id: inbound-access-and-identity-gates
         features:
           - name: DM pairing
-            coverageIds: [security.dm-pairing]
+            coverageIds: [security.dm-pairing, channels.pairing-gate]
             description: DM pairing and allowFrom sender controls
           - name: Group/channel allowlists
-            coverageIds: [channels.group-channel-allowlists]
+            coverageIds: [channels.access-policy, channels.allowlist-hot-reload, channels.group-channel-allowlists]
             description: Group/channel allowlists and sender allowlists
           - name: Access group expansion
             coverageIds: [channels.access-group-expansion]
@@ -1930,7 +1930,7 @@ surfaces:
         id: outbound-delivery-and-reply-pipeline
         features:
           - name: Automatic final reply delivery
-            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
+            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.restart-resume, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
             description: Automatic final reply delivery and strict message-tool-only visible delivery
           - name: Durable outbound send orchestration
             coverageIds: [channels.dedup, channels.reconnect, runtime.delivery]

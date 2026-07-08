@@ -92,6 +92,40 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
+  it("skips artifact enumeration when readMemoryArtifacts is disabled", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: false,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+
+    let listCalls = 0;
+    const status = await resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        },
+      } as OpenClawConfig,
+      listPublicArtifacts: async () => {
+        listCalls += 1;
+        return [];
+      },
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(listCalls).toBe(0);
+    expect(status.bridgePublicArtifactCount).toBeNull();
+    expect(status.warnings.map((warning) => warning.code)).not.toContain(
+      "bridge-artifacts-missing",
+    );
+  });
+
   it("discovers pages in nested subdirectories", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-nested-",

@@ -42,6 +42,7 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
@@ -56,6 +57,10 @@ describe("method scope resolution", () => {
     ["worktrees.create", ["operator.admin"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["skills.curator.status", ["operator.read"]],
+    ["skills.curator.pin", ["operator.admin"]],
+    ["skills.curator.unpin", ["operator.admin"]],
+    ["skills.curator.restore", ["operator.admin"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
@@ -178,6 +183,132 @@ describe("method scope resolution", () => {
         actionId: "approve",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
+  it("resolves sessions.patch to write scope for chat-organization fields only", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
+        key: "agent:main:ios-1",
+        label: "Trip planning",
+        pinned: true,
+        archived: false,
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
+        key: "agent:main:ios-1",
+        agentId: "main",
+        category: "Travel",
+        unread: true,
+      }),
+    ).toEqual(["operator.write"]);
+    expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
+  });
+
+  it.each([
+    ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
+    ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
+    ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
+    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
+    ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
+  ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
+      "operator.admin",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("authorizes write-scoped sessions.patch for chat-organization fields and denies read scope", () => {
+    const params = { key: "agent:main:ios-1", label: "Trip planning", pinned: true };
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.read"], params)).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+  });
+
+  it("lets malformed sessions.patch params through to handler validation at write scope", () => {
+    // Malformed params cannot mutate anything; the handler rejects them with a
+    // precise validation error instead of a misleading missing-scope error.
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch")).toEqual([
+      "operator.write",
+    ]);
+  });
+
+  it("grants write-scope sessions.delete only with the archivedOnly opt-in", () => {
+    // Internal callers (subagent cleanup, fallback synthetic dispatch, CLI
+    // minting) never set archivedOnly and keep requiring admin; the handler
+    // enforces that archivedOnly targets are actually archived.
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete")).toEqual([
+      "operator.admin",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
+        key: "agent:main:old",
+        deleteTranscript: true,
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
+        key: "agent:main:old",
+        archivedOnly: true,
+      }),
+    ).toEqual(["operator.write"]);
+    const archivedParams = { key: "agent:main:old", archivedOnly: true };
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], archivedParams),
+    ).toEqual({ allowed: true });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.read"], archivedParams),
+    ).toEqual({ allowed: false, missingScope: "operator.write" });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+        archivedOnly: "yes",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    // Internal-only controls must not ride along on the write-scope path.
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+        archivedOnly: true,
+        emitLifecycleHooks: false,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+        archivedOnly: true,
+        expectedSessionId: "sess-1",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
+        key: "agent:main:old",
+        archivedOnly: true,
+        emitLifecycleHooks: false,
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(authorizeOperatorScopesForMethod("sessions.delete", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
   });
 
   it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {

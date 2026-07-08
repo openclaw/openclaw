@@ -2,17 +2,17 @@
 
 ## Unreleased
 
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
+## 2026.7.1 - 2026-07-08
 
-Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
 
-Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
 
-Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
+Adds workspace files, Cron details, terminal access, and Listen playback.
 
-Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
 
-Camera clip capture no longer emits release-path diagnostics containing temporary file details.
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

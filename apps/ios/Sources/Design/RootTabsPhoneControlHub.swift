@@ -159,6 +159,11 @@ struct RootTabsPhoneControlHub: View {
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openChatFromControlDetail(.sessions) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerTitle: "Files",
+                openSettings: { self.openGatewayDetail() })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,

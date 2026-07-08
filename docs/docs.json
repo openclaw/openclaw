@@ -1352,6 +1352,7 @@
                     "group": "Web browser",
                     "pages": [
                       "tools/browser",
+                      "tools/chrome-extension",
                       "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
@@ -1468,6 +1469,7 @@
                   "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
+                  "providers/featherless",
                   "providers/fireworks",
                   "providers/github-copilot",
                   "providers/gmi",
@@ -1480,6 +1482,7 @@
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
+                  "providers/longcat",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
@@ -1744,12 +1747,14 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/audit",
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
                       "cli/commitments",
                       "cli/message",
                       "cli/models",
+                      "cli/promos",
                       "cli/sessions",
                       "cli/system",
                       "cli/tasks"

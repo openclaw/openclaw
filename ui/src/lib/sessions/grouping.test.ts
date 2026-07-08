@@ -1,11 +1,80 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
+  groupSidebarSessionRows,
   groupSessionRows,
   normalizeSessionsGroupBy,
+  normalizeSidebarSessionsGrouping,
   resolveSessionGroupId,
   UNGROUPED_ID,
 } from "./grouping.ts";
+
+describe("groupSidebarSessionRows", () => {
+  it("orders pinned, alphabetical categories, and ungrouped while preserving row order", () => {
+    const rows = [
+      row({ key: "z-1", category: "Zulu" }),
+      row({ key: "p-1", pinned: true, category: "Alpha" }),
+      row({ key: "a-1", category: "Alpha" }),
+      row({ key: "u-1" }),
+      row({ key: "a-2", category: "Alpha" }),
+    ];
+
+    const sections = groupSidebarSessionRows(rows);
+
+    expect(sections.map((section) => section.id)).toEqual([
+      "pinned",
+      "category:Alpha",
+      "category:Zulu",
+      "ungrouped",
+    ]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "a-2"]);
+    expect(sections[3]?.rows.map((item) => item.key)).toEqual(["u-1"]);
+  });
+
+  it("keeps the ungrouped section when no categories exist", () => {
+    expect(groupSidebarSessionRows([row({ key: "a" })]).map((section) => section.id)).toEqual([
+      "ungrouped",
+    ]);
+  });
+
+  it("keeps stored-but-empty known groups visible as sections", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a" }), row({ key: "b", category: "Zulu" })],
+      {
+        knownGroups: ["Apps", " ", "Zulu"],
+      },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "category:Apps",
+      "category:Zulu",
+      "ungrouped",
+    ]);
+    expect(sections[0]?.rows).toEqual([]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
+  });
+
+  it("collapses categories into the ungrouped list when grouping is none", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        row({ key: "p-1", pinned: true }),
+        row({ key: "a-1", category: "Alpha" }),
+        row({ key: "u-1" }),
+      ],
+      { grouping: "none", knownGroups: ["Alpha", "Apps"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped"]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "u-1"]);
+  });
+});
+
+describe("normalizeSidebarSessionsGrouping", () => {
+  it("accepts none and falls back to category grouping", () => {
+    expect(normalizeSidebarSessionsGrouping("none")).toBe("none");
+    expect(normalizeSidebarSessionsGrouping("category")).toBe("category");
+    expect(normalizeSidebarSessionsGrouping(null)).toBe("category");
+    expect(normalizeSidebarSessionsGrouping("bogus")).toBe("category");
+  });
+});
 
 function row(overrides: Partial<GatewaySessionRow> & { key: string }): GatewaySessionRow {
   return {

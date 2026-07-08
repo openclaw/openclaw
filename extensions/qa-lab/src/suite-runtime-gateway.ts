@@ -83,6 +83,14 @@ async function waitForConfigRestartSettle(
   const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
 
+  // A delay beyond this mutation's observation window intentionally keeps the
+  // current process alive so scenarios can prove config reads without restart.
+  if (restartDelayMs >= timeoutMs) {
+    await waitForGatewayHealthy(env, timeoutMs);
+    await waitForTransportReady(env, timeoutMs);
+    return;
+  }
+
   while (Date.now() < deadline) {
     try {
       await waitForGatewayHealthy(env, Math.max(1, Math.min(1_000, deadline - Date.now())));

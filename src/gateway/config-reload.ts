@@ -20,6 +20,7 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
 export {
   buildGatewayReloadPlan,
@@ -89,11 +90,6 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     plan.restartChannels.size === 0
   );
 }
-
-// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
-// after watcher re-creation fails past the retry budget, so operators/callers
-// can detect silent degradation instead of assuming reloads still fire.
-export type GatewayHotReloadStatus = "active" | "disabled";
 
 type GatewayConfigReloader = {
   stop: () => Promise<void>;

@@ -56,7 +56,7 @@ type SlackExecApprovalConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
 >;
 
-export type SlackApprovalHandlerContext = {
+type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
 };

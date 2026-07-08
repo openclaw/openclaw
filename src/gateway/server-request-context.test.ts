@@ -11,12 +11,13 @@ import {
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
-  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
       cronEnabled: true,
     },
+    configReloader: { stop: vi.fn(async () => {}) },
   };
   return {
     deps: {} as never,
@@ -88,12 +89,13 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
       cronState: {
         cron: cronA,
         storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
+      configReloader: { stop: vi.fn(async () => {}) },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -109,6 +111,33 @@ describe("createGatewayRequestContext", () => {
 
     expect(context.cron).toBe(cronB);
     expect(context.cronStorePath).toBe("/tmp/cron-b");
+  });
+
+  it("reads config hot-reload status live from runtime state", () => {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+      cronState: {
+        cron: { start: vi.fn(), stop: vi.fn() } as never,
+        storePath: "/tmp/cron",
+        cronEnabled: true,
+      },
+      configReloader: { stop: vi.fn(async () => {}) },
+    };
+
+    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
+
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
+
+    runtimeState.configReloader = {
+      stop: vi.fn(async () => {}),
+      hotReloadStatus: () => "active",
+    };
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
+
+    runtimeState.configReloader = {
+      stop: vi.fn(async () => {}),
+      hotReloadStatus: () => "disabled",
+    };
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
   });
 
   it("invalidateClientsForDevice sets the flag on matching clients without closing the socket", () => {

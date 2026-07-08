@@ -258,9 +258,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "action",
-          description: "status, start, pause, resume, complete, block, clear",
+          description: "status, start, edit, pause, resume, complete, block, clear",
           type: "string",
-          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+          choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
         },
         {
           name: "text",

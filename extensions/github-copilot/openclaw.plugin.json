@@ -169,6 +169,7 @@
       "provider": "github-copilot",
       "method": "device",
       "choiceId": "github-copilot",
+      "appGuidedSecret": true,
       "choiceLabel": "GitHub Copilot",
       "choiceHint": "Device login with your GitHub account",
       "groupId": "copilot",

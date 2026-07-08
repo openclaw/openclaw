@@ -281,7 +281,7 @@ export async function snapshotAiViaPlaywright(opts: {
       : undefined;
   let truncated = false;
   if (limit && snapshot.length > limit) {
-    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
+    snapshot = `${truncateUtf16Safe(snapshot, limit)}\n\n[...TRUNCATED - page too large]`;
     truncated = true;
   }
 

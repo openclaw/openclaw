@@ -1,6 +1,6 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
@@ -444,6 +444,10 @@ describe("handleControlUiHttpRequest", () => {
     { filename: "voice.ogg", disposition: "inline" },
     { filename: "clip.mp4", disposition: "inline" },
     { filename: "report.pdf", disposition: "attachment" },
+    {
+      filename: "invoice---123e4567-e89b-12d3-a456-426614174000.pdf",
+      disposition: "attachment",
+    },
     { filename: "archive.bin", disposition: "attachment" },
   ])("serves $filename with $disposition disposition", async ({ filename, disposition }) => {
     await withAllowedAssistantMediaRoot({
@@ -490,7 +494,7 @@ describe("handleControlUiHttpRequest", () => {
 
   it("serves assistant media from canonical inbound media refs", async () => {
     const stateDir = resolveStateDir();
-    const id = `ui-media-ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const id = `report---${randomUUID()}.pdf`;
     const filePath = path.join(stateDir, "media", "inbound", id);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
@@ -503,6 +507,10 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
+      expect(res["setHeader"]).toHaveBeenCalledWith(
+        "Content-Disposition",
+        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -915,6 +923,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         const body = String(end.mock.calls[0]?.[0] ?? "");
+        expect(body).toContain('data-openclaw-control-ui-base-path="/openclaw"');
         expect(body).toContain('href="/openclaw/manifest.webmanifest"');
         expect(body).toContain('href="/openclaw/favicon.svg"');
         expect(body).not.toContain('href="/manifest.webmanifest"');

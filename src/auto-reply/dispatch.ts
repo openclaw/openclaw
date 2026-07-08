@@ -20,7 +20,7 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
-import { copyReplyPayloadMetadata } from "./reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -615,15 +615,23 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       ? async (payload, info) => {
           // Check both before and after hooks because hooks can await while newer replies finish.
           if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+            // Only the foreground fence proves "not shown because stale"; hook
+            // cancellations may be intentional policy and must stay untagged.
+            setReplyPayloadMetadata(payload, {
+              foregroundDeliverySuppression: { reason: "stale-foreground" },
+            });
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
-          if (
-            !deliverPayload ||
-            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
-          ) {
+          if (!deliverPayload) {
+            return null;
+          }
+          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+            setReplyPayloadMetadata(payload, {
+              foregroundDeliverySuppression: { reason: "stale-foreground" },
+            });
             return null;
           }
           return deliverPayload;

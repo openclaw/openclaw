@@ -68,7 +68,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
@@ -981,6 +981,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -1774,6 +1779,7 @@ async function runAgentTurnWithFallbackInternal(
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
@@ -2379,8 +2385,8 @@ async function runAgentTurnWithFallbackInternal(
                 sessionKey: params.sessionKey,
                 startedAt: cliLifecycleStartedAt,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -2619,8 +2625,8 @@ async function runAgentTurnWithFallbackInternal(
                 runId,
                 sessionKey: params.sessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -3305,6 +3311,9 @@ async function runAgentTurnWithFallbackInternal(
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
+      // the targeted re-auth/failover copy is surfaced instead of the generic
+      // provider-auth message.
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
@@ -3485,7 +3494,7 @@ async function runAgentTurnWithFallbackInternal(
             ? params.opts.abortSignal
             : undefined;
       const abortLifecycleFields = {
-        ...resolveAgentRunAbortLifecycleFields(abortedSignal),
+        ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
         ...(isReplyOperationRestartAbort(params.replyOperation)
           ? {
               aborted: true as const,

@@ -16,7 +16,7 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MattermostMediaInfo = {
   path: string;

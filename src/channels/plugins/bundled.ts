@@ -112,6 +112,21 @@ function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
 }
 
+function resolveCanonicalPathOrAbsolute(targetPath: string): string {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+function isPathInsideCanonicalRoot(rootPath: string, targetPath: string): boolean {
+  return isPathInside(
+    resolveCanonicalPathOrAbsolute(rootPath),
+    resolveCanonicalPathOrAbsolute(targetPath),
+  );
+}
+
 function isPackageLocalBundledDistModulePath(params: {
   rootScope: BundledChannelRootScope;
   metadata: BundledChannelPluginMetadata;
@@ -123,7 +138,7 @@ function isPackageLocalBundledDistModulePath(params: {
       : []),
     path.join(params.rootScope.packageRoot, "extensions", params.metadata.dirName, "dist"),
   ];
-  return distRoots.some((root) => isPathInside(root, params.modulePath));
+  return distRoots.some((root) => isPathInsideCanonicalRoot(root, params.modulePath));
 }
 
 function resolveChannelPluginModuleEntry(
@@ -191,13 +206,18 @@ function resolveBundledChannelBoundaryRoot(params: {
     bundledChannelBoundaryRoots.set(cacheKey, cached);
     return cached;
   }
-  const isModuleUnderRoot = (root: string) => isPathInside(path.resolve(root), params.modulePath);
+  const canonicalModulePath = resolveCanonicalPathOrAbsolute(params.modulePath);
+  const resolveMatchingRoot = (root: string): string | null => {
+    const canonicalRoot = resolveCanonicalPathOrAbsolute(root);
+    return isPathInside(canonicalRoot, canonicalModulePath) ? canonicalRoot : null;
+  };
   const overrideRoot = params.pluginsDir
     ? path.resolve(params.pluginsDir, params.metadata.dirName)
     : null;
   let boundaryRoot: string;
-  if (overrideRoot && isModuleUnderRoot(overrideRoot)) {
-    boundaryRoot = overrideRoot;
+  const overrideBoundaryRoot = overrideRoot ? resolveMatchingRoot(overrideRoot) : null;
+  if (overrideBoundaryRoot) {
+    boundaryRoot = overrideBoundaryRoot;
   } else {
     const distRoot = path.resolve(
       params.packageRoot,
@@ -205,8 +225,9 @@ function resolveBundledChannelBoundaryRoot(params: {
       "extensions",
       params.metadata.dirName,
     );
-    if (isModuleUnderRoot(distRoot)) {
-      boundaryRoot = distRoot;
+    const distBoundaryRoot = resolveMatchingRoot(distRoot);
+    if (distBoundaryRoot) {
+      boundaryRoot = distBoundaryRoot;
     } else {
       const distRuntimeRoot = path.resolve(
         params.packageRoot,
@@ -214,9 +235,11 @@ function resolveBundledChannelBoundaryRoot(params: {
         "extensions",
         params.metadata.dirName,
       );
-      boundaryRoot = isModuleUnderRoot(distRuntimeRoot)
-        ? distRuntimeRoot
-        : path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
+      boundaryRoot =
+        resolveMatchingRoot(distRuntimeRoot) ??
+        resolveCanonicalPathOrAbsolute(
+          path.resolve(params.packageRoot, "extensions", params.metadata.dirName),
+        );
     }
   }
   bundledChannelBoundaryRoots.set(cacheKey, boundaryRoot);

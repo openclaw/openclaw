@@ -16,9 +16,9 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "openrouter";
-export const OPENROUTER_OAUTH_METHOD_ID = "oauth";
+const OPENROUTER_OAUTH_METHOD_ID = "oauth";
 export const OPENROUTER_OAUTH_CHOICE_ID = "openrouter-oauth";
-export const OPENROUTER_OAUTH_AUTHORIZE_URL = "https://openrouter.ai/auth";
+const OPENROUTER_OAUTH_AUTHORIZE_URL = "https://openrouter.ai/auth";
 export const OPENROUTER_OAUTH_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
 export const OPENROUTER_OAUTH_CALLBACK_HOST = "localhost";
 export const OPENROUTER_OAUTH_CALLBACK_PORT = 3000;

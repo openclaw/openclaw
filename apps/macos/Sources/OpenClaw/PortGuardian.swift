@@ -534,12 +534,37 @@ actor PortGuardian {
             {
                 return true
             }
+            if self.isNodeOpenClawGatewayCommand(full) { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
         case .unconfigured:
             return false
         }
+    }
+
+    private static func isNodeOpenClawGatewayCommand(_ fullCommand: String) -> Bool {
+        let tokens = fullCommand
+            .split(whereSeparator: \.isWhitespace)
+            .map { self.unquoteCommandToken(String($0)) }
+        guard tokens.count >= 3 else { return false }
+        guard URL(fileURLWithPath: tokens[0]).lastPathComponent.lowercased() == "node" else {
+            return false
+        }
+        return self.isOpenClawDistEntrypointToken(tokens[1])
+            && tokens[2].lowercased() == "gateway"
+    }
+
+    private static func isOpenClawDistEntrypointToken(_ token: String) -> Bool {
+        let normalized = token.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard normalized.hasSuffix("/dist/index.js") else { return false }
+        return normalized
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .contains("openclaw")
+    }
+
+    private static func unquoteCommandToken(_ token: String) -> String {
+        token.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     private func probeGatewayHealthIfNeeded(

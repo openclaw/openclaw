@@ -61,12 +61,11 @@ Denied flags by safe-bin profile:
 
 Safe bins also force argv tokens to be treated as **literal text** at execution
 time (no globbing and no `$VARS` expansion) for stdin-only segments, so
-patterns like `*` or `$HOME/...` cannot be used to smuggle file reads. `awk`
-and `sed` are always denied as safe bins (their semantics cannot be validated
-to stdin-only); `jq` can be opted in, but OpenClaw still rejects `env`-style
-filters (for example `jq env` or `jq -n env`) in safe-bin mode so `jq` cannot
-dump the host process environment without an explicit allowlist path or
-approval prompt.
+patterns like `*` or `$HOME/...` cannot be used to smuggle file reads. `awk`,
+`sed`, and `jq` are always denied as safe bins because their semantics cannot be
+validated to stdin-only: `jq` can read environment data and load jq code from
+modules or startup files. Use an explicit allowlist entry or approval prompt for
+those tools instead of `safeBins`.
 
 ### Trusted binary directories
 
@@ -131,7 +130,7 @@ Custom profile example:
 {
   tools: {
     exec: {
-      safeBins: ["jq", "myfilter"],
+      safeBins: ["myfilter"],
       safeBinProfiles: {
         myfilter: {
           minPositional: 0,

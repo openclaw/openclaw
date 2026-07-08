@@ -23,7 +23,11 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
+import {
+  resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
+} from "../media/media-reference.js";
+import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -35,6 +39,7 @@ import {
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
+  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -169,7 +174,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
 ]);
 
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
-export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
   if (!normalized) {
     return html;
@@ -181,6 +186,15 @@ export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath
     next = next.split(rootHref).join(baseHref);
   }
   return next;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&#39;");
 }
 
 type ControlUiAvatarResolution =
@@ -629,7 +643,8 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    localPath = await resolveMediaReferenceLocalPath(source);
+    const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
+    localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
     opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
@@ -643,10 +658,14 @@ export async function handleControlUiAssistantMediaRequest(
       filePath: localPath,
     });
     const contentType = mime ?? "application/octet-stream";
+    const filename =
+      resolvedReference.kind === "inbound"
+        ? extractOriginalFilename(localPath)
+        : path.basename(localPath);
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",
-      buildAssistantMediaContentDisposition(path.basename(localPath), contentType),
+      buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
@@ -779,12 +798,16 @@ function serveResolvedIndexHtml(
   basePath?: string,
   allowWasm?: boolean,
 ) {
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  const normalizedBasePath = normalizeControlUiBasePath(basePath);
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
+  const basePathAttribute = normalizedBasePath
+    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
+    : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the

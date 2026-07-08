@@ -109,7 +109,11 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  toolsAllow: TSchema;
+  fallbacks: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
@@ -120,7 +124,7 @@ function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -161,8 +165,20 @@ function createCronPayloadSchema(): TSchema {
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
     }),
   );
+}
+
+function createCronTriggerSchema(params: { nullableClears: boolean }): TSchema {
+  const trigger = Type.Object(
+    {
+      script: Type.String({ minLength: 1, maxLength: 65_536 }),
+      once: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  );
+  return Type.Optional(params.nullableClears ? Type.Union([trigger, Type.Null()]) : trigger);
 }
 
 function cronDeliverySchema(params: { nullableClears: boolean }) {
@@ -276,6 +292,7 @@ function createCronJobObjectSchema(): TSchema {
           ),
         ),
         schedule: createCronScheduleSchema(),
+        trigger: createCronTriggerSchema({ nullableClears: false }),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current | session:<id>",
@@ -307,12 +324,14 @@ function createCronPatchObjectSchema(): TSchema {
           }),
         ),
         schedule: createCronScheduleSchema(),
+        trigger: createCronTriggerSchema({ nullableClears: true }),
         sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
         payload: Type.Optional(
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),
@@ -438,7 +457,7 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
@@ -895,6 +914,7 @@ JOB SCHEMA (for add action):
 {
   "name": "string",
   "schedule": { ... },      // required
+  "trigger": { "script": "...", "once": false }, // optional condition gate for every/cron
   "payload": { ... },       // required
   "delivery": { ... },      // optional announce for isolated/current/session, webhook for any target
   "sessionTarget": "main" | "isolated" | "current" | "session:<id>",
@@ -922,6 +942,8 @@ SCHEDULE TYPES (schedule.kind):
   Write expr in local wall-clock time; do not convert the requested local time to UTC first.
   tz omitted => Gateway host local timezone, not UTC.
   Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
+
+Optional trigger scripts poll headlessly on every/cron schedules and run the payload only when they return { fire: true }.
 
 For "at", ISO timestamps without timezone are UTC.
 

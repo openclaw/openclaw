@@ -224,6 +224,7 @@ describe("google prompt cache", () => {
     expect(createInit.method).toBe("POST");
     const createHeaders = createInit.headers as Record<string, string>;
     expect(createHeaders["x-goog-api-key"]).toBe("gemini-api-key");
+    expect(createHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
     expect(createHeaders["X-Provider"]).toBe("google");
     expect(typeof createInit.body).toBe("string");
     const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;

@@ -5,6 +5,24 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
+    @Test func `session controls use branded typography`() throws {
+        let support = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
+            encoding: .utf8)
+        let commandCenter = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterTab.swift"),
+            encoding: .utf8)
+
+        #expect(support.contains("TextField(self.editorPlaceholder"))
+        #expect(support.contains("Label(\"Move to Group\""))
+        #expect(support.contains("Label(\"Delete…\""))
+        #expect(support.contains(".font(OpenClawType.subhead)"))
+        #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(commandCenter.contains("Toggle(isOn: self.$showArchived)"))
+        #expect(commandCenter.contains("Text(\"Show Archived\")"))
+        #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")
@@ -208,10 +226,24 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains("title: \"Same Machine (Dev)\""))
         #expect(onboardingWizard.contains("if lastMode == .developerLocal"))
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
+        let onboardingSecurityPicker = try Self.extract(
+            onboardingWizard,
+            from: "private var manualConnectionSecurityRows",
+            to: "    private func onboardingLabeledContent")
+        let onboardingUnencryptedOption = try Self.extract(
+            onboardingSecurityPicker,
+            from: "Text(\"Unencrypted\")",
+            to: ".tag(false)")
+        let onboardingSecureOption = try Self.extract(
+            onboardingSecurityPicker,
+            from: "Text(\"Secure (TLS)\")",
+            to: ".tag(true)")
+        #expect(onboardingUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
-        #expect(settingsSections.contains("Toggle(isOn: self.$talkButtonEnabled)"))
-        #expect(settingsSections.contains("Text(\"Show Talk Control\")"))
+        #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
+        #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
         #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))
@@ -235,6 +267,20 @@ struct OpenClawTypographyTests {
         #expect(gatewaySecureField.contains(".autocorrectionDisabled()"))
         #expect(settingsSections.contains("Picker(\"Default Agent\", selection: self.$selectedAgentPickerId)"))
         #expect(settingsSections.contains("Text(\"Default\")"))
+        let settingsSecurityPicker = try Self.extract(
+            settingsSections,
+            from: "Picker(\"Connection security\", selection: self.manualGatewayTLSBinding)",
+            to: "            .pickerStyle(.segmented)")
+        let settingsUnencryptedOption = try Self.extract(
+            settingsSecurityPicker,
+            from: "Text(\"Unencrypted\")",
+            to: ".tag(false)")
+        let settingsSecureOption = try Self.extract(
+            settingsSecurityPicker,
+            from: "Text(\"Secure (TLS)\")",
+            to: ".tag(true)")
+        #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(settingsSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))

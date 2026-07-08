@@ -45,6 +45,32 @@ target change -> stale
 
 Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
+## Lifecycle curation
+
+The Gateway tracks aggregate skill usage in the shared state database. Once a
+day, it reviews skills created and applied by Skill Workshop. Skills unused for
+more than 30 days become `stale`; after 90 days they become `archived` and are
+left out of new agent skill snapshots. Archived skill files remain unchanged on
+disk. Manually authored skills are never curated; only skills created by Skill
+Workshop proposals enter lifecycle curation.
+
+Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
+after it is used and the next sweep runs. Archived skills return only through an
+explicit restore:
+
+Lifecycle transitions and restores apply to new sessions; running sessions keep
+their current skill snapshot.
+
+```bash
+openclaw skills curator status
+openclaw skills curator pin <skill>
+openclaw skills curator unpin <skill>
+openclaw skills curator restore <skill>
+```
+
+All curator commands accept `--json`. Status also reports deterministic overlap
+candidates as suggestions only; it never merges skills or calls a model.
+
 ## Chat
 
 Ask the agent for the skill you want; it calls `skill_workshop` and returns a
@@ -204,11 +230,11 @@ agent session or the CLI.
 
 ## Suggested skills
 
-OpenClaw detects durable instructions such as “next time” and “remember to” after successful
-interactive turns. On the next turn, the agent offers to save the detected workflow through
-`skill_workshop`; the user decides whether to create a proposal. This built-in suggestion does not
-create or change a skill by itself. Enable `skills.workshop.autonomous.enabled` to create pending
-proposals directly instead.
+OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
+when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
+the most recent detected workflow through `skill_workshop`; the user decides whether to create a
+proposal. This built-in suggestion does not create or change a skill by itself. Enable
+`skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
 ## Approval and autonomy
 
@@ -230,11 +256,16 @@ proposals directly instead.
 
 | Setting                    | Default     | Effect                                                                                                                                                                 |
 | -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Lets OpenClaw create pending proposals from durable conversation signals after a successful turn.                                                                      |
+| `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
 | `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
 | `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
 | `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
 | `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+
+Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
+corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
+to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
+revises its own pending proposal when another correction targets the same skill.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.
@@ -252,6 +283,10 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.proposals.apply`           | `operator.admin` |
 | `skills.proposals.reject`          | `operator.admin` |
 | `skills.proposals.quarantine`      | `operator.admin` |
+| `skills.curator.status`            | `operator.read`  |
+| `skills.curator.pin`               | `operator.admin` |
+| `skills.curator.unpin`             | `operator.admin` |
+| `skills.curator.restore`           | `operator.admin` |
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session
