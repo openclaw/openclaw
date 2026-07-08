@@ -7,10 +7,13 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -145,6 +148,21 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   };
 }
 
+function resolveMcpLoopbackAuthProfileStore(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): ReturnType<typeof loadAuthProfileStoreForSecretsRuntime> | undefined {
+  try {
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const agentDir = resolveAgentDir(cfg, agentId);
+    return loadAuthProfileStoreForSecretsRuntime(agentDir);
+  } catch {
+    // Auth-profile loading is best-effort for loopback tool availability.
+    // Missing or unreadable stores fall back to the previous behavior.
+    return undefined;
+  }
+}
+
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
@@ -228,6 +246,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
+        const authProfileStore = resolveMcpLoopbackAuthProfileStore(cfg, requestContext.sessionKey);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -244,6 +263,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
+          authProfileStore,
         });
 
         logMcpLoopbackTraffic("request", {

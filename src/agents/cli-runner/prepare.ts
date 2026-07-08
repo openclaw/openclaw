@@ -720,6 +720,7 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             senderIsOwner: undefined,
+            authProfileStore: authStore,
           }).tools
         : [];
     const promptToolNamesHash =

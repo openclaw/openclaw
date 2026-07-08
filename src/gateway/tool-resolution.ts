@@ -6,6 +6,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agents/agent-tools.policy.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   isSubagentEnvelopeSession,
@@ -65,6 +66,7 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
+  authProfileStore?: AuthProfileStore;
 }) {
   const {
     agentId,
@@ -209,6 +211,7 @@ export function resolveGatewayScopedTools(params: {
       : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
   });
 
   const policyFiltered = applyToolPolicyPipeline({
