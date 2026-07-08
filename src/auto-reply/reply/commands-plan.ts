@@ -156,8 +156,11 @@ async function runPlanAction(
     case "exit": {
       const snapshot = await getSessionPlanState({ ...scope, fallbackEntry: params.sessionEntry });
       if (snapshot.status === "pending_approval") {
-        const resolved = resolvePendingPlanQuestion(params.sessionKey, PLAN_APPROVE_LABEL);
-        return planReply(resolved ? "Plan approved — executing." : "No plan is awaiting approval.");
+        // Exiting plan mode is NOT approval: approval is an explicit `/plan accept` or the plan
+        // card's Approve action. Resolve the pending question with "Keep planning" so the plan is
+        // discarded without executing — this keeps the human-in-the-loop gate intact when leaving
+        // via the Control-UI mode selector (which sends `/plan exit`).
+        resolvePendingPlanQuestion(params.sessionKey, PLAN_KEEP_PLANNING_LABEL);
       }
       const cleared = await clearPlanState(scope);
       if (cleared) {

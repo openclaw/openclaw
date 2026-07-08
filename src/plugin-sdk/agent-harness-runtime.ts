@@ -179,12 +179,7 @@ export {
   registerAgentHarnessQuestion,
   type AgentHarnessQuestionRegistration,
 } from "../agents/harness/question-bridge.js";
-export {
-  getGlobalQuestionManager,
-  resetGlobalQuestionManagerForTest,
-  type QuestionAnswers,
-  type QuestionRecord,
-} from "../gateway/question-manager.js";
+export { type QuestionAnswers, type QuestionRecord } from "../gateway/question-manager.js";
 export {
   resolvePendingQuestionFromAnswerCommand,
   type ResolvePendingQuestionOutcome,

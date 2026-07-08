@@ -145,6 +145,30 @@ describe("plan commands", () => {
     expect(answers?.q1?.text).toBe("please add rollback");
   });
 
+  it("/plan exit does not approve a pending plan — it keeps planning and leaves", async () => {
+    const storePath = await createStorePath();
+    await seedSession(storePath);
+    await enterPlanMode({ storePath, sessionKey });
+    const { record, wait } = getGlobalQuestionManager().register({
+      id: "plan-approval-main-789",
+      sessionKey,
+      agentId: "main",
+      questions: [buildPlanApprovalQuestion("do it")],
+    });
+    await setPlanPendingApproval({
+      storePath,
+      sessionKey,
+      planFilePath: "/tmp/plan.md",
+      pendingQuestionId: record.id,
+    });
+
+    const result = await handlePlanCommand(buildPlanParams("/plan exit", storePath), true);
+    expect(result?.reply?.text).not.toMatch(/approved|executing/i);
+    expect(result?.reply?.text).toMatch(/Left plan mode/i);
+    const answers = await wait;
+    expect(answers?.q1?.text).toBe("Keep planning");
+  });
+
   it("/plan accept with no pending question replies gracefully", async () => {
     const storePath = await createStorePath();
     await seedSession(storePath);
