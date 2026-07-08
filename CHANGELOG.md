@@ -46,7 +46,7 @@ Docs: https://docs.openclaw.ai
 - **Microsoft Teams attachment metadata:** bound Bot Framework `attachmentInfo` JSON reads and cancel oversized streams before they can exhaust Gateway memory. (#99125) Thanks @ly85206559.
 - **Agent auth copy order:** preserve the source agent's portable auth-profile precedence when copying credentials to a new agent while excluding skipped profiles and transient auth state. (#100833) Thanks @machine3at.
 - **Memory session repair:** keep daily dreaming ingestion bookkeeping outside session-corpus audit and repair so `memory status --fix` preserves healthy daily state. (#93389) Thanks @Alix-007 and @vincentkoc.
-- **Remote browser CDP policy:** allow the configured CDP control host through an existing hostname allowlist without widening page navigation policy. (#100986, #100819) Thanks @NianJiuZst.
+- **Remote browser CDP policy:** allow the configured CDP control host through an existing hostname allowlist without widening page navigation policy, while keeping strict-policy discovery bound to the configured control authority. (#100986, #100819) Thanks @NianJiuZst.
 - **Config unset diagnostics:** explain when an inherited or default configuration value cannot be unset instead of reporting a misleading successful deletion. (#96557) Thanks @moeghashim.
 - **Crestodian command probes:** contain stdout and stderr stream failures while keeping child-process close and spawn errors authoritative, preventing unhandled probe crashes. (#100741) Thanks @lsr911.
 - **Feishu mention forwarding:** fail closed when the bot Open ID is unavailable so group messages cannot be misclassified as explicit bot mentions. (#100891) Thanks @zhangguiping-xydt.

@@ -149,6 +149,26 @@ describe("GatewayClient", () => {
     ).toBe(6_000);
   });
 
+  test("returns non-sensitive connection metadata", () => {
+    const client = new GatewayClient({
+      clientName: "cli",
+      mode: "backend",
+      preauthHandshakeTimeoutMs: 30_000,
+      deviceIdentity: {
+        deviceId: "device-1",
+        privateKeyPem: "private-key",
+        publicKeyPem: "public-key",
+      },
+    });
+
+    expect(client.getConnectionMetadata()).toEqual({
+      clientName: "cli",
+      hasDeviceIdentity: true,
+      mode: "backend",
+      preauthHandshakeTimeoutMs: 30_000,
+    });
+  });
+
   test("closes on missing ticks", async () => {
     const port = await getFreePort();
     wss = new WebSocketServer({ port, host: "127.0.0.1" });
