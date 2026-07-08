@@ -7,6 +7,9 @@ import {
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
+const STREAM_ERROR_KILL_GRACE_MS = 1_000;
+const STREAM_ERROR_CLOSE_GRACE_MS = 1_000;
+
 function summarizeAzErrorMessage(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -172,6 +175,9 @@ export async function azLoginDeviceCodeWithOptions(params: {
     let stdoutLen = 0;
     let stderrLen = 0;
     let settled = false;
+    let streamError: Error | undefined;
+    let streamKillTimer: NodeJS.Timeout | undefined;
+    let streamCloseFallbackTimer: NodeJS.Timeout | undefined;
     const appendBoundedChunk = (chunks: string[], text: string, len: number): number => {
       if (!text) {
         return len;
@@ -184,20 +190,59 @@ export async function azLoginDeviceCodeWithOptions(params: {
       }
       return total;
     };
+    const clearStreamErrorTimers = () => {
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
+        streamKillTimer = undefined;
+      }
+      if (streamCloseFallbackTimer) {
+        clearTimeout(streamCloseFallbackTimer);
+        streamCloseFallbackTimer = undefined;
+      }
+    };
     const rejectOnce = (error: Error) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearStreamErrorTimers();
       reject(error);
     };
+    const armStreamCloseFallback = () => {
+      if (settled || !streamError || streamCloseFallbackTimer) {
+        return;
+      }
+      // Prefer `close` so normal pipe cleanup wins; bound Windows shell cases
+      // where a grandchild keeps inherited stdio handles open after child exit.
+      streamCloseFallbackTimer = setTimeout(() => {
+        if (streamError) {
+          rejectOnce(streamError);
+        }
+      }, STREAM_ERROR_CLOSE_GRACE_MS);
+      streamCloseFallbackTimer.unref?.();
+    };
     const rejectStreamError = (streamName: "stdout" | "stderr") => (error: Error) => {
+      if (settled || streamError) {
+        return;
+      }
+      streamError = new Error(`az login ${streamName} stream failed: ${error.message}`);
       try {
         child.kill("SIGTERM");
       } catch {
         // Ignore kill failures; the stream error is already the actionable failure.
       }
-      rejectOnce(new Error(`az login ${streamName} stream failed: ${error.message}`));
+      // Keep lifecycle ownership until close; escalate if the login process
+      // ignores the stream-failure shutdown request.
+      streamKillTimer = setTimeout(() => {
+        streamKillTimer = undefined;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Process may have exited after the grace timer was armed.
+        }
+        armStreamCloseFallback();
+      }, STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
     };
     child.stdout?.on("data", (chunk) => {
       const text = String(chunk);
@@ -211,11 +256,26 @@ export async function azLoginDeviceCodeWithOptions(params: {
       process.stderr.write(text);
     });
     child.stderr?.on("error", rejectStreamError("stderr"));
+    child.on("exit", () => {
+      if (!streamError || settled) {
+        return;
+      }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
+        streamKillTimer = undefined;
+      }
+      armStreamCloseFallback();
+    });
     child.on("close", (code) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearStreamErrorTimers();
+      if (streamError) {
+        reject(streamError);
+        return;
+      }
       if (code === 0) {
         resolve();
         return;
@@ -229,6 +289,10 @@ export async function azLoginDeviceCodeWithOptions(params: {
         ),
       );
     });
-    child.on("error", rejectOnce);
+    child.on("error", (error) => {
+      if (!streamError) {
+        rejectOnce(error);
+      }
+    });
   });
 }
