@@ -199,9 +199,10 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       this.fail(error);
       void this.close();
     });
+    // Codex JSON-RPC is stdout-only; stderr is diagnostics and must not tear down the session.
     this.proc.stderr.once("error", (error) => {
-      this.fail(error);
-      void this.close();
+      this.stderrTail.push(`stderr stream error: ${error.message}`);
+      this.stderrTail.splice(0, Math.max(0, this.stderrTail.length - 40));
     });
     this.proc.stdin.once("error", (error) => this.fail(error));
     this.proc.once("error", (error) => this.fail(error));
