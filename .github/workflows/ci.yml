@@ -344,6 +344,9 @@ jobs:
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
+                requires_go:
+                  shard.shardName === "core-tooling" ||
+                  shard.groups?.some((group) => group.shard_name === "core-tooling"),
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -1148,6 +1151,13 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
+
+      - name: Setup Go for docs i18n
+        if: matrix.requires_go == true
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: scripts/docs-i18n/go.mod
+          cache-dependency-path: scripts/docs-i18n/go.sum
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
