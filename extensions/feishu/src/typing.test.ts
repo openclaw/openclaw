@@ -1,6 +1,11 @@
 // Feishu tests cover typing plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isFeishuBackoffError, getBackoffCodeFromResponse, FeishuBackoffError } from "./typing.js";
+import {
+  isFeishuBackoffError,
+  getBackoffCodeFromResponse,
+  FeishuBackoffError,
+  isFeishuMessageNotFoundError,
+} from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -97,6 +102,33 @@ describe("getBackoffCodeFromResponse", () => {
   it("returns undefined for response without code field", () => {
     const response = { data: { reaction_id: "r1" } };
     expect(getBackoffCodeFromResponse(response)).toBeUndefined();
+  });
+});
+
+describe("isFeishuMessageNotFoundError", () => {
+  it("returns true for AxiosError response data code 231003", () => {
+    const err = { response: { status: 400, data: { code: 231003 } } };
+    expect(isFeishuMessageNotFoundError(err)).toBe(true);
+  });
+
+  it("returns true for SDK error with top-level code 231003", () => {
+    const err = { code: 231003, msg: "The message is not found, maybe not exist or deleted" };
+    expect(isFeishuMessageNotFoundError(err)).toBe(true);
+  });
+
+  it("returns true for nested Feishu SDK error tuples", () => {
+    const err = [
+      [
+        { message: "Request failed with status code 400" },
+        { code: 231003, msg: "The message is not found, maybe not exist or deleted" },
+      ],
+    ];
+    expect(isFeishuMessageNotFoundError(err)).toBe(true);
+  });
+
+  it("returns false for unrelated Feishu API codes", () => {
+    const err = { response: { status: 400, data: { code: 99991401 } } };
+    expect(isFeishuMessageNotFoundError(err)).toBe(false);
   });
 });
 

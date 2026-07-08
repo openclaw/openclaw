@@ -1199,6 +1199,52 @@ describe("handleFeishuMessage command authorization", () => {
     expect(observedAbortSignal?.aborted).toBe(true);
   });
 
+  it("aborts an in-flight agent dispatch when the source typing target is missing", async () => {
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchReplyFromConfig.mockImplementationOnce(
+      async (params: {
+        replyOptions?: {
+          abortSignal?: AbortSignal;
+        };
+      }) => {
+        observedAbortSignal = params.replyOptions?.abortSignal;
+        const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+          | { onTypingTargetMissing?: (messageId: string) => void }
+          | undefined;
+        dispatcherParams?.onTypingTargetMissing?.("msg-missing-during-typing");
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    );
+
+    await dispatchMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-missing-during-typing",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: commandRuntime.channel,
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(observedAbortSignal?.aborted).toBe(true);
+  });
+
   it("routes /compact through the standard reply dispatch path (#90185)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
 

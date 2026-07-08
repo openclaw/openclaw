@@ -73,6 +73,7 @@ import {
   bindFeishuSourceMessageRun,
   composeFeishuSourceMessageAbortSignal,
   isFeishuSourceMessageRecalled,
+  recallFeishuSourceMessage,
 } from "./source-message-recall.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -150,6 +151,46 @@ function bindFeishuRecallAwareDispatch(params: {
         binding.abortSignal,
       ),
     },
+  };
+}
+
+function createFeishuTypingTargetMissingHandler(params: {
+  channelRuntime: PluginRuntime["channel"];
+  accountId: string;
+  sourceMessageId: string;
+  typingTargetMessageId?: string;
+  log: (...args: unknown[]) => void;
+}): ((messageId: string) => void) | undefined {
+  if (params.typingTargetMessageId !== params.sourceMessageId) {
+    return undefined;
+  }
+
+  let logged = false;
+  return (messageId: string) => {
+    if (messageId !== params.sourceMessageId) {
+      return;
+    }
+    const result = recallFeishuSourceMessage({
+      channelRuntime: params.channelRuntime,
+      accountId: params.accountId,
+      messageId,
+    });
+    if (!result.recorded) {
+      if (!logged) {
+        logged = true;
+        params.log(
+          `feishu[${params.accountId}]: source message missing during typing ${messageId} ignored without runtime context`,
+        );
+      }
+      return;
+    }
+    if (!logged) {
+      logged = true;
+      params.log(
+        `feishu[${params.accountId}]: source message missing during typing ${messageId} ` +
+          `(abortedRuns=${result.abortedRuns}, alreadyRecalled=${result.alreadyRecalled})`,
+      );
+    }
   };
 }
 
@@ -1688,6 +1729,13 @@ export async function handleFeishuMessage(params: {
               mentionTargets: ctx.mentionTargets,
               messageCreateTimeMs,
               sessionKey: agentSessionKey,
+              onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+                channelRuntime: core.channel,
+                accountId: account.accountId,
+                sourceMessageId: ctx.messageId,
+                typingTargetMessageId,
+                log,
+              }),
             });
 
           log(
@@ -1909,6 +1957,13 @@ export async function handleFeishuMessage(params: {
           mentionTargets: ctx.mentionTargets,
           messageCreateTimeMs,
           sessionKey: route.sessionKey,
+          onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+            channelRuntime: core.channel,
+            accountId: account.accountId,
+            sourceMessageId: ctx.messageId,
+            typingTargetMessageId,
+            log,
+          }),
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);

@@ -155,6 +155,7 @@ type CreateFeishuReplyDispatcherParams = {
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
   sessionKey?: string;
+  onTypingTargetMissing?: (messageId: string) => void | Promise<void>;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -222,6 +223,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
+          onMessageNotFound: params.onTypingTargetMissing,
         });
       },
       stop: async () => {

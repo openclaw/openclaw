@@ -422,6 +422,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("notifies callers when the typing target message is missing", async () => {
+    const onTypingTargetMissing = vi.fn();
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      sendTarget: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+      onTypingTargetMissing,
+    });
+
+    const options = firstTypingDispatcherOptions();
+    await options.onReplyStart?.();
+
+    const typingParams = firstMockArg(addTypingIndicatorMock, "typing indicator params") as {
+      onMessageNotFound?: (messageId: string) => void | Promise<void>;
+    };
+    expect(typingParams.onMessageNotFound).toBe(onTypingTargetMissing);
+    await typingParams.onMessageNotFound?.("om_parent");
+    expect(onTypingTargetMissing).toHaveBeenCalledWith("om_parent");
+  });
+
   it("targets typing at the inbound message while replies stay on the thread root", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
