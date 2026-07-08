@@ -146,4 +146,40 @@ describe("readResponseText", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not mark exact-size responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["exact"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "exact",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks response as truncated when more data follows after hitting the byte limit", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["exact", "more"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "exact",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
 });
