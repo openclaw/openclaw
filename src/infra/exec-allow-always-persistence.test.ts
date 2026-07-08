@@ -117,6 +117,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     },
   );
 
+  it("persists npm x approvals against the inner executable", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "npm");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "npm x -- tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
   it("keeps package-manager shell carriers one-shot", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "pnpm");
@@ -171,6 +195,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       });
     },
   );
+
+  it("keeps npm x shell carriers one-shot", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["npm", "sh", "echo"]) {
+      makeExecutable(dir, executable);
+    }
+    const env = makePathEnv(dir);
+    const command = "npm x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
 
   it.each(["env --", "nice"])(
     "keeps dispatch-wrapped package-manager shell carriers one-shot: %s",

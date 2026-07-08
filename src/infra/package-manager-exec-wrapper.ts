@@ -25,6 +25,8 @@ const NPM_EXEC_FLAG_OPTIONS = new Set([
   "-y",
 ]);
 
+const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
+
 export const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--config",
   "--dir",
@@ -221,7 +223,7 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
       continue;
     }
     if (!token.startsWith("-")) {
-      if (token !== "exec") {
+      if (!NPM_EXEC_SUBCOMMANDS.has(token)) {
         return null;
       }
       idx += 1;
@@ -263,10 +265,11 @@ export function resolveKnownPackageManagerExecInvocation(
       if (unwrapped) {
         return { kind: "unwrapped", argv: unwrapped };
       }
-      return firstSubcommandAfterOptions(argv, {
+      const firstSubcommand = firstSubcommandAfterOptions(argv, {
         optionsWithValue: new Set([...NPM_EXEC_OPTIONS_WITH_VALUE, "-C"]),
         flagOptions: NPM_EXEC_FLAG_OPTIONS,
-      }) === "exec"
+      });
+      return NPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
         ? { kind: "unsafe-exec" }
         : containsSubcommandToken(argv.slice(1), new Set(["exec"]))
           ? { kind: "unsafe-exec" }
