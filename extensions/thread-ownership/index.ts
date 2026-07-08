@@ -5,6 +5,8 @@ import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
+  pruneMapToMaxSize,
+  readProviderJsonResponse,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
@@ -19,9 +21,11 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 
 // In-memory set of {channel}:{thread} keys where this agent was @-mentioned.
-// Entries expire after 5 minutes.
+// Entries expire after 5 minutes and are capped to bound high-cardinality Slack traffic.
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
+const MENTION_CACHE_MAX_ENTRIES = 2000;
+const FORWARDER_CONFLICT_JSON_MAX_BYTES = 64 * 1024;
 
 function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig {
   return value !== null && typeof value === "object";
@@ -49,6 +53,12 @@ function cleanExpiredMentions(): void {
       mentionedThreads.delete(key);
     }
   }
+}
+
+function rememberMentionedThread(key: string): void {
+  cleanExpiredMentions();
+  mentionedThreads.set(key, Date.now());
+  pruneMapToMaxSize(mentionedThreads, MENTION_CACHE_MAX_ENTRIES);
 }
 
 function containsAgentNameMention(text: string, agentName: string): boolean {
@@ -136,8 +146,7 @@ export default definePluginEntry({
         containsAgentNameMention(text, agent.name) ||
         (botUserId && text.includes(`<@${botUserId}>`));
       if (mentioned) {
-        cleanExpiredMentions();
-        mentionedThreads.set(`${channelId}:${threadTs}`, Date.now());
+        rememberMentionedThread(`${channelId}:${threadTs}`);
       }
     });
 
@@ -189,9 +198,14 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = (await resp.json()) as { owner?: string };
+            const body = await readProviderJsonResponse<{ owner?: unknown }>(
+              resp,
+              "thread-ownership forwarder conflict",
+              { maxBytes: FORWARDER_CONFLICT_JSON_MAX_BYTES },
+            );
+            const owner = typeof body.owner === "string" ? body.owner : undefined;
             api.logger.info?.(
-              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
             );
             return { cancel: true };
           }

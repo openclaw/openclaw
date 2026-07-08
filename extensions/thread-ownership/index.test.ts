@@ -269,6 +269,19 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
+    it("fails open when the forwarder conflict JSON exceeds the bounded read limit", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "x".repeat(70 * 1024) }), { status: 409 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      const warningMessage = requireFirstLogMessage(api.logger.warn, "ownership check warning log");
+      expect(warningMessage).toContain("ownership check failed");
+      expect(warningMessage).toContain("JSON response exceeds 65536 bytes");
+    });
+
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
@@ -479,6 +492,48 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(globalThis.fetch).toHaveBeenCalled();
+    });
+
+    it("evicts the oldest mentioned thread when the mention cache reaches its cap", async () => {
+      for (let i = 0; i <= 2000; i++) {
+        await hooks.message_received(
+          {
+            content: "Hey @TestBot help me",
+            threadId: `9000.${String(i).padStart(4, "0")}`,
+            metadata: { channelId: "C321" },
+          },
+          { channelId: "slack", conversationId: "C321" },
+        );
+      }
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      await hooks.message_sending(
+        {
+          content: "On it!",
+          replyToId: "9000.0000",
+          metadata: { channelId: "C321" },
+          to: "C321",
+        },
+        { channelId: "slack", conversationId: "C321" },
+      );
+      await hooks.message_sending(
+        {
+          content: "On it!",
+          replyToId: "9000.2000",
+          metadata: { channelId: "C321" },
+          to: "C321",
+        },
+        { channelId: "slack", conversationId: "C321" },
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expectOwnershipFetchCall(
+        0,
+        "http://localhost:8750/api/v1/ownership/C321/9000.0000",
+        "test-agent",
+      );
     });
 
     it("does not treat email-like text as an agent-name mention", async () => {
