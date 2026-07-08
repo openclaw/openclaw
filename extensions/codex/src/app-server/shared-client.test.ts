@@ -797,6 +797,32 @@ describe("shared Codex app-server client", () => {
     expect(second.process.stdin.destroyed).toBe(false);
   });
 
+  it("suspect retirement closes a client that was already gracefully detached", async () => {
+    const first = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
+
+    const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await expect(lease).resolves.toBe(first.client);
+
+    // Routine cleanup detaches gracefully; a later terminal-idle kill must
+    // still be able to fail the leaseholders off the poisoned process.
+    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
+      activeLeases: 1,
+      closed: false,
+    });
+    expect(first.process.stdin.destroyed).toBe(false);
+
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
+      activeLeases: 1,
+      closed: true,
+    });
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+  });
+
   it("retires gracefully by default: leased clients close on release, not immediately", async () => {
     const first = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);

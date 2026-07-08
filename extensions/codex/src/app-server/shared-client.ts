@@ -34,6 +34,10 @@ type SharedCodexAppServerClientState = {
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
 };
 
+// Clients we already force-closed for suspect retirement; a repeat retire must
+// report closed:false instead of pretending to close the corpse again.
+const suspectClosedClients = new WeakSet<CodexAppServerClient>();
+
 // Symbol.for shares one client table across duplicate module copies (dist +
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
@@ -436,6 +440,9 @@ export function retireSharedCodexAppServerClientIfCurrent(
       if (opts?.failActiveLeases) {
         entry.closeError = new Error("codex app-server client is closed");
         const closed = closeRetiredSharedClientEntry(entry);
+        if (closed) {
+          suspectClosedClients.add(client);
+        }
         return { activeLeases: entry.activeLeases, closed };
       }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
@@ -444,6 +451,14 @@ export function retireSharedCodexAppServerClientIfCurrent(
   }
   const activeLeases = state.leasedReleases.get(client)?.length ?? 0;
   if (activeLeases > 0) {
+    // A gracefully detached client (e.g. one-shot cleanup) can still be leased
+    // when a later terminal-idle kill declares it suspect; the map miss must
+    // not let the poisoned process keep serving those co-leases.
+    if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
+      suspectClosedClients.add(client);
+      client.close();
+      return { activeLeases, closed: true };
+    }
     return { activeLeases, closed: false };
   }
   return undefined;
