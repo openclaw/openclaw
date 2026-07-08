@@ -2,7 +2,12 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionPlanState } from "../../../api/types.ts";
-import type { PlanChecklist } from "../../../lib/session-plan.ts";
+import { extractPlanChecklist, type PlanChecklist } from "../../../lib/plan-checklist.ts";
+import {
+  getPlanChecklist,
+  resetPlanChecklistStoreForTest,
+  setPlanChecklist,
+} from "../plan-stream-store.ts";
 import { renderPlanPanel } from "./plan-panel.ts";
 
 let container: HTMLDivElement;
@@ -80,5 +85,51 @@ describe("renderPlanPanel", () => {
   it("shows the empty state when there are no steps yet", () => {
     render(renderPlanPanel({ plan: planningState, checklist: { steps: [] } }), container);
     expect(container.querySelector(".plan-panel__empty")).not.toBeNull();
+  });
+});
+
+describe("plan panel live stream:plan sequence", () => {
+  const sessionKey = "agent:main:web:main";
+
+  beforeEach(() => resetPlanChecklistStoreForTest());
+  afterEach(() => resetPlanChecklistStoreForTest());
+
+  // Simulates a stream:plan sequence: each update_plan tool result is captured into the store
+  // (as handleAgentEvent does) and the panel re-renders from it.
+  function feedAndRender(steps: { step: string; status: string }[]): void {
+    const parsed = extractPlanChecklist({ details: { status: "updated", plan: steps } });
+    expect(parsed).not.toBeNull();
+    setPlanChecklist(sessionKey, parsed as PlanChecklist);
+    render(
+      renderPlanPanel({ plan: planningState, checklist: getPlanChecklist(sessionKey) }),
+      container,
+    );
+  }
+
+  function stepClass(index: number): string {
+    return container.querySelectorAll(".plan-panel__step")[index]?.className ?? "";
+  }
+
+  it("re-renders step status transitions as successive plan updates stream in", () => {
+    feedAndRender([
+      { step: "Research the seam", status: "in_progress" },
+      { step: "Write the gate", status: "pending" },
+    ]);
+    expect(container.querySelectorAll(".plan-panel__step")).toHaveLength(2);
+    expect(stepClass(0)).toContain("plan-panel__step--in_progress");
+    expect(stepClass(1)).toContain("plan-panel__step--pending");
+    expect(container.textContent).toContain("0/2 done");
+
+    // Next delta: step 1 completes, step 2 starts, a third step appears.
+    feedAndRender([
+      { step: "Research the seam", status: "completed" },
+      { step: "Write the gate", status: "in_progress" },
+      { step: "Add tests", status: "pending" },
+    ]);
+    expect(container.querySelectorAll(".plan-panel__step")).toHaveLength(3);
+    expect(stepClass(0)).toContain("plan-panel__step--completed");
+    expect(stepClass(1)).toContain("plan-panel__step--in_progress");
+    expect(container.textContent).toContain("1/3 done");
+    expect(container.textContent).toContain("Add tests");
   });
 });

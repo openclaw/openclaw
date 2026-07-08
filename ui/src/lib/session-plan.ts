@@ -1,19 +1,13 @@
 // Control UI module implements Codex-parity plan-mode presentation helpers.
 import type { SessionPlanState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import type { PlanChecklistStep, PlanChecklistStepStatus } from "./plan-checklist.ts";
 
-export type PlanChecklistStepStatus = "pending" | "in_progress" | "completed";
-
-export type PlanChecklistStep = {
-  step: string;
-  status: PlanChecklistStepStatus;
-};
-
-/** Live plan checklist derived from the latest stream:plan (update_plan) event. */
-export type PlanChecklist = {
-  explanation?: string;
-  steps: PlanChecklistStep[];
-};
+export type {
+  PlanChecklist,
+  PlanChecklistStep,
+  PlanChecklistStepStatus,
+} from "./plan-checklist.ts";
 
 /** Human label for the plan-mode state chip. */
 export function formatPlanStateLabel(status: SessionPlanState["status"]): string {

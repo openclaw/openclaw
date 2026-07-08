@@ -39,6 +39,7 @@ import {
 } from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
+import { getPlanChecklist } from "../plan-stream-store.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -2248,9 +2249,9 @@ export function renderChatComposer(props: ChatComposerProps) {
           })}
           ${renderPlanPanel({
             plan: activeSession?.plan,
-            // The live stream:plan checklist is threaded through chat run-state separately; the
-            // panel renders state chip + summary + approve/reject from the session snapshot today.
-            checklist: null,
+            // Live checklist captured from the update_plan tool stream (stream:plan); updates in
+            // real time via the throttled tool-stream sync/re-render.
+            checklist: getPlanChecklist(props.sessionKey),
             actions:
               canCompose && props.onGoalCommand
                 ? {
