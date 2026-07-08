@@ -190,6 +190,11 @@ export function createAskUserQuestionTool(options: AskUserQuestionToolOptions = 
       const questions = normalizeQuestions(rawQuestions);
 
       const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim() || null;
+      // v1 registers with the PROCESS-GLOBAL manager: the gateway resolve/list
+      // handlers and channel surfaces share this instance in the default embedded
+      // (in-process) deployment. Caveat: a remote/out-of-process agent runtime would
+      // not see this singleton — such a topology must route through a gateway
+      // request/wait RPC (mirroring exec.approval.request) before it is supported.
       const { wait } = getGlobalQuestionManager().register({
         sessionKey,
         agentId: options.sessionAgentId ?? null,

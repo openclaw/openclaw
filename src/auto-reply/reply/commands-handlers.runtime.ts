@@ -1,6 +1,7 @@
 // Loads command handlers behind a runtime boundary for the command dispatcher.
 import { handleAcpCommand } from "./commands-acp.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
+import { handleAnswerCommand } from "./commands-answer.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleBtwCommand } from "./commands-btw.js";
@@ -73,6 +74,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,
+    handleAnswerCommand,
     handleContextCommand,
     handleExportSessionCommand,
     handleExportTrajectoryCommand,
