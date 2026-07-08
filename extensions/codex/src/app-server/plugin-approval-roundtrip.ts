@@ -6,6 +6,7 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
@@ -130,7 +131,7 @@ export function mapExecDecisionToOutcome(
 }
 
 function truncateForGateway(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

@@ -186,6 +186,7 @@ import {
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
+  shouldCatalogToolForLocalModelLean,
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -1319,6 +1320,11 @@ export async function runEmbeddedAttempt(
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: effectiveToolsAllow,
     });
+    const localModelLeanEnabled = isLocalModelLeanEnabled({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
     const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
       toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
@@ -1813,6 +1819,10 @@ export async function runEmbeddedAttempt(
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: catalogToolHookContext,
+            shouldCatalogTool:
+              localModelLeanEnabled && toolSearchConfig.mode === "tools"
+                ? shouldCatalogToolForLocalModelLean
+                : undefined,
           });
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
@@ -2841,10 +2851,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         messageProvider: params.messageProvider,
         messageChannel: params.messageChannel,
-        localModelLean: isLocalModelLeanEnabled({
-          config: params.config,
-          agentId: sessionAgentId,
-        }),
+        localModelLean: localModelLeanEnabled,
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });

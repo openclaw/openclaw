@@ -3,6 +3,7 @@
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
@@ -34,22 +35,40 @@ function resolveAccountAgentRoute(params: {
       id: params.target,
     },
   });
-  const agentId = params.account.agentId ?? route.agentId;
+  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
   if (agentId === route.agentId) {
     return route;
   }
+  const peer = {
+    kind: params.isDirect ? ("direct" as const) : ("channel" as const),
+    id: params.target,
+  };
+  const dmScope = params.cfg.session?.dmScope ?? "main";
+  // Account-level agent ownership changes only the agent prefix. Preserve the
+  // resolved session policy so outbound recipient routing reaches this key.
+  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer,
+    dmScope,
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    dmScope: "main",
+  });
   return {
     ...route,
     agentId,
-    sessionKey: runtime.channel.routing.buildAgentSessionKey({
-      agentId,
-      channel: CHANNEL_ID,
-      accountId: params.account.accountId,
-      peer: {
-        kind: params.isDirect ? "direct" : "channel",
-        id: params.target,
-      },
-    }),
+    dmScope,
+    sessionKey,
+    mainSessionKey,
+    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
   };
 }
 

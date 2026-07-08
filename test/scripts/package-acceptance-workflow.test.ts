@@ -18,6 +18,7 @@ const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desk
 const MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW =
   ".github/workflows/mantis-telegram-desktop-proof.yml";
 const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
+const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
@@ -1569,6 +1570,11 @@ describe("package artifact reuse", () => {
         workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
         jobName: "run_telegram_live",
         stepName: "Upload Mantis Telegram artifacts",
+      },
+      {
+        workflowPath: MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW,
+        jobName: "run_web_ui_chat",
+        stepName: "Upload Mantis web UI chat artifacts",
       },
       {
         workflowPath: NPM_TELEGRAM_WORKFLOW,

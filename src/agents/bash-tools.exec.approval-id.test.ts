@@ -657,6 +657,37 @@ describe("exec approvals", () => {
     expect(calls).toContain("node.invoke");
   });
 
+  it("keeps the background fallback warning when node exec actually runs inline", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      allowBackground: false,
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-background-disabled", {
+      command: "echo ok",
+      background: true,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain(
+      "Warning: background execution is disabled; running synchronously.",
+    );
+    expect(getResultText(result)).toContain("node-ok");
+  });
+
   it("honors ask=off for elevated gateway exec without prompting", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
@@ -940,6 +971,49 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
   });
+
+  it.each(["gateway", "node"] as const)(
+    "keeps background fallback warnings out of pending %s approvals",
+    async (host) => {
+      let approvalRequest: Record<string, unknown> | undefined;
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        if (method === "node.invoke") {
+          const invoke = params as { command?: string };
+          if (invoke.command === "system.run.prepare") {
+            return buildPreparedSystemRunPayload(params);
+          }
+        }
+        if (method === "exec.approvals.node.get") {
+          return { file: { version: 1, agents: {} } };
+        }
+        if (method === "exec.approval.request") {
+          approvalRequest = params as Record<string, unknown>;
+          return acceptedApprovalResponse(params);
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host,
+        ask: "always",
+        security: "full",
+        allowBackground: false,
+        approvalRunningNoticeMs: 0,
+      });
+
+      const result = await tool.execute(`call-${host}-background-approval`, {
+        command: "echo ok",
+        background: true,
+      });
+
+      expect(result.details.status).toBe("approval-pending");
+      expect(getResultText(result)).not.toContain("background execution is disabled");
+      expect(approvalRequest?.warningText).toBeUndefined();
+    },
+  );
 
   it("starts an internal agent follow-up after approved gateway exec completes without an external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];

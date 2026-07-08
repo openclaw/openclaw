@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -314,7 +315,8 @@ async function spillWebFetchContent(
   }
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.
-  const content = value.slice(0, WEB_FETCH_SPILL_MAX_CHARS);
+  const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
+  const spilledChars = content.length;
   const fullOutputPath = await writePrivateTempFile(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
@@ -324,7 +326,7 @@ async function spillWebFetchContent(
   const spillNote = sourceTruncated
     ? " Spilled available content from truncated response."
     : spillCapped
-      ? ` Spilled first ${WEB_FETCH_SPILL_MAX_CHARS} chars.`
+      ? ` Spilled first ${spilledChars} chars.`
       : "";
   const fullOutputFooter = formatFullOutputFooter(fullOutputPath);
   const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
@@ -344,7 +346,7 @@ async function spillWebFetchContent(
     text,
     wrappedLength: text.length,
     fullOutputPath,
-    spilledChars: content.length,
+    spilledChars,
     spillTruncated,
   };
 }

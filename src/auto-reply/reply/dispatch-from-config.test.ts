@@ -70,6 +70,9 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const globalMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+}));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
   logMessageDispatchStarted: vi.fn(),
@@ -442,6 +445,14 @@ vi.mock("./abort.runtime.js", () => ({
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },
 }));
+
+vi.mock("../../globals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../globals.js")>();
+  return {
+    ...actual,
+    logVerbose: globalMocks.logVerbose,
+  };
+});
 
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
@@ -10203,6 +10214,32 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
     expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("keeps the suppressed reply log preview UTF-16 safe", async () => {
+    setNoAbort();
+    globalMocks.logVerbose.mockClear();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const text = `${"y".repeat(159)}🚀`;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text }),
+    });
+
+    const suppressedLog = globalMocks.logVerbose.mock.calls.find(([message]) =>
+      message.includes("final reply suppressed"),
+    )?.[0];
+    expect(suppressedLog).toContain("textChars=161");
+    expect(suppressedLog).toContain(`textPreview=${JSON.stringify("y".repeat(159))}`);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("does not mark allowed group silence eligible for no-visible fallback", async () => {

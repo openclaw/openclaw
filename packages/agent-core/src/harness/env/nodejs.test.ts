@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NodeExecutionEnv, resolveExecTimeoutMs } from "./nodejs.js";
+import { NodeExecutionEnv } from "./nodejs.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -11,6 +11,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -30,23 +31,57 @@ function mockSpawnChild() {
   };
 }
 
-describe("NodeExecutionEnv timeout helpers", () => {
-  it("converts positive timeout seconds to milliseconds", () => {
-    expect(resolveExecTimeoutMs(1)).toBe(1_000);
-    expect(resolveExecTimeoutMs(1.5)).toBe(1_500);
-    expect(resolveExecTimeoutMs(0.0005)).toBe(1);
+async function waitForSpawnCall(): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (spawnMock.mock.calls.length > 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+  throw new Error("expected spawn to be called");
+}
+
+describe("NodeExecutionEnv timeout handling", () => {
+  let env: NodeExecutionEnv;
+
+  beforeEach(() => {
+    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
   });
 
-  it("caps oversized timeout seconds to a timer-safe delay", () => {
-    expect(resolveExecTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(2_147_000_000);
+  it.each([
+    { timeout: 1, expectedDelayMs: 1_000 },
+    { timeout: 1.5, expectedDelayMs: 1_500 },
+    { timeout: 0.0005, expectedDelayMs: 1 },
+    { timeout: Number.MAX_SAFE_INTEGER, expectedDelayMs: 2_147_000_000 },
+  ])("schedules timeout $timeout as $expectedDelayMs ms", async ({ timeout, expectedDelayMs }) => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const child = mockSpawnChild();
+
+    const resultPromise = env.exec("echo hello", { timeout });
+    await waitForSpawnCall();
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), expectedDelayMs);
+    child.emit("close", 0);
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
 
-  it("ignores absent, invalid, or non-positive timeout seconds", () => {
-    expect(resolveExecTimeoutMs(undefined)).toBeUndefined();
-    expect(resolveExecTimeoutMs(Number.NaN)).toBeUndefined();
-    expect(resolveExecTimeoutMs(0)).toBeUndefined();
-    expect(resolveExecTimeoutMs(-1)).toBeUndefined();
-  });
+  it.each([undefined, Number.NaN, 0, -1])(
+    "does not schedule an invalid timeout value %s",
+    async (timeout) => {
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const child = mockSpawnChild();
+
+      const resultPromise = env.exec("echo hello", { timeout });
+      await waitForSpawnCall();
+
+      expect(timeoutSpy).not.toHaveBeenCalled();
+      child.emit("close", 0);
+      await expect(resultPromise).resolves.toMatchObject({ ok: true });
+    },
+  );
 });
 
 describe("NodeExecutionEnv exec stream errors", () => {
@@ -62,9 +97,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
       const child = mockSpawnChild();
 
       const resultPromise = env.exec("echo hello");
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
-        timeout: 2000,
-      });
+      await waitForSpawnCall();
 
       child[streamName].emit("error", new Error(`${streamName} EPIPE`));
 
@@ -82,9 +115,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
     const child = mockSpawnChild();
 
     const resultPromise = env.exec("echo hello");
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
-      timeout: 2000,
-    });
+    await waitForSpawnCall();
 
     child.stdout.emit("error", new Error("stdout EPIPE"));
 
@@ -104,9 +135,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
     const child = mockSpawnChild();
 
     const resultPromise = env.exec("echo hello");
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
-      timeout: 2000,
-    });
+    await waitForSpawnCall();
     child.emit("close", 0);
 
     const result = await resultPromise;
@@ -119,7 +148,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
     try {
       const child = mockSpawnChild();
       const resultPromise = new NodeExecutionEnv({ cwd: process.cwd() }).exec("echo hello");
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), { timeout: 2000 });
+      await waitForSpawnCall();
 
       child.stdout.emit("error", new Error("where stdout failed"));
 

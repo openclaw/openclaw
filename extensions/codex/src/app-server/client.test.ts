@@ -422,6 +422,42 @@ describe("CodexAppServerClient", () => {
     await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
   });
 
+  it("handles stdout stream errors without crashing the process", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    const readError = Object.assign(new Error("stdout pipe broke"), { code: "EIO" });
+
+    expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
+
+    await expect(pending).rejects.toThrow("stdout pipe broke");
+    await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
+  });
+
+  it("keeps RPC requests usable after stderr stream errors", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const stderrError = Object.assign(new Error("stderr pipe broke"), { code: "EIO" });
+
+    expect(() => harness.process.stderr.emit("error", stderrError)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith("codex app-server stderr stream failed", {
+      error: stderrError,
+    });
+
+    harness.send({ id: firstRequest.id, result: { ok: true } });
+    await expect(pending).resolves.toEqual({ ok: true });
+
+    const next = harness.client.request("another/method");
+    const secondRequest = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({ id: secondRequest.id, result: { ok: "still-connected" } });
+    await expect(next).resolves.toEqual({ ok: "still-connected" });
+  });
+
   it("preserves redacted app-server stderr on exit errors", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

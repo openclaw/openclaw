@@ -23,6 +23,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
+- **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
+- **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.
+- **Direct poll delivery:** route direct and hybrid channel polls through the owning outbound adapter while preserving gateway-mode routing and channel option checks. (#99950) Thanks @NianJiuZst.
+- **Agent wait hard-timeout snapshots:** preserve canonical hard-timeout phase and timestamps when the outer `agent.wait` timer wins the retry-grace race, while leaving queue, draining, and restart-cancelled waits correctable. (#89367) Thanks @Pick-cat.
+- **Control UI typed approvals:** send `/approve` commands immediately through the authorized Gateway command path while an agent run is blocked instead of queueing the command behind that run. (#77672) Thanks @vincentkoc.
+- **Microsoft Teams Graph response bounds:** cap successful file-upload and chat JSON reads so oversized Microsoft Graph responses cannot be buffered without limit. (#97784) Thanks @Alix-007.
 - **Packaged speech runtime:** stop treating package-backed `speech-core` as a bundled plugin sidecar, restoring TTS startup in npm installs while release checks keep true activation-bypassing facades package-complete. (#89899, #89425) Thanks @zhangguiping-xydt.
 - **Codex app-server protocol:** require app-server 0.142 or newer, remove pre-0.142 wire-shape compatibility, and teach Codex to retrieve deferred native `spawn_agent` through `tool_search` so native subagent task mirroring works on search-capable models. (#101221)
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator.
@@ -134,6 +141,7 @@ Docs: https://docs.openclaw.ai
 - **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
 - **iOS Gateway auth retry:** restrict stored device-token retry to parsed loopback hosts and reject wildcard bind addresses, preventing remote lookalike hostnames from receiving trusted retry credentials. (#99859) Thanks @ly85206559.
 - **Bedrock Mantle discovery:** bound model-catalog fetch time and response size, and release rejected response bodies so stalled, oversized, or failed provider responses fall back safely. (#99961) Thanks @zhangguiping-xydt.
+- **Discord thread-title prompts:** truncate generated-title message and channel context on UTF-16 boundaries so emoji cannot leave malformed model prompt text. (#101551) Thanks @Alix-007.
 
 ## 2026.7.1
 

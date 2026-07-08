@@ -13,6 +13,12 @@ import {
   tarCreateMock,
 } from "./backup.test-support.js";
 
+const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
+
+vi.mock("../utils/sleep.js", () => ({
+  sleep: (ms: number) => sleepMock(ms),
+}));
+
 const { backupCreateCommand } = await import("./backup.js");
 
 describe("backupCreateCommand atomic archive write", () => {
@@ -26,6 +32,7 @@ describe("backupCreateCommand atomic archive write", () => {
     await resetBackupTempHome(tempHome);
     tarCreateMock.mockReset();
     backupVerifyCommandMock.mockReset();
+    sleepMock.mockClear();
   });
 
   afterEach(async () => {
@@ -130,6 +137,7 @@ describe("backupCreateCommand atomic archive write", () => {
       });
 
       expect(result.archivePath).toBe(outputPath);
+      expect(sleepMock.mock.calls).toStrictEqual([[10_000], [20_000]]);
       expect(attemptFiles).toStrictEqual([
         attemptFiles[0],
         `${attemptFiles[0]}.retry-2`,
