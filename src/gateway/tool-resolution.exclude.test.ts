@@ -8,6 +8,7 @@ type CreateOpenClawToolsArg = {
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  authProfileStore?: { profiles: Record<string, unknown> };
 };
 
 const hoisted = vi.hoisted(() => {
@@ -46,6 +47,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
+    authProfileStore?: unknown;
   } {
     const args = hoisted.createOpenClawToolsMock.mock.calls[index]?.[0];
     if (!args || typeof args !== "object") {
@@ -55,6 +57,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
       inheritedToolDenylist?: string[];
       pluginToolDenylist?: string[];
+      authProfileStore?: unknown;
     };
   }
 
@@ -143,5 +146,17 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { name: "read" },
       { name: "cron" },
     ]);
+  });
+
+  it("forwards authProfileStore to createOpenClawTools", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      authProfileStore: { profiles: {} } as never,
+    });
+
+    const args = readCreateToolsArgs();
+    expect(args.authProfileStore).toBeDefined();
   });
 });
