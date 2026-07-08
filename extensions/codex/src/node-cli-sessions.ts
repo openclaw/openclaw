@@ -294,6 +294,7 @@ async function runCodexExecResume(params: {
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.stdin.end(params.prompt);
+    let streamError: Error | undefined;
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
       child.on("exit", (code) => resolve(code));
@@ -301,14 +302,15 @@ async function runCodexExecResume(params: {
       // stdout/stderr Readable. When the child terminates abruptly the pipe
       // can break before the "exit" event fires, so the stream layer emits
       // an asynchronous "error" that would otherwise crash the gateway.
+      // Unlike the earlier pattern of rejecting immediately, we record the
+      // error and wait for the child to exit via the existing exit-listener so
+      // the caller's active-session guard is not released while the child
+      // process is still running.
       const routeStreamError = (error: unknown) => {
-        // Kill the child before surfacing the stream error so the caller's
-        // active-session guard is not released while the child is still running
-        // and the process does not become orphaned.
+        streamError = error instanceof Error ? error : new Error(String(error));
         child.kill("SIGTERM");
         const sigkill = setTimeout(() => child.kill("SIGKILL"), 2_000);
         sigkill.unref();
-        reject(error instanceof Error ? error : new Error(String(error)));
       };
       child.stdout?.on?.("error", routeStreamError);
       child.stderr?.on?.("error", routeStreamError);
@@ -318,6 +320,9 @@ async function runCodexExecResume(params: {
         clearTimeout(forceKillTimeout);
       }
     });
+    if (streamError) {
+      throw streamError;
+    }
     if (timedOut) {
       throw new Error(`codex exec resume timed out after ${String(params.timeoutMs)}ms`);
     }
