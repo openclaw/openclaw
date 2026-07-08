@@ -123,7 +123,9 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
   if (!hasRunFields) {
     return null;
   }
-  if (resumeFlowId !== undefined || resumeRevision !== undefined) {
+  // Schema defaults (empty string, zero) are not caller intent; only
+  // explicitly positive flowExpectedRevision signals TaskFlow mode.
+  if (resumeFlowId !== undefined || (resumeRevision !== undefined && resumeRevision > 0)) {
     throw new Error("run action does not accept flowId or flowExpectedRevision");
   }
   if (!controllerId) {
@@ -153,9 +155,11 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
   const stateJson = params.flowStateJson;
 
+  // Only a positive expectedRevision signals intentional TaskFlow resume;
+  // schema default 0 means the caller did not supply this field.
   const hasResumeFields =
     flowId !== undefined ||
-    expectedRevision !== undefined ||
+    (expectedRevision !== undefined && expectedRevision > 0) ||
     currentStep !== undefined ||
     waitingStep !== undefined;
 
@@ -168,7 +172,7 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   if (!flowId) {
     throw new Error("flowId required when using managed TaskFlow resume mode");
   }
-  if (expectedRevision === undefined) {
+  if (expectedRevision === undefined || expectedRevision <= 0) {
     throw new Error("flowExpectedRevision required when using managed TaskFlow resume mode");
   }
   if (!token && !approvalId) {
