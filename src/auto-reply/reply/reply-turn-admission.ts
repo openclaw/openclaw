@@ -9,9 +9,10 @@ import {
 import {
   createReplyOperation,
   expireStaleReplyOperation,
+  isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_STALE_TAKEOVER_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  resolveReplyRunStaleThresholdMs,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
@@ -69,9 +70,7 @@ function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boo
       expireStaleReplyOperation(operation, "terminal_unreleased")
     );
   }
-  return (
-    idleMs > REPLY_RUN_STALE_TAKEOVER_MS && expireStaleReplyOperation(operation, "no_activity")
-  );
+  return isReplyRunEvidenceStale(operation) && expireStaleReplyOperation(operation, "no_activity");
 }
 
 function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
@@ -81,7 +80,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
   const ageMs = Date.now() - operation.lastActivityAtMs;
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : REPLY_RUN_STALE_TAKEOVER_MS - ageMs;
+    : resolveReplyRunStaleThresholdMs(operation) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 

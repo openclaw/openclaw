@@ -11,7 +11,10 @@ import {
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import {
+  markDiagnosticToolStartedForTest,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
@@ -536,6 +539,60 @@ describe("embedded-agent runner run registry", () => {
         gatewayHealth: "live",
       });
       expect(queueMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps steering into a quiet tool phase until the blocked-tool floor", () => {
+    vi.useFakeTimers();
+    try {
+      const queueMessage = vi.fn(async () => {});
+      setActiveEmbeddedRun("session-quiet-tool-steer", createRunHandle({ queueMessage }));
+      markDiagnosticToolStartedForTest({
+        sessionId: "session-quiet-tool-steer",
+        toolName: "exec",
+        toolCallId: "tool-quiet-steer",
+      });
+
+      vi.advanceTimersByTime(12 * 60_000);
+      expect(
+        queueEmbeddedAgentMessageWithOutcome("session-quiet-tool-steer", "status?").queued,
+      ).toBe(true);
+
+      vi.advanceTimersByTime(4 * 60_000);
+      const late = queueEmbeddedAgentMessageWithOutcome("session-quiet-tool-steer", "status?");
+      expect(late).toMatchObject({ queued: false, reason: "stale_run" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses reply-backed steering with stale registry evidence as stale_run", () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:cli-stale-steer",
+        sessionId: "session-cli-stale-steer",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "cli",
+        cancel: () => {},
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      vi.advanceTimersByTime(10 * 60_000 + 1);
+      const outcome = queueEmbeddedAgentMessageWithOutcome("session-cli-stale-steer", "hello");
+
+      expect(outcome).toEqual({
+        queued: false,
+        sessionId: "session-cli-stale-steer",
+        reason: "stale_run",
+        gatewayHealth: "live",
+      });
+      operation.complete();
     } finally {
       vi.useRealTimers();
     }

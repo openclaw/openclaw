@@ -19,6 +19,7 @@ import {
   resetDiagnosticPhasesForTest,
 } from "./diagnostic-phase.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
   type DiagnosticSessionActivitySnapshot,
@@ -82,10 +83,6 @@ const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
-// Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
-// truly silent children within its own deadline. This floor only bounds
-// diagnostic recovery aborts; lowering it reopens #88870, removing it reopens #96168.
-const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;

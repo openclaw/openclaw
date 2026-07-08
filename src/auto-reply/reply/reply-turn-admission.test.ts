@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  markDiagnosticToolStartedForTest,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -39,6 +43,7 @@ function createSessionStore(entries: Record<string, object>): string {
 describe("reply turn admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
   });
 
   it("rejects a reply when an archive commits before admission", async () => {
@@ -997,6 +1002,64 @@ describe("reply turn admission", () => {
         reason: "aborted",
         activeOperation: active,
       });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers takeover to the blocked-tool floor while a quiet tool is active", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const startedAt = Date.now();
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        sessionId: "quiet-tool-session",
+        resetTriggered: false,
+      });
+      active.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      active.setPhase("running");
+      markDiagnosticToolStartedForTest({
+        sessionId: "quiet-tool-session",
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        toolName: "exec",
+        toolCallId: "tool-quiet-1",
+      });
+
+      // 12 minutes of silence with an active tool: past the generic takeover
+      // window but inside the blocked-tool floor — must NOT be reclaimed.
+      vi.setSystemTime(startedAt + 12 * 60_000);
+      const abortController = new AbortController();
+      let settled = false;
+      const waiting = admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        sessionId: "replacement-quiet-tool",
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: abortController.signal,
+      }).then((admission) => {
+        settled = true;
+        return admission;
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(settled).toBe(false);
+      expect(cancel).not.toHaveBeenCalled();
+
+      // Past the 15-minute floor the same waiting turn reclaims it.
+      vi.setSystemTime(startedAt + 16 * 60_000);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      const result = await waiting;
+      expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+      abortController.abort();
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

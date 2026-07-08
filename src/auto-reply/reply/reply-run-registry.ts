@@ -6,6 +6,8 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
@@ -851,6 +853,33 @@ export function expireStaleReplyRunBySessionId(
   return operation ? expireStaleReplyOperation(operation, reason) : false;
 }
 
+/**
+ * Effective staleness window for an operation. Quiet-but-alive tool phases get
+ * the diagnostic blocked-tool floor: a human message must not reclaim a healthy
+ * long tool that stuck recovery itself would not touch yet.
+ */
+export function resolveReplyRunStaleThresholdMs(operation: ReplyOperation): number {
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: operation.sessionId,
+    sessionKey: operation.key,
+  });
+  return activity.activeWorkKind === "tool_call"
+    ? Math.max(REPLY_RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : REPLY_RUN_STALE_TAKEOVER_MS;
+}
+
+export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
+  return (
+    !operation.result &&
+    Date.now() - operation.lastActivityAtMs > resolveReplyRunStaleThresholdMs(operation)
+  );
+}
+
+export function isReplyRunEvidenceStaleBySessionId(sessionId: string): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return operation ? isReplyRunEvidenceStale(operation) : false;
+}
+
 export const replyRunRegistry: ReplyRunRegistry = {
   begin(params) {
     return createReplyOperation(params);
@@ -979,7 +1008,7 @@ export function queueReplyRunMessage(
   }
   // Steering into an evidence-dead run swallows the human message that would
   // otherwise trigger stale takeover through normal reply admission.
-  if (Date.now() - operation.lastActivityAtMs > REPLY_RUN_STALE_TAKEOVER_MS) {
+  if (isReplyRunEvidenceStale(operation)) {
     return false;
   }
   if (!isReplyBackendMessageInjectable(backend)) {

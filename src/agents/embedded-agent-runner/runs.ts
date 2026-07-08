@@ -6,6 +6,7 @@ import {
   abortReplyRunBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
+  isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
@@ -14,6 +15,7 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -448,6 +450,13 @@ function prepareEmbeddedAgentQueueMessage(
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
+    // A stale reply-backed run must produce the same closed reason as the
+    // embedded gate so announce delivery falls through to direct instead of
+    // reading the wedged op as active and dropping the handoff.
+    if (isReplyRunEvidenceStaleBySessionId(sessionId)) {
+      diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+      return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
+    }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
@@ -479,9 +488,16 @@ function prepareEmbeddedAgentQueueMessage(
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
   const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
+  // Quiet tool phases stay steerable until the blocked-tool floor: refusing at
+  // the shorter window would push the message into admission takeover of a run
+  // the diagnostic layer still considers healthy.
+  const steerStaleCaptureMs =
+    activity.activeWorkKind === "tool_call"
+      ? Math.max(EMBEDDED_STEER_STALE_CAPTURE_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+      : EMBEDDED_STEER_STALE_CAPTURE_MS;
   if (
     typeof activity.lastProgressAgeMs === "number" &&
-    activity.lastProgressAgeMs > EMBEDDED_STEER_STALE_CAPTURE_MS
+    activity.lastProgressAgeMs > steerStaleCaptureMs
   ) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
