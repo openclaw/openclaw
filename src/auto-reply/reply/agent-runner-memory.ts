@@ -213,6 +213,19 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
   );
 }
 
+/** Returns true when a compaction failure is a transient error (timeout,
+ * provider 4xx/5xx) that should degrade gracefully rather than terminating
+ * the run. Non-retryable failures (auth, guard, summary, unknown) remain
+ * terminal. (#100778) */
+function isTransientCompactionError(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  return (
+    classification === "timeout" ||
+    classification === "provider_error_5xx" ||
+    classification === "provider_error_4xx"
+  );
+}
+
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
@@ -996,12 +1009,19 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
-      await notifyTerminalCompaction("skipped");
-      logVerbose(
-        `preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason} — ` +
-          `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
-      );
-      return entry ?? params.sessionEntry;
+      // Transient errors (timeout, provider error) degrade gracefully;
+      // non-retryable errors (auth, guard, summary) remain terminal. (#100778)
+      if (isTransientCompactionError(reason)) {
+        await notifyTerminalCompaction("skipped");
+        logVerbose(
+          `preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason} — ` +
+            `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
+        );
+        return entry ?? params.sessionEntry;
+      }
+      await notifyTerminalCompaction("incomplete");
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
 
     if (!result.compacted) {
@@ -1011,12 +1031,17 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
-      await notifyTerminalCompaction("skipped");
-      logVerbose(
-        `preflightCompaction incomplete: sessionKey=${params.sessionKey} reason=${reason} — ` +
-          `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
-      );
-      return entry ?? params.sessionEntry;
+      if (isTransientCompactionError(reason)) {
+        await notifyTerminalCompaction("skipped");
+        logVerbose(
+          `preflightCompaction incomplete: sessionKey=${params.sessionKey} reason=${reason} — ` +
+            `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
+        );
+        return entry ?? params.sessionEntry;
+      }
+      await notifyTerminalCompaction("incomplete");
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
 
     await deps.incrementCompactionCount({
