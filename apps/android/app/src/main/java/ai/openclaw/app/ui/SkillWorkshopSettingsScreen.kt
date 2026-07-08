@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
+import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -34,6 +35,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -60,7 +63,8 @@ internal fun SkillWorkshopSettingsScreen(
   var selectedAgentId by rememberSaveable { mutableStateOf("") }
   var selectedProposalId by rememberSaveable { mutableStateOf<String?>(null) }
   val selectedAgentParam = selectedAgentId.trim().takeIf { it.isNotEmpty() }
-  val filteredProposals = skillWorkshopFilteredProposals(summary.proposals, statusFilter, query)
+  val visibleProposals = skillWorkshopVisibleProposals(summary, selectedAgentParam)
+  val filteredProposals = skillWorkshopFilteredProposals(visibleProposals, statusFilter, query)
   val selectedProposal =
     filteredProposals.firstOrNull { it.id == selectedProposalId }
       ?: filteredProposals.firstOrNull()
@@ -92,13 +96,13 @@ internal fun SkillWorkshopSettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Pending", summary.proposals.count { it.status == "pending" }.toString()),
+          SettingsMetric("Pending", visibleProposals.count { it.status == "pending" }.toString()),
           SettingsMetric(
             "Held",
-            summary.proposals.count { skillWorkshopStatusMatchesFilter(it.status, "held") }.toString(),
+            visibleProposals.count { skillWorkshopStatusMatchesFilter(it.status, "held") }.toString(),
           ),
-          SettingsMetric("Applied", summary.proposals.count { it.status == "applied" }.toString()),
-          SettingsMetric("Rejected", summary.proposals.count { it.status == "rejected" }.toString()),
+          SettingsMetric("Applied", visibleProposals.count { it.status == "applied" }.toString()),
+          SettingsMetric("Rejected", visibleProposals.count { it.status == "rejected" }.toString()),
         ),
     )
 
@@ -109,7 +113,7 @@ internal fun SkillWorkshopSettingsScreen(
       onAgentChange = { agentId ->
         selectedAgentId = agentId
         selectedProposalId = null
-        viewModel.clearSkillWorkshopMessage()
+        viewModel.resetSkillWorkshopAgentScope(agentId = agentId.takeIf { it.isNotBlank() })
       },
       statusFilter = statusFilter,
       onStatusFilterChange = { filter ->
@@ -424,7 +428,13 @@ private fun SkillWorkshopProposalDetail(
           )
         }
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = "Skill Workshop inspect and apply actions" },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
         ClawSecondaryButton(
           text = if (inspecting) "Inspecting" else "Inspect",
           onClick = onInspect,
@@ -444,7 +454,13 @@ private fun SkillWorkshopProposalDetail(
           modifier = Modifier.weight(1f),
         )
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = "Skill Workshop reject and quarantine actions" },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
         ClawSecondaryButton(
           text = "Reject",
           onClick = onReject,
@@ -486,6 +502,17 @@ private fun SkillWorkshopEmptyPanel(
     }
   }
 }
+
+internal fun skillWorkshopVisibleProposals(
+  summary: GatewaySkillWorkshopSummary,
+  selectedAgentId: String?,
+): List<GatewaySkillWorkshopProposal> =
+  when {
+    summary.agentId == skillWorkshopAgentScope(selectedAgentId) -> summary.proposals
+    else -> emptyList()
+  }
+
+internal fun skillWorkshopAgentScope(agentId: String?): String = agentId?.trim().orEmpty()
 
 internal fun skillWorkshopFilteredProposals(
   proposals: List<GatewaySkillWorkshopProposal>,

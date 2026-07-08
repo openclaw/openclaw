@@ -732,6 +732,7 @@ class NodeRuntime private constructor(
   val skillWorkshopMutatingProposalId: StateFlow<String?> = _skillWorkshopMutatingProposalId.asStateFlow()
   private val skillWorkshopListSeq = AtomicLong(0)
   private val skillWorkshopInspectSeq = AtomicLong(0)
+  private val skillWorkshopMutationSeq = AtomicLong(0)
   private val _nodesDevicesSummary =
     MutableStateFlow(
       GatewayNodesDevicesSummary(
@@ -893,6 +894,7 @@ class NodeRuntime private constructor(
     _skillWorkshopMutatingProposalId.value = null
     skillWorkshopListSeq.incrementAndGet()
     skillWorkshopInspectSeq.incrementAndGet()
+    skillWorkshopMutationSeq.incrementAndGet()
     _nodesDevicesSummary.value =
       GatewayNodesDevicesSummary(
         nodes = emptyList(),
@@ -1415,6 +1417,19 @@ class NodeRuntime private constructor(
     scope.launch {
       refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
     }
+  }
+
+  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
+    val normalizedAgentId = normalizeSkillWorkshopAgentId(agentId)
+    skillWorkshopListSeq.incrementAndGet()
+    skillWorkshopInspectSeq.incrementAndGet()
+    skillWorkshopMutationSeq.incrementAndGet()
+    _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = normalizedAgentId, proposals = emptyList())
+    _skillWorkshopRefreshing.value = false
+    _skillWorkshopErrorText.value = null
+    _skillWorkshopNoticeText.value = null
+    _skillWorkshopInspectingProposalId.value = null
+    _skillWorkshopMutatingProposalId.value = null
   }
 
   fun inspectSkillWorkshopProposal(
@@ -3693,9 +3708,10 @@ class NodeRuntime private constructor(
 
   private suspend fun refreshSkillWorkshopProposalsFromGateway(agentId: String?) {
     val listSeq = skillWorkshopListSeq.incrementAndGet()
+    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = emptyList())
+      _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
       _skillWorkshopRefreshing.value = false
       _skillWorkshopErrorText.value = "Connect the gateway to load Skill Workshop proposals."
       return
@@ -3703,6 +3719,14 @@ class NodeRuntime private constructor(
     publishGatewayData(gatewayScope) {
       _skillWorkshopRefreshing.value = true
       _skillWorkshopErrorText.value = null
+      if (_skillWorkshopSummary.value.agentId != requestAgentId) {
+        _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
+        _skillWorkshopNoticeText.value = null
+        _skillWorkshopInspectingProposalId.value = null
+        _skillWorkshopMutatingProposalId.value = null
+        skillWorkshopInspectSeq.incrementAndGet()
+        skillWorkshopMutationSeq.incrementAndGet()
+      }
     }
     try {
       val res =
@@ -3712,24 +3736,29 @@ class NodeRuntime private constructor(
           skillWorkshopParams(agentId = agentId).toString(),
         )
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      val previousById = _skillWorkshopSummary.value.proposals.associateBy { it.id }
+      val previousById =
+        _skillWorkshopSummary.value
+          .takeIf { it.agentId == requestAgentId }
+          ?.proposals
+          ?.associateBy { it.id }
+          .orEmpty()
       val proposals = parseSkillWorkshopProposals(root?.get("proposals") as? JsonArray, previousById)
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq) {
-          _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = proposals)
+        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
+          _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = proposals)
         }
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq) {
+        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           _skillWorkshopErrorText.value = "Could not load Skill Workshop proposals."
         }
       }
     } finally {
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq) {
+        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           _skillWorkshopRefreshing.value = false
         }
       }
@@ -3741,14 +3770,24 @@ class NodeRuntime private constructor(
     agentId: String?,
   ) {
     val inspectSeq = skillWorkshopInspectSeq.incrementAndGet()
+    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
       _skillWorkshopErrorText.value = "Connect the gateway to inspect Skill Workshop proposals."
       return
     }
-    publishGatewayData(gatewayScope) {
-      _skillWorkshopInspectingProposalId.value = proposalId
-      _skillWorkshopErrorText.value = null
+    var inspectStarted = false
+    val scopeCurrent =
+      publishGatewayData(gatewayScope) {
+        val currentSummary = _skillWorkshopSummary.value
+        if (currentSummary.agentId == requestAgentId && currentSummary.proposals.any { it.id == proposalId }) {
+          inspectStarted = true
+          _skillWorkshopInspectingProposalId.value = proposalId
+          _skillWorkshopErrorText.value = null
+        }
+      }
+    if (!scopeCurrent || !inspectStarted) {
+      return
     }
     try {
       val res =
@@ -3758,10 +3797,21 @@ class NodeRuntime private constructor(
           skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
         )
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      val previous = _skillWorkshopSummary.value.proposals.firstOrNull { it.id == proposalId }
-      val inspected = parseSkillWorkshopProposalInspect(root, previous) ?: throw IllegalStateException("skills.proposals.inspect returned no proposal")
+      val previous =
+        _skillWorkshopSummary.value
+          .takeIf { it.agentId == requestAgentId }
+          ?.proposals
+          ?.firstOrNull { it.id == proposalId }
+      val inspected =
+        parseSkillWorkshopProposalInspect(root, previous)
+          ?: throw IllegalStateException("skills.proposals.inspect returned no proposal")
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+        val currentSummary = _skillWorkshopSummary.value
+        if (
+          skillWorkshopInspectSeq.get() == inspectSeq &&
+          currentSummary.agentId == requestAgentId &&
+          currentSummary.proposals.any { it.id == proposalId }
+        ) {
           _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(inspected)
         }
       }
@@ -3769,13 +3819,13 @@ class NodeRuntime private constructor(
       throw err
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+        if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           _skillWorkshopErrorText.value = "Could not inspect Skill Workshop proposal."
         }
       }
     } finally {
       publishGatewayData(gatewayScope) {
-        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+        if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
           _skillWorkshopInspectingProposalId.value = null
         }
       }
@@ -3787,6 +3837,8 @@ class NodeRuntime private constructor(
     agentId: String?,
     action: String,
   ) {
+    val mutationSeq = skillWorkshopMutationSeq.incrementAndGet()
+    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     if (!operatorAdminScopeAvailable.value) {
       _skillWorkshopErrorText.value = "Skill Workshop proposal actions require operator.admin scope."
       return
@@ -3796,10 +3848,19 @@ class NodeRuntime private constructor(
       _skillWorkshopErrorText.value = "Connect the gateway to update Skill Workshop proposals."
       return
     }
-    publishGatewayData(gatewayScope) {
-      _skillWorkshopMutatingProposalId.value = proposalId
-      _skillWorkshopErrorText.value = null
-      _skillWorkshopNoticeText.value = null
+    var mutationStarted = false
+    val scopeCurrent =
+      publishGatewayData(gatewayScope) {
+        val currentSummary = _skillWorkshopSummary.value
+        if (currentSummary.agentId == requestAgentId && currentSummary.proposals.any { it.id == proposalId }) {
+          mutationStarted = true
+          _skillWorkshopMutatingProposalId.value = proposalId
+          _skillWorkshopErrorText.value = null
+          _skillWorkshopNoticeText.value = null
+        }
+      }
+    if (!scopeCurrent || !mutationStarted) {
+      return
     }
     try {
       requestGatewayData(
@@ -3808,21 +3869,37 @@ class NodeRuntime private constructor(
         skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
       )
       publishGatewayData(gatewayScope) {
-        _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
+          _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+        }
       }
-      refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
+      var refreshStillCurrent = false
+      publishGatewayData(gatewayScope) {
+        refreshStillCurrent =
+          skillWorkshopMutationSeq.get() == mutationSeq &&
+          _skillWorkshopSummary.value.agentId == requestAgentId
+      }
+      if (refreshStillCurrent) {
+        refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
-        _skillWorkshopErrorText.value = "Could not ${skillWorkshopActionVerb(action)} Skill Workshop proposal."
+        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
+          _skillWorkshopErrorText.value = "Could not ${skillWorkshopActionVerb(action)} Skill Workshop proposal."
+        }
       }
     } finally {
       publishGatewayData(gatewayScope) {
-        _skillWorkshopMutatingProposalId.value = null
+        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
+          _skillWorkshopMutatingProposalId.value = null
+        }
       }
     }
   }
+
+  private fun normalizeSkillWorkshopAgentId(agentId: String?): String = agentId?.trim().orEmpty()
 
   private fun skillWorkshopParams(
     agentId: String?,
@@ -5101,6 +5178,7 @@ data class GatewaySkillsSummary(
 )
 
 data class GatewaySkillWorkshopSummary(
+  val agentId: String = "",
   val proposals: List<GatewaySkillWorkshopProposal>,
 ) {
   fun withProposal(proposal: GatewaySkillWorkshopProposal): GatewaySkillWorkshopSummary =

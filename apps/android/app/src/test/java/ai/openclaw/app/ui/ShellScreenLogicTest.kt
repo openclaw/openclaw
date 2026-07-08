@@ -265,6 +265,34 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun skillWorkshopVisibleProposalsAreKeyedBySelectedAgentScope() {
+    val mainProposal = skillWorkshopProposal("main-proposal", "pending")
+    val opsProposal = skillWorkshopProposal("ops-proposal", "pending")
+
+    assertEquals(
+      listOf("main-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "", proposals = listOf(mainProposal)),
+        selectedAgentId = null,
+      ).map { it.id },
+    )
+    assertEquals(
+      emptyList<String>(),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "main", proposals = listOf(mainProposal)),
+        selectedAgentId = "ops",
+      ).map { it.id },
+    )
+    assertEquals(
+      listOf("ops-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "ops", proposals = listOf(opsProposal)),
+        selectedAgentId = " ops ",
+      ).map { it.id },
+    )
+  }
+
+  @Test
   fun skillWorkshopProposalActionsRequireAdminScope() {
     assertTrue(
       skillWorkshopProposalActionEnabled(

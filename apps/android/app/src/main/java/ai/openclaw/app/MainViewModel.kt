@@ -723,6 +723,10 @@ class MainViewModel(
     ensureRuntime().refreshSkillWorkshopProposals(agentId = agentId)
   }
 
+  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
+    ensureRuntime().resetSkillWorkshopAgentScope(agentId = agentId)
+  }
+
   fun inspectSkillWorkshopProposal(
     proposalId: String,
     agentId: String? = null,
