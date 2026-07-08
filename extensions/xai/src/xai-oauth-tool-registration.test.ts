@@ -20,7 +20,7 @@ type ToolRegistration = {
   factory: ToolFactory;
 };
 
-describe("xAI OAuth CLI-backend loopback tool surface proof", () => {
+describe("xAI OAuth tool registration", () => {
   it("registers x_search and code_execution when an xAI OAuth auth context is present", () => {
     const registeredTools: ToolRegistration[] = [];
 
