@@ -152,6 +152,42 @@ function clearGithubCopilotDomainConfigPatch(): Partial<OpenClawConfig> {
   } as unknown as Partial<OpenClawConfig>;
 }
 
+function applyGithubCopilotDomainToConfig(
+  config: OpenClawConfig,
+  domain: string,
+  previousDomain: string,
+): OpenClawConfig {
+  const isEnterprise = domain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
+  const shouldClear = !isEnterprise && previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
+  if (!isEnterprise && !shouldClear) {
+    return config;
+  }
+
+  const models = config.models ?? {};
+  const providers = models.providers ?? {};
+  const provider = providers[PROVIDER_ID] ?? {};
+  const params = { ...(provider.params ?? {}) } as Record<string, unknown>;
+  if (isEnterprise) {
+    params.githubDomain = domain;
+  } else {
+    delete params.githubDomain;
+  }
+
+  return {
+    ...config,
+    models: {
+      ...models,
+      providers: {
+        ...providers,
+        [PROVIDER_ID]: {
+          ...provider,
+          params,
+        },
+      },
+    },
+  };
+}
+
 async function resolveCopilotNonInteractiveToken(
   ctx: ProviderAuthMethodNonInteractiveContext,
   flagValue: string | undefined,
@@ -273,8 +309,16 @@ async function runGitHubCopilotNonInteractiveAuth(
     profileId = existingProfileId;
   }
 
+  const resolvedDomain = resolveGithubCopilotDomain({ config: ctx.config });
+  const previousDomain = resolveGithubCopilotDomain({ env: {}, config: ctx.config });
+  const configWithDomain = applyGithubCopilotDomainToConfig(
+    ctx.config,
+    resolvedDomain,
+    previousDomain,
+  );
+
   return applyCopilotDefaultModel(
-    applyAuthProfileConfig(ctx.config, {
+    applyAuthProfileConfig(configWithDomain, {
       profileId,
       provider: PROVIDER_ID,
       mode: "token",

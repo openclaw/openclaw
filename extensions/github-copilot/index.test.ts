@@ -970,6 +970,71 @@ describe("github-copilot plugin", () => {
     });
   });
 
+  it("persists COPILOT_GITHUB_DOMAIN during non-interactive onboarding", async () => {
+    vi.stubEnv("COPILOT_GITHUB_DOMAIN", "acme.ghe.com");
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {},
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_test123" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_test123",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.models?.providers?.["github-copilot"]?.params?.githubDomain).toBe(
+      "acme.ghe.com",
+    );
+    expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
+      provider: "github-copilot",
+      mode: "token",
+    });
+
+    const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
+    expect(profile).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      token: "ghu_test123",
+    });
+  });
+
+  it("clears a persisted enterprise domain during public non-interactive onboarding", async () => {
+    vi.stubEnv("COPILOT_GITHUB_DOMAIN", "github.com");
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {
+        models: { providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } } },
+      },
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_public" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_public",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.models?.providers?.["github-copilot"]?.params?.githubDomain).toBeUndefined();
+  });
+
   it("stores env-backed token refs for non-interactive onboarding ref mode", async () => {
     const provider = registerProviderWithPluginConfig({});
     const method = provider.auth[0];
