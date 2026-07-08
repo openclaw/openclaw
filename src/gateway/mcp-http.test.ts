@@ -1074,6 +1074,7 @@ describe("mcp loopback server", () => {
       sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: undefined,
       authProfileStore: authStore,
+      authCacheKey: "test_profile",
     } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
 
     resolveGatewayScopedToolsMock.mockClear();
@@ -1084,6 +1085,43 @@ describe("mcp loopback server", () => {
       | { authProfileStore?: AuthProfileStore }
       | undefined;
     expect(callArgs?.authProfileStore).toBe(authStore);
+  });
+
+  it("partitions loopback tool cache by auth profile identity", () => {
+    const authStoreA: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        xai: { type: "api_key", provider: "xai", key: "sk-a" },
+      },
+    };
+    const authStoreB: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        xai: { type: "api_key", provider: "xai", key: "sk-a" },
+        openai: { type: "api_key", provider: "openai", key: "sk-b" },
+      },
+    };
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: undefined,
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: undefined,
+      inboundEventKind: undefined,
+      messageProvider: undefined,
+      senderIsOwner: true,
+      sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: undefined,
+      authProfileStore: authStoreA,
+    } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "authCacheKey">;
+
+    resolveGatewayScopedToolsMock.mockClear();
+    cache.resolve({ ...baseParams, authCacheKey: "xai" });
+    cache.resolve({ ...baseParams, authProfileStore: authStoreB, authCacheKey: "xai,openai" });
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {

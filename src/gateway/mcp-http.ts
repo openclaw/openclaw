@@ -7,6 +7,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -147,10 +149,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-export async function startMcpLoopbackServer(
-  port = 0,
-  authProfileStore?: AuthProfileStore,
-): Promise<{
+export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
@@ -232,6 +231,21 @@ export async function startMcpLoopbackServer(
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
+        // Resolve auth profile store per-request from the session so that
+        // OAuth-only plugin tools (e.g. xAI x_search) see the caller's auth
+        // context rather than a process-wide snapshot captured at server start.
+        const { sessionAgentId } = resolveSessionAgentIds({
+          config: cfg,
+          sessionKey: requestContext.sessionKey,
+        });
+        const requestAgentDir = resolveAgentDir(cfg, sessionAgentId);
+        const requestAuthStore: AuthProfileStore | undefined = loadAuthProfileStoreForRuntime(
+          requestAgentDir,
+          { readOnly: true },
+        );
+        const requestAuthCacheKey = Object.keys(requestAuthStore?.profiles ?? {})
+          .toSorted()
+          .join(",");
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -248,7 +262,8 @@ export async function startMcpLoopbackServer(
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
-          authProfileStore,
+          authProfileStore: requestAuthStore,
+          authCacheKey: requestAuthCacheKey || undefined,
         });
 
         logMcpLoopbackTraffic("request", {
@@ -403,15 +418,12 @@ export async function startMcpLoopbackServer(
 }
 
 /** Returns the active MCP loopback server or starts one if none exists. */
-export async function ensureMcpLoopbackServer(
-  port = 0,
-  authProfileStore?: AuthProfileStore,
-): Promise<McpLoopbackServer> {
+export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
   if (activeMcpLoopbackServer) {
     return activeMcpLoopbackServer;
   }
   if (!activeMcpLoopbackServerPromise) {
-    activeMcpLoopbackServerPromise = startMcpLoopbackServer(port, authProfileStore)
+    activeMcpLoopbackServerPromise = startMcpLoopbackServer(port)
       .then((server) => {
         activeMcpLoopbackServer = server;
         return server;
