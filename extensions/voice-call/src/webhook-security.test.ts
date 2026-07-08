@@ -583,7 +583,7 @@ describe("verifyTwilioWebhook", () => {
   it("uses request query when publicUrl omits it", () => {
     const authToken = "test-auth-token";
     const publicUrl = "https://example.com/voice/webhook";
-    const urlWithQuery = `${publicUrl}?callId=abc`;
+    const urlWithQuery = `${publicUrl}?callId=abc&turnToken=secret-turn-token`;
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
 
     const signature = twilioSignature({
@@ -600,15 +600,40 @@ describe("verifyTwilioWebhook", () => {
           "x-twilio-signature": signature,
         },
         rawBody: postBody,
-        url: "http://local/voice/webhook?callId=abc",
+        url: "http://local/voice/webhook?callId=abc&turnToken=secret-turn-token",
         method: "POST",
-        query: { callId: "abc" },
+        query: { callId: "abc", turnToken: "secret-turn-token" },
       },
       authToken,
       { publicUrl },
     );
 
     expect(result.ok).toBe(true);
+    expect(result.verificationUrl).toBe(urlWithQuery);
+  });
+
+  it("redacts query params from invalid Twilio signature diagnostics", () => {
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-twilio-signature": "invalid",
+        },
+        rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
+        url: "https://example.com/voice/webhook?callId=call-1&turnToken=secret-turn-token",
+        method: "POST",
+        query: { callId: "call-1", turnToken: "secret-turn-token" },
+      },
+      "test-auth-token",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("Invalid signature for URL:");
+    expect(result.reason).toContain("turnToken=***");
+    expect(result.reason).toContain("callId=***");
+    expect(result.reason).not.toContain("secret-turn-token");
+    expect(result.verificationUrl).toContain("turnToken=***");
+    expect(result.verificationUrl).not.toContain("secret-turn-token");
   });
 
   it("treats changed idempotency header as replay for identical signed requests", () => {
