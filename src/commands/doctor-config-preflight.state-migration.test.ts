@@ -326,7 +326,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("records the startup migration checkpoint when plugin repair warnings are nonblocking", async () => {
+  it("blocks gateway readiness when plugin repair warnings remain", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
@@ -339,16 +339,15 @@ describe("runDoctorConfigPreflight state migration", () => {
       }),
     );
 
-    await runDoctorConfigPreflight({
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      requireStartupMigrationCheckpoint: true,
-    });
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow("Configured plugin discord is not installed");
 
-    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
-      env: process.env,
-      lease: startupMigrationLease,
-    });
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       "- Configured plugin discord is not installed. Run `openclaw update repair` to retry plugin repair.",
       "Doctor warnings",

@@ -135,7 +135,7 @@ async function runStartupUpgradeConvergence(params: {
   if (warnings.length > 0) {
     note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
-  return convergence.errored ? warnings : [];
+  return warnings;
 }
 
 function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
