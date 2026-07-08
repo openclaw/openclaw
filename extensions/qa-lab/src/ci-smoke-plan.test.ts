@@ -5,16 +5,23 @@ import { createQaSmokeCiShard } from "./ci-smoke-plan.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 
 describe("createQaSmokeCiShard", () => {
-  it("partitions every smoke scenario into two channel-compatible lanes", () => {
+  it("partitions every smoke scenario into bounded channel-compatible lanes", () => {
     const matrix = createQaSmokeCiShard("matrix");
-    const crabline = createQaSmokeCiShard("crabline");
-    const repeatedCrabline = createQaSmokeCiShard("crabline");
+    const crablineShards = [
+      createQaSmokeCiShard("crabline-1"),
+      createQaSmokeCiShard("crabline-2"),
+      createQaSmokeCiShard("crabline-3"),
+    ];
+    const repeatedCrabline = createQaSmokeCiShard("crabline-1");
 
-    expect(repeatedCrabline).toEqual(crabline);
+    expect(repeatedCrabline).toEqual(crablineShards[0]);
     expect(matrix.channel).toBe("matrix");
-    expect(crabline.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    expect(
+      crablineShards.every((shard) => shard.channel === OPENCLAW_CRABLINE_DEFAULT_CHANNEL),
+    ).toBe(true);
 
-    const scenarioIds = [...matrix.scenario_ids, ...crabline.scenario_ids];
+    const crablineScenarioIds = crablineShards.flatMap((shard) => shard.scenario_ids);
+    const scenarioIds = [...matrix.scenario_ids, ...crablineScenarioIds];
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     const scenarioById = new Map(
       readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
@@ -24,9 +31,12 @@ describe("createQaSmokeCiShard", () => {
     ).toEqual(new Set(["flow", "playwright", "script"]));
     expect(scenarioIds).not.toContain("slack-restart-resume");
     expect(scenarioIds).not.toContain("whatsapp-restart-resume");
-    expect(crabline.scenario_ids).toContain("subagent-fanout-synthesis");
+    expect(crablineScenarioIds).toContain("subagent-fanout-synthesis");
     expect(matrix.scenario_ids.length).toBeGreaterThan(0);
-    expect(crabline.scenario_ids.length).toBeGreaterThan(0);
+    const crablineShardSizes = crablineShards.map((shard) => shard.scenario_ids.length);
+    expect(Math.max(...crablineShardSizes) - Math.min(...crablineShardSizes)).toBeLessThanOrEqual(
+      1,
+    );
   });
 
   it("rejects undeclared CI lanes", () => {

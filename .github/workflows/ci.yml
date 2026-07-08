@@ -941,15 +941,21 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         include:
           - name: matrix
             lane: matrix
             slug: matrix
-          - name: crabline
-            lane: crabline
-            slug: crabline
+          - name: crabline 1/3
+            lane: crabline-1
+            slug: crabline-1-of-3
+          - name: crabline 2/3
+            lane: crabline-2
+            slug: crabline-2-of-3
+          - name: crabline 3/3
+            lane: crabline-3
+            slug: crabline-3-of-3
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment

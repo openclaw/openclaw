@@ -7,8 +7,10 @@ import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_LANES = {
-  matrix: "matrix",
-  crabline: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+  matrix: { channel: "matrix", shardIndex: 0, shardCount: 1 },
+  "crabline-1": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 0, shardCount: 3 },
+  "crabline-2": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 1, shardCount: 3 },
+  "crabline-3": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 2, shardCount: 3 },
 } as const;
 
 type QaSmokeCiLane = keyof typeof QA_SMOKE_CI_LANES;
@@ -55,7 +57,9 @@ export function createQaSmokeCiShard(lane: string): QaSmokeCiShard {
     throw new Error(`${QA_SMOKE_PROFILE} did not resolve any executable QA scenarios.`);
   }
 
-  const supportedChannels = new Set<string>(Object.values(QA_SMOKE_CI_LANES));
+  const supportedChannels = new Set<string>(
+    Object.values(QA_SMOKE_CI_LANES).map((entry) => entry.channel),
+  );
   const unsupportedChannels = new Set(
     scenarios
       .map((scenario) => scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
@@ -67,13 +71,14 @@ export function createQaSmokeCiShard(lane: string): QaSmokeCiShard {
     );
   }
 
-  const channel = QA_SMOKE_CI_LANES[lane];
+  const { channel, shardIndex, shardCount } = QA_SMOKE_CI_LANES[lane];
   const scenarioIds = scenarios
     .filter(
       (scenario) => (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) === channel,
     )
     .map((scenario) => scenario.id)
-    .toSorted();
+    .toSorted()
+    .filter((_, index) => index % shardCount === shardIndex);
   if (scenarioIds.length === 0) {
     throw new Error(`${QA_SMOKE_PROFILE} CI lane ${lane} did not resolve any scenarios.`);
   }

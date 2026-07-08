@@ -2125,10 +2125,12 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    expect(smokeShardJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeShardJob.strategy["max-parallel"]).toBe(4);
     expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
       "matrix",
-      "crabline",
+      "crabline-1-of-3",
+      "crabline-2-of-3",
+      "crabline-3-of-3",
     ]);
     expect(smokeShardJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiShard");
