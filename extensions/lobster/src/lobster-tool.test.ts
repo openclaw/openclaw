@@ -323,6 +323,41 @@ describe("lobster plugin tool", () => {
     expect(mutation.applied).toBe(true);
   });
 
+  it("preserves explicit empty flow state in managed TaskFlow run mode", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    await tool.execute("call-managed-run-empty-state", {
+      action: "run",
+      pipeline: "noop",
+      flowControllerId: "tests/lobster",
+      flowGoal: "Run Lobster workflow",
+      flowStateJson: "{}",
+    });
+
+    expect(taskFlow.createManaged).toHaveBeenCalledWith({
+      controllerId: "tests/lobster",
+      goal: "Run Lobster workflow",
+      currentStep: "run_lobster",
+      stateJson: {},
+    });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+  });
+
   it("rejects managed TaskFlow params when no bound taskFlow runtime is available", async () => {
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },

@@ -102,19 +102,20 @@ function parseOptionalFlowStateJson(value: unknown): JsonLike | undefined {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(trimmed) as JsonLike;
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.keys(parsed).length === 0
-    ) {
-      return undefined;
-    }
-    return parsed;
+    return JSON.parse(trimmed) as JsonLike;
   } catch {
     throw new Error("flowStateJson must be valid JSON");
   }
+}
+
+function isEmptyJsonObject(value: JsonLike | undefined): boolean {
+  return (
+    value !== undefined &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
 }
 
 function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunParams | null {
@@ -125,13 +126,14 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
   const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
   const resumeFlowId = readOptionalTrimmedString(params.flowId, "flowId");
   const resumeRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
+  const stateJsonSignalsRunMode = stateJson !== undefined && !isEmptyJsonObject(stateJson);
 
   const hasRunFields =
     controllerId !== undefined ||
     goal !== undefined ||
     currentStep !== undefined ||
     waitingStep !== undefined ||
-    stateJson !== undefined;
+    stateJsonSignalsRunMode;
 
   if (!hasRunFields) {
     return null;
@@ -175,7 +177,8 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
     return null;
   }
   const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
-  if (runControllerId !== undefined || runGoal !== undefined || stateJson !== undefined) {
+  const stateJsonDisallowed = stateJson !== undefined && !isEmptyJsonObject(stateJson);
+  if (runControllerId !== undefined || runGoal !== undefined || stateJsonDisallowed) {
     throw new Error("resume action does not accept flowControllerId, flowGoal, or flowStateJson");
   }
   if (!flowId) {
