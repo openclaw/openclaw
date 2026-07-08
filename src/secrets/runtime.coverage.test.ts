@@ -540,6 +540,15 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
+  if (entry.id === "agents.defaults.sandbox.docker.env.*") {
+    setPathCreateStrict(config, ["agents", "defaults", "sandbox", "mode"], "all");
+    setPathCreateStrict(config, ["agents", "defaults", "sandbox", "backend"], "docker");
+  }
+  if (entry.id === "agents.list[].sandbox.docker.env.*") {
+    setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "list", "0", "sandbox", "mode"], "all");
+    setPathCreateStrict(config, ["agents", "list", "0", "sandbox", "backend"], "docker");
+  }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
   }

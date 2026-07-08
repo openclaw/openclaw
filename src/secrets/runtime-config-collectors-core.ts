@@ -575,6 +575,141 @@ function collectCronAssignments(params: {
   });
 }
 
+function readSandboxMode(value: unknown): "off" | "non-main" | "all" | undefined {
+  return value === "off" || value === "non-main" || value === "all" ? value : undefined;
+}
+
+function readSandboxBackend(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readSandboxScope(value: unknown): "session" | "agent" | "shared" | undefined {
+  return value === "session" || value === "agent" || value === "shared" ? value : undefined;
+}
+
+function readLegacyPerSession(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function resolveCollectorSandboxScope(params: {
+  sandbox: Record<string, unknown> | undefined;
+  defaultsSandbox: Record<string, unknown> | undefined;
+}): "session" | "agent" | "shared" {
+  const scope =
+    readSandboxScope(params.sandbox?.scope) ?? readSandboxScope(params.defaultsSandbox?.scope);
+  if (scope) {
+    return scope;
+  }
+  const perSession =
+    readLegacyPerSession(params.sandbox?.perSession) ??
+    readLegacyPerSession(params.defaultsSandbox?.perSession);
+  if (typeof perSession === "boolean") {
+    return perSession ? "session" : "shared";
+  }
+  return "agent";
+}
+
+function isDockerSandboxActive(params: {
+  backend: string | undefined;
+  mode: "off" | "non-main" | "all" | undefined;
+}): boolean {
+  return (
+    normalizeOptionalLowercaseString(params.backend ?? "docker") === "docker" &&
+    params.mode !== "off"
+  );
+}
+
+function collectSandboxDockerEnvAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = isRecord(params.config.agents) ? params.config.agents : undefined;
+  if (!agents) {
+    return;
+  }
+
+  const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
+  const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
+  const defaultsDocker: Record<string, unknown> | undefined = isRecord(defaultsSandbox?.docker)
+    ? defaultsSandbox.docker
+    : undefined;
+  const defaultsEnv: Record<string, unknown> | undefined = isRecord(defaultsDocker?.env)
+    ? defaultsDocker.env
+    : undefined;
+  const defaultsBackend = readSandboxBackend(defaultsSandbox?.backend);
+  const defaultsMode = readSandboxMode(defaultsSandbox?.mode);
+
+  const activeDefaultEnvConsumers: Array<Set<string> | null> = [];
+  const list = Array.isArray(agents.list) ? agents.list : [];
+
+  list.forEach((rawAgent, index) => {
+    const agentRecord = isRecord(rawAgent) ? (rawAgent as Record<string, unknown>) : null;
+    if (!agentRecord || agentRecord.enabled === false) {
+      return;
+    }
+    const sandbox = isRecord(agentRecord.sandbox) ? agentRecord.sandbox : undefined;
+    const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
+    const env = isRecord(docker?.env) ? docker.env : undefined;
+    const effectiveBackend = readSandboxBackend(sandbox?.backend) ?? defaultsBackend ?? "docker";
+    const effectiveMode = readSandboxMode(sandbox?.mode) ?? defaultsMode ?? "off";
+    const active = isDockerSandboxActive({ backend: effectiveBackend, mode: effectiveMode });
+    const scope = resolveCollectorSandboxScope({ sandbox, defaultsSandbox });
+    const agentEnvActive = active && scope !== "shared";
+
+    if (env) {
+      for (const [key, value] of Object.entries(env)) {
+        collectSecretInputAssignment({
+          value,
+          path: `agents.list.${index}.sandbox.docker.env.${key}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: agentEnvActive,
+          inactiveReason:
+            scope === "shared"
+              ? "agent-specific sandbox Docker env is ignored when sandbox scope is shared."
+              : "sandbox Docker backend is not active for this agent.",
+          apply: (resolvedValue) => {
+            env[key] = resolvedValue;
+          },
+        });
+      }
+    }
+
+    if (active) {
+      activeDefaultEnvConsumers.push(scope === "shared" || !env ? null : new Set(Object.keys(env)));
+    }
+  });
+
+  if (!defaultsEnv) {
+    return;
+  }
+
+  const defaultsOwnActive =
+    isDockerSandboxActive({
+      backend: defaultsBackend ?? "docker",
+      mode: defaultsMode ?? "off",
+    }) && list.length === 0;
+  for (const [key, value] of Object.entries(defaultsEnv)) {
+    const inheritedByActiveAgent = activeDefaultEnvConsumers.some(
+      (overrides) => overrides === null || !overrides.has(key),
+    );
+    collectSecretInputAssignment({
+      value,
+      path: `agents.defaults.sandbox.docker.env.${key}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: defaultsOwnActive || inheritedByActiveAgent,
+      inactiveReason: "sandbox Docker backend is not active.",
+      apply: (resolvedValue) => {
+        defaultsEnv[key] = resolvedValue;
+      },
+    });
+  }
+}
+
 function collectSandboxSshAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -689,6 +824,7 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
+  collectSandboxDockerEnvAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
   collectAgentTtsAssignments(params);

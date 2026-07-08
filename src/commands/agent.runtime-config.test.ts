@@ -35,6 +35,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: (params?: { includeChannelTargets?: boolean }) =>
     new Set([
       "models.providers.*.apiKey",
+      "agents.defaults.sandbox.docker.env.*",
+      "agents.list[].sandbox.docker.env.*",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
   getScopedChannelsCommandSecretTargets: (params: {
@@ -203,11 +205,17 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: new Set(["models.providers.*.apiKey"]),
+        targetIds: new Set([
+          "models.providers.*.apiKey",
+          "agents.defaults.sandbox.docker.env.*",
+          "agents.list[].sandbox.docker.env.*",
+        ]),
         runtime,
       });
       const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
+      expect(targetIds.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
+      expect(targetIds.has("agents.list[].sandbox.docker.env.*")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
       expect(prepared.cfg).toBe(resolvedConfig);
@@ -363,6 +371,43 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
       expect(prepared.cfg).toBe(loadedConfig);
+    });
+  });
+
+  it("resolves command secrets when sandbox Docker env contains the only SecretRef", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      loadedConfig.agents = {
+        ...loadedConfig.agents,
+        defaults: {
+          ...loadedConfig.agents?.defaults,
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              env: {
+                OPENCLAW_SANDBOX_TOKEN: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_SANDBOX_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig["agents"];
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      const targetIds = requireResolveCommandConfigParams().targetIds;
+      expect(targetIds.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
+      expect(targetIds.has("agents.list[].sandbox.docker.env.*")).toBe(true);
     });
   });
 

@@ -98,6 +98,15 @@ function hasAgentRuntimeSecretRefs(params: {
   ) {
     return true;
   }
+  if (hasNestedSecretRef(config.agents?.defaults?.sandbox?.docker?.env)) {
+    return true;
+  }
+  if (
+    Array.isArray(config.agents?.list) &&
+    config.agents.list.some((agent) => hasNestedSecretRef(agent?.sandbox?.docker?.env))
+  ) {
+    return true;
+  }
   if (hasNestedSecretRef(config.messages?.tts?.providers)) {
     return true;
   }

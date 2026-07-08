@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 const REGISTRY_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+  "agents.defaults.sandbox.docker.env.*",
+  "agents.list[].sandbox.docker.env.*",
   "channels.discord.token",
   "channels.discord.accounts.*.token",
   "channels.telegram.botToken",
@@ -269,6 +271,8 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
+    expect(ids.has("agents.list[].sandbox.docker.env.*")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
