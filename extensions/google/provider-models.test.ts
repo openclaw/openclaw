@@ -211,9 +211,10 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
-  it("treats gemini 2.5 ids as modern google models", () => {
+  it("treats gemini 2.5 and 3.5 ids as modern google models", () => {
     expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
     expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
+    expect(isModernGoogleModel("gemini-3.5-flash")).toBe(true);
     expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
   });
 

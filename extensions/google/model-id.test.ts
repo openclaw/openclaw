@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./api.js";
 
 describe("google model id helpers", () => {
-  it.each(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"])(
+  it.each(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro", "gemini-3.5-pro", "gemini-3-5-pro"])(
     "adds default -low suffix to bare antigravity pro id: %s",
     (id) => {
       expect(normalizeAntigravityModelId(id)).toBe(`${id}-low`);
@@ -25,5 +25,11 @@ describe("google model id helpers", () => {
 
   it("adds the preview suffix for gemini 3.1 flash-lite", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite-preview");
+  });
+
+  it("adds the preview suffix for gemini 3.5 pro, flash-lite, and flash", () => {
+    expect(normalizeGoogleModelId("gemini-3.5-pro")).toBe("gemini-3.5-pro-preview");
+    expect(normalizeGoogleModelId("gemini-3.5-flash-lite")).toBe("gemini-3.5-flash-lite-preview");
+    expect(normalizeGoogleModelId("gemini-3.5-flash")).toBe("gemini-3.5-flash-preview");
   });
 });

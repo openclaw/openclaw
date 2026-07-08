@@ -18,6 +18,7 @@ import type {
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteMatch,
+  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -67,6 +68,7 @@ export type PluginHttpRouteRegistration = {
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   source?: string;
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
 
 export type PluginChannelRegistration = {

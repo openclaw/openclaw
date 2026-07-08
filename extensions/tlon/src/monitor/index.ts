@@ -566,7 +566,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               metadata?: { model?: string };
               model?: string;
             };
-            const extRoute = route;
+            const extRoute = route as { model?: string };
             const defaultModel = cfg.agents?.defaults?.model;
             const modelInfo =
               extPayload.metadata?.model ||

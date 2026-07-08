@@ -1,4 +1,10 @@
-const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
+const ANTIGRAVITY_BARE_PRO_IDS = new Set([
+  "gemini-3-pro",
+  "gemini-3.1-pro",
+  "gemini-3-1-pro",
+  "gemini-3.5-pro",
+  "gemini-3-5-pro",
+]);
 
 export function normalizeGooglePreviewModelId(id: string): string {
   if (id === "gemini-3-pro") {
@@ -15,6 +21,15 @@ export function normalizeGooglePreviewModelId(id: string): string {
   }
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
     return "gemini-3-flash-preview";
+  }
+  if (id === "gemini-3.5-pro") {
+    return "gemini-3.5-pro-preview";
+  }
+  if (id === "gemini-3.5-flash-lite") {
+    return "gemini-3.5-flash-lite-preview";
+  }
+  if (id === "gemini-3.5-flash" || id === "gemini-3.5-flash-preview") {
+    return "gemini-3-5-flash-preview";
   }
   return id;
 }

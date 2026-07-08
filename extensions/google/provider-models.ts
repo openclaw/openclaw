@@ -12,6 +12,9 @@ const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_3_5_PRO_PREFIX = "gemini-3.5-pro";
+const GEMINI_3_5_FLASH_LITE_PREFIX = "gemini-3.5-flash-lite";
+const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
 const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
@@ -19,6 +22,9 @@ const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GEMINI_3_5_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
+const GEMINI_3_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
+const GEMINI_3_5_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
@@ -145,6 +151,24 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+    };
+  } else if (lower.startsWith(GEMINI_3_5_PRO_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_5_PRO_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_5_PRO_TEMPLATE_IDS,
+    };
+    if (params.providerId === "google" || params.providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID) {
+      patch = { reasoning: true };
+    }
+  } else if (lower.startsWith(GEMINI_3_5_FLASH_LITE_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_5_FLASH_LITE_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_5_FLASH_LITE_TEMPLATE_IDS,
+    };
+  } else if (lower.startsWith(GEMINI_3_5_FLASH_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
     };
   } else if (lower.startsWith(GEMMA_PREFIX)) {
     family = {

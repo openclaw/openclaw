@@ -86,11 +86,8 @@ function createMockRequest(
   return req;
 }
 
-function createMockResponse(): ServerResponse & {
-  _getData: () => string;
-  _getStatusCode: () => number;
-} {
-  const res = new ServerResponse({} as IncomingMessage);
+function createMockResponse() {
+  const res = new ServerResponse({} as IncomingMessage) as any;
 
   let data = "";
   let statusCode = 200;
@@ -117,7 +114,10 @@ function createMockResponse(): ServerResponse & {
   res._getData = () => data;
   res._getStatusCode = () => statusCode;
 
-  return res;
+  return res as ServerResponse & {
+    _getData: () => string;
+    _getStatusCode: () => number;
+  };
 }
 
 type MockResponse = ReturnType<typeof createMockResponse>;

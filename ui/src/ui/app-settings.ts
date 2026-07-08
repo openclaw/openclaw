@@ -536,7 +536,7 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
 }
 
 export async function loadOverview(host: SettingsHost) {
-  const app = host as unknown as OpenClawApp;
+  const app = host as unknown as SettingsAppHost;
   await Promise.allSettled([
     loadChannels(app, false),
     loadPresence(app),

@@ -75,7 +75,6 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
-  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -100,9 +99,7 @@ import type {
   WebSearchProviderPlugin,
 } from "./types.js";
 
-export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
-  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
-};
+export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration;
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;

@@ -4,9 +4,14 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
-function isGemini31Model(modelId: string): boolean {
+function isGemini31OrLaterModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
+  return (
+    normalized.includes("gemini-3.1-pro") ||
+    normalized.includes("gemini-3.1-flash") ||
+    normalized.includes("gemini-3.5-pro") ||
+    normalized.includes("gemini-3.5-flash")
+  );
 }
 
 function isGemma4Model(modelId: string): boolean {
@@ -126,7 +131,7 @@ export function sanitizeGoogleThinkingPayload(params: {
 
   if (
     typeof params.modelId === "string" &&
-    isGemini31Model(params.modelId) &&
+    isGemini31OrLaterModel(params.modelId) &&
     params.thinkingLevel &&
     params.thinkingLevel !== "off" &&
     thinkingConfigObj.thinkingLevel === undefined

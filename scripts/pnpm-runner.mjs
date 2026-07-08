@@ -15,11 +15,19 @@ export function resolvePnpmRunner(params = {}) {
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
-    return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
-      shell: false,
-    };
+    if (/\.c?js$/.test(npmExecPath)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    } else {
+      return {
+        command: npmExecPath,
+        args: pnpmArgs,
+        shell: false,
+      };
+    }
   }
 
   if (platform === "win32") {
