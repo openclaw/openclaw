@@ -16,6 +16,7 @@ export type RenderLink = {
   end: number;
   open: string;
   close: string;
+  escapeText?: (text: string) => string;
 };
 
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
@@ -117,9 +118,16 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
 
   const points = [...boundaries].toSorted((a, b) => a - b);
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
-  const stack: { close: string; end: number }[] = [];
+  const stack: { close: string; end: number; escapeText?: (text: string) => string }[] = [];
   type OpeningItem =
-    | { end: number; open: string; close: string; kind: "link"; index: number }
+    | {
+        end: number;
+        open: string;
+        close: string;
+        escapeText?: (text: string) => string;
+        kind: "link";
+        index: number;
+      }
     | {
         end: number;
         open: string;
@@ -150,6 +158,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
           end: link.end,
           open: link.open,
           close: link.close,
+          escapeText: link.escapeText,
           kind: "link",
           index,
         });
@@ -191,7 +200,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end });
+        stack.push({ close: item.close, end: item.end, escapeText: item.escapeText });
       }
     }
 
@@ -200,7 +209,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       break;
     }
     if (next > pos) {
-      out += options.escapeText(text.slice(pos, next));
+      out += (stack[stack.length - 1]?.escapeText ?? options.escapeText)(text.slice(pos, next));
     }
   }
 

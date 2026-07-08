@@ -161,6 +161,13 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
     expect(result).toContain('<a href="https://example.com">');
   });
 
+  it("keeps ampersands readable in bare URL query labels", () => {
+    const result = markdownToTelegramHtml("Visit https://example.com/?a=1&b=2");
+    expect(result).toBe(
+      'Visit <a href="https://example.com/?a=1&amp;b=2">https://example.com/?a=1&b=2</a>',
+    );
+  });
+
   it("preserves explicit markdown links even when href looks like a file ref", () => {
     const result = markdownToTelegramHtml("[docs](http://README.md)");
     expect(result).toContain('<a href="http://README.md">docs</a>');

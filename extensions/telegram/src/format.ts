@@ -41,6 +41,10 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function escapeTelegramBareLinkLabel(text: string): string {
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
@@ -80,6 +84,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
     end: link.end,
     open: `<a href="${safeHref}">`,
     close: "</a>",
+    escapeText: label === href ? escapeTelegramBareLinkLabel : undefined,
   };
 }
 
