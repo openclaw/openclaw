@@ -33,8 +33,9 @@ const mocks = vi.hoisted(() => {
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-    resolveImageDescriptionCompressionPolicy: vi.fn<() => Promise<unknown>>(
-      async () => undefined,
+    resolveImageDescriptionCompressionPolicy: vi.fn<() => Promise<unknown>>(async () => undefined),
+    resolveImageDescriptionPreCompressionMaxBytes: vi.fn((maxBytes: number) =>
+      Math.max(maxBytes, 50 * 1024 * 1024),
     ),
     optimizeImageBufferForWebMedia: vi.fn(async ({ buffer, contentType, fileName }) => ({
       buffer,
@@ -75,6 +76,8 @@ vi.mock("../media/media-services.js", () => ({
 
 vi.mock("./image-compression-policy.js", () => ({
   resolveImageDescriptionCompressionPolicy: mocks.resolveImageDescriptionCompressionPolicy,
+  resolveImageDescriptionPreCompressionMaxBytes:
+    mocks.resolveImageDescriptionPreCompressionMaxBytes,
 }));
 
 vi.mock("../media/web-media.js", () => ({
@@ -111,6 +114,10 @@ describe("media-understanding runtime", () => {
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mocks.resolveImageDescriptionCompressionPolicy.mockReset();
     mocks.resolveImageDescriptionCompressionPolicy.mockResolvedValue(undefined);
+    mocks.resolveImageDescriptionPreCompressionMaxBytes.mockReset();
+    mocks.resolveImageDescriptionPreCompressionMaxBytes.mockImplementation((maxBytes: number) =>
+      Math.max(maxBytes, 50 * 1024 * 1024),
+    );
     mocks.optimizeImageBufferForWebMedia.mockReset();
     mocks.optimizeImageBufferForWebMedia.mockImplementation(
       async ({ buffer, contentType, fileName }) => ({
@@ -710,6 +717,62 @@ describe("media-understanding runtime", () => {
         buffer: Buffer.from("remote-image"),
         fileName: "photo.png",
         mime: "image/png",
+      }),
+    );
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches remote explicit image descriptions with a pre-compression cap", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, url: "https://example.com/large.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.resolveImageDescriptionCompressionPolicy.mockResolvedValue({ quality: "balanced" });
+    mocks.getBuffer.mockResolvedValue({
+      buffer: Buffer.from("oversized-jpeg"),
+      fileName: "large.jpg",
+      mime: "image/jpeg",
+      size: 20 * 1024 * 1024,
+    });
+    mocks.optimizeImageBufferForWebMedia.mockResolvedValue({
+      buffer: Buffer.from("compressed-jpeg"),
+      contentType: "image/jpeg",
+      fileName: "large.jpg",
+      kind: "image",
+    });
+
+    await describeImageFileWithModel({
+      filePath: "https://example.com/large.jpg",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      prompt: "Describe it",
+      cfg: {
+        agents: {
+          defaults: {
+            imageQuality: "balanced",
+          },
+        },
+      } as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      timeoutMs: 45_000,
+    });
+
+    expect(mocks.getBuffer).toHaveBeenCalledWith({
+      attachmentIndex: 0,
+      maxBytes: 50 * 1024 * 1024,
+      timeoutMs: 45_000,
+    });
+    expect(mocks.optimizeImageBufferForWebMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("oversized-jpeg"),
+        maxBytes: 10 * 1024 * 1024,
+        imageCompression: { quality: "balanced" },
+      }),
+    );
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("compressed-jpeg"),
+        fileName: "large.jpg",
+        mime: "image/jpeg",
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);

@@ -50,13 +50,18 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_MAX_BYTES,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
 import { fileExists } from "./fs.js";
-import { resolveImageDescriptionCompressionPolicy } from "./image-compression-policy.js";
-import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import {
+  resolveImageDescriptionCompressionPolicy,
+  resolveImageDescriptionPreCompressionMaxBytes,
+} from "./image-compression-policy.js";
+import {
+  isImageDescriptionMaxBytesError,
+  normalizeImageDescriptionInput,
+} from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   recordLocalAudioBackendObservation,
@@ -76,14 +81,6 @@ import type {
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
-
-// Image entries may shrink oversized originals before provider execution; keep
-// the source read bounded, then enforce the provider maxBytes after compression.
-const IMAGE_PRE_COMPRESSION_MAX_BYTES = DEFAULT_MAX_BYTES.video;
-
-function resolveImagePreCompressionMaxBytes(maxBytes: number): number {
-  return Math.max(maxBytes, IMAGE_PRE_COMPRESSION_MAX_BYTES);
-}
 
 function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
@@ -840,24 +837,40 @@ export async function runProviderEntry(params: {
     if (!modelId) {
       throw new Error("Image understanding requires model id");
     }
+    const imageCompression = await resolveImageDescriptionCompressionPolicy({
+      cfg,
+      provider: requestProviderId,
+      model: modelId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    const sourceMaxBytes = imageCompression
+      ? resolveImageDescriptionPreCompressionMaxBytes(maxBytes)
+      : maxBytes;
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
-      maxBytes: resolveImagePreCompressionMaxBytes(maxBytes),
+      maxBytes: sourceMaxBytes,
       timeoutMs,
     });
-    const normalizedMedia = await normalizeImageDescriptionInput({
-      buffer: media.buffer,
-      fileName: media.fileName,
-      imageCompression: await resolveImageDescriptionCompressionPolicy({
-        cfg,
-        provider: requestProviderId,
-        model: modelId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-      }),
-      mime: media.mime,
-      maxBytes,
-    });
+    let normalizedMedia: Awaited<ReturnType<typeof normalizeImageDescriptionInput>>;
+    try {
+      normalizedMedia = await normalizeImageDescriptionInput({
+        buffer: media.buffer,
+        fileName: media.fileName,
+        imageCompression,
+        mime: media.mime,
+        maxBytes,
+        sourceMaxBytes,
+      });
+    } catch (err) {
+      if (isImageDescriptionMaxBytesError(err)) {
+        throw new MediaUnderstandingSkipError(
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${maxBytes}`,
+        );
+      }
+      throw err;
+    }
     assertMediaMaxBytes({
       size: normalizedMedia.buffer.length,
       maxBytes,

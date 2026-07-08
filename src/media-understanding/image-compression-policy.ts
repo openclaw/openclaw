@@ -4,6 +4,15 @@ import {
 } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionPolicy } from "../media/web-media.js";
+import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+
+// Image descriptions can shrink oversized originals before provider execution;
+// keep source reads bounded, then enforce the provider maxBytes after compression.
+const IMAGE_DESCRIPTION_PRE_COMPRESSION_MAX_BYTES = DEFAULT_MAX_BYTES.video;
+
+export function resolveImageDescriptionPreCompressionMaxBytes(maxBytes: number): number {
+  return Math.max(maxBytes, IMAGE_DESCRIPTION_PRE_COMPRESSION_MAX_BYTES);
+}
 
 /** Resolves media-understanding image compression from selected model metadata and user config. */
 export async function resolveImageDescriptionCompressionPolicy(params: {
