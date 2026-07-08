@@ -15,11 +15,32 @@ export function formatProviderModelRef(providerRaw: string, modelRaw: string): s
   if (!model) {
     return provider;
   }
-  const prefix = `${provider}/`;
-  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
-    const normalizedModel = model.slice(prefix.length).trim();
+  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const modelLower = normalizeLowercaseStringOrEmpty(model);
+  const providerPrefix = `${providerLower}/`;
+  // If the model id already embeds the same provider prefix (e.g. "openai/gpt-5.4"
+  // passed as the model with provider "openai"), strip the redundant prefix so
+  // the result stays "openai/gpt-5.4" instead of "openai/openai/gpt-5.4".
+  if (modelLower.startsWith(providerPrefix)) {
+    const normalizedModel = model.slice(providerPrefix.length).trim();
     if (normalizedModel) {
       return `${provider}/${normalizedModel}`;
+    }
+  }
+  // If the model id embeds a *different* provider prefix (e.g. "openai/gpt-5.4"
+  // passed as the model with provider "minimax"), strip the foreign prefix too
+  // so the result is "minimax/gpt-5.4" instead of the malformed
+  // "minimax/openai/gpt-5.4". Without this, fallback-banner rendering and
+  // status messages can leak stale provider/model state from a previous
+  // fallback attempt into the active ref.
+  const slashIndex = model.indexOf("/");
+  if (slashIndex > 0) {
+    const embeddedProvider = model.slice(0, slashIndex).trim();
+    if (embeddedProvider && normalizeLowercaseStringOrEmpty(embeddedProvider) !== providerLower) {
+      const remainder = model.slice(slashIndex + 1).trim();
+      if (remainder) {
+        return `${provider}/${remainder}`;
+      }
     }
   }
   return `${provider}/${model}`;

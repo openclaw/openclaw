@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  formatProviderModelRef,
   hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
@@ -282,5 +283,35 @@ describe("resolveOpenAiImageMediaCandidate", () => {
 
     expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(false);
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
+  });
+});
+
+describe("formatProviderModelRef (model-config.helpers)", () => {
+  it("joins provider and model with a slash", () => {
+    expect(formatProviderModelRef("openai", "gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("strips the same provider prefix when embedded in the model", () => {
+    expect(formatProviderModelRef("openai", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("strips a foreign provider prefix embedded in the model", () => {
+    // Regression: previously produced "minimax/openai/gpt-5.4" which is malformed.
+    expect(formatProviderModelRef("minimax", "openai/gpt-5.4")).toBe("minimax/gpt-5.4");
+    expect(formatProviderModelRef("openai", "anthropic/claude-opus-4-6")).toBe(
+      "openai/claude-opus-4-6",
+    );
+  });
+
+  it("strips a foreign provider prefix case-insensitively", () => {
+    expect(formatProviderModelRef("minimax", "OpenAI/gpt-5.4")).toBe("minimax/gpt-5.4");
+  });
+
+  it("returns the bare model when the provider is empty", () => {
+    expect(formatProviderModelRef("", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("returns the bare provider when the model is empty", () => {
+    expect(formatProviderModelRef("minimax", "")).toBe("minimax");
   });
 });
