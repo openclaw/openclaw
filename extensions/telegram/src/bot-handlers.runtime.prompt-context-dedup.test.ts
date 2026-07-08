@@ -70,4 +70,13 @@ describe("resolvePromptContextTextDedupeKey", () => {
 
     expect(key).toBe("1000:ok");
   });
+
+  it("preserves literal underscores inside words (regression)", () => {
+    const key = resolvePromptContextTextDedupeKey({
+      body: "check this_here_value now",
+      timestamp_ms: 1000,
+    });
+
+    expect(key).toBe("1000:check this_here_value now");
+  });
 });

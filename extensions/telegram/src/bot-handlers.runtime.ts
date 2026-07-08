@@ -48,7 +48,10 @@ import {
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import {
+  stripInlineDirectiveTagsForDelivery,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-chunking";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -180,20 +183,10 @@ import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
-export type TelegramPromptContextMessageForDedupe = {
+type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
   timestamp_ms?: unknown;
 };
-
-/**
- * Strip Markdown emphasis / code formatting characters so that the same
- * message stored with different formatting in the session transcript vs
- * the Telegram message cache produces the same dedup key. Only strips
- * inline formatting characters: * _ ` ~
- */
-export function stripMarkdownFormatting(text: string): string {
-  return text.replace(/[*_`~]/g, "");
-}
 
 export function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
@@ -201,15 +194,16 @@ export function resolvePromptContextTextDedupeKey(
   if (typeof message.body !== "string") {
     return undefined;
   }
-  const visibleBody = stripInlineDirectiveTagsForDelivery(message.body).text.trim();
+  // Normalise both directive tags and Markdown formatting so the same message
+  // from the session transcript and the Telegram cache produces the same key.
+  const visibleBody = stripMarkdown(stripInlineDirectiveTagsForDelivery(message.body).text).trim();
   if (!visibleBody) {
     return undefined;
   }
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  const normalisedBody = stripMarkdownFormatting(visibleBody);
-  return `${message.timestamp_ms}:${normalisedBody}`;
+  return `${message.timestamp_ms}:${visibleBody}`;
 }
 
 export const registerTelegramHandlers = ({
