@@ -29,10 +29,13 @@ vi.mock("./approval-card-actions.js", () => ({
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 
-const account: ResolvedGoogleChatAccount = {
+const account = {
   accountId: "test-account",
-  credentials: { type: "service_account" } as ResolvedGoogleChatAccount["credentials"],
-};
+  enabled: true,
+  credentialSource: "inline",
+  config: {},
+  credentials: { type: "service_account" },
+} as ResolvedGoogleChatAccount;
 
 describe("Google Chat API request timeout", () => {
   it("passes timeoutMs to fetchWithSsrFGuard on every outbound request", async () => {
