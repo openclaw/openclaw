@@ -1447,11 +1447,16 @@ export async function runHeartbeatOnce(opts: {
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    return { status: "skipped", reason: "disabled" };
-  }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    return { status: "skipped", reason: "disabled" };
+  // Cron jobs manage their own scheduling and should not be gated by per-agent
+  // heartbeat configuration or interval resolution. Only the global toggle
+  // (areHeartbeatsEnabled) applies to cron-sourced runs.
+  if (opts.source !== "cron") {
+    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+      return { status: "skipped", reason: "disabled" };
+    }
+    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+      return { status: "skipped", reason: "disabled" };
+    }
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
