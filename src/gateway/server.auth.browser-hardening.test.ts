@@ -277,36 +277,51 @@ describe("gateway auth browser hardening", () => {
       origin: ALLOWED_BROWSER_ORIGIN,
       ok: true,
     },
-  ])("keeps non-proxy browser-origin behavior unchanged: $name", async ({ origin, ok }) => {
-    const { writeConfigFile } = await import("../config/config.js");
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    await writeConfigFile({
-      gateway: {
-        controlUi: {
-          allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+    {
+      name: "accepts allowlisted custom-scheme origins",
+      origin: "tauri://localhost",
+      allowedOrigins: ["tauri://localhost"],
+      ok: true,
+    },
+    {
+      name: "rejects unlisted non-loopback custom-scheme origins",
+      origin: "electron://attacker.example",
+      allowedOrigins: ["tauri://localhost"],
+      ok: false,
+    },
+  ])(
+    "keeps non-proxy browser-origin behavior unchanged: $name",
+    async ({ origin, allowedOrigins, ok }) => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      await writeConfigFile({
+        gateway: {
+          controlUi: {
+            allowedOrigins: allowedOrigins ?? [ALLOWED_BROWSER_ORIGIN],
+          },
         },
-      },
-    });
+      });
 
-    await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, { origin });
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          client: TEST_OPERATOR_CLIENT,
-          device: null,
-        });
-        expect(res.ok).toBe(ok);
-        if (ok) {
-          expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
-        } else {
-          expectOriginNotAllowed(res);
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin });
+        try {
+          const res = await connectReq(ws, {
+            token: "secret",
+            client: TEST_OPERATOR_CLIENT,
+            device: null,
+          });
+          expect(res.ok).toBe(ok);
+          if (ok) {
+            expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+          } else {
+            expectOriginNotAllowed(res);
+          }
+        } finally {
+          ws.close();
         }
-      } finally {
-        ws.close();
-      }
-    });
-  });
+      });
+    },
+  );
 
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     await expectBrowserOriginConnectRejected({});

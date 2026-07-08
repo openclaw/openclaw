@@ -110,6 +110,60 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: true as const, matchedBy: "allowlist" as const },
     },
     {
+      name: "accepts allowlisted app custom-scheme origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "app://localhost",
+        allowedOrigins: ["app://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts allowlisted electron custom-scheme origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "electron://localhost",
+        allowedOrigins: ["electron://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts allowlisted tauri custom-scheme origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://LOCALHOST",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "rejects unlisted custom-scheme origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "electron://localhost",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects hostless file opaque origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "file:///tmp/openclaw.html",
+        allowedOrigins: ["file://"],
+      },
+      expected: { ok: false as const, reason: "origin missing or invalid" },
+    },
+    {
+      name: "rejects hostless data opaque origins",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "data:text/plain,hello",
+        allowedOrigins: ["data:text/plain,hello"],
+      },
+      expected: { ok: false as const, reason: "origin missing or invalid" },
+    },
+    {
       name: "rejects missing origin",
       input: {
         requestHost: "gateway.example.com:18789",
@@ -130,6 +184,14 @@ describe("checkBrowserOrigin", () => {
       input: {
         requestHost: "gateway.example.com:18789",
         origin: "not a url",
+      },
+      expected: { ok: false as const, reason: "origin missing or invalid" },
+    },
+    {
+      name: "rejects malformed standard origin URLs",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "http://localhost:abc",
       },
       expected: { ok: false as const, reason: "origin missing or invalid" },
     },

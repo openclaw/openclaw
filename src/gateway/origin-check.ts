@@ -23,9 +23,19 @@ function parseOrigin(
   }
   try {
     const url = new URL(trimmed);
+    const host = normalizeLowercaseStringOrEmpty(url.host);
+    const origin =
+      url.origin && url.origin !== "null"
+        ? normalizeLowercaseStringOrEmpty(url.origin)
+        : url.protocol && host
+          ? normalizeLowercaseStringOrEmpty(`${url.protocol}//${host}`)
+          : "";
+    if (!origin) {
+      return null;
+    }
     return {
-      origin: normalizeLowercaseStringOrEmpty(url.origin),
-      host: normalizeLowercaseStringOrEmpty(url.host),
+      origin,
+      host,
       hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
   } catch {
