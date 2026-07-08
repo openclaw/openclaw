@@ -326,6 +326,7 @@ describe("runCodexExecResume stream error handling", () => {
       expect(child?.stdout).not.toBeNull();
       child?.stdout?.emit("error", new Error("synthetic parent stdout read failure"));
       await expect(handlePromise).rejects.toThrow("synthetic parent stdout read failure");
+      expect(child?.killed).toBe(true);
     } finally {
       vi.doUnmock("node:child_process");
       vi.resetModules();
@@ -353,6 +354,7 @@ describe("runCodexExecResume stream error handling", () => {
       expect(child?.stderr).not.toBeNull();
       child?.stderr?.emit("error", new Error("synthetic parent stderr read failure"));
       await expect(handlePromise).rejects.toThrow("synthetic parent stderr read failure");
+      expect(child?.killed).toBe(true);
     } finally {
       vi.doUnmock("node:child_process");
       vi.resetModules();

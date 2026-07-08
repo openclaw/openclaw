@@ -302,6 +302,12 @@ async function runCodexExecResume(params: {
       // can break before the "exit" event fires, so the stream layer emits
       // an asynchronous "error" that would otherwise crash the gateway.
       const routeStreamError = (error: unknown) => {
+        // Kill the child before surfacing the stream error so the caller's
+        // active-session guard is not released while the child is still running
+        // and the process does not become orphaned.
+        child.kill("SIGTERM");
+        const sigkill = setTimeout(() => child.kill("SIGKILL"), 2_000);
+        sigkill.unref();
         reject(error instanceof Error ? error : new Error(String(error)));
       };
       child.stdout?.on?.("error", routeStreamError);
