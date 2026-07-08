@@ -202,9 +202,9 @@ async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGateway, callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  const callParams = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -213,6 +213,19 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
+  };
+  const carriesTrustedRequester =
+    params.actionParams.requesterAccountId !== undefined ||
+    params.actionParams.requesterSenderId !== undefined ||
+    params.actionParams.senderIsOwner !== undefined;
+  if (!carriesTrustedRequester) {
+    return await callGatewayLeastPrivilege<T>(callParams);
+  }
+  // Trusted requester fields come from inbound server context. Use a full-scope
+  // bridge here so the public Gateway can reject the same fields from write-only clients.
+  return await callGateway<T>({
+    ...callParams,
+    scopes: ["operator.admin"],
   });
 }
 

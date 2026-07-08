@@ -91,6 +91,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
+  callGateway: vi.fn(),
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -107,6 +108,7 @@ vi.mock("./outbound-send-service.js", () => ({
 }));
 
 vi.mock("./message.gateway.runtime.js", () => ({
+  callGateway: mocks.callGateway,
   callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
   randomIdempotencyKey: mocks.randomIdempotencyKey,
 }));
@@ -276,6 +278,7 @@ describe("runMessageAction plugin dispatch", () => {
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "poll", ctx }),
     );
+    mocks.callGateway.mockReset();
     mocks.callGatewayLeastPrivilege.mockReset();
     mocks.randomIdempotencyKey.mockClear();
     mocks.maybeApplyTtsToPayload.mockReset();
@@ -583,7 +586,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      mocks.callGateway.mockResolvedValue({
         ok: true,
         added: "✅",
       });
@@ -620,11 +623,12 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
+      const gatewayCall = readMockCallArg(mocks.callGateway, "trusted gateway call");
+      expectRecordFields(
+        gatewayCall,
+        { method: "message.action", scopes: ["operator.admin"] },
+        "gateway call",
       );
-      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
       expectRecordFields(
         gatewayParams,
@@ -648,6 +652,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway tool context",
       );
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
