@@ -872,25 +872,6 @@ export async function startGatewaySidecars(params: {
 
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
-    name: "sidecars.model-catalog-warm",
-    log: params.log,
-    run: async (isStopped) => {
-      if (isStopped()) {
-        return;
-      }
-      const { loadGatewayModelCatalog } = await import("./server-model-catalog.js");
-      // Warm read-only cache first (used by models.list RPC), then full cache
-      // (runs augmentModelCatalog hooks including Pioneer live discovery).
-      await loadGatewayModelCatalog({ readOnly: true });
-      if (isStopped()) {
-        return;
-      }
-      await loadGatewayModelCatalog({ readOnly: false });
-    },
-  });
-
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
     name: "sidecars.session-locks",
     log: params.log,
     run: async (isStopped) => {

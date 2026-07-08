@@ -2133,7 +2133,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
-      expect(hoisted.loadModelCatalog).toHaveBeenCalledTimes(3);
+      expect(hoisted.loadModelCatalog).toHaveBeenCalledTimes(1);
     });
     expect(hoisted.getModelRefStatus).toHaveBeenCalledWith(
       expect.objectContaining({ ref: "openai/gpt-5.4" }),

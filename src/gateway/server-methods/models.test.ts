@@ -456,109 +456,117 @@ describe("models.list", () => {
   });
 
   it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
-    await withoutOpenAIEnvAuth(async () => {
-      const catalog = [
-        { id: "claude-test", name: "Claude Test", provider: "anthropic" },
-        { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
-        { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
-        { id: "llama-local", name: "Llama Local", provider: "vllm" },
-        { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
-      ];
-      const cfg = {
-        agents: {
-          defaults: {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+      },
+      async () => {
+        await withoutOpenAIEnvAuth(async () => {
+          const catalog = [
+            { id: "claude-test", name: "Claude Test", provider: "anthropic" },
+            { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
+            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
+            { id: "llama-local", name: "Llama Local", provider: "vllm" },
+            { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
+          ];
+          const cfg = {
+            agents: {
+              defaults: {
+                models: {
+                  "openai/*": {},
+                  "vllm/*": {},
+                },
+              },
+            },
             models: {
-              "openai/*": {},
-              "vllm/*": {},
+              providers: {
+                openai: {
+                  api: "openai-responses",
+                  apiKey: "test-key",
+                  baseUrl: "https://api.openai.com/v1",
+                },
+                vllm: { apiKey: "test-key" },
+              },
             },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              apiKey: "test-key",
-              baseUrl: "https://api.openai.com/v1",
-            },
-            vllm: { apiKey: "test-key" },
-          },
-        },
-      } as unknown as OpenClawConfig;
+          } as unknown as OpenClawConfig;
 
-      const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
-      const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
-        view: "configured",
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: loadConfiguredCatalog,
-        reqId: "req-models-list-provider-allowlist",
-      });
-      await configuredRequest;
+          const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
+          const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
+            view: "configured",
+            runtimeConfig: cfg,
+            loadGatewayModelCatalog: loadConfiguredCatalog,
+            reqId: "req-models-list-provider-allowlist",
+          });
+          await configuredRequest;
 
-      expect(configuredRespond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
+          expect(configuredRespond).toHaveBeenCalledWith(
+            true,
             {
-              id: "gpt-5.4",
-              name: "GPT-5.4 Codex",
-              provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
-              available: true,
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4 Codex",
+                  provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
+                  available: true,
+                },
+                {
+                  id: "gpt-codex-test",
+                  name: "GPT Codex Test",
+                  provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
+                  available: true,
+                },
+                { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+                { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+              ],
             },
-            {
-              id: "gpt-codex-test",
-              name: "GPT Codex Test",
-              provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
-              available: true,
-            },
-            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-          ],
-        },
-        undefined,
-      );
-      expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+            undefined,
+          );
+          expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
 
-      const { request: allRequest, respond: allRespond } = requestModelsList({
-        view: "all",
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
-        reqId: "req-models-list-provider-allowlist-all",
-      });
-      await allRequest;
+          const { request: allRequest, respond: allRespond } = requestModelsList({
+            view: "all",
+            runtimeConfig: cfg,
+            loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+            reqId: "req-models-list-provider-allowlist-all",
+          });
+          await allRequest;
 
-      expect(allRespond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
+          expect(allRespond).toHaveBeenCalledWith(
+            true,
             {
-              id: "claude-test",
-              name: "Claude Test",
-              provider: "anthropic",
-              available: false,
+              models: [
+                {
+                  id: "claude-test",
+                  name: "Claude Test",
+                  provider: "anthropic",
+                  available: false,
+                },
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4 Codex",
+                  provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
+                  available: true,
+                },
+                {
+                  id: "gpt-codex-test",
+                  name: "GPT Codex Test",
+                  provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
+                  available: true,
+                },
+                { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+                { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+              ],
             },
-            {
-              id: "gpt-5.4",
-              name: "GPT-5.4 Codex",
-              provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
-              available: true,
-            },
-            {
-              id: "gpt-codex-test",
-              name: "GPT Codex Test",
-              provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
-              available: true,
-            },
-            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-          ],
-        },
-        undefined,
-      );
-    });
+            undefined,
+          );
+        });
+      },
+    );
   });
 
   it("keeps keyless local provider wildcard discoveries visible with unknown availability", async () => {
