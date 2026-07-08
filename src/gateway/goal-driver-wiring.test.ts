@@ -89,7 +89,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
     if (Date.now() > deadline) {
       throw new Error("waitFor: predicate did not become true in time");
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
 }
 
@@ -106,7 +108,9 @@ afterEach(async () => {
   vi.useRealTimers();
   // Let any fire-and-forget store writes settle before removing the temp dir so
   // a late lockfile write cannot race the rmdir (ENOTEMPTY).
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
   await Promise.all(
     tempRoots.map((root) =>
       fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 }),
