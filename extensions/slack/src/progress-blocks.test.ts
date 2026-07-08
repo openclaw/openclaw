@@ -36,7 +36,11 @@ function planUpdate(title: string) {
   return { type: "plan_update", title };
 }
 
-function taskUpdate(id: unknown, title: string, status: "in_progress" | "complete" | "error") {
+function taskUpdate(
+  id: unknown,
+  title: string,
+  status: "pending" | "in_progress" | "complete" | "error",
+) {
   return { type: "task_update", id, title, status };
 }
 
@@ -188,8 +192,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("tool two"),
-      taskUpdate("item_1", "tool one", "in_progress"),
-      taskUpdate("item_2", "tool two", "in_progress"),
+      taskUpdate("item_1", "tool one", "pending"),
+      taskUpdate("item_2", "tool two", "pending"),
     ]);
   });
 
@@ -213,7 +217,7 @@ describe("native Slack progress stream chunks", () => {
       taskUpdate(
         "tool_1",
         "Exec — run tests in /Users/example/P…aw/packages/very/deep/path/example",
-        "in_progress",
+        "pending",
       ),
     ]);
   });
@@ -258,12 +262,12 @@ describe("native Slack progress stream chunks", () => {
     expectTaskUpdate(chunksWithTitle?.[1], {
       id: "tool_1",
       title: "Exec 10 — run 10",
-      status: "in_progress",
+      status: "pending",
     });
     expectTaskUpdate(chunksWithTitle?.at(-1), {
       id: "tool_50",
       title: "Exec 59 — run 59",
-      status: "in_progress",
+      status: "pending",
     });
 
     const chunksWithoutTitle = buildSlackProgressStreamStartChunks({
@@ -274,12 +278,12 @@ describe("native Slack progress stream chunks", () => {
     expectTaskUpdate(chunksWithoutTitle?.[1], {
       id: "tool_1",
       title: "Exec 10 — run 10",
-      status: "in_progress",
+      status: "pending",
     });
     expectTaskUpdate(chunksWithoutTitle?.at(-1), {
       id: "tool_50",
       title: "Exec 59 — run 59",
-      status: "in_progress",
+      status: "pending",
     });
   });
 
@@ -290,7 +294,7 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — run tests"),
-      taskUpdate("exec_1", "Exec — run tests", "in_progress"),
+      taskUpdate("exec_1", "Exec — run tests", "pending"),
     ]);
   });
 
@@ -315,8 +319,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — run tests"),
-      taskUpdate("item_1", "prepare the workspace", "in_progress"),
-      taskUpdate("exec_2", "Exec — run tests", "in_progress"),
+      taskUpdate("item_1", "prepare the workspace", "pending"),
+      taskUpdate("exec_2", "Exec — run tests", "pending"),
     ]);
   });
 
@@ -345,8 +349,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
-      taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
+      taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "🛠️ Exec", "pending"),
+      taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "🛠️ Exec", "pending"),
     ]);
   });
 
@@ -408,8 +412,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling"),
-      taskUpdate("item_1", "tool one", "in_progress"),
-      taskUpdate("item_2", "tool two", "in_progress"),
+      taskUpdate("item_1", "tool one", "pending"),
+      taskUpdate("item_2", "tool two", "pending"),
     ]);
   });
 
