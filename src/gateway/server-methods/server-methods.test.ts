@@ -3601,7 +3601,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "Allow Always is unavailable because the effective policy requires approval every time.",
     });
 
     const denyRespond = vi.fn();
@@ -3626,6 +3626,7 @@ describe("exec approval handlers", () => {
       context,
       params: {
         twoPhase: true,
+        ask: "on-miss",
         unavailableDecisions: ["allow-always"],
       },
     });
@@ -3644,7 +3645,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
     });
 
     const allowOnceRespond = vi.fn();

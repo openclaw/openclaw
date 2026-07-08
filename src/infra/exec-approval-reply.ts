@@ -19,6 +19,7 @@ import {
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
 import {
+  formatAllowAlwaysUnavailableMessage,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecHost,
@@ -371,9 +372,7 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    lines.push(formatAllowAlwaysUnavailableMessage(params.ask));
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);

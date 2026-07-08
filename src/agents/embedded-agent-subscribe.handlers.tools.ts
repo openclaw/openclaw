@@ -722,6 +722,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   cwd?: string;
   nodeId?: string;
   warningText?: string;
+  ask?: string | null;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -756,6 +757,7 @@ function readExecApprovalPendingDetails(result: unknown): {
     cwd: readStringValue(details.cwd),
     nodeId: readStringValue(details.nodeId),
     warningText: readStringValue(details.warningText),
+    ask: details.ask ? String(details.ask) : null,
   };
 }
 
@@ -829,6 +831,7 @@ async function emitToolResultOutput(params: {
         buildExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
+          ask: approvalPending.ask,
           allowedDecisions: approvalPending.allowedDecisions,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
