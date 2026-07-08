@@ -84,6 +84,7 @@ function isTagNameChar(value: string): boolean {
     (code >= 65 && code <= 90) ||
     (code >= 97 && code <= 122) ||
     value === "-" ||
+    value === "_" ||
     value === ":"
   );
 }
@@ -169,6 +170,14 @@ function findTagEnd(html: string, start: number): number {
 }
 
 function readTagToken(html: string, start: number): ReadTagResult | null {
+  if (html.startsWith("<!--", start)) {
+    const commentEnd = html.indexOf("-->", start + 4);
+    return {
+      token: null,
+      next: commentEnd === -1 ? html.length : commentEnd + 3,
+    };
+  }
+
   const end = findTagEnd(html, start);
   if (end === -1) {
     return null;
