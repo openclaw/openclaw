@@ -180,12 +180,30 @@ import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
-type TelegramPromptContextMessageForDedupe = {
+export type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
   timestamp_ms?: unknown;
 };
 
-function resolvePromptContextTextDedupeKey(
+/**
+ * Minimum body length (after stripping directive tags) for text-only dedup.
+ * Bodies shorter than this keep the timestamp-qualified key to avoid false
+ * positives on very short messages like "ok" or "yes".
+ */
+const PROMPT_CONTEXT_TEXT_DEDUPE_MIN_LENGTH = 20;
+
+/**
+ * Strip Markdown emphasis / code formatting characters so that the same
+ * message rendered with different formatting (e.g. **bold** vs bold) produces
+ * the same dedup key.
+ *
+ * Only strips characters that affect inline formatting: * _ ` ~
+ */
+function stripMarkdownFormatting(text: string): string {
+  return text.replace(/[*_`~]/g, "");
+}
+
+export function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
   if (typeof message.body !== "string") {
@@ -197,6 +215,18 @@ function resolvePromptContextTextDedupeKey(
   }
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
+  }
+  // For sufficiently long bodies, dedup on normalised text alone. The session
+  // transcript and the Telegram message cache often store the same assistant
+  // reply with different timestamps (model response time vs delivery time),
+  // which defeats a timestamp-qualified key. Stripping Markdown formatting
+  // ensures that minor rendering differences (e.g. **bold** vs bold) do not
+  // prevent a match.
+  if (visibleBody.length >= PROMPT_CONTEXT_TEXT_DEDUPE_MIN_LENGTH) {
+    const normalisedBody = stripMarkdownFormatting(visibleBody);
+    if (normalisedBody.length >= PROMPT_CONTEXT_TEXT_DEDUPE_MIN_LENGTH) {
+      return `text:${normalisedBody}`;
+    }
   }
   return `${message.timestamp_ms}:${visibleBody}`;
 }
