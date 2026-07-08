@@ -3,12 +3,11 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { parseDotPath, toDotPath } from "../../../src/secrets/shared.js";
 import {
   resolveConfigSecretTargetByPath,
   resolvePlanTargetAgainstRegistry,
-} from "../../../src/secrets/target-registry.js";
+} from "openclaw/plugin-sdk/secret-ref-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 type CommandLike = {
   command(name: string): CommandLike;
@@ -116,6 +115,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseDotPath(pathname: string): string[] {
+  return pathname
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function toDotPath(segments: string[]): string {
+  return segments.join(".");
 }
 
 function assertValidProviderAlias(value: string): void {
