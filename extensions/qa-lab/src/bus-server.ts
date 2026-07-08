@@ -34,7 +34,12 @@ export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
     })
   ).trim();
-  return text ? (JSON.parse(text) as unknown) : {};
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("Malformed JSON body");
+  }
 }
 
 export function writeJson(res: ServerResponse, statusCode: number, body: unknown) {

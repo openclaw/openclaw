@@ -249,4 +249,18 @@ describe("handleQaBusRequest", () => {
     expect(res.statusCode).toBe(413);
     expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
+
+  it("returns a controlled error when a v1 POST body is malformed JSON", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    try {
+      const response = await postQaBusRawJson(bus.baseUrl, "/v1/reset", "{");
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "Malformed JSON body",
+      });
+    } finally {
+      await closeQaHttpServer(bus.server);
+    }
+  });
 });
