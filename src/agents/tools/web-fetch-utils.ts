@@ -455,9 +455,10 @@ export async function extractBasicHtmlContent(params: {
   if (params.extractMode === "text") {
     const text =
       stripInvisibleUnicode(markdownToText(rendered.text)) ||
+      stripInvisibleUnicode(rendered.title ?? "") ||
       stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
     return text ? { text, title: rendered.title } : null;
   }
-  const text = stripInvisibleUnicode(rendered.text);
+  const text = stripInvisibleUnicode(rendered.text) || stripInvisibleUnicode(rendered.title ?? "");
   return text ? { text, title: rendered.title } : null;
 }

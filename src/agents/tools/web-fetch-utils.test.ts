@@ -1,6 +1,6 @@
 // web_fetch extraction utility tests cover HTML entity decoding.
 import { describe, expect, it } from "vitest";
-import { htmlToMarkdown, truncateText } from "./web-fetch-utils.js";
+import { extractBasicHtmlContent, htmlToMarkdown, truncateText } from "./web-fetch-utils.js";
 
 describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   const grin = String.fromCodePoint(0x1f600); // 😀 — an astral (> U+FFFF) code point
@@ -75,6 +75,15 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
       "[Read](https://example.com/path)",
     );
     expect(htmlToMarkdown(`<a href=/docs/path>Read</a>`).text).toBe("[Read](/docs/path)");
+  });
+
+  it("uses the title as fallback content when an HTML shell has no body text", async () => {
+    await expect(
+      extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),
+    ).resolves.toEqual({ text: "Shell Page", title: "Shell Page" });
+    await expect(
+      extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "text" }),
+    ).resolves.toEqual({ text: "Shell Page", title: "Shell Page" });
   });
 
   it("consumes a malformed tag tail once instead of rescanning every later less-than", () => {
