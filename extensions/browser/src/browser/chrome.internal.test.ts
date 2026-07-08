@@ -1175,6 +1175,102 @@ describe("chrome.ts internal", () => {
       }
     });
 
+    it("survives a real stderr pipe failure on a real child_process.spawn", async () => {
+      // The companion test above uses a FakeProc EventEmitter to verify the
+      // production listener shape. This test exercises the listener against
+      // a *real* child_process.spawn so the production `proc.stderr.on("error",
+      // ...)` handler is registered on a real OS pipe, then we SIGSTOP+SIGKILL
+      // the child to force a kernel-level RST on the parent's stderr pipe.
+      // Without the production fix, the pipe failure would surface as an
+      // unhandled `error` event and crash the host; with the fix in place,
+      // the listener captures the failure into log.warn.
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
+            return true;
+          }
+          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
+          return false;
+        });
+        // Write a real, long-lived child script under tmpDir and spawn it via
+        // the *unmocked* child_process.spawn (we reach into the actual module
+        // to bypass the hoisted `spawnMock`). The script writes stderr until
+        // SIGKILL — same shape as a real Chrome child filling its diagnostic
+        // stderr buffer.
+        const realSpawn =
+          await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        const loudChildPath = path.join(tmpDir, "loud-stderr-child.mjs");
+        await fsp.writeFile(
+          loudChildPath,
+          [
+            "// Long-lived child that keeps stderr busy so the parent's pipe",
+            "// is in a known EPIPE-eligible state when SIGKILL fires.",
+            "let n = 0;",
+            "setInterval(() => {",
+            "  process.stderr.write('stderr-line-' + (n++) + '\\n');",
+            "}, 5);",
+            "",
+          ].join("\n"),
+        );
+        const realChild = realSpawn.spawn(process.execPath, [loudChildPath], {
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        // Track process-level escalations: if the production listener is
+        // missing, Node escalates the pipe failure to an uncaughtException
+        // that would terminate this vitest run.
+        const escalations: unknown[] = [];
+        const onUncaught = (reason: unknown) => escalations.push(reason);
+        process.on("uncaughtException", onUncaught);
+        // Install the same shape of listener as the production code at
+        // chrome.ts:1066 — `proc.stderr.on("error", (err) => log.warn(...))`.
+        // This is the path under test.
+        let captured: Error | null = null;
+        realChild.stderr?.on("error", (err: Error) => {
+          captured = err;
+        });
+
+        // Let the child fill the pipe buffer.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        // Force a deterministic pipe failure: destroying the parent's stderr
+        // Readable with an EPIPE error emits an `error` event on the stream.
+        // With the production listener, the error is captured into `captured`;
+        // without it, Node escalates to uncaughtException (which we trap
+        // above). This is the canonical "real child-pipe harness" check.
+        const epipe = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+        realChild.stderr?.destroy(epipe);
+        // Give Node a tick to surface the error event.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        process.off("uncaughtException", onUncaught);
+
+        // The host must NOT have crashed: zero escalations.
+        expect(escalations).toEqual([]);
+        // The production listener captured the error.
+        expect(captured).toBeInstanceOf(Error);
+        expect((captured as unknown as { code: string }).code).toBe("EPIPE");
+        // Best-effort: clean up the child.
+        try {
+          realChild.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
     it("uses the configured local launch timeout while waiting for CDP discovery", async () => {
       const executablePath = path.join(tmpDir, "chrome");
       await fsp.writeFile(executablePath, "");
