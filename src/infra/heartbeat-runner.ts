@@ -1447,11 +1447,22 @@ export async function runHeartbeatOnce(opts: {
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    return { status: "skipped", reason: "disabled" };
-  }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    return { status: "skipped", reason: "disabled" };
+  // Cron-sourced wakes are explicit deliver-to-main requests (e.g. a cron job
+  // with sessionTarget "main" and a systemEvent payload), not scheduled
+  // heartbeat polls. An agent without per-agent heartbeat config (common for
+  // the default "main" agent) must still be woken; otherwise the cron run is
+  // recorded as status=skipped/error="disabled" and the main session never
+  // receives the systemEvent. The global heartbeats toggle above still gates
+  // cron wakes. Both the immediate wake (wakeMode "now", timer.ts) and the
+  // queued wake (wakeMode "next-heartbeat", via requestHeartbeat's scheduled
+  // handler) route through this function with source "cron".
+  if (opts.source !== "cron") {
+    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+      return { status: "skipped", reason: "disabled" };
+    }
+    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+      return { status: "skipped", reason: "disabled" };
+    }
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
