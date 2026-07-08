@@ -1,6 +1,7 @@
 // Model-backed image understanding runtime for providers without a native media
 // provider hook.
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -41,10 +42,6 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNativeResponsesReasoningPayload(model: Model): boolean {
@@ -238,6 +235,15 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    model.api === "bedrock-converse-stream"
+  ) {
+    return { apiKey: "", model };
+  }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)

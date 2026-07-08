@@ -1,5 +1,6 @@
 // Discord plugin module implements message run queue behavior.
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -34,14 +35,9 @@ export type DiscordMessageRunQueueTestingHooks = {
 
 type SkippedQueuedMessageCleanup = () => void;
 
-let messageProcessRuntimePromise:
-  | Promise<typeof import("./message-handler.process.js")>
-  | undefined;
-
-async function loadMessageProcessRuntime() {
-  messageProcessRuntimePromise ??= import("./message-handler.process.js");
-  return await messageProcessRuntimePromise;
-}
+const loadMessageProcessRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.process.js"),
+);
 
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;

@@ -44,7 +44,7 @@ const scenarios = [
     successCriteria: ["playwright pass"],
     execution: {
       kind: "playwright" as const,
-      path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      path: "ui/src/e2e/chat-flow.e2e.test.ts",
     },
   },
 ];

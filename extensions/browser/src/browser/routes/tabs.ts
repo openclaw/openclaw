@@ -24,6 +24,7 @@ import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./t
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
+const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
 
 function handleTabsRouteError(
   ctx: BrowserRouteContext,
@@ -88,7 +89,18 @@ async function ensureBrowserRunning(
   res: BrowserResponse,
   signal?: AbortSignal,
 ) {
-  if (!(await checkTabReachability(ctx, profileCtx, signal))) {
+  let isReachable = await checkTabReachability(ctx, profileCtx, signal);
+  // A running browser can outlive one short CDP probe; retry once before
+  // rejecting a tab mutation and leaving session-owned tabs behind.
+  if (!isReachable && !signal?.aborted) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, TAB_REACHABILITY_RETRY_DELAY_MS);
+    });
+    // Keep false reserved for paths where jsonError already wrote a response.
+    signal?.throwIfAborted();
+    isReachable = await checkTabReachability(ctx, profileCtx, signal);
+  }
+  if (!isReachable) {
     jsonError(
       res,
       new BrowserProfileUnavailableError("browser not running").status,

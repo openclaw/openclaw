@@ -788,6 +788,61 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
   });
 
+  it("keeps generated media notices out of command input", async () => {
+    const decision = await resolveIMessageInboundDecision({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      message: {
+        id: 12347,
+        guid: "p:0/GUID-media-failure",
+        sender: "+15555550123",
+        text: "/reset",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "/reset",
+      bodyText: "/reset",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload } = await buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      decision: {
+        ...decision,
+        agentBodyText: "/reset\n\n[imessage attachment unavailable]",
+      },
+      message: {
+        id: 12347,
+        guid: "p:0/GUID-media-failure",
+        sender: "+15555550123",
+        text: "/reset",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(ctxPayload.RawBody).toBe("/reset");
+    expect(ctxPayload.CommandBody).toBe("/reset");
+    expect(ctxPayload.BodyForAgent).toBe("/reset\n\n[imessage attachment unavailable]");
+    expect(ctxPayload.Body).toContain("/reset\n\n[imessage attachment unavailable]");
+  });
+
   it("prepends direct-message history when supplied", async () => {
     const decision = await resolveIMessageInboundDecision({
       cfg: {} as OpenClawConfig,

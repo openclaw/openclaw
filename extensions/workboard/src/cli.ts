@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
@@ -25,10 +26,6 @@ function writeJson(value: unknown): void {
 
 function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function splitLabels(value: string | undefined): string[] | undefined {

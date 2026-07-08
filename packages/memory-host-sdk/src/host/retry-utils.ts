@@ -2,7 +2,7 @@
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 
 /** Retry timing configuration with optional jitter. */
-export type RetryConfig = {
+type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
   maxDelayMs?: number;
@@ -10,7 +10,7 @@ export type RetryConfig = {
 };
 
 /** Retry callback payload. */
-export type RetryInfo = {
+type RetryInfo = {
   attempt: number;
   maxAttempts: number;
   delayMs: number;
@@ -19,7 +19,7 @@ export type RetryInfo = {
 };
 
 /** Retry options for retryAsync. */
-export type RetryOptions = RetryConfig & {
+type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
@@ -64,7 +64,7 @@ function resolveAttempts(value: unknown, fallback: number): number {
 }
 
 /** Resolve retry settings with clamped positive timeout values. */
-export function resolveRetryConfig(
+function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
@@ -160,7 +160,7 @@ export async function retryAsync<T>(
   throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }

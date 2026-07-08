@@ -10,6 +10,7 @@ import { monitorIMessageProvider } from "./monitor.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
+  resolveIMessageRecoveryCursorDbIdentity,
 } from "./monitor/recovery-cursor.js";
 import {
   clearCachedIMessagePrivateApiStatus,
@@ -1125,7 +1126,11 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
-    advanceIMessageRecoveryCursor("default", 4990);
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ remoteHost: "user@gateway-host" }),
+      4990,
+    );
     const client = {
       request: vi.fn(async () => ({ subscription: 1 })),
       waitForClose: vi.fn(async () => {}),
@@ -1213,10 +1218,14 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
-    advanceIMessageRecoveryCursor("default", 4990);
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-"));
     tempDirs.push(stateDir);
     const dbPath = path.join(stateDir, "chat.db");
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      4990,
+    );
     const { DatabaseSync } = await import("node:sqlite");
     const database = new DatabaseSync(dbPath);
     try {
@@ -1445,11 +1454,15 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("does not advance the recovery cursor past a failed replay row", async () => {
-    advanceIMessageRecoveryCursor("default", 4990);
     debouncerControl.holdEntries = true;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-failed-"));
     tempDirs.push(stateDir);
     const dbPath = path.join(stateDir, "chat.db");
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      4990,
+    );
     const { DatabaseSync } = await import("node:sqlite");
     const database = new DatabaseSync(dbPath);
     try {
@@ -1516,15 +1529,21 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     });
-    expect(loadIMessageRecoveryCursor("default")).toBe(4994);
+    expect(
+      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+    ).toBe(4994);
   });
 
   it("advances the recovery cursor after lower pending replay rows complete", async () => {
-    advanceIMessageRecoveryCursor("default", 4990);
     debouncerControl.holdEntries = true;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-ordered-"));
     tempDirs.push(stateDir);
     const dbPath = path.join(stateDir, "chat.db");
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      4990,
+    );
     const { DatabaseSync } = await import("node:sqlite");
     const database = new DatabaseSync(dbPath);
     try {
@@ -1584,7 +1603,9 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     });
-    expect(loadIMessageRecoveryCursor("default")).toBe(4996);
+    expect(
+      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+    ).toBe(4996);
   });
 
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {

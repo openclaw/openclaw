@@ -111,6 +111,7 @@ export function preservePendingAssistantUsage(
     output,
     cacheRead,
     cacheWrite,
+    ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
     totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
     ...(pendingUsage.reasoningTokens !== undefined
       ? { reasoningTokens: pendingUsage.reasoningTokens }
@@ -1229,14 +1230,17 @@ export function handleMessageEnd(
     if (
       hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
     ) {
-      ctx.emitBlockReply({
-        text: cleanedTextLocal,
-        mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      });
+      ctx.emitBlockReply(
+        {
+          text: cleanedTextLocal,
+          mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
+          audioAsVoice,
+          replyToId,
+          replyToTag,
+          replyToCurrent,
+        },
+        { assistantMessageIndex: ctx.state.assistantMessageIndex },
+      );
     }
   };
 
@@ -1351,7 +1355,9 @@ export function handleMessageEnd(
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
         .then(() => {
-          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+            reason: "message_end",
+          });
           if (isPromiseLike<void>(onBlockReplyFlushResult)) {
             return onBlockReplyFlushResult;
           }
@@ -1361,7 +1367,7 @@ export function handleMessageEnd(
           finalizeMessageEnd();
         });
     }
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush({ reason: "message_end" });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.finally(() => {
         finalizeMessageEnd();

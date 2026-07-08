@@ -29,6 +29,7 @@ export async function responseBodyViaPlaywright(opts: {
       ? Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars)))
       : 200_000;
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
+  const maxBytes = maxChars * 4;
 
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -89,12 +90,14 @@ export async function responseBodyViaPlaywright(opts: {
   const headers = resp.headers?.();
 
   let bodyText = "";
+  let bodyByteLength = 0;
   try {
-    if (typeof resp.text === "function") {
-      bodyText = await resp.text();
-    } else if (typeof resp.body === "function") {
+    if (typeof resp.body === "function") {
       const buf = await resp.body();
-      bodyText = new TextDecoder("utf-8").decode(buf);
+      bodyByteLength = buf.byteLength;
+      // Playwright exposes only a full-body Buffer. Bound the second allocation
+      // while preserving the existing response-prefix contract.
+      bodyText = new TextDecoder("utf-8").decode(buf.subarray(0, maxBytes));
     }
   } catch (err) {
     throw new Error(`Failed to read response body for "${url}": ${String(err)}`, { cause: err });
@@ -106,6 +109,6 @@ export async function responseBodyViaPlaywright(opts: {
     status,
     headers,
     body: trimmed,
-    truncated: bodyText.length > maxChars ? true : undefined,
+    truncated: bodyByteLength > maxBytes || bodyText.length > maxChars ? true : undefined,
   };
 }

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CliBackendPreparedExecution } from "openclaw/plugin-sdk/cli-backend";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   GOOGLE_GEMINI_CLI_PROVIDER_ID,
@@ -185,10 +186,6 @@ function resolveGeminiCliProfileHome(ctx: GeminiCliAuthHomeContext): {
 
   const home = resolveGeminiCliProfileHomePath(agentDir, authProfileId);
   return { home, geminiDir: path.join(home, ".gemini") };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function readGeminiAuthProfileCredential(

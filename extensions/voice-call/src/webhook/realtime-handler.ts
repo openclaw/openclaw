@@ -28,10 +28,10 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
-import { normalizePath } from "../path-utils.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
@@ -149,6 +149,38 @@ function appendTranscriptText(base: string | undefined, fragment: string): strin
   }
   const separator = shouldInsertTranscriptSpace(current, next) ? " " : "";
   return `${current}${separator}${next}`.trim();
+}
+
+function resolveFinalTranscriptText(params: {
+  partial: string | undefined;
+  rawPartial: string | undefined;
+  final: string;
+}): string {
+  const final = normalizeTranscriptText(params.final);
+  const rawPartial = params.rawPartial ?? "";
+  const partial = normalizeTranscriptText(params.partial ?? rawPartial);
+  if (!partial) {
+    return final;
+  }
+  if (!final) {
+    return partial;
+  }
+  const compact = (value: string) => value.toLowerCase().replaceAll(/\s/g, "");
+  const compactFinal = compact(final);
+  const compactRaw = compact(rawPartial);
+  const compactPartial = compact(partial);
+  // A bounded partial buffer may only retain the end of a long complete final.
+  // In that case the provider's final is authoritative; appending would duplicate the suffix.
+  if (compactFinal.startsWith(compactPartial) || compactFinal.endsWith(compactPartial)) {
+    return final;
+  }
+  if (compactPartial.endsWith(compactFinal)) {
+    return partial;
+  }
+  if (compactRaw !== compactPartial) {
+    return appendTranscriptText(partial, params.final);
+  }
+  return normalizeTranscriptText(`${rawPartial}${params.final}`);
 }
 
 function limitPartialUserTranscript(text: string): string {
@@ -289,6 +321,7 @@ export class RealtimeCallHandler {
     (reason: TelephonyCloseReason) => void
   >();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
+  private readonly rawPartialUserTranscriptsByCallId = new Map<string, string>();
   private readonly partialUserTranscriptUpdatedAtByCallId = new Map<string, number>();
   private readonly recentFinalUserTranscriptsByCallId = new Map<string, string>();
   private readonly recentFinalUserTranscriptTimersByCallId = new Map<
@@ -318,8 +351,8 @@ export class RealtimeCallHandler {
     try {
       const parsed = new URL(url);
       this.publicOrigin = parsed.host;
-      const normalizedServePath = normalizePath(this.servePath);
-      const normalizedPublicPath = normalizePath(parsed.pathname);
+      const normalizedServePath = normalizeWebhookPath(this.servePath);
+      const normalizedPublicPath = normalizeWebhookPath(parsed.pathname);
       const idx = normalizedPublicPath.indexOf(normalizedServePath);
       this.publicPathPrefix = idx > 0 ? normalizedPublicPath.slice(0, idx) : "";
     } catch {
@@ -329,7 +362,7 @@ export class RealtimeCallHandler {
   }
 
   getStreamPathPattern(): string {
-    return `${this.publicPathPrefix}${normalizePath(this.config.streamPath ?? "/voice/stream/realtime")}`;
+    return `${this.publicPathPrefix}${normalizeWebhookPath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
@@ -584,6 +617,45 @@ export class RealtimeCallHandler {
         }),
       );
     };
+    const providerHandlesInputAudioBargeIn =
+      this.realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
+    const cancelOutputAudioForBargeIn = (
+      source: "local" | "provider",
+      interruptProvider?: (audioPlaybackActive: boolean) => void,
+      clearedAudioBytes = 0,
+    ): void => {
+      const outputAudioActive = talk.outputAudioActive;
+      const pendingTelephonyAudio = audioPacer.hasPendingAudio();
+      if (
+        source === "provider" &&
+        !outputAudioActive &&
+        !pendingTelephonyAudio &&
+        clearedAudioBytes === 0
+      ) {
+        return;
+      }
+      // Capture playback before provider interruption. Local fallback must clear
+      // telephony even after pacing drains because the remote stream buffers audio.
+      const interruptedTurnId = talk.activeTurnId;
+      interruptProvider?.(outputAudioActive || pendingTelephonyAudio);
+      const shouldClearTelephony = source === "local" || pendingTelephonyAudio;
+      const clearedBytes = clearedAudioBytes + (shouldClearTelephony ? audioPacer.clearAudio() : 0);
+      console.log(
+        `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+      );
+      if (!outputAudioActive || !interruptedTurnId) {
+        return;
+      }
+      const reason = `${source}-barge-in`;
+      finishOutputAudio(reason);
+      const cancelled = talk.cancelTurn({
+        turnId: interruptedTurnId,
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (cancelled.ok) {
+        rememberTalkEvent(cancelled.event);
+      }
+    };
     emitTalkEvent({
       type: "session.started",
       payload: { callId, providerCallId: callSid, streamSid },
@@ -640,10 +712,15 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const interruptResponseOnInputAudio =
+      typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
+        ? this.providerConfig.interruptResponseOnInputAudio
+        : undefined;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
+      interruptResponseOnInputAudio,
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
@@ -665,8 +742,12 @@ export class RealtimeCallHandler {
           });
           audioPacer.sendAudio(muLaw);
         },
-        clearAudio: () => {
+        clearAudio: (reason) => {
           const clearedBytes = audioPacer.clearAudio();
+          if (reason === "barge-in") {
+            cancelOutputAudioForBargeIn("provider", undefined, clearedBytes);
+            return;
+          }
           console.log(
             `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
           );
@@ -711,7 +792,11 @@ export class RealtimeCallHandler {
           return;
         }
         if (role === "user") {
-          const transcript = this.recordPartialUserTranscript(callId, text);
+          const transcript = resolveFinalTranscriptText({
+            partial: this.partialUserTranscriptsByCallId.get(callId),
+            rawPartial: this.rawPartialUserTranscriptsByCallId.get(callId),
+            final: text,
+          });
           this.clearPartialUserTranscript(callId);
           this.setRecentFinalUserTranscript(callId, transcript);
           console.log(
@@ -743,11 +828,11 @@ export class RealtimeCallHandler {
         }
         this.manager.processEvent({
           id: `realtime-bot-${callSid}-${Date.now()}`,
-          type: "call.speaking",
+          type: "call.assistant-speech",
           callId,
           providerCallId: callSid,
           timestamp: Date.now(),
-          text,
+          transcript: text,
         });
       },
       onToolCall: (toolEvent, sessionLocal) => {
@@ -848,8 +933,11 @@ export class RealtimeCallHandler {
       },
     });
     const closeTelephony = (reason: TelephonyCloseReason) => {
-      emitCallEnd(reason);
-      session.close();
+      try {
+        session.close();
+      } finally {
+        emitCallEnd(reason);
+      }
     };
     this.activeBridgesByCallId.set(callId, session);
     this.activeBridgesByCallId.set(callSid, session);
@@ -858,18 +946,13 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        const interruptedTurnId = ensureTalkTurn();
-        const clearedBytes = audioPacer.clearAudio();
         console.log(
-          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        finishOutputAudio("barge-in");
-        const cancelled = talk.cancelTurn({
-          turnId: interruptedTurnId,
-          payload: { callId, providerCallId: callSid, reason: "barge-in" },
-        });
-        if (cancelled.ok) {
-          rememberTalkEvent(cancelled.event);
+        if (!providerHandlesInputAudioBargeIn) {
+          cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {
+            session.handleBargeIn({ audioPlaybackActive });
+          });
         }
       }
       emitTalkEvent({
@@ -880,15 +963,25 @@ export class RealtimeCallHandler {
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
+    let sessionClosed = false;
     session.close = () => {
-      this.activeBridgesByCallId.delete(callId);
-      this.activeBridgesByCallId.delete(callSid);
-      this.activeTelephonyClosersByCallId.delete(callId);
-      this.activeTelephonyClosersByCallId.delete(callSid);
-      this.clearUserTranscriptState(callId);
-      this.clearForcedConsultState(callId);
-      audioPacer.close();
-      closeSession();
+      if (sessionClosed) {
+        return;
+      }
+      sessionClosed = true;
+      // Providers may synchronously flush final transcript callbacks during close.
+      // Keep the call and transcript state alive until those callbacks finish.
+      try {
+        closeSession();
+      } finally {
+        this.activeBridgesByCallId.delete(callId);
+        this.activeBridgesByCallId.delete(callSid);
+        this.activeTelephonyClosersByCallId.delete(callId);
+        this.activeTelephonyClosersByCallId.delete(callSid);
+        this.clearUserTranscriptState(callId);
+        this.clearForcedConsultState(callId);
+        audioPacer.close();
+      }
     };
 
     session.connect().catch((error: unknown) => {
@@ -904,13 +997,18 @@ export class RealtimeCallHandler {
   private recordPartialUserTranscript(callId: string, text: string): string {
     const current = this.partialUserTranscriptsByCallId.get(callId);
     const next = limitPartialUserTranscript(appendTranscriptText(current, text));
+    const raw = limitPartialUserTranscript(
+      `${this.rawPartialUserTranscriptsByCallId.get(callId) ?? ""}${text}`,
+    );
     this.partialUserTranscriptsByCallId.set(callId, next);
+    this.rawPartialUserTranscriptsByCallId.set(callId, raw);
     this.partialUserTranscriptUpdatedAtByCallId.set(callId, Date.now());
     return next;
   }
 
   private clearPartialUserTranscript(callId: string): void {
     this.partialUserTranscriptsByCallId.delete(callId);
+    this.rawPartialUserTranscriptsByCallId.delete(callId);
     this.partialUserTranscriptUpdatedAtByCallId.delete(callId);
   }
 
@@ -965,6 +1063,7 @@ export class RealtimeCallHandler {
       const remaining = current.slice(text.length).trimStart();
       if (remaining) {
         this.partialUserTranscriptsByCallId.set(callId, remaining);
+        this.rawPartialUserTranscriptsByCallId.set(callId, remaining);
       } else {
         this.clearPartialUserTranscript(callId);
       }

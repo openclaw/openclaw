@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import lockfile from "proper-lockfile";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
@@ -987,11 +988,7 @@ export class SettingsManager {
   }
 
   getImageWidthCells(): number {
-    const width = this.settings.terminal?.imageWidthCells;
-    if (typeof width !== "number" || !Number.isFinite(width)) {
-      return 60;
-    }
-    return Math.max(1, Math.floor(width));
+    return resolveIntegerOption(this.settings.terminal?.imageWidthCells, 60, { min: 1 });
   }
 
   setImageWidthCells(width: number): void {

@@ -596,6 +596,9 @@ async function runVitestJsonReport(params) {
     env: {
       ...process.env,
       ...params.env,
+      // The JSON reporter can stay silent for the entire config. The profiler
+      // owns the wall-clock timeout and process-group cleanup for this child.
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
       NODE_OPTIONS: [
         (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
         ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
@@ -638,7 +641,7 @@ function readReportInput(entry) {
   };
 }
 
-export function readReportInputs(entries) {
+function readReportInputs(entries) {
   const invalid = [];
   const missing = [];
   const reports = [];
@@ -908,15 +911,35 @@ export function resolveRunPlanConcurrency(args, runPlanCount) {
   return Math.min(2, runPlanCount);
 }
 
+function hasExplicitIsolationArg(args) {
+  return args.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+}
+
+/**
+ * Gives full-suite duration reports one process lifetime per test file.
+ * This prevents unrelated retained module graphs and GC pauses from being
+ * attributed to whichever assertion happens to run next in a shared worker.
+ */
+export function resolveReportVitestArgs(args) {
+  if (!args.fullSuite || hasExplicitIsolationArg(args.vitestArgs)) {
+    return args.vitestArgs;
+  }
+  return [...args.vitestArgs, "--isolate=true"];
+}
+
 /**
  * Builds concrete report run specs from parsed args and config plans.
  */
 export function resolveReportRunSpecs(args, runPlans, params = {}) {
   const concurrency = params.concurrency ?? resolveRunPlanConcurrency(args, runPlans.length);
   const env = params.env ?? process.env;
+  const vitestArgs = resolveReportVitestArgs(args);
   const specs = runPlans.map((plan) => ({
     ...plan,
     env: resolveFullSuiteVitestEnv(args, env, plan.label),
+    vitestArgs,
   }));
   if (concurrency <= 1) {
     return specs;
@@ -933,11 +956,34 @@ function printRunLine(run) {
   );
 }
 
-async function runReportPlans(params) {
+function printSlowTestsForRun(entry, maxTestMs) {
+  if (maxTestMs === null || !fs.existsSync(entry.reportPath)) {
+    return;
+  }
+  const input = readReportInputs([entry]).reports[0];
+  if (!input) {
+    return;
+  }
+  const report = buildGroupedTestReport({
+    groupBy: "area",
+    maxTestMs,
+    reports: [input],
+  });
+  for (const test of report.slowTests) {
+    console.log(
+      `[test-group-report] slow-test config=${test.config} duration=${formatMs(test.durationMs)} file=${test.file} name=${test.fullName}`,
+    );
+  }
+}
+
+export async function runReportPlans(params) {
   const concurrency = resolveRunPlanConcurrency(params.args, params.runPlans.length);
   const runSpecs = resolveReportRunSpecs(params.args, params.runPlans, { concurrency });
+  const runVitest = params.runVitestJsonReport ?? runVitestJsonReport;
   const results = [];
   results.length = runSpecs.length;
+  const runs = [];
+  runs.length = runSpecs.length;
   let nextIndex = 0;
   let failed = false;
   let exitCode = 0;
@@ -948,7 +994,7 @@ async function runReportPlans(params) {
       nextIndex += 1;
       const plan = runSpecs[index];
       const slug = sanitizePathSegment(plan.label);
-      const run = await runVitestJsonReport({
+      const run = await runVitest({
         config: plan.config,
         forwardedArgs: plan.forwardedArgs,
         env: plan.env,
@@ -958,8 +1004,9 @@ async function runReportPlans(params) {
         rss: params.args.rss,
         timeoutMs: params.args.timeoutMs,
         killGraceMs: params.args.killGraceMs,
-        vitestArgs: params.args.vitestArgs,
+        vitestArgs: plan.vitestArgs,
       });
+      runs[index] = run;
       printRunLine(run);
       let includeEntry = true;
       if (run.status !== 0) {
@@ -968,20 +1015,30 @@ async function runReportPlans(params) {
           console.error(
             `[test-group-report] missing JSON report for failed config; see ${run.logPath}`,
           );
-          exitCode = 1;
           includeEntry = false;
         } else {
-          console.error(
-            `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
-          );
+          try {
+            readReportInput({ config: plan.label, reportPath: run.reportPath, run });
+            console.error(
+              `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
+            );
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            console.error(
+              `[test-group-report] config failed; skipping unusable JSON report from ${run.reportPath} (${reason})`,
+            );
+            includeEntry = false;
+          }
         }
         if (!params.args.allowFailures) {
-          exitCode = run.status;
+          exitCode = run.status || 1;
         }
       }
-      results[index] = includeEntry
-        ? { config: plan.label, reportPath: run.reportPath, run }
-        : null;
+      const entry = includeEntry ? { config: plan.label, reportPath: run.reportPath, run } : null;
+      results[index] = entry;
+      if (entry) {
+        printSlowTestsForRun(entry, params.args.maxTestMs);
+      }
     }
   }
 
@@ -995,6 +1052,7 @@ async function runReportPlans(params) {
     failed,
     exitCode,
     runEntries: results.filter(Boolean),
+    runs: runs.filter(Boolean),
   };
 }
 
@@ -1030,6 +1088,7 @@ async function main() {
 
   const { reportDir, logDir } = resolveReportArtifactDirs(output);
   const runEntries = [];
+  const runs = [];
   const runPlans = resolveRunPlans(args);
   let failed = false;
   let exitCode = 0;
@@ -1046,6 +1105,7 @@ async function main() {
     failed = result.failed;
     exitCode = result.exitCode;
     runEntries.push(...result.runEntries);
+    runs.push(...result.runs);
   }
 
   if (exitCode !== 0) {
@@ -1083,7 +1143,7 @@ async function main() {
     ...report,
     command: "test-group-report",
     failed,
-    runs: reportInputs.map((entry) => entry.run).filter(Boolean),
+    runs: runs.length > 0 ? runs : reportInputs.map((entry) => entry.run).filter(Boolean),
     system: {
       node: process.version,
       platform: process.platform,

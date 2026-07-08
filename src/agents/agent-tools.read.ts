@@ -1,12 +1,12 @@
-/**
- * Read/write/edit tool wrappers for host and sandbox workspaces.
- * Adds workspace-root guards, adaptive read paging, image validation, memory
- * append-only writes, and parameter cleanup around the session file tools.
- */
+// Read/write/edit tool wrappers for host and sandbox workspaces.
+// Adds workspace-root guards, adaptive read paging, image validation, memory
+// append-only writes, and parameter cleanup around the session file tools.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -23,6 +23,7 @@ import {
   resolveMediaReferenceSandboxPath,
 } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { clampNumber } from "../utils.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -75,10 +76,6 @@ const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
   if (
@@ -91,7 +88,7 @@ function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number 
   const fromContext = Math.floor(
     contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * ADAPTIVE_READ_CONTEXT_SHARE,
   );
-  return clamp(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
+  return clampNumber(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
 }
 
 function malformedXmlArgValuePathError(key: string): Error {
@@ -99,13 +96,12 @@ function malformedXmlArgValuePathError(key: string): Error {
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)}KB`;
-  }
-  return `${bytes}B`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 0 : 1),
+  });
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {

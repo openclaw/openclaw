@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -22,11 +22,14 @@ function setNoAbort() {
 }
 
 describe("dispatchReplyFromConfig stale visible admission recovery", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ createReplyOperation, __testing: replyRunTesting } =
       await import("./reply-run-registry.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+  });
+
+  beforeEach(() => {
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();

@@ -6,8 +6,10 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
-import type { SlackFile } from "../types.js";
+import type { SlackAttachment, SlackFile } from "../types.js";
+import { resolveSlackBlocksText } from "./block-text.js";
 import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
@@ -45,6 +47,52 @@ function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
 }
 
+function pushUniqueText(parts: string[], value: string | undefined): void {
+  const text = normalizeOptionalString(value);
+  if (text && !parts.includes(text)) {
+    parts.push(text);
+  }
+}
+
+function resolveSlackBlocksFallbackText(blocks: unknown[] | undefined): string | undefined {
+  return resolveSlackBlocksText(blocks)?.text;
+}
+
+function resolveSlackAttachmentFallbackText(
+  attachments: SlackAttachment[] | undefined,
+): string | undefined {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  for (const attachment of attachments) {
+    pushUniqueText(parts, attachment.pretext);
+    pushUniqueText(parts, attachment.title);
+    pushUniqueText(parts, attachment.text);
+    pushUniqueText(parts, attachment.fallback);
+    for (const field of attachment.fields ?? []) {
+      pushUniqueText(parts, field.title);
+      pushUniqueText(parts, field.value);
+    }
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.blocks));
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
+  }
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function resolveSlackMessageText(message: {
+  text?: string;
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
+}): string | undefined {
+  return (
+    normalizeOptionalString(message.text) ??
+    resolveSlackAttachmentFallbackText(message.attachments) ??
+    resolveSlackBlocksFallbackText(message.blocks)
+  );
+}
+
 export async function resolveSlackThreadStarter(params: {
   channelId: string;
   threadTs: string;
@@ -73,10 +121,12 @@ export async function resolveSlackThreadStarter(params: {
         bot_id?: string;
         ts?: string;
         files?: SlackFile[];
+        blocks?: unknown[];
+        attachments?: SlackAttachment[];
       }>;
     };
     const message = response?.messages?.[0];
-    const text = (message?.text ?? "").trim();
+    const text = message ? resolveSlackMessageText(message) : undefined;
     const files = message?.files?.length ? message.files : undefined;
     if (!message || (!text && !files)) {
       return null;
@@ -126,6 +176,8 @@ type SlackRepliesPageMessage = {
   bot_id?: string;
   ts?: string;
   files?: SlackFile[];
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
 };
 
 type SlackRepliesPage = {
@@ -133,12 +185,14 @@ type SlackRepliesPage = {
   response_metadata?: { next_cursor?: string };
 };
 
+const SLACK_THREAD_HISTORY_MAX_PAGES = 3;
+
 /**
  * Fetches the most recent messages in a Slack thread (excluding the current message).
  * Used to populate thread context when a new thread session starts.
  *
- * Uses cursor pagination and keeps only the latest N retained messages so long threads
- * still produce up-to-date context without unbounded memory growth.
+ * Uses cursor pagination and keeps only the latest N retained messages when the full
+ * thread fits in the bounded fetch window.
  */
 export async function resolveSlackThreadHistory(params: {
   channelId: string;
@@ -156,9 +210,11 @@ export async function resolveSlackThreadHistory(params: {
   const fetchLimit = 200;
   const retained: SlackRepliesPageMessage[] = [];
   let cursor: string | undefined;
+  let pagesFetched = 0;
 
   try {
     do {
+      pagesFetched += 1;
       const response = (await params.client.conversations.replies({
         channel: params.channelId,
         ts: params.threadTs,
@@ -168,8 +224,9 @@ export async function resolveSlackThreadHistory(params: {
       })) as SlackRepliesPage;
 
       for (const msg of response.messages ?? []) {
-        // Keep messages with text OR file attachments.
-        if (!msg.text?.trim() && !msg.files?.length) {
+        const text = resolveSlackMessageText(msg);
+        // Keep messages with text, Slack attachment/block fallback text, or file attachments.
+        if (!text && !msg.files?.length) {
           continue;
         }
         if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
@@ -183,11 +240,20 @@ export async function resolveSlackThreadHistory(params: {
 
       const next = response.response_metadata?.next_cursor;
       cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
-    } while (cursor);
+      // Slack replies paginate oldest to newest with no reverse cursor; cap cold
+      // thread seeding so pathological long threads cannot block dispatch.
+    } while (cursor && pagesFetched < SLACK_THREAD_HISTORY_MAX_PAGES);
+
+    if (cursor) {
+      logVerbose(
+        `slack thread history capped channel=${params.channelId} ts=${params.threadTs} pages=${SLACK_THREAD_HISTORY_MAX_PAGES}`,
+      );
+      return [];
+    }
 
     return retained.map((msg) => ({
       // For file-only messages, create a placeholder showing attached filenames.
-      text: msg.text?.trim() ? msg.text : formatSlackFilePlaceholder(msg.files),
+      text: resolveSlackMessageText(msg) ?? formatSlackFilePlaceholder(msg.files),
       userId: msg.user,
       botId: msg.bot_id,
       ts: msg.ts,

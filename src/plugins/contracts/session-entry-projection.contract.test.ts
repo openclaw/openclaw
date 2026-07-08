@@ -276,7 +276,7 @@ describe("plugin session extension SessionEntry projection", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     expect(
       registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
     ).toStrictEqual([
@@ -316,7 +316,7 @@ describe("plugin session extension SessionEntry projection", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     const diagnostics = registry.registry.diagnostics.map(({ pluginId, message }) => ({
       pluginId,
       message,
@@ -369,8 +369,8 @@ describe("plugin session extension SessionEntry projection", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(1);
-    expect(registry.registry.sessionExtensions?.[0]?.extension.sessionEntrySlotKey).toBe(
+    expect(registry.registry.sessionExtensions).toHaveLength(1);
+    expect(registry.registry.sessionExtensions[0]?.extension.sessionEntrySlotKey).toBe(
       "approvalSnapshot",
     );
     const diagnostics = registry.registry.diagnostics.map(({ pluginId, message }) => ({

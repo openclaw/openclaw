@@ -41,7 +41,7 @@ import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
-export type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
+type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   fingerprint: string;
   workspaceDir?: string;
 };
@@ -340,22 +340,7 @@ export async function buildModelsJsonSourceFingerprint(
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  const prior = MODELS_JSON_STATE.writeLocks.get(targetPath) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const pending = prior.then(() => gate);
-  MODELS_JSON_STATE.writeLocks.set(targetPath, pending);
-  try {
-    await prior;
-    return await run();
-  } finally {
-    release();
-    if (MODELS_JSON_STATE.writeLocks.get(targetPath) === pending) {
-      MODELS_JSON_STATE.writeLocks.delete(targetPath);
-    }
-  }
+  return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
 }
 
 /** Ensures models.json and plugin catalog sidecars are current for an agent. */

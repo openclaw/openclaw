@@ -167,6 +167,8 @@ export type PolicyGatewayExposureEvidence = {
     | "controlUi"
     | "httpEndpoint"
     | "httpUrlFetch"
+    | "nodeCommand"
+    | "nodeDenyCommand"
     | "remote"
     | "tailscale";
   readonly source: string;
@@ -175,6 +177,7 @@ export type PolicyGatewayExposureEvidence = {
   readonly explicit?: boolean;
   readonly endpoint?: string;
   readonly hasAllowlist?: boolean;
+  readonly command?: string;
 };
 
 export type PolicyAgentWorkspaceEvidence = {
@@ -713,7 +716,7 @@ export function scanPolicyMcpServers(
     });
 }
 
-export function scanPolicyModelProviders(
+function scanPolicyModelProviders(
   cfg: Record<string, unknown>,
 ): readonly PolicyModelProviderEvidence[] {
   return Object.keys(configuredModelProviders(cfg))
@@ -724,9 +727,7 @@ export function scanPolicyModelProviders(
     }));
 }
 
-export function scanPolicyModelRefs(
-  cfg: Record<string, unknown>,
-): readonly PolicyModelRefEvidence[] {
+function scanPolicyModelRefs(cfg: Record<string, unknown>): readonly PolicyModelRefEvidence[] {
   const refs: PolicyModelRefEvidence[] = [];
   if (isRecord(cfg.agents)) {
     collectModelRefsFromRecord(refs, cfg.agents, "oc://openclaw.config/agents");
@@ -737,7 +738,7 @@ export function scanPolicyModelRefs(
   );
 }
 
-export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
+function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
   return [
     networkBooleanEvidence(
       cfg,
@@ -832,7 +833,7 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicyGatewayExposure(
+function scanPolicyGatewayExposure(
   cfg: Record<string, unknown>,
 ): readonly PolicyGatewayExposureEvidence[] {
   const gateway = isRecord(cfg.gateway) ? cfg.gateway : {};
@@ -951,10 +952,12 @@ export function scanPolicyGatewayExposure(
   const endpoints = isRecord(http.endpoints) ? http.endpoints : {};
   pushGatewayHttpEndpointEvidence(entries, endpoints, "chatCompletions");
   pushGatewayHttpEndpointEvidence(entries, endpoints, "responses");
+  const nodes = isRecord(gateway.nodes) ? gateway.nodes : {};
+  pushGatewayNodeCommandEvidence(entries, nodes);
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
-export function scanPolicyAgentWorkspace(
+function scanPolicyAgentWorkspace(
   cfg: Record<string, unknown>,
 ): readonly PolicyAgentWorkspaceEvidence[] {
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
@@ -1001,7 +1004,7 @@ export function scanPolicyAgentWorkspace(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicySandboxPosture(
+function scanPolicySandboxPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicySandboxPostureEvidence[] {
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
@@ -1040,9 +1043,7 @@ export function scanPolicySandboxPosture(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicyToolPosture(
-  cfg: Record<string, unknown>,
-): readonly PolicyToolPostureEvidence[] {
+function scanPolicyToolPosture(cfg: Record<string, unknown>): readonly PolicyToolPostureEvidence[] {
   const globalTools = isRecord(cfg.tools) ? cfg.tools : {};
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
   const defaults = isRecord(agents.defaults) ? agents.defaults : {};
@@ -1082,13 +1083,13 @@ export function scanPolicyToolPosture(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
+function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
   return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
 }
 
-export function scanPolicyAuthProfiles(
+function scanPolicyAuthProfiles(
   cfg: Record<string, unknown>,
 ): readonly PolicyAuthProfileEvidence[] {
   const auth = isRecord(cfg.auth) ? cfg.auth : {};
@@ -1119,7 +1120,7 @@ export function scanPolicyAuthProfiles(
     });
 }
 
-export function scanPolicyDataHandling(
+function scanPolicyDataHandling(
   cfg: Record<string, unknown>,
 ): readonly PolicyDataHandlingEvidence[] {
   const entries: PolicyDataHandlingEvidence[] = [];
@@ -2849,6 +2850,56 @@ function pushGatewayHttpUrlFetchEvidence(
     endpoint,
     explicit: allowUrl === true,
     hasAllowlist: hasEffectiveAllowlist,
+  });
+}
+
+function pushGatewayNodeCommandEvidence(
+  entries: PolicyGatewayExposureEvidence[],
+  nodes: Record<string, unknown>,
+): void {
+  const deniedCommands = new Set(
+    Array.isArray(nodes.denyCommands)
+      ? nodes.denyCommands
+          .filter((command): command is string => typeof command === "string")
+          .map((command) => command.trim())
+      : [],
+  );
+  if (Array.isArray(nodes.denyCommands)) {
+    nodes.denyCommands.forEach((command, index) => {
+      if (typeof command !== "string") {
+        return;
+      }
+      const normalized = command.trim();
+      if (normalized === "") {
+        return;
+      }
+      entries.push({
+        id: `gateway-node-deny-command-${normalized}`,
+        kind: "nodeDenyCommand",
+        source: `oc://openclaw.config/gateway/nodes/denyCommands/#${index}`,
+        value: normalized,
+        command: normalized,
+      });
+    });
+  }
+  if (!Array.isArray(nodes.allowCommands)) {
+    return;
+  }
+  nodes.allowCommands.forEach((command, index) => {
+    if (typeof command !== "string") {
+      return;
+    }
+    const normalized = command.trim();
+    if (normalized === "" || deniedCommands.has(normalized)) {
+      return;
+    }
+    entries.push({
+      id: `gateway-node-command-${normalized}`,
+      kind: "nodeCommand",
+      source: `oc://openclaw.config/gateway/nodes/allowCommands/#${index}`,
+      value: normalized,
+      command: normalized,
+    });
   });
 }
 

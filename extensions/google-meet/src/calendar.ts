@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
@@ -197,7 +198,10 @@ async function fetchGoogleCalendarEvents(params: {
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       });
     }
-    const payload = (await response.json()) as { items?: unknown };
+    const payload = await readProviderJsonResponse<{ items?: unknown }>(
+      response,
+      "Google Calendar events.list",
+    );
     if (payload.items !== undefined && !Array.isArray(payload.items)) {
       throw new Error("Google Calendar events.list response had non-array items");
     }

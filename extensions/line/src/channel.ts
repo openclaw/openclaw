@@ -1,5 +1,8 @@
 // Line plugin module implements channel behavior.
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
@@ -10,6 +13,7 @@ import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
@@ -44,12 +48,31 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     },
     messaging: {
       targetPrefixes: ["line"],
-      normalizeTarget: (target) => {
-        const trimmed = target.trim();
-        if (!trimmed) {
-          return undefined;
+      normalizeTarget: normalizeLineMessagingTarget,
+      inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+        const peerId = normalizeLineMessagingTarget(target);
+        const chatType = inferLineTargetChatType(target);
+        if (!peerId || !chatType) {
+          return null;
         }
-        return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
+        const isRoom = peerId.startsWith("R");
+        return buildChannelOutboundSessionRoute({
+          cfg,
+          agentId,
+          channel: "line",
+          accountId,
+          recipientSessionExact: true,
+          peer: { kind: chatType, id: peerId },
+          chatType,
+          from:
+            chatType === "direct"
+              ? `line:${peerId}`
+              : isRoom
+                ? `line:room:${peerId}`
+                : `line:group:${peerId}`,
+          to: peerId,
+        });
       },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {

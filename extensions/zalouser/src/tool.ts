@@ -2,6 +2,7 @@
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
@@ -13,11 +14,6 @@ import {
 } from "./zalo-js.js";
 
 const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
-
-type AgentToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  details: unknown;
-};
 
 const ZalouserToolSchema = Type.Object(
   {
@@ -43,13 +39,6 @@ type ToolParams = {
 };
 
 type ZalouserToolContext = Pick<OpenClawPluginToolContext, "deliveryContext">;
-
-function json(payload: unknown): AgentToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
 
 function resolveAmbientZalouserTarget(context?: ZalouserToolContext): {
   threadId?: string;
@@ -96,7 +85,7 @@ export async function executeZalouserTool(
   _signal?: AbortSignal,
   _onUpdate?: unknown,
   context?: ZalouserToolContext,
-): Promise<AgentToolResult> {
+): Promise<AgentToolResult<unknown>> {
   try {
     switch (params.action) {
       case "send": {

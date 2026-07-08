@@ -1,17 +1,21 @@
 // Telegram plugin module implements bot message context.body behavior.
 import {
   buildMentionRegexes,
+  classifyChannelInboundEvent,
   formatLocationText,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveUnmentionedGroupInboundPolicy,
   type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
+  type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramDirectConfig,
@@ -24,6 +28,7 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -51,25 +56,17 @@ import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-
-type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
-type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
 
-let stickerVisionRuntimePromise: Promise<StickerVisionRuntime> | undefined;
-let mediaUnderstandingRuntimePromise: Promise<MediaUnderstandingRuntime> | undefined;
+const loadStickerVisionRuntime = createLazyRuntimeModule(
+  () => import("./sticker-vision.runtime.js"),
+);
 
-function loadStickerVisionRuntime(): Promise<StickerVisionRuntime> {
-  stickerVisionRuntimePromise ??= import("./sticker-vision.runtime.js");
-  return stickerVisionRuntimePromise;
-}
-
-function loadMediaUnderstandingRuntime(): Promise<MediaUnderstandingRuntime> {
-  mediaUnderstandingRuntimePromise ??= import("./media-understanding.runtime.js");
-  return mediaUnderstandingRuntimePromise;
-}
+const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
+  () => import("./media-understanding.runtime.js"),
+);
 
 export type TelegramInboundBodyResult = {
   bodyText: string;
@@ -78,6 +75,7 @@ export type TelegramInboundBodyResult = {
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
   mentionFacts: TelegramMentionFacts;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   hasControlCommand: boolean;
@@ -422,6 +420,20 @@ export async function resolveTelegramInboundBody(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommandInMessage ? "text" : undefined);
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: isGroup ? "group" : "direct" },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg,
+      agentId: routeAgentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest: isAbortRequestText(rawBody, { botUsername }),
+    commandSource,
+  });
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordTelegramGroupHistoryEntry({
@@ -486,6 +498,7 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
+    inboundEventKind,
     mentionFacts: resolveTelegramMentionFacts({
       canDetectMention,
       effectiveWasMentioned,

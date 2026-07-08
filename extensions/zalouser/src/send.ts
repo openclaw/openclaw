@@ -12,7 +12,10 @@ import {
 } from "./zalo-js.js";
 import { TextStyle } from "./zca-constants.js";
 
-type ZalouserSendOptions = ZaloSendOptions;
+type ZalouserSendOptions = ZaloSendOptions & {
+  /** Persist each concrete platform send before the next internal chunk starts. */
+  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void;
+};
 type ZalouserSendResult = ZaloSendResult;
 
 const ZALO_TEXT_LIMIT = 2000;
@@ -30,25 +33,26 @@ export async function sendMessageZalouser(
   text: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
+  const { onDeliveryResult, ...transportOptions } = options;
   const prepared =
-    options.textMode === "markdown"
+    transportOptions.textMode === "markdown"
       ? parseZalouserTextStyles(text)
-      : { text, styles: options.textStyles };
-  const textChunkLimit = options.textChunkLimit ?? ZALO_TEXT_LIMIT;
+      : { text, styles: transportOptions.textStyles };
+  const textChunkLimit = transportOptions.textChunkLimit ?? ZALO_TEXT_LIMIT;
   const chunks = splitStyledText(
     prepared.text,
     (prepared.styles?.length ?? 0) > 0 ? prepared.styles : undefined,
     textChunkLimit,
-    options.textChunkMode,
+    transportOptions.textChunkMode,
   );
 
   let lastResult: ZalouserSendResult | null = null;
   for (const [index, chunk] of chunks.entries()) {
     const chunkOptions =
       index === 0
-        ? { ...options, textStyles: chunk.styles }
+        ? { ...transportOptions, textStyles: chunk.styles }
         : {
-            ...options,
+            ...transportOptions,
             caption: undefined,
             mediaLocalRoots: undefined,
             mediaUrl: undefined,
@@ -56,8 +60,9 @@ export async function sendMessageZalouser(
           };
     const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions);
     if (!result.ok) {
-      return result;
+      throw new Error(result.error || "Failed to send Zalouser message");
     }
+    await onDeliveryResult?.(result);
     lastResult = result;
   }
 

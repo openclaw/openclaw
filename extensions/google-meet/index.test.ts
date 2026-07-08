@@ -2294,7 +2294,7 @@ describe("google-meet plugin", () => {
         method: "POST",
         path: "/tabs/open",
         timeoutMs: 30000,
-        body: { url: "https://meet.google.com/abc-defg-hij" },
+        body: { url: "https://meet.google.com/abc-defg-hij?hl=en" },
       });
       expect(openCall[3]).toEqual({ progress: false });
       expect(
@@ -3105,7 +3105,7 @@ describe("google-meet plugin", () => {
       method: "POST",
       path: "/tabs/open",
       timeoutMs: 30000,
-      body: { url: "https://meet.google.com/abc-defg-hij" },
+      body: { url: "https://meet.google.com/abc-defg-hij?hl=en" },
     });
     const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
       const call = requireRecord(rawCall, "node invoke");
@@ -4105,7 +4105,7 @@ describe("google-meet plugin", () => {
       const request = requireRecord(params, "local browser open request");
       expect(request.method).toBe("POST");
       expect(request.path).toBe("/tabs/open");
-      expect(request.body).toStrictEqual({ url: "https://meet.google.com/abc-defg-hij" });
+      expect(request.body).toStrictEqual({ url: "https://meet.google.com/abc-defg-hij?hl=en" });
       expect(extra).toStrictEqual({ progress: false });
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });

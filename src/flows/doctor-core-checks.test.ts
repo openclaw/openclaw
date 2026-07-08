@@ -170,6 +170,47 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).toBe(false);
   });
 
+  it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+        tools: { profile: "messaging" },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-workshop-tool-policy",
+        severity: "warning",
+        message: 'tools.profile: "messaging" does not include "skill_workshop".',
+        path: "tools.profile",
+        fixHint: 'Add tools.alsoAllow: ["skill_workshop"].',
+      }),
+    ]);
+  });
+
+  it("does not warn when autonomous Skill Workshop capture is disabled", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: { tools: { profile: "messaging" } },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),

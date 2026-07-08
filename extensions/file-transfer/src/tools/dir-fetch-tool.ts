@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { appendFileTransferAudit } from "../shared/audit.js";
+import { consumeChildOutput } from "../shared/child-output.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import { humanSize, readBoolean, readClampedInt } from "../shared/params.js";
 import {
@@ -114,9 +115,22 @@ async function listTarOutputLines<T>(input: {
       stopChild();
       finish({ ok: false, reason: `${input.label} timed out` });
     }, 30_000);
-    child.stdout.on("data", consumeChunk);
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = appendBoundedTextTail(stderr, chunk, TAR_STDERR_TAIL_CHARS);
+    consumeChildOutput(child.stdout, {
+      onData: consumeChunk,
+      onError: (error) => {
+        stopChild();
+        finish({ ok: false, reason: `${input.label} stdout error: ${String(error)}` });
+      },
+    });
+    consumeChildOutput(child.stderr, {
+      onData: (chunk) => {
+        stderr = appendBoundedTextTail(stderr, chunk, TAR_STDERR_TAIL_CHARS);
+      },
+      onError: (error) => {
+        // stderr is diagnostic only; preserve that fact for a later nonzero
+        // close without invalidating complete stdout validation data.
+        stderr = `[stderr unavailable: ${String(error)}]`;
+      },
     });
     child.on("close", (code) => {
       if (settled) {
@@ -291,9 +305,25 @@ export async function validateTarUncompressedBudget(
       finish({ ok: false, reason: "tar uncompressed budget validation timed out" });
     }, TAR_UNPACK_TIMEOUT_MS);
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.byteLength;
-      if (totalBytes > maxBytes) {
+    consumeChildOutput(child.stdout, {
+      onData: (chunk) => {
+        if (settled) {
+          return;
+        }
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* gone */
+          }
+          finish({
+            ok: false,
+            reason: `archive expands past uncompressed budget ${maxBytes} bytes`,
+          });
+        }
+      },
+      onError: (error) => {
         try {
           child.kill("SIGKILL");
         } catch {
@@ -301,15 +331,17 @@ export async function validateTarUncompressedBudget(
         }
         finish({
           ok: false,
-          reason: `archive expands past uncompressed budget ${maxBytes} bytes`,
+          reason: `tar uncompressed budget validation stdout error: ${String(error)}`,
         });
-      }
+      },
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (stderr.length > 4096) {
-        stderr = stderr.slice(-4096);
-      }
+    consumeChildOutput(child.stderr, {
+      onData: (chunk) => {
+        stderr = appendBoundedTextTail(stderr, chunk, TAR_STDERR_TAIL_CHARS);
+      },
+      onError: (error) => {
+        stderr = `[stderr unavailable: ${String(error)}]`;
+      },
     });
     child.on("close", (code) => {
       if (settled) {
@@ -411,8 +443,15 @@ async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
       }
       fail(new Error(`tar unpack timed out after ${TAR_UNPACK_TIMEOUT_MS}ms`));
     }, TAR_UNPACK_TIMEOUT_MS);
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrOut = appendBoundedTextTail(stderrOut, chunk, TAR_STDERR_TAIL_CHARS);
+    consumeChildOutput(child.stderr, {
+      onData: (chunk) => {
+        stderrOut = appendBoundedTextTail(stderrOut, chunk, TAR_STDERR_TAIL_CHARS);
+      },
+      onError: (error) => {
+        // Extraction success is authoritative; a diagnostic read failure only
+        // replaces stderr context if tar later exits nonzero.
+        stderrOut = `[stderr unavailable: ${String(error)}]`;
+      },
     });
     child.on("close", (code) => {
       if (code !== 0) {
@@ -656,5 +695,6 @@ export function createDirFetchTool(): AnyAgentTool {
 
 export const testing = {
   preValidateTarball,
+  unpackTar,
   validateTarUncompressedBudget,
 };

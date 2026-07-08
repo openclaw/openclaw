@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type {
-  PluginDoctorStateMigration,
-  PluginStateKeyedStore,
+import {
+  archiveLegacyStateSource,
+  type PluginDoctorStateMigration,
+  type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   buildVoiceCallLegacyJsonlEventKey,
@@ -126,14 +127,6 @@ function resolveVoiceCallStorePath(params: {
 }
 
 /** Return true when a path exists and is a file. */
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
 
 /** Build the plugin state key for one migrated event chunk. */
 function buildChunkKey(eventKey: string, index: number): string {
@@ -214,25 +207,6 @@ async function readLegacyCallRecords(filePath: string): Promise<{
 }
 
 /** Archive the legacy JSONL source after a complete migration. */
-async function archiveLegacySource(params: {
-  filePath: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated Voice Call call-log source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived Voice Call call-log legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving Voice Call call-log legacy source: ${String(err)}`);
-  }
-}
 
 /** Select newest missing records that fit remaining plugin state capacity. */
 async function selectEntriesForImport(params: {
@@ -356,7 +330,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         warnings.push("Left Voice Call call-log source in place because migration was incomplete");
         return { changes, warnings };
       }
-      await archiveLegacySource({ filePath, changes, warnings });
+      await archiveLegacyStateSource({ filePath, label: "Voice Call call-log", changes, warnings });
       return { changes, warnings };
     },
   },

@@ -23,7 +23,7 @@ import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../skills/types.js";
+import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -470,6 +470,8 @@ export function createOpenClawCodingTools(options?: {
   currentMessageId?: string | number;
   /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
+  /** Dynamic audio state for runs that can accept steered input after tool creation. */
+  hasCurrentInboundAudio?: () => boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -519,7 +521,9 @@ export function createOpenClawCodingTools(options?: {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-  /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
+  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
+  crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
@@ -535,6 +539,8 @@ export function createOpenClawCodingTools(options?: {
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Original identities for sandbox-materialized skill instruction paths. */
+  skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }): AnyAgentTool[] {
@@ -637,7 +643,7 @@ export function createOpenClawCodingTools(options?: {
     return normalized === "*" || normalized === "message";
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-    toolNames: options?.runtimeToolAllowlist,
+    toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
@@ -904,6 +910,7 @@ export function createOpenClawCodingTools(options?: {
             config: options?.config,
             fsPolicy,
             requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
@@ -972,6 +979,7 @@ export function createOpenClawCodingTools(options?: {
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
       ? createOpenClawTools({
+          ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           agentSessionKey: options?.sessionKey,
@@ -1004,6 +1012,7 @@ export function createOpenClawCodingTools(options?: {
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,
+          hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,
@@ -1151,12 +1160,14 @@ export function createOpenClawCodingTools(options?: {
     cwd: codingRoot,
     workspaceDir: workspaceRoot,
     ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
+    ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
     ...(sandboxRoot && allowWorkspaceWrites
       ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
       : {}),
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
+    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),

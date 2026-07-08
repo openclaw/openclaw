@@ -5,11 +5,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { cronStoreKey } from "./store/key.js";
@@ -77,6 +79,50 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
+}
+
+function emptyLoadedCronStore(): LoadedCronStore {
+  return {
+    store: { version: 1, jobs: [] },
+    configJobs: [],
+    configJobIndexes: [],
+    configJobRuntimeEntries: [],
+    invalidConfigRows: [],
+  };
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName) !== undefined
+  );
+}
+
+/** Loads cron jobs from an existing SQLite store without creating or migrating state. */
+export async function loadCronJobsStoreWithConfigJobsReadOnly(
+  storePath: string,
+): Promise<LoadedCronStore> {
+  const statePath = resolveOpenClawStateSqlitePath(process.env);
+  if (!fs.existsSync(statePath)) {
+    return emptyLoadedCronStore();
+  }
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(statePath, { readOnly: true });
+  try {
+    if (!tableExists(db, "cron_jobs")) {
+      return emptyLoadedCronStore();
+    }
+    const rows = loadCronRows(db, storeKey);
+    if (rows.length > 0) {
+      return loadedCronStoreFromRows(rows);
+    }
+    return emptyLoadedCronStore();
+  } finally {
+    db.close();
+  }
 }
 
 /** Loads only the persisted cron job store payload. */

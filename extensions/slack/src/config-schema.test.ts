@@ -168,6 +168,25 @@ describe("slack config schema", () => {
     );
   });
 
+  it("accepts per-channel replyToMode", () => {
+    expectSlackConfigValid({
+      channels: {
+        C123: { requireMention: false, replyToMode: "off" },
+      },
+    });
+  });
+
+  it("rejects invalid per-channel replyToMode", () => {
+    expectSlackConfigIssue(
+      {
+        channels: {
+          C123: { replyToMode: "sometimes" },
+        },
+      },
+      "channels.C123.replyToMode",
+    );
+  });
+
   it("accepts account-level user token config", () => {
     expectSlackConfigValid({
       accounts: {

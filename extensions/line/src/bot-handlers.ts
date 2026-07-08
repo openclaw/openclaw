@@ -190,6 +190,7 @@ async function sendLinePairingReply(params: {
   })();
   await createChannelPairingChallengeIssuer({
     channel: "line",
+    accountId: context.account.accountId,
     upsertPairingRequest: async ({ id, meta }) =>
       await upsertChannelPairingRequest({
         channel: "line",
@@ -467,6 +468,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const allMedia: MediaRef[] = [];
+  let mediaUnavailable = false;
 
   if (isDownloadableLineMessageType(message.type)) {
     try {
@@ -480,6 +482,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         contentType: media.contentType,
       });
     } catch (err) {
+      mediaUnavailable = true;
       const errMsg = String(err);
       if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
@@ -492,6 +495,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const messageContext = await buildLineMessageContext({
     event,
     allMedia,
+    mediaUnavailable,
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,

@@ -73,6 +73,21 @@ function normalizeMainSystemEventCreateJob(params: {
 }
 
 describe("normalizeCronJobCreate", () => {
+  it("normalizes trigger scripts and preserves patch clears", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "watcher",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "changed" },
+      trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.trigger).toEqual({ script: "json({ fire: true })", once: true });
+    expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+  });
+
   it("trims agentId and drops null", () => {
     const normalized = normalizeCronJobCreate({
       name: "agent-set",

@@ -22,9 +22,10 @@ describe("printModelTable", () => {
 
     printModelTable(rows, runtime as never);
 
+    // Decimal windows render in decimal K: 272000 -> "272k", 400000 -> "400k".
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
-      ["openai/gpt-5.5                             text+image 266k/391k   no    yes   "],
+      ["openai/gpt-5.5                             text+image 272k/400k   no    yes   "],
     ]);
   });
 });

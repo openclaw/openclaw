@@ -11,6 +11,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -107,9 +108,10 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest = stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-      ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-      : fileName;
+    const relativeDest =
+      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
+        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
+        : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
@@ -382,17 +384,35 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
     );
 
     let stderr = "";
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       stderr = appendScpStderrTail(stderr, chunk);
     });
+    child.stderr?.on("error", (error) => {
+      // stderr is diagnostic; child close remains transfer authority so the
+      // caller cannot remove the staging directory while scp is still alive.
+      stderr = appendScpStderrTail(stderr, formatErrorMessage(error));
+    });
 
-    child.once("error", reject);
-    child.once("exit", (code) => {
+    child.once("error", finish);
+    child.once("close", (code) => {
       if (code === 0) {
-        resolve();
+        finish();
       } else {
-        reject(new Error(`scp failed (${code}): ${stderr.trim()}`));
+        finish(new Error(`scp failed (${code}): ${stderr.trim()}`));
       }
     });
   });
@@ -409,3 +429,5 @@ export function appendScpStderrTail(
   }
   return combined.slice(-maxChars);
 }
+
+export const testing = { scpFile } as const;
