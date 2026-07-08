@@ -97,7 +97,7 @@ function hasCodexTrajectoryDeliveryEvidence(result: EmbeddedRunAttemptResult): b
     result.yieldDetected === true ||
     (result.acceptedSessionSpawns?.length ?? 0) > 0 ||
     (result.successfulCronAdds ?? 0) > 0 ||
-    result.toolMetas?.some((entry) => entry.asyncStarted === true) === true
+    (result.toolMetas?.some((entry) => entry.asyncStarted === true) ?? false)
   );
 }
 
