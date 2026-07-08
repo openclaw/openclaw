@@ -1,6 +1,7 @@
-// In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+// In-process gateway run loop, restart signaling, drain, and update respawn handling.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -566,7 +567,7 @@ export async function runGatewayLoop(params: {
                       `status=${task.status}`,
                       `runtime=${task.runtime}`,
                       task.label ? `label=${task.label}` : null,
-                      task.title ? `title=${task.title.slice(0, 80)}` : null,
+                      task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
                     ]
                       .filter((value): value is string => Boolean(value))
                       .join(" "),

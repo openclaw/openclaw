@@ -1,5 +1,6 @@
 // Gateway hot-reload handlers.
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -267,7 +268,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       `status=${task.status}`,
       `runtime=${task.runtime}`,
       task.label ? `label=${task.label}` : null,
-      task.title ? `title=${task.title.slice(0, 80)}` : null,
+      task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
     ].filter((value): value is string => Boolean(value));
     return details.join(" ");
   };

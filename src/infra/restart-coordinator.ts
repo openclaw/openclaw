@@ -1,4 +1,5 @@
 // Coordinates restart requests around active embedded agent runs.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
@@ -70,7 +71,7 @@ function formatTaskBlocker(task: ActiveTaskRestartBlocker): string {
     `status=${task.status}`,
     `runtime=${task.runtime}`,
     task.label ? `label=${task.label}` : null,
-    task.title ? `title=${task.title.slice(0, 80)}` : null,
+    task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ");
