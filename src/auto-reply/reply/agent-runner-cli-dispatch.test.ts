@@ -171,6 +171,95 @@ describe("runCliAgentWithLifecycle", () => {
     expect(result.payloads).toEqual([{ text: "Visible answer" }]);
   });
 
+  it("stamps onActivity for every delivered bridge event, including reasoning-only progress", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 200 },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-reasoning-progress",
+      provider: "claude-cli",
+      onActivity,
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-reasoning-progress",
+      },
+    });
+
+    // A run in a long pure-reasoning stretch must keep stamping activity, or
+    // stale-takeover reclaims it while it is visibly thinking.
+    expect(onReasoningProgress).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps onActivity for assistant text without caller callbacks for that stream", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Deep thought", delta: "Deep thought", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Visible answer", delta: "Visible answer" },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-assistant",
+      provider: "claude-cli",
+      onActivity,
+      onAssistantText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-assistant",
+      },
+    });
+
+    // Reasoning text stamps even with no onReasoningText caller: the durable
+    // reasoning deliver always runs, and thinking is activity evidence.
+    expect(onAssistantText).toHaveBeenCalledTimes(1);
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
   it("does not add a durable reasoning payload when the CLI emits no thinking", async () => {
     cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible answer" }],

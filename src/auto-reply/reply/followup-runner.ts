@@ -1094,12 +1094,12 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onActivity: () => replyOperation?.recordActivity(),
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    replyOperation?.recordActivity();
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
                       return;
@@ -1117,7 +1117,6 @@ export function createFollowupRunner(params: {
                   onCommentaryText:
                     progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
                       ? async ({ text, itemId }) => {
-                          replyOperation?.recordActivity();
                           await forwardFollowupProgressEvent({
                             evt: {
                               stream: "item",
@@ -1129,7 +1128,6 @@ export function createFollowupRunner(params: {
                         }
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
-                    replyOperation?.recordActivity();
                     await enqueueProgressDelivery(async () => {
                       // Mirrors direct dispatch progress suppression: ambient
                       // room events never get automatic fast-mode notices.
