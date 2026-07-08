@@ -542,11 +542,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
           : undefined;
         const senderIsOwner = canSupplyTrustedRequester ? request.senderIsOwner === true : false;
+        const hasTrustedRequesterProvenance =
+          requesterAccountId !== undefined ||
+          requesterSenderId !== undefined ||
+          (canSupplyTrustedRequester && request.senderIsOwner !== undefined);
         const isTrustedBackendBridge =
           canSupplyTrustedRequester &&
           client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
           client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-          Boolean(requesterAccountId || requesterSenderId || senderIsOwner);
+          hasTrustedRequesterProvenance;
         const dispatchGatewayClientScopes = isTrustedBackendBridge
           ? TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES
           : gatewayClientScopes;

@@ -1731,6 +1731,69 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("down-scopes backend bridge actions that carry explicit non-owner provenance", async () => {
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-message-action-backend-non-owner",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        senderIsOwner: false,
+        idempotencyKey: "idem-message-action-backend-non-owner",
+      },
+      {
+        connect: {
+          scopes: ["operator.admin"],
+          client: {
+            id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(lastDispatchChannelMessageActionCall()).toEqual(
+      expect.objectContaining({
+        requesterAccountId: undefined,
+        requesterSenderId: undefined,
+        senderIsOwner: false,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+  });
+
   it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {
     const telegramPlugin: ChannelPlugin = {
       id: "telegram",
