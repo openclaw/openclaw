@@ -1,11 +1,16 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-07T08:47:22.571Z",
+  "fallbackKeys": [
+    "workboard.allBoards",
+    "workboard.boardFilter",
+    "workboard.boardFilterNone",
+    "workboard.boardFilterNoneHelp"
+  ],
+  "generatedAt": "2026-07-08T02:44:02.592Z",
   "locale": "zh-TW",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "d012bf7dea64cb5e4858358eb65d806374d86512260f7e16949b761b8bc0627b",
-  "totalKeys": 1669,
+  "sourceHash": "fae3b3a9c6edad2684ceb6a53ba144befe56fd4217c1c891a53eb94fa91e9887",
+  "totalKeys": 1673,
   "translatedKeys": 1669,
   "workflow": 1
 }
