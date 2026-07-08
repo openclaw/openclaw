@@ -812,6 +812,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       createPackedPluginSdkTypescriptSmokeProject({
         consumerDir,
         packageSpec: `file:${packageRoot}`,
+        aiPackageSpec: "file:/tmp/openclaw-ai.tgz",
       });
 
       const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
@@ -827,6 +828,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk"');
@@ -870,6 +872,36 @@ describe("collectPackUnpackedSizeErrors", () => {
   });
 });
 
+describe("resolvePackedTarballPath", () => {
+  it("resolves one local npm pack tarball filename inside the pack destination", () => {
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+  });
+
+  it("rejects path-like npm pack tarball filenames", () => {
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      "/tmp/openclaw.tgz",
+      "C:\\temp\\openclaw.tgz",
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      expect(() => resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename }])).toThrow(
+        "release-check: npm pack reported unsafe tarball filename",
+      );
+    }
+  });
+});
 describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
   it("flags oversized public plugin SDK entrypoints before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-critical-sdk-"));
