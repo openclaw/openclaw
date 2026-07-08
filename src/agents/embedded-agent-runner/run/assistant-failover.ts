@@ -4,6 +4,11 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import {
+  hasRetryAfterValue,
+  MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS,
+  parseRetryAfterSeconds,
+} from "../../../llm/utils/retry-after.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -44,42 +49,6 @@ const SHORT_RATE_LIMIT_WINDOW_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
-const RETRY_AFTER_VALUE_RE = /\bretry[- ]after\b\s*:?\s*(?:in\s*)?([^\r\n;]+)/i;
-const RETRY_AFTER_SECONDS_RE =
-  /^(\d+(?:\.\d+)?)(?:\s*(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m))?\b/i;
-const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
-
-function parseRetryAfterSeconds(message: string): number | null {
-  const valueText = RETRY_AFTER_VALUE_RE.exec(message)?.[1]?.trim();
-  if (!valueText) {
-    return null;
-  }
-  const secondsMatch = RETRY_AFTER_SECONDS_RE.exec(valueText);
-  if (secondsMatch?.[1]) {
-    const value = Number(secondsMatch[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      return null;
-    }
-    const unit = secondsMatch[2]?.toLowerCase();
-    if (
-      unit?.startsWith("m") &&
-      unit !== "ms" &&
-      !unit.startsWith("msec") &&
-      !unit.startsWith("millisecond")
-    ) {
-      return value * 60;
-    }
-    if (unit === "ms" || unit?.startsWith("msec") || unit?.startsWith("millisecond")) {
-      return value / 1000;
-    }
-    return value;
-  }
-  const retryAtMs = Date.parse(valueText);
-  if (!Number.isFinite(retryAtMs)) {
-    return null;
-  }
-  return Math.max(0, (retryAtMs - Date.now()) / 1000);
-}
 
 function resolveShortWindowRateLimitRetry(
   message: string | undefined,
@@ -95,7 +64,7 @@ function resolveShortWindowRateLimitRetry(
   const shortRetryAfter =
     retryAfterSeconds !== null && retryAfterSeconds <= MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS;
   const hasShortWindowSignal = SHORT_RATE_LIMIT_WINDOW_RE.test(raw);
-  if (RETRY_AFTER_VALUE_RE.test(raw) && retryAfterSeconds === null && !hasShortWindowSignal) {
+  if (hasRetryAfterValue(raw) && retryAfterSeconds === null && !hasShortWindowSignal) {
     return null;
   }
   if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortWindowSignal && !shortRetryAfter) {
