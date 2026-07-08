@@ -1227,6 +1227,21 @@ describe("sendMessageTelegram", () => {
     expect(result).toEqual({ messageId: "55", chatId: "123" });
   });
 
+  it("skips plain chunks Telegram rejects as empty instead of failing the send", async () => {
+    // Parity with the reply funnel: a render-to-empty chunk records no
+    // delivery instead of surfacing a phantom outbound failure.
+    botApi.sendMessage.mockRejectedValueOnce(new Error("Bad Request: message text is empty"));
+
+    const result = await sendMessageTelegram("123", "<i></i>", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe("");
+  });
+
   it("routes caller HTML through the legacy HTML transport on rich accounts", async () => {
     // Rich HTML treats literal newlines as insignificant; parse_mode HTML keeps
     // them, so caller-authored HTML must stay on the legacy transport.

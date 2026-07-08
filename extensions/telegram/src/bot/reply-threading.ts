@@ -46,17 +46,21 @@ export async function sendChunkedTelegramReplyText<
     replyToMessageId?: number;
     replyMarkup?: TReplyMarkup;
     replyQuoteText?: string;
-  }) => Promise<void>;
+  }) => Promise<number | undefined>;
 }): Promise<void> {
   const applyDelivered = params.markDelivered ?? markDelivered;
   const suppressSingleUseReply =
     params.chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
-  for (let i = 0; i < params.chunks.length; i += 1) {
-    const chunk = params.chunks[i];
+  // One-time reply buttons and the first-only quote must land on the first
+  // DELIVERED chunk, not chunk index 0. A chunk that renders to empty Telegram
+  // content is skipped below; keying these on the index would consume them on
+  // that skipped attempt and the actually-delivered chunk would lose them.
+  let hasDeliveredChunk = false;
+  for (const chunk of params.chunks) {
     if (!chunk) {
       continue;
     }
-    const isFirstChunk = i === 0;
+    const isFirstDeliveryAttempt = !hasDeliveredChunk;
     // Telegram Desktop can render long formatted native-reply chunks as
     // unsupported messages. Multi-part `first` replies consume the reply target
     // without adding native reply params, preserving visible text.
@@ -70,18 +74,26 @@ export async function sendChunkedTelegramReplyText<
     const shouldAttachQuote =
       Boolean(replyToMessageId) &&
       Boolean(params.replyQuoteText) &&
-      (params.quoteOnlyOnFirstChunk !== true || isFirstChunk);
-    await params.sendChunk({
+      (params.quoteOnlyOnFirstChunk !== true || isFirstDeliveryAttempt);
+    const deliveredMessageId = await params.sendChunk({
       chunk,
-      isFirstChunk,
+      isFirstChunk: isFirstDeliveryAttempt,
       replyToMessageId,
-      replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
+      replyMarkup: isFirstDeliveryAttempt ? params.replyMarkup : undefined,
       replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
     });
-    markReplyApplied(
-      params.progress,
-      suppressSingleUseReply && isFirstChunk ? params.replyToId : replyToMessageId,
-    );
+    // sendTelegramText resolves undefined for silently-skipped chunks (content
+    // that renders to an empty Telegram payload). No real message id means no
+    // reply/delivered accounting: otherwise deliveredCount, transcript mirror,
+    // and message_sent would record a phantom send.
+    if (deliveredMessageId == null) {
+      continue;
+    }
+    // Suppressed single-use replies consume the reply target on the first
+    // DELIVERED chunk (markReplyApplied is idempotent); keying on chunk index
+    // would leak unconsumed state to later sends when chunk 0 silently skips.
+    markReplyApplied(params.progress, suppressSingleUseReply ? params.replyToId : replyToMessageId);
     applyDelivered(params.progress);
+    hasDeliveredChunk = true;
   }
 }
