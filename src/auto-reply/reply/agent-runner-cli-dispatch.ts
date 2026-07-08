@@ -470,13 +470,10 @@ async function runCliAgentWithLifecycleInternal(
       ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
     });
     try {
-      if (params.onFastModeAutoProgress) {
-        params.onActivity?.();
-        await params.onFastModeAutoProgress({
-          text: summary,
-          channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
-        });
-      }
+      await params.onFastModeAutoProgress?.({
+        text: summary,
+        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+      });
     } catch {
       // Progress hints are best-effort; a channel failure must not fail the agent turn.
     }
@@ -528,46 +525,46 @@ async function runCliAgentWithLifecycleInternal(
       },
     });
   }
-  // One activity seam for every delivered CLI event: stamping per-callback at
-  // call sites drifted (a queued-followup callback missed one), which lets
-  // stale-takeover reclaim a run that is visibly producing output.
-  const withActivity = <T>(
-    deliver: ((payload: T) => Promise<void>) | undefined,
-  ): ((payload: T) => Promise<void>) | undefined =>
-    deliver && params.onActivity
-      ? async (payload: T) => {
+  // One delivery-independent activity seam for every CLI agent event.
+  // Suppressed (silentExpected) runs still emit real events and must keep
+  // stamping, or a healthy silent stream looks stale to the takeover window.
+  const activityBridge = params.onActivity
+    ? createAgentEventBridge<Record<string, never>>({
+        runId: params.runId,
+        read: () => ({}),
+        deliver: async () => {
           params.onActivity?.();
-          await deliver(payload);
-        }
-      : deliver;
+        },
+      })
+    : undefined;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: withActivity(params.onAssistantText),
+    deliver: params.onAssistantText,
   });
   let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: withActivity(async (payload: ReasoningTextPayload) => {
+    deliver: async (payload: ReasoningTextPayload) => {
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
-    }),
+    },
   });
   const reasoningProgressBridge = createReasoningProgressBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: withActivity(params.onReasoningProgress),
+    deliver: params.onReasoningProgress,
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: withActivity(params.onToolEvent),
+    deliver: params.onToolEvent,
   });
   const commentaryBridge = createCommentaryEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: withActivity(params.onCommentaryText),
+    deliver: params.onCommentaryText,
   });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,
@@ -575,6 +572,7 @@ async function runCliAgentWithLifecycleInternal(
     deliver: maybeAnnounceFastModeAutoOff,
   });
   const bridges = [
+    activityBridge,
     assistantBridge,
     reasoningBridge,
     reasoningProgressBridge,

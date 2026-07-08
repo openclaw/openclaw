@@ -214,8 +214,57 @@ describe("runCliAgentWithLifecycle", () => {
     });
 
     // A run in a long pure-reasoning stretch must keep stamping activity, or
-    // stale-takeover reclaims it while it is visibly thinking.
+    // stale-takeover reclaims it while it is visibly thinking. Stamps are
+    // per-event (delivery-independent), so dedupe downstream does not matter.
     expect(onReasoningProgress).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps stamping onActivity when bridges are suppressed for silent runs", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Silent answer", delta: "Silent answer" },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-suppressed",
+      provider: "claude-cli",
+      suppressAssistantBridge: true,
+      onActivity,
+      onAssistantText,
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-suppressed",
+      },
+    });
+
+    // silentExpected runs suppress deliveries, but their events are still real
+    // liveness evidence — without these stamps a healthy silent run would be
+    // reclaimed as run_stalled at the takeover window.
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(onReasoningProgress).not.toHaveBeenCalled();
     expect(onActivity).toHaveBeenCalledTimes(2);
   });
 
@@ -254,8 +303,7 @@ describe("runCliAgentWithLifecycle", () => {
       },
     });
 
-    // Reasoning text stamps even with no onReasoningText caller: the durable
-    // reasoning deliver always runs, and thinking is activity evidence.
+    // Every real event stamps, independent of which callbacks are registered.
     expect(onAssistantText).toHaveBeenCalledTimes(1);
     expect(onActivity).toHaveBeenCalledTimes(2);
   });
