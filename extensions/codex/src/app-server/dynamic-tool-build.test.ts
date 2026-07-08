@@ -167,6 +167,15 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("discord");
   });
 
+  it("uses the deliverable provider for internal webchat Codex turns", () => {
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "discord",
+      }),
+    ).toBe("discord");
+  });
+
   it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
     expect(
       mapCodexAppServerRemoteWorkspacePath({

@@ -34,6 +34,8 @@ import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
+const INTERNAL_WEBCHAT_MESSAGE_CHANNEL = "webchat";
+
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;
@@ -112,6 +114,13 @@ export function resolveOpenClawCodingToolsSessionKeys(
 export function resolveCodexMessageToolProvider(
   params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
 ): string | undefined {
+  if (
+    params.messageChannel === INTERNAL_WEBCHAT_MESSAGE_CHANNEL &&
+    params.messageProvider &&
+    params.messageProvider !== INTERNAL_WEBCHAT_MESSAGE_CHANNEL
+  ) {
+    return params.messageProvider;
+  }
   return params.messageChannel ?? params.messageProvider;
 }
 
