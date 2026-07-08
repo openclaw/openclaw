@@ -1,4 +1,4 @@
-import { verifyEd25519Signature } from "../infra/ed25519-signature.js";
+import { verifyEd25519SignatureBytes } from "../infra/ed25519-signature.js";
 import { isRecord } from "../utils.js";
 import {
   isOfficialExternalPluginCatalogFeed,
@@ -52,9 +52,9 @@ export function createOfficialExternalPluginCatalogEnvelopePayload(
 
 export function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
-  payload: string;
-}): string {
-  return dssePreAuthenticationEncoding(params.payloadType, params.payload);
+  payloadBytes: Buffer;
+}): Buffer {
+  return dssePreAuthenticationEncoding(params.payloadType, params.payloadBytes);
 }
 
 export function verifyOfficialExternalPluginCatalogSignedEnvelope(
@@ -78,9 +78,17 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       message: "hosted catalog signed envelope payload type is unsupported",
     };
   }
+  const payloadBytes = decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(envelope.payload);
+  if (!payloadBytes) {
+    return {
+      ok: false,
+      error: "invalid-payload",
+      message: "hosted catalog signed envelope payload is invalid",
+    };
+  }
   const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
     payloadType: envelope.payloadType,
-    payload: envelope.payload,
+    payloadBytes,
   });
   let trustedSignatureKeyId: string | undefined;
   for (const envelopeSignature of envelope.signatures) {
@@ -90,7 +98,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       continue;
     }
     if (
-      verifyEd25519Signature({
+      verifyEd25519SignatureBytes({
         publicKey: trustedKey.publicKey,
         payload: signingInput,
         signatureBase64Url: envelopeSignature.signature,
@@ -101,7 +109,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     }
   }
   if (trustedSignatureKeyId) {
-    const feed = decodeOfficialExternalPluginCatalogEnvelopePayload(envelope.payload);
+    const feed = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
     if (!feed) {
       return {
         ok: false,
@@ -180,16 +188,28 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   };
 }
 
-function dssePreAuthenticationEncoding(payloadType: string, payload: string): string {
-  return `DSSEv1 ${payloadType.length} ${payloadType} ${payload.length} ${payload}`;
+function dssePreAuthenticationEncoding(payloadType: string, payloadBytes: Buffer): Buffer {
+  const payloadTypeBytes = Buffer.from(payloadType, "utf8");
+  const prefix = Buffer.from(
+    `DSSEv1 ${payloadTypeBytes.length} ${payloadType} ${payloadBytes.length} `,
+    "utf8",
+  );
+  return Buffer.concat([prefix, payloadBytes]);
+}
+
+function decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(payload: string): Buffer | null {
+  try {
+    return Buffer.from(payload, "base64");
+  } catch {
+    return null;
+  }
 }
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(
-  payload: string,
+  payloadBytes: Buffer,
 ): OfficialExternalPluginCatalogFeed | null {
   try {
-    const decoded = Buffer.from(payload, "base64url").toString("utf8");
-    const raw = JSON.parse(decoded) as unknown;
+    const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
     return isOfficialExternalPluginCatalogFeed(raw) ? raw : null;
   } catch {
     return null;

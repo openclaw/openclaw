@@ -67,21 +67,37 @@ export function signEd25519Payload(privateKeyPem: string, payload: string): stri
   return base64UrlEncode(sig);
 }
 
+function createEd25519PublicKey(publicKey: string): crypto.KeyObject {
+  return publicKey.includes("BEGIN")
+    ? crypto.createPublicKey(publicKey)
+    : crypto.createPublicKey({
+        key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(publicKey)]),
+        type: "spki",
+        format: "der",
+      });
+}
+
 export function verifyEd25519Signature(params: {
   publicKey: string;
   payload: string;
   signatureBase64Url: string;
 }): boolean {
+  return verifyEd25519SignatureBytes({
+    publicKey: params.publicKey,
+    payload: Buffer.from(params.payload, "utf8"),
+    signatureBase64Url: params.signatureBase64Url,
+  });
+}
+
+export function verifyEd25519SignatureBytes(params: {
+  publicKey: string;
+  payload: Buffer;
+  signatureBase64Url: string;
+}): boolean {
   try {
-    const key = params.publicKey.includes("BEGIN")
-      ? crypto.createPublicKey(params.publicKey)
-      : crypto.createPublicKey({
-          key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(params.publicKey)]),
-          type: "spki",
-          format: "der",
-        });
+    const key = createEd25519PublicKey(params.publicKey);
     const sig = base64UrlDecode(params.signatureBase64Url);
-    return crypto.verify(null, Buffer.from(params.payload, "utf8"), key, sig);
+    return crypto.verify(null, params.payload, key, sig);
   } catch {
     return false;
   }

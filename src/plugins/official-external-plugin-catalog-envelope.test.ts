@@ -55,12 +55,13 @@ function signedEnvelope(params?: {
   const payload =
     params?.payload ??
     createOfficialExternalPluginCatalogEnvelopePayload(params?.feed ?? fixtureFeed());
+  const payloadBytes = Buffer.from(payload, "base64");
   const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
     payloadType,
-    payload,
+    payloadBytes,
   });
   const signature = crypto
-    .sign(null, Buffer.from(signingInput, "utf8"), crypto.createPrivateKey(privateKey))
+    .sign(null, signingInput, crypto.createPrivateKey(privateKey))
     .toString("base64url");
   return {
     envelope: {
@@ -85,8 +86,8 @@ describe("official external plugin catalog signed envelopes", () => {
     expect(
       createOfficialExternalPluginCatalogEnvelopeSigningInput({
         payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
-        payload: "abc",
-      }),
+        payloadBytes: Buffer.from("abc", "utf8"),
+      }).toString("utf8"),
     ).toBe("DSSEv1 49 openclaw.official-external-plugin-catalog-feed.v1 3 abc");
   });
 
@@ -96,6 +97,29 @@ describe("official external plugin catalog signed envelopes", () => {
     const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
       trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
     });
+
+    expect(result).toEqual({
+      ok: true,
+      signedBy: "clawhub-root-2026",
+      feed: fixtureFeed(),
+    });
+  });
+
+  it("verifies signatures over decoded payload bytes across base64 encodings", () => {
+    const feedBytes = Buffer.from(JSON.stringify(fixtureFeed()), "utf8");
+    const urlSafePayload = feedBytes.toString("base64url");
+    const standardPayload = feedBytes.toString("base64");
+    const { envelope, publicKeyPem } = signedEnvelope({ payload: urlSafePayload });
+
+    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      {
+        ...envelope,
+        payload: standardPayload,
+      },
+      {
+        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
+      },
+    );
 
     expect(result).toEqual({
       ok: true,
