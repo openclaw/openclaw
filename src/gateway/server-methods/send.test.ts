@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -199,7 +200,12 @@ function createDeferred<T>() {
 
 async function runMessageActionRequest(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: {
+    connect?: {
+      scopes?: string[];
+      client?: { id?: string; mode?: string };
+    };
+  } | null,
 ) {
   const respond = vi.fn();
   await sendHandlers["message.action"]({
@@ -1616,7 +1622,6 @@ describe("gateway send mirroring", () => {
         },
         requesterAccountId: "default",
         requesterSenderId: "trusted-user",
-        effectiveGatewayClientScopes: ["operator.write"],
         inboundTurnKind: "room_event",
         toolContext: {
           currentMessagingTarget: "user:15551234567",
@@ -1630,7 +1635,15 @@ describe("gateway send mirroring", () => {
         },
         idempotencyKey: "idem-message-action",
       },
-      { connect: { scopes: ["operator.admin"] } },
+      {
+        connect: {
+          scopes: ["operator.admin"],
+          client: {
+            id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+        },
+      },
     );
 
     expect(respond).toHaveBeenCalledWith(
@@ -1701,7 +1714,6 @@ describe("gateway send mirroring", () => {
         },
         requesterAccountId: "default",
         requesterSenderId: "spoofed-admin-user",
-        effectiveGatewayClientScopes: ["operator.admin"],
         senderIsOwner: true,
         idempotencyKey: "idem-message-action-untrusted-requester",
       },

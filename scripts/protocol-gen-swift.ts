@@ -74,10 +74,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["ArtifactsListParams", ["agentId"]],
   ["ArtifactsGetParams", ["agentId"]],
   ["ArtifactsDownloadParams", ["agentId"]],
-  [
-    "MessageActionParams",
-    ["inboundTurnKind", "requesterAccountId", "effectiveGatewayClientScopes"],
-  ],
+  ["MessageActionParams", ["inboundTurnKind", "requesterAccountId"]],
   ["CronListParams", ["compact"]],
   [
     "CronJob",

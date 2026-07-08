@@ -617,8 +617,8 @@ describe("runMessageAction plugin dispatch", () => {
           currentMessageId: "wamid.1",
         },
         gateway: {
-          clientName: "cli",
-          mode: "cli",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
         dryRun: false,
       });
@@ -636,7 +636,6 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "gatewaychat",
           action: "react",
           requesterSenderId: "trusted-user",
-          effectiveGatewayClientScopes: ["operator.write"],
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",

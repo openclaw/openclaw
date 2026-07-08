@@ -112,8 +112,6 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-const TRUSTED_MESSAGE_ACTION_EFFECTIVE_SCOPES = ["operator.write"];
-
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
@@ -224,14 +222,10 @@ async function callGatewayMessageAction<T>(params: {
     return await callGatewayLeastPrivilege<T>(callParams);
   }
   // Trusted requester fields come from inbound server context. The RPC needs
-  // admin scope to prove provenance, but channel handlers still see the
-  // message.action least-privilege scope set they would get from a direct call.
+  // admin scope to prove provenance; the Gateway recognizes this backend bridge
+  // and keeps channel-handler authorization at message.action least privilege.
   return await callGateway<T>({
     ...callParams,
-    params: {
-      ...params.actionParams,
-      effectiveGatewayClientScopes: TRUSTED_MESSAGE_ACTION_EFFECTIVE_SCOPES,
-    },
     scopes: ["operator.admin"],
   });
 }

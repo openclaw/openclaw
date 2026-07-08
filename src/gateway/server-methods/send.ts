@@ -49,8 +49,13 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -66,6 +71,8 @@ const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<InflightResult>>
 >();
+
+const TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES = [WRITE_SCOPE];
 
 const getInflightMap = (context: GatewayRequestContext) => {
   let inflight = inflightByContext.get(context);
@@ -453,7 +460,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       requesterAccountId?: string;
       requesterSenderId?: string;
-      effectiveGatewayClientScopes?: string[];
       senderIsOwner?: boolean;
       sessionKey?: string;
       sessionId?: string;
@@ -529,25 +535,30 @@ export const sendHandlers: GatewayRequestHandlers = {
         // Requester provenance is trusted channel context, not public RPC input.
         // Only full-scope callers may bridge server-injected sender identity.
         const canSupplyTrustedRequester = gatewayClientScopes.includes(ADMIN_SCOPE);
-        const effectiveGatewayClientScopes =
-          canSupplyTrustedRequester && Array.isArray(request.effectiveGatewayClientScopes)
-            ? request.effectiveGatewayClientScopes
-                .map((scope) => normalizeOptionalString(scope))
-                .filter((scope): scope is string => Boolean(scope))
-            : gatewayClientScopes;
+        const requesterAccountId = canSupplyTrustedRequester
+          ? (normalizeOptionalString(request.requesterAccountId) ?? undefined)
+          : undefined;
+        const requesterSenderId = canSupplyTrustedRequester
+          ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
+          : undefined;
+        const senderIsOwner = canSupplyTrustedRequester ? request.senderIsOwner === true : false;
+        const isTrustedBackendBridge =
+          canSupplyTrustedRequester &&
+          client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+          client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+          Boolean(requesterAccountId || requesterSenderId || senderIsOwner);
+        const dispatchGatewayClientScopes = isTrustedBackendBridge
+          ? TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES
+          : gatewayClientScopes;
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
           accountId,
-          requesterAccountId: canSupplyTrustedRequester
-            ? (normalizeOptionalString(request.requesterAccountId) ?? undefined)
-            : undefined,
-          requesterSenderId: canSupplyTrustedRequester
-            ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
-            : undefined,
-          senderIsOwner: canSupplyTrustedRequester ? request.senderIsOwner === true : false,
+          requesterAccountId,
+          requesterSenderId,
+          senderIsOwner,
           sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
@@ -555,7 +566,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           toolContext: request.toolContext,
           dryRun: false,
-          gatewayClientScopes: effectiveGatewayClientScopes,
+          gatewayClientScopes: dispatchGatewayClientScopes,
         });
         if (!handled) {
           const error = errorShape(
