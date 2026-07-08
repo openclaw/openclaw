@@ -83,7 +83,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 
 type ChatPageContext = ApplicationContext;
-type PaneSessionChangeOptions = { replace?: boolean };
+type PaneSessionChangeOptions = { focusComposer?: boolean; replace?: boolean };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
@@ -107,6 +107,7 @@ class ChatPane extends LitElement {
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) chrome: "none" | "pane" = "none";
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
     paneId: string,
@@ -123,6 +124,7 @@ class ChatPane extends LitElement {
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
+  private pendingComposerFocusSessionKey: string | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
@@ -287,9 +289,33 @@ class ChatPane extends LitElement {
       return false;
     }
     this.chatState.captureCreatedSessionComposer(nextSessionKey);
-    this.onPaneSessionChange?.(this.paneId, nextSessionKey);
+    this.onPaneSessionChange?.(this.paneId, nextSessionKey, { focusComposer: true });
     return true;
   };
+
+  private requestComposerFocus(sessionKey: string) {
+    this.pendingComposerFocusSessionKey = sessionKey;
+    void this.focusComposerAfterUpdate(sessionKey);
+  }
+
+  private async focusComposerAfterUpdate(sessionKey: string) {
+    await this.updateComplete;
+    if (
+      !this.isConnected ||
+      !this.active ||
+      this.pendingComposerFocusSessionKey !== sessionKey ||
+      this.state?.sessionKey !== sessionKey
+    ) {
+      return;
+    }
+    this.pendingComposerFocusSessionKey = null;
+    const textarea = this.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox > textarea",
+    );
+    if (textarea && !textarea.disabled) {
+      textarea.focus({ preventScroll: true });
+    }
+  }
 
   private syncActiveBindings() {
     this.nativeDraftCleanup?.();
@@ -476,7 +502,15 @@ class ChatPane extends LitElement {
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
       }
-      this.chatState.restoreCreatedSessionComposer(nextSessionKey);
+      const restoredCreatedComposer = this.chatState.restoreCreatedSessionComposer(nextSessionKey);
+      if (restoredCreatedComposer && nextSessionKey) {
+        this.requestComposerFocus(nextSessionKey);
+      }
+      if (this.focusComposer && nextSessionKey) {
+        this.requestComposerFocus(nextSessionKey);
+      }
+    } else if (changedProperties.has("focusComposer") && this.focusComposer && this.state) {
+      this.requestComposerFocus(this.state.sessionKey);
     }
     if (changedProperties.has("active") || changedProperties.has("sessionKey")) {
       this.syncActiveBindings();

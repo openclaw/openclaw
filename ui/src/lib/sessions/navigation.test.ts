@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { resolveSessionNavigation } from "./navigation.ts";
+import { resolveSessionNavigation, searchForSession } from "./navigation.ts";
 
 function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -13,6 +13,13 @@ function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("resolveSessionNavigation", () => {
+  it("adds composer focus to session search params only when requested", () => {
+    expect(searchForSession("agent:main:new")).toBe("?session=agent%3Amain%3Anew");
+    expect(searchForSession("agent:main:new", { focusComposer: true })).toBe(
+      "?session=agent%3Amain%3Anew&focusComposer=1",
+    );
+  });
+
   it("keeps the selected session in its sorted slot instead of hoisting it", () => {
     const rows = Array.from({ length: 5 }, (_, index) => ({
       key: `agent:main:recent-${index}`,

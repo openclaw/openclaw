@@ -26,7 +26,7 @@ import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
+import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -50,6 +50,17 @@ type ShellRouteState = {
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const NEW_CHAT_SHORTCUT_EDITABLE_SELECTOR = [
+  "input",
+  "textarea",
+  "select",
+  "[contenteditable]:not([contenteditable='false'])",
+  "[role='textbox']",
+  ".cm-editor",
+  ".monaco-editor",
+  "dialog",
+  "[role='dialog']",
+].join(",");
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
@@ -85,6 +96,21 @@ function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | nu
 function resolveOnboardingMode(): boolean {
   const raw = new URLSearchParams(globalThis.location?.search ?? "").get("onboarding");
   return raw !== null && /^(?:1|true|yes|on)$/iu.test(raw.trim());
+}
+
+function isEditableNewChatShortcutTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest(NEW_CHAT_SHORTCUT_EDITABLE_SELECTOR));
+}
+
+export function shouldHandleNewChatShortcut(event: KeyboardEvent): boolean {
+  return (
+    !event.defaultPrevented &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === "n" &&
+    !isEditableNewChatShortcutTarget(event.target)
+  );
 }
 
 /**
@@ -413,6 +439,7 @@ class OpenClawShell extends LitElement {
     super.connectedCallback();
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    document.addEventListener("keydown", this.handleGlobalNewChatKeydown);
   }
 
   override updated() {
@@ -480,6 +507,7 @@ class OpenClawShell extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    document.removeEventListener("keydown", this.handleGlobalNewChatKeydown);
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
     this.stopConfigSubscription?.();
@@ -563,6 +591,45 @@ class OpenClawShell extends LitElement {
     event.preventDefault();
     this.closeNavDrawer({ restoreFocus: true });
   };
+
+  private readonly handleGlobalNewChatKeydown = (event: KeyboardEvent) => {
+    if (!shouldHandleNewChatShortcut(event)) {
+      return;
+    }
+    event.preventDefault();
+    void this.createSessionFromShortcut();
+  };
+
+  private async createSessionFromShortcut() {
+    const context = this.context;
+    if (!context || !context.gateway.snapshot.connected || context.sessions.state.loading) {
+      return;
+    }
+    const currentSessionKey =
+      this.activeSessionKey.trim() || context.gateway.snapshot.sessionKey.trim();
+    const navigation = resolveSessionNavigation({
+      result: context.sessions.state.result,
+      resultAgentId: context.sessions.state.agentId,
+      sessionKey: currentSessionKey,
+      assistantAgentId:
+        context.agentSelection.state.selectedId ?? context.gateway.snapshot.assistantAgentId,
+      hello: context.gateway.snapshot.hello,
+    });
+    if (navigation.selectedSession?.hasActiveRun === true) {
+      return;
+    }
+    const nextSessionKey = await context.sessions.create({
+      currentSessionKey: navigation.currentSessionKey,
+      agentId: navigation.selectedAgentId,
+    });
+    if (!nextSessionKey) {
+      return;
+    }
+    context.gateway.setSessionKey(nextSessionKey);
+    this.navigate("chat", {
+      search: searchForSession(nextSessionKey, { focusComposer: true }),
+    });
+  }
 
   private readonly openPalette = () => {
     this.commandPalette?.openPalette();

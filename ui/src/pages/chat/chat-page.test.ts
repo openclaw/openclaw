@@ -23,6 +23,7 @@ type RenderedPane = HTMLElement & {
   sessionKey: string;
   active: boolean;
   chrome: "none" | "pane";
+  focusComposer: boolean;
 };
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -113,6 +114,16 @@ describe("chat page split layout host", () => {
     expect(pane?.active).toBe(true);
   });
 
+  it("passes route composer focus requests to the active pane", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main", focusComposer: true };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    expect(pane?.focusComposer).toBe(true);
+  });
+
   it("renders keyed panes and a divider for a two-column split", async () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
@@ -127,6 +138,17 @@ describe("chat page split layout host", () => {
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
+  });
+
+  it("passes split route composer focus requests only to the active pane", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main", focusComposer: true };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    expect(panes.map((pane) => pane.focusComposer)).toEqual([false, true]);
   });
 
   it("renders only the active pane from a preserved split on narrow viewports", async () => {

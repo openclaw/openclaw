@@ -13,11 +13,19 @@ function draftFromLocation(location: RouteLocation): string | undefined {
   return draft || undefined;
 }
 
+function focusComposerFromLocation(location: RouteLocation): boolean {
+  return new URLSearchParams(location.search).get("focusComposer") === "1";
+}
+
 export const page = definePage({
   id: "chat",
   path: "/chat",
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-    `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}`,
+    [
+      sessionKeyFromLocation(location) ?? "",
+      draftFromLocation(location) ?? "",
+      focusComposerFromLocation(location) ? "focus" : "",
+    ].join("\u0000"),
   loader: async (_context: ApplicationContext, { location }) => {
     const sessionKey = sessionKeyFromLocation(location);
     if (!sessionKey) {
@@ -26,6 +34,7 @@ export const page = definePage({
     return {
       sessionKey,
       draft: draftFromLocation(location),
+      focusComposer: focusComposerFromLocation(location),
     };
   },
   component: () =>

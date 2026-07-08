@@ -273,6 +273,13 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   };
 }
 
-export function searchForSession(sessionKey: string): string {
-  return `?session=${encodeURIComponent(sessionKey)}`;
+export function searchForSession(
+  sessionKey: string,
+  options: { focusComposer?: boolean } = {},
+): string {
+  const search = new URLSearchParams({ session: sessionKey });
+  if (options.focusComposer) {
+    search.set("focusComposer", "1");
+  }
+  return `?${search.toString()}`;
 }

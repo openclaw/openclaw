@@ -33,6 +33,7 @@ import {
 type ChatRouteData = {
   sessionKey: string;
   draft?: string;
+  focusComposer?: boolean;
 };
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
@@ -239,15 +240,20 @@ export class ChatPage extends LitElement {
     patchSettings({ chatSplitLayout: layout });
   }
 
-  private updateRoute(sessionKey: string, replace = false) {
+  private updateRoute(
+    sessionKey: string,
+    options: { focusComposer?: boolean; replace?: boolean } = {},
+  ) {
     if (this.data?.sessionKey === sessionKey) {
       return;
     }
-    const options = { search: searchForSession(sessionKey) };
-    if (replace) {
-      this.context.replace("chat", options);
+    const navigationOptions = {
+      search: searchForSession(sessionKey, { focusComposer: options.focusComposer }),
+    };
+    if (options.replace) {
+      this.context.replace("chat", navigationOptions);
     } else {
-      this.context.navigate("chat", options);
+      this.context.navigate("chat", navigationOptions);
     }
   }
 
@@ -268,7 +274,7 @@ export class ChatPage extends LitElement {
       }
       const next = insertPane(createSinglePaneLayout(currentSessionKey), "p1", trimmed, zone.edge);
       this.persistLayout(next);
-      this.updateRoute(trimmed, true);
+      this.updateRoute(trimmed, { replace: true });
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -281,11 +287,11 @@ export class ChatPage extends LitElement {
       }
       const active = setActivePane(layout, paneId);
       this.persistLayout(setPaneSession(active, paneId, trimmed));
-      this.updateRoute(trimmed, true);
+      this.updateRoute(trimmed, { replace: true });
       return;
     }
     this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
-    this.updateRoute(trimmed, true);
+    this.updateRoute(trimmed, { replace: true });
   }
 
   private readonly handleFocusPane = (paneId: string) => {
@@ -298,7 +304,7 @@ export class ChatPage extends LitElement {
       return;
     }
     this.persistLayout(setActivePane(layout, paneId));
-    this.updateRoute(pane.sessionKey, true);
+    this.updateRoute(pane.sessionKey, { replace: true });
   };
 
   private readonly handlePaneSessionChange = (
@@ -312,7 +318,7 @@ export class ChatPage extends LitElement {
     }
     const layout = this.layout;
     if (!layout) {
-      this.updateRoute(trimmed, options?.replace);
+      this.updateRoute(trimmed, options);
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -321,7 +327,7 @@ export class ChatPage extends LitElement {
     }
     this.persistLayout(setPaneSession(layout, paneId, trimmed));
     if (layout.activePaneId === paneId) {
-      this.updateRoute(trimmed, options?.replace);
+      this.updateRoute(trimmed, options);
     }
   };
 
@@ -359,13 +365,13 @@ export class ChatPage extends LitElement {
     const next = closePane(layout, paneId);
     this.persistLayout(next);
     if (!next && survivingPane) {
-      this.updateRoute(survivingPane.sessionKey, true);
+      this.updateRoute(survivingPane.sessionKey, { replace: true });
       return;
     }
     if (next) {
       const activePane = findPane(next, next.activePaneId)?.pane;
       if (activePane) {
-        this.updateRoute(activePane.sessionKey, true);
+        this.updateRoute(activePane.sessionKey, { replace: true });
       }
     }
   };
@@ -383,6 +389,7 @@ export class ChatPage extends LitElement {
         .active=${active}
         .chrome=${"pane"}
         .draft=${active ? this.data?.draft : undefined}
+        .focusComposer=${active && this.data?.focusComposer === true}
         .onFocusPane=${this.handleFocusPane}
         .onPaneSessionChange=${this.handlePaneSessionChange}
         .onSplitRight=${canSplit ? this.handleSplitRight : undefined}
@@ -481,6 +488,7 @@ export class ChatPage extends LitElement {
                 .active=${true}
                 .chrome=${"none"}
                 .draft=${this.data?.draft}
+                .focusComposer=${this.data?.focusComposer === true}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
                 .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
