@@ -58,6 +58,8 @@ type PendingApprovalListEntry<TPayload> = {
   expiresAtMs: number;
 };
 
+type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
+
 type ApprovalResolveParams = {
   id: string;
   decision: string;
@@ -84,7 +86,7 @@ function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
 }
 
-export function isApprovalDecision(value: string): value is ExecApprovalDecision {
+function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
 
@@ -118,6 +120,17 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
+function normalizeApprovalIdentities(values: readonly string[] | null | undefined): string[] {
+  const normalized = new Set<string>();
+  for (const value of values ?? []) {
+    const identity = normalizeApprovalIdentity(value);
+    if (identity) {
+      normalized.add(identity);
+    }
+  }
+  return [...normalized];
+}
+
 /** Checks whether a client can observe or resolve an approval record. */
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
@@ -132,6 +145,14 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
   if (hasApprovalsScope && params.client?.internal?.approvalRuntime === true) {
+    return true;
+  }
+
+  const approvalReviewerDeviceIds = normalizeApprovalIdentities(
+    params.record.approvalReviewerDeviceIds,
+  );
+  const clientDeviceId = normalizeApprovalIdentity(params.client?.connect?.device?.id);
+  if (hasApprovalsScope && clientDeviceId && approvalReviewerDeviceIds.includes(clientDeviceId)) {
     return true;
   }
 
@@ -185,6 +206,16 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
+}
+
+export function bindApprovalReviewerDeviceIds<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  deviceIds?: readonly string[] | null;
+}): void {
+  const deviceIds = normalizeApprovalIdentities(params.deviceIds);
+  if (deviceIds.length > 0) {
+    params.record.approvalReviewerDeviceIds = deviceIds;
+  }
 }
 
 /** Registers an approval record and converts manager registration errors to gateway errors. */
@@ -444,6 +475,13 @@ export async function handlePendingApprovalRequest<
       turnSourceAccountId: params.record.request.turnSourceAccountId,
       approvalKind: params.approvalKind ?? "exec",
     });
+  const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
+    ? "forwarder"
+    : hasApprovalClients
+      ? "approval-client"
+      : hasTurnSourceRoute
+        ? "turn-source"
+        : "none";
 
   if (
     params.requireDeliveryRoute !== false &&
@@ -472,6 +510,9 @@ export async function handlePendingApprovalRequest<
       {
         status: "accepted",
         id: params.record.id,
+        // Agent-side timeouts use this to distinguish delivered prompts from
+        // requests kept pending only because manual /approve routing may work.
+        deliveryRoute,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
       },

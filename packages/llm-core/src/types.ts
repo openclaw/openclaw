@@ -185,7 +185,7 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
@@ -263,6 +263,10 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Exact context snapshot for the final provider iteration. */
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   totalTokens: number;
   cost: {
     input: number;
@@ -270,6 +274,8 @@ export interface Usage {
     cacheRead: number;
     cacheWrite: number;
     total: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: "provider-billed";
   };
 }
 
@@ -281,6 +287,15 @@ export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /**
+   * Marks a user message that carries transient current-turn runtime context
+   * (e.g. an OpenClaw runtime-context carrier appended after the active user
+   * turn). Such messages are volatile — present only on the turn they belong to
+   * and stripped on replay — so providers must NOT anchor a prompt-cache
+   * breakpoint on them, or the breakpoint would land on bytes that change every
+   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   */
+  runtimeContextCarrier?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -296,6 +311,9 @@ export interface AssistantMessage {
   usage: Usage;
   stopReason: StopReason;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -366,7 +384,12 @@ export interface Context {
 export type AssistantMessageEvent =
   | { type: "start"; partial: AssistantMessage }
   | { type: "text_start"; contentIndex: number; partial: AssistantMessage }
-  | { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
+  /**
+   * Plain text deltas may omit `partial` to avoid retaining one full assistant
+   * snapshot per token. Consumers that need current text should replay `delta`
+   * from the latest start/end partial checkpoint.
+   */
+  | { type: "text_delta"; contentIndex: number; delta: string; partial?: AssistantMessage }
   | { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
   | { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
   | { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
@@ -601,6 +624,8 @@ export interface Model<TApi extends Api = Api> {
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   headers?: Record<string, string>;
+  /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
+  authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat

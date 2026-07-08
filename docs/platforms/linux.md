@@ -7,85 +7,69 @@ read_when:
 title: "Linux app"
 ---
 
-The Gateway is fully supported on Linux. **Node is the recommended runtime**.
-Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
+The Gateway is fully supported on Linux. Node is the recommended runtime; Bun
+is not recommended (known WhatsApp/Telegram issues).
 
-Native Linux companion apps are planned. Contributions are welcome if you want to help build one.
+There is no native Linux companion app yet. Contributions are welcome.
 
-## Beginner quick path (VPS)
+## Quick path (VPS)
 
-1. Install Node 24 (recommended; Node 22 LTS, currently `22.19+`, still works for compatibility)
+1. Install Node 24 (recommended) or Node 22.19+ (LTS, still supported).
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared secret (token by default; password if you set `gateway.auth.mode: "password"`)
+5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared
+   secret (token by default; password if `gateway.auth.mode` is `"password"`).
 
-Full Linux server guide: [Linux Server](/vps). Step-by-step VPS example: [exe.dev](/install/exe-dev)
+Full server guide: [Linux Server](/vps). Step-by-step VPS example:
+[exe.dev](/install/exe-dev).
 
 ## Install
 
 - [Getting Started](/start/getting-started)
 - [Install & updates](/install/updating)
-- Optional flows: [Bun (experimental)](/install/bun), [Nix](/install/nix), [Docker](/install/docker)
+- Optional: [Bun (experimental)](/install/bun), [Nix](/install/nix), [Docker](/install/docker)
 
-## Gateway
+## Gateway service (systemd)
 
-- [Gateway runbook](/gateway)
-- [Configuration](/gateway/configuration)
+Install with one of:
 
-## Gateway service install (CLI)
-
-Use one of these:
-
-```
+```bash
 openclaw onboard --install-daemon
-```
-
-Or:
-
-```
 openclaw gateway install
+openclaw configure   # select "Gateway service" when prompted
 ```
 
-Or:
+Repair or migrate an existing install:
 
-```
-openclaw configure
-```
-
-Select **Gateway service** when prompted.
-
-Repair/migrate:
-
-```
+```bash
 openclaw doctor
 ```
 
-## System control (systemd user unit)
+`openclaw gateway install` renders a systemd **user** unit by default. Full
+service guidance, including the **system**-level unit variant for shared or
+always-on hosts, lives in the [Gateway runbook](/gateway#supervision-and-service-lifecycle).
 
-OpenClaw installs a systemd **user** service by default. Use a **system**
-service for shared or always-on servers. `openclaw gateway install` and
-`openclaw onboard --install-daemon` already render the current canonical unit
-for you; write one by hand only when you need a custom system/service-manager
-setup. The full service guidance lives in the [Gateway runbook](/gateway).
+Write a unit by hand only for a custom setup. Minimal user-unit example
+(`~/.config/systemd/user/openclaw-gateway[-<profile>].service`):
 
-Minimal setup:
-
-Create `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
-
-```
+```ini
 [Unit]
 Description=OpenClaw Gateway (profile: <profile>, v<version>)
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
+RestartPreventExitStatus=78
 TimeoutStopSec=30
 TimeoutStartSec=30
 SuccessExitStatus=0 143
+OOMPolicy=continue
 KillMode=control-group
 
 [Install]
@@ -94,48 +78,55 @@ WantedBy=default.target
 
 Enable it:
 
-```
+```bash
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
 ## Memory pressure and OOM kills
 
-On Linux, the kernel chooses an OOM victim when a host, VM, or container cgroup
-runs out of memory. The Gateway can be a poor victim because it owns long-lived
-sessions and channel connections. OpenClaw therefore biases transient child
-processes to be killed before the Gateway when possible.
+On Linux, the kernel picks an OOM victim when a host, VM, or container cgroup
+runs out of memory. The Gateway is a poor victim because it owns long-lived
+sessions and channel connections, so OpenClaw biases transient child
+processes to be killed first when possible.
 
-For eligible Linux child spawns, OpenClaw starts the child through a short
-`/bin/sh` wrapper that raises the child's own `oom_score_adj` to `1000`, then
-`exec`s the real command. This is an unprivileged operation because the child is
-only increasing its own OOM kill likelihood.
+For eligible Linux child spawns, OpenClaw wraps the command in a short
+`/bin/sh` shim that raises the child's own `oom_score_adj` to `1000`, then
+`exec`s the real command. This is unprivileged: a process may always raise
+its own OOM score.
 
-Covered child process surfaces include:
+Covered child process surfaces:
 
-- supervisor-managed command children,
-- PTY shell children,
-- MCP stdio server children,
-- OpenClaw-launched browser/Chrome processes.
+- Supervisor-managed command children
+- PTY shell children
+- MCP stdio server children
+- OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
 
-The wrapper is Linux-only and is skipped when `/bin/sh` is unavailable. It is
-also skipped if the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ=0`, `false`,
-`no`, or `off`.
+The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
+the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
+`off`.
 
-To verify a child process:
+Verify a child process:
 
 ```bash
 cat /proc/<child-pid>/oom_score_adj
 ```
 
-Expected value for covered children is `1000`. The Gateway process should keep
-its normal score, usually `0`.
+Expected value for covered children is `1000`; the Gateway process itself
+keeps its normal score (usually `0`).
+
+The systemd unit's `OOMPolicy=continue` keeps the Gateway service alive when
+a transient child is selected by the OOM killer instead of marking the whole
+unit failed and restarting all channels; the failed child/session reports its
+own error.
 
 This does not replace normal memory tuning. If a VPS or container repeatedly
-kills children, increase the memory limit, reduce concurrency, or add stronger
-resource controls such as systemd `MemoryMax=` or container-level memory limits.
+kills children, raise the memory limit, reduce concurrency, or add stronger
+resource controls (systemd `MemoryMax=`, container memory limits).
 
 ## Related
 
 - [Install overview](/install)
 - [Linux server](/vps)
 - [Raspberry Pi](/platforms/raspberry-pi)
+- [Gateway runbook](/gateway)
+- [Gateway configuration](/gateway/configuration)

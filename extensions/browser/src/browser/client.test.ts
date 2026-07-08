@@ -69,14 +69,7 @@ describe("browser client", () => {
   });
 
   it("surfaces non-2xx responses with body text", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 409,
-        text: async () => "conflict",
-      } as unknown as Response),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", { status: 409 })));
 
     await expect(
       browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
@@ -200,6 +193,11 @@ describe("browser client", () => {
               ok: true,
               targetId: "t1",
               url: "https://y",
+              download: {
+                url: "https://y/report.csv",
+                suggestedFilename: "report.csv",
+                path: "/tmp/openclaw/downloads/report.csv",
+              },
             }),
           } as unknown as Response;
         }
@@ -212,6 +210,13 @@ describe("browser client", () => {
               url: "https://x",
               result: 1,
               results: [{ ok: true }],
+              downloads: [
+                {
+                  url: "https://x/report.pdf",
+                  suggestedFilename: "report.pdf",
+                  path: "/tmp/openclaw/downloads/report.pdf",
+                },
+              ],
             }),
           } as unknown as Response;
         }
@@ -338,11 +343,23 @@ describe("browser client", () => {
     });
     expect(navigation.ok).toBe(true);
     expect(navigation.targetId).toBe("t1");
+    expect(navigation.download).toEqual({
+      url: "https://y/report.csv",
+      suggestedFilename: "report.csv",
+      path: "/tmp/openclaw/downloads/report.csv",
+    });
 
     const act = await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
     expect(act.ok).toBe(true);
     expect(act.targetId).toBe("t1");
     expect(act.results).toEqual([{ ok: true }]);
+    expect(act.downloads).toEqual([
+      {
+        url: "https://x/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ]);
 
     const fileChooser = await browserArmFileChooser("http://127.0.0.1:18791", {
       paths: ["/tmp/a.txt"],

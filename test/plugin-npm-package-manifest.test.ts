@@ -275,7 +275,7 @@ describe("plugin npm package manifest staging", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
+        setupEntry: "./dist/setup-entry.js",
         compat: {
           pluginApi: ">=2026.4.30",
         },
@@ -296,6 +296,7 @@ describe("plugin npm package manifest staging", () => {
         );
         expect(stagedPackageJson.openclaw.extensions).toEqual(["./index.ts"]);
         expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
+        expect(stagedPackageJson.openclaw.setupEntry).toBe("./dist/setup-entry.js");
         expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
         expect(stagedPackageJson.bundledDependencies).toEqual([]);
         expect(stagedPackageJson.bundleDependencies).toBeUndefined();

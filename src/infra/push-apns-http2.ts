@@ -1,6 +1,7 @@
 // Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import http2 from "node:http2";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { toErrorObject } from "./errors.js";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
@@ -19,7 +20,14 @@ const APNS_AUTHORITIES = new Set([
 type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.apple.com";
 
 export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
+export const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
 const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
+
+export type ApnsResponseBodyCapture = {
+  text: string;
+  bytes: number;
+  truncated: boolean;
+};
 
 /** Parameters for opening an APNs HTTP/2 client session. */
 export type ConnectApnsHttp2SessionParams = {
@@ -114,6 +122,29 @@ function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, APNS_HTTP2_MIN_TIMEOUT_MS, APNS_HTTP2_MIN_TIMEOUT_MS);
 }
 
+export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
+  return { text: "", bytes: 0, truncated: false };
+}
+
+export function appendApnsResponseBodyCapture(
+  capture: ApnsResponseBodyCapture,
+  chunk: unknown,
+  maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
+): void {
+  const buffer = Buffer.from(String(chunk));
+  capture.bytes += buffer.byteLength;
+  const remaining = maxBytes - Buffer.byteLength(capture.text);
+  if (remaining <= 0) {
+    capture.truncated = capture.truncated || buffer.byteLength > 0;
+    return;
+  }
+  const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+  capture.text += slice.toString("utf8");
+  if (slice.byteLength < buffer.byteLength) {
+    capture.truncated = true;
+  }
+}
+
 /** Sends an intentionally invalid APNs push through a proxy to prove HTTP/2 reachability. */
 export async function probeApnsHttp2ReachabilityViaProxy(
   params: ProbeApnsHttp2ReachabilityViaProxyParams,
@@ -130,7 +161,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
   try {
     return await new Promise<ProbeApnsHttp2ReachabilityViaProxyResult>((resolve, reject) => {
       let settled = false;
-      let body = "";
+      const body = createApnsResponseBodyCapture();
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
@@ -150,7 +181,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         settled = true;
         cleanup();
         session.destroy(err instanceof Error ? err : new Error(String(err)));
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
       };
 
       const request = session.request({
@@ -176,7 +207,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         );
       });
       request.on("data", (chunk) => {
-        body += String(chunk);
+        appendApnsResponseBodyCapture(body, chunk);
       });
       request.once("error", fail);
       request.once("end", () => {
@@ -189,7 +220,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
           reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
           return;
         }
-        resolve({ status, body, responseHeaders });
+        resolve({ status, body: body.text, responseHeaders });
       });
       request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
     });
@@ -198,18 +229,4 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       session.close();
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -5,7 +5,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -57,7 +56,6 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 import {
-  decodeStrictBase64,
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
@@ -87,18 +85,19 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
+  dispatchGatewayMethodInProcess,
   emitSessionLifecycleEvent,
-  forkSessionFromParent,
+  forkSessionEntryFromParent,
   getGlobalHookRunner,
   getSessionBindingService,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   loadSessionStore,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
-  resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
@@ -106,7 +105,7 @@ import {
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
-  isAdminOnlyMethod,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
   SpawnSubagentContextMode,
@@ -125,31 +124,31 @@ export type {
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
-export { decodeStrictBase64 };
-
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
 }
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
-  forkSessionFromParent: typeof forkSessionFromParent;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
+  forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
+  hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
-  resolveParentForkDecision: typeof resolveParentForkDecision;
   updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
-  forkSessionFromParent,
+  dispatchGatewayMethodInProcess,
+  forkSessionEntryFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
-  resolveParentForkDecision,
   updateSessionStore,
 };
 
@@ -158,7 +157,7 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-export type SpawnSubagentParams = {
+type SpawnSubagentParams = {
   task: string;
   label?: string;
   agentId?: string;
@@ -183,7 +182,7 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+type SpawnSubagentContext = {
   agentSessionKey?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
@@ -242,13 +241,39 @@ async function callSubagentGateway(
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
-  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
-  return await subagentSpawnDeps.callGateway({
+  // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" -> write) keep their least-privilege scope. The params-aware
+  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
+    params.method,
+    params.params,
+  );
+  const scopes =
+    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
+  const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
-  });
+  };
+  if (
+    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    request.params != null &&
+    typeof request.params === "object" &&
+    !Array.isArray(request.params)
+  ) {
+    // Spawn is already running in the gateway process for channel/tool calls.
+    // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
+      request.method,
+      request.params as Record<string, unknown>,
+      {
+        expectFinal: request.expectFinal,
+        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
+        ...(scopes != null ? { syntheticScopes: scopes } : {}),
+      },
+    );
+  }
+  return await subagentSpawnDeps.callGateway(request);
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
@@ -322,6 +347,14 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
       entry.model = model;
       entry.modelOverride = model;
       entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
+      const fallbackOriginProvider = normalizeOptionalString(
+        patch.modelOverrideFallbackOriginProvider,
+      );
+      const fallbackOriginModel = normalizeOptionalString(patch.modelOverrideFallbackOriginModel);
+      if (fallbackOriginProvider && fallbackOriginModel) {
+        entry.modelOverrideFallbackOriginProvider = fallbackOriginProvider;
+        entry.modelOverrideFallbackOriginModel = fallbackOriginModel;
+      }
       if (provider) {
         entry.modelProvider = provider;
         entry.providerOverride = provider;
@@ -476,55 +509,46 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
-    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
-      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
-      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+    if (params.targetAgentId !== params.requesterAgentId) {
+      throw new Error(
+        'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+      );
+    }
 
-      if (params.targetAgentId !== params.requesterAgentId) {
-        throw new Error(
-          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
-        );
-      }
-      if (!parentEntry?.sessionId) {
-        throw new Error(
-          'context="fork" requested but the requester session transcript is not available.',
-        );
-      }
-      const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
-        parentEntry,
-        storePath: parentTarget.storePath,
-      });
-      if (forkDecision.status === "skip") {
-        forkFallbackNote = forkDecision.message;
-        return null;
-      }
-
-      const fork = await subagentSpawnDeps.forkSessionFromParent({
-        parentEntry,
-        agentId: params.requesterAgentId,
-        sessionsDir,
-      });
-      if (!fork) {
-        throw new Error(
-          'context="fork" requested but OpenClaw could not fork the requester transcript.',
-        );
-      }
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: childTarget.canonicalKey,
-        candidates: childTarget.storeKeys,
-      });
-      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
-        sessionId: fork.sessionId,
-        sessionFile: fork.sessionFile,
-        forkedFromParent: true,
-      });
-      childEntry = store[childTarget.canonicalKey];
-      return fork;
-    })) as { sessionId: string; sessionFile: string } | null;
+    const forkedResult = await subagentSpawnDeps.forkSessionEntryFromParent({
+      storePath: childTarget.storePath,
+      parentSessionKey: parentTarget.canonicalKey,
+      parentStoreKeys: parentTarget.storeKeys,
+      sessionKey: childTarget.canonicalKey,
+      sessionStoreKeys: childTarget.storeKeys,
+      fallbackEntry: { sessionId: "", updatedAt: Date.now() },
+      agentId: params.requesterAgentId,
+    });
+    if (forkedResult.status === "missing-parent") {
+      throw new Error(
+        'context="fork" requested but the requester session transcript is not available.',
+      );
+    }
+    if (forkedResult.status === "failed" || forkedResult.status === "missing-entry") {
+      throw new Error(
+        'context="fork" requested but OpenClaw could not fork the requester transcript.',
+      );
+    }
+    parentEntry = forkedResult.parentEntry;
+    childEntry = forkedResult.sessionEntry;
+    if (forkedResult.status === "skipped") {
+      forkFallbackNote =
+        forkedResult.decision?.status === "skip" ? forkedResult.decision.message : undefined;
+    }
+    const forked =
+      forkedResult.status === "forked"
+        ? {
+            sessionId: forkedResult.fork.sessionId,
+            sessionFile: forkedResult.fork.sessionFile,
+          }
+        : null;
 
     if (params.contextMode === "fork") {
       if (!parentEntry || !forked) {
@@ -1636,6 +1660,8 @@ export async function spawnSubagentDirect(
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
+      agentId: targetAgentId,
+      requesterAgentId,
       cleanup,
       label: label || undefined,
       model: resolvedModel,

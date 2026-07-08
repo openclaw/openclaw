@@ -1278,6 +1278,79 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["google"]);
   });
 
+  it("cold-loads a capability provider by runtime alias", () => {
+    const active = createEmptyPluginRegistry();
+    active.realtimeTranscriptionProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram",
+      source: "test",
+      provider: { id: "deepgram", label: "Deepgram" },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeTranscriptionProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI",
+      source: "test",
+      provider: {
+        id: "openai",
+        aliases: [" OpenAI-Realtime "],
+        label: "OpenAI",
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "deepgram",
+          origin: "bundled",
+          contracts: { realtimeTranscriptionProviders: ["deepgram"] },
+        },
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { realtimeTranscriptionProviders: ["openai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "realtimeTranscriptionProviders",
+      providerId: "openai-realtime",
+    });
+
+    expect(provider?.id).toBe("openai");
+    expectActiveRegistryLookup(["deepgram", "openai"]);
+  });
+
+  it("prefers a canonical provider id over an earlier provider alias", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push(
+      {
+        pluginId: "microsoft",
+        pluginName: "Microsoft",
+        source: "test",
+        provider: { id: "microsoft", aliases: [" EDGE "], label: "Microsoft" },
+      } as never,
+      {
+        pluginId: "edge",
+        pluginName: "Edge",
+        source: "test",
+        provider: { id: "edge", label: "Edge" },
+      } as never,
+    );
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId: "edge",
+    });
+
+    expect(provider?.id).toBe("edge");
+  });
+
   it("does not merge unrelated bundled capability providers when cfg requests one provider", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

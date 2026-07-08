@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
@@ -42,34 +42,39 @@ async function persistDiscordModelPickerOverride(params: {
     agentId: params.route.agentId,
   });
   let persisted = false;
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[params.route.sessionKey] ?? {
+  await patchSessionEntry({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    fallbackEntry: {
       sessionId: randomUUID(),
       updatedAt: Date.now(),
-    };
-    store[params.route.sessionKey] = entry;
-    persisted =
-      applyModelOverrideToSessionEntry({
-        entry,
-        selection: {
-          provider: params.provider,
-          model: params.model,
-          isDefault: params.isDefault,
-        },
-        markLiveSwitchPending: true,
-      }).updated || persisted;
-    const runtime = params.runtime?.trim();
-    if (runtime && runtime !== "auto" && runtime !== "default") {
-      if (entry.agentRuntimeOverride !== runtime) {
-        entry.agentRuntimeOverride = runtime;
+    },
+    replaceEntry: true,
+    update: (entry) => {
+      persisted =
+        applyModelOverrideToSessionEntry({
+          entry,
+          selection: {
+            provider: params.provider,
+            model: params.model,
+            isDefault: params.isDefault,
+          },
+          markLiveSwitchPending: true,
+        }).updated || persisted;
+      const runtime = params.runtime?.trim();
+      if (runtime && runtime !== "auto" && runtime !== "default") {
+        if (entry.agentRuntimeOverride !== runtime) {
+          entry.agentRuntimeOverride = runtime;
+          delete entry.agentHarnessId;
+          persisted = true;
+        }
+      } else if (runtime && entry.agentRuntimeOverride) {
+        delete entry.agentRuntimeOverride;
         delete entry.agentHarnessId;
         persisted = true;
       }
-    } else if (runtime && entry.agentRuntimeOverride) {
-      delete entry.agentRuntimeOverride;
-      delete entry.agentHarnessId;
-      persisted = true;
-    }
+      return entry;
+    },
   });
   return persisted;
 }

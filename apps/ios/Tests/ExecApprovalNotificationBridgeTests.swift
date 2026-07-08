@@ -14,10 +14,6 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         self.authorization
     }
 
-    func requestAuthorization(options _: UNAuthorizationOptions) async throws -> Bool {
-        true
-    }
-
     func add(_ request: UNNotificationRequest) async throws {
         self.addedRequests.append(request)
     }
@@ -36,33 +32,39 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
 }
 
 @Suite(.serialized) struct ExecApprovalNotificationBridgeTests {
-    @Test func parsePromptMapsDefaultNotificationTap() {
+    @Test func `parse prompt maps default notification tap`() {
         let prompt = ExecApprovalNotificationBridge.parsePrompt(
             actionIdentifier: UNNotificationDefaultActionIdentifier,
             userInfo: [
                 "openclaw": [
                     "kind": ExecApprovalNotificationBridge.requestedKind,
                     "approvalId": "approval-123",
+                    "gatewayDeviceId": "gateway-a",
                 ],
             ])
 
-        #expect(prompt == ExecApprovalNotificationPrompt(approvalId: "approval-123"))
+        #expect(prompt == ExecApprovalNotificationPrompt(
+            approvalId: "approval-123",
+            gatewayDeviceId: "gateway-a"))
     }
 
-    @Test func parsePromptMapsReviewAction() {
+    @Test func `parse prompt maps review action`() {
         let prompt = ExecApprovalNotificationBridge.parsePrompt(
             actionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
             userInfo: [
                 "openclaw": [
                     "kind": ExecApprovalNotificationBridge.requestedKind,
                     "approvalId": "approval-456",
+                    "gatewayDeviceId": "gateway-b",
                 ],
             ])
 
-        #expect(prompt == ExecApprovalNotificationPrompt(approvalId: "approval-456"))
+        #expect(prompt == ExecApprovalNotificationPrompt(
+            approvalId: "approval-456",
+            gatewayDeviceId: "gateway-b"))
     }
 
-    @Test func parsePromptIgnoresUnexpectedActionIdentifiers() {
+    @Test func `parse prompt ignores unexpected action identifiers`() {
         let prompt = ExecApprovalNotificationBridge.parsePrompt(
             actionIdentifier: "openclaw.exec-approval.allow-once",
             userInfo: [
@@ -75,7 +77,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         #expect(prompt == nil)
     }
 
-    @Test @MainActor func handleResolvedPushRemovesMatchingNotifications() async {
+    @Test @MainActor func `handle resolved push removes matching notifications`() async {
         let center = MockNotificationCenter()
         center.delivered = [
             NotificationSnapshot(
@@ -84,6 +86,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
                     "openclaw": [
                         "kind": ExecApprovalNotificationBridge.requestedKind,
                         "approvalId": "approval-123",
+                        "gatewayDeviceId": "gateway-a",
                     ],
                 ]),
             NotificationSnapshot(
@@ -91,22 +94,73 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
                 userInfo: [
                     "openclaw": [
                         "kind": ExecApprovalNotificationBridge.requestedKind,
-                        "approvalId": "approval-999",
+                        "approvalId": "approval-123",
+                        "gatewayDeviceId": "gateway-b",
                     ],
                 ]),
         ]
 
-        let handled = await ExecApprovalNotificationBridge.handleResolvedPushIfNeeded(
-            userInfo: [
-                "openclaw": [
-                    "kind": ExecApprovalNotificationBridge.resolvedKind,
-                    "approvalId": "approval-123",
-                ],
-            ],
+        let push = ExecApprovalNotificationPrompt(
+            approvalId: "approval-123",
+            gatewayDeviceId: "gateway-a")
+        await ExecApprovalNotificationBridge.removeNotifications(
+            for: push,
             notificationCenter: center)
 
-        #expect(handled)
-        #expect(center.pendingRemovedIdentifiers == [["exec.approval.approval-123"]])
+        #expect(center.pendingRemovedIdentifiers == [["exec.approval.gateway-a.approval-123"]])
         #expect(center.deliveredRemovedIdentifiers == [["remote-approval-1"]])
+    }
+
+    @Test func `legacy ownerless approval pushes remain parseable for authenticated route validation`() {
+        let userInfo: [AnyHashable: Any] = [
+            "openclaw": [
+                "kind": ExecApprovalNotificationBridge.requestedKind,
+                "approvalId": "approval-ownerless",
+            ],
+        ]
+
+        #expect(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) ==
+            ExecApprovalNotificationPrompt(
+                approvalId: "approval-ownerless",
+                gatewayDeviceId: nil))
+        #expect(ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo))
+    }
+
+    @Test @MainActor func `validated cleanup removes legacy ownerless alerts but preserves other owners`() async {
+        let center = MockNotificationCenter()
+        center.delivered = [
+            NotificationSnapshot(
+                identifier: "legacy-ownerless",
+                userInfo: [
+                    "openclaw": [
+                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "approvalId": "approval-shared",
+                    ],
+                ]),
+            NotificationSnapshot(
+                identifier: "other-owner",
+                userInfo: [
+                    "openclaw": [
+                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "approvalId": "approval-shared",
+                        "gatewayDeviceId": "gateway-b",
+                    ],
+                ]),
+        ]
+        let push = ExecApprovalNotificationPrompt(
+            approvalId: "approval-shared",
+            gatewayDeviceId: "gateway-a")
+
+        await ExecApprovalNotificationBridge.removeNotifications(
+            for: push,
+            notificationCenter: center,
+            includingLegacyOwnerless: true)
+
+        #expect(center.pendingRemovedIdentifiers == [[
+            "exec.approval.gateway-a.approval-shared",
+            "exec.approval.approval-shared",
+            "exec.approval.legacy.approval-shared",
+        ]])
+        #expect(center.deliveredRemovedIdentifiers == [["legacy-ownerless"]])
     }
 }

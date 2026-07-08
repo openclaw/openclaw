@@ -3,9 +3,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Result from the fast abort path before normal reply dispatch starts. */
-export type FastAbortResult = {
+type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
+  rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
 
@@ -16,4 +17,7 @@ export type TryFastAbortFromMessage = (params: {
 }) => Promise<FastAbortResult>;
 
 /** Formats the user-visible abort acknowledgement text. */
-export type FormatAbortReplyText = (stoppedSubagents?: number) => string;
+export type FormatAbortReplyText = (
+  stoppedSubagents?: number,
+  rejectionReason?: FastAbortResult["rejectionReason"],
+) => string;

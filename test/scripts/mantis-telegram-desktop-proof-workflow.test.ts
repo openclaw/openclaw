@@ -1,6 +1,5 @@
 // Mantis Telegram Desktop Proof Workflow tests cover mantis telegram desktop proof workflow script behavior.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -257,18 +256,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "OPENCLAW_TELEGRAM_USER_PROOF_CMD",
     );
     expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
-    const payloadValidationImport =
-      "../../qa/convex-credential-broker/convex/payload-validation.js";
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
-    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(payloadValidationImport);
-    const payloadValidationSource = normalize(
-      `${dirname(CREDENTIAL_SCRIPT)}/${payloadValidationImport.replace(/\.js$/, ".ts")}`,
-    );
-    expect(existsSync(payloadValidationSource)).toBe(true);
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
-      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload_validation\.js"/u,
     );
   });
 

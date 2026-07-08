@@ -8,7 +8,7 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-export type CodexNativeAssetHit = {
+type CodexNativeAssetHit = {
   /** Native Codex asset category discovered under Codex or personal agent homes. */
   kind: "skill" | "plugin" | "config" | "hooks";
   /** Absolute path to the asset or asset container. */

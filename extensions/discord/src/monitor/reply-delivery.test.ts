@@ -120,6 +120,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "all",
+      allowedMentions: { parse: [] },
       kind: "final",
     });
 
@@ -139,6 +140,22 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.cfg).toBe(params.cfg);
     expect(sendOptions.token).toBe("token");
     expect(sendOptions.rest).toBe(rest);
+    expect(sendOptions.allowedMentions).toEqual({ parse: [] });
+  });
+
+  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Because it helps", isReasoning: true }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "block",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
@@ -500,7 +517,7 @@ describe("deliverDiscordReply", () => {
     const deps = firstDeliverParams().deps!;
     await deps.discordVoice("channel:123", "https://example.com/voice.ogg", {
       cfg,
-      replyTo: "reply-1",
+      reply: { messageId: "reply-1", scope: "all" },
     });
 
     expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
@@ -512,7 +529,7 @@ describe("deliverDiscordReply", () => {
     const voiceOptions = objectArgAt(sendVoiceMessageDiscordMock, 2);
     expect(voiceOptions.cfg).toBe(cfg);
     expect(voiceOptions.token).toBe("token");
-    expect(voiceOptions.replyTo).toBe("reply-1");
+    expect(voiceOptions.reply).toEqual({ messageId: "reply-1", scope: "all" });
   });
 
   it("rewrites bound thread replies to parent target plus thread id and persona", async () => {
@@ -554,5 +571,39 @@ describe("deliverDiscordReply", () => {
     const session = recordField(params.session, "session");
     expect(session.key).toBe("agent:main:subagent:child");
     expect(session.agentId).toBe("main");
+  });
+
+  it("keeps bound thread persona names on a UTF-16 boundary", async () => {
+    const threadBindings = {
+      listBySessionKey: vi.fn(() => [
+        {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "thread-1",
+          targetSessionKey: "agent:main:subagent:child",
+          agentId: "main",
+          label: `${"a".repeat(76)}🚀tail`,
+          webhookId: "wh_1",
+          webhookToken: "tok_1",
+        },
+      ]),
+    };
+
+    await deliverDiscordReply({
+      replies: [{ text: "Hello from subagent" }],
+      target: "channel:thread-1",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+      kind: "final",
+    });
+
+    expect(recordField(firstDeliverParams().identity, "identity").name).toBe(
+      `🤖 ${"a".repeat(76)}`,
+    );
   });
 });

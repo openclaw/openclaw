@@ -1,10 +1,15 @@
 // Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE } from "../run-diagnostics.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  listWebSearchProvidersMock,
+  loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
+  resolveConfiguredModelRefMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
+  resolveWebSearchProviderIdMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -41,6 +46,23 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
         kind: "agentTurn",
         message: "check allowed tools",
         toolsAllow,
+      },
+    } as never,
+  };
+}
+
+function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
+  const params = makeParams();
+  const job = params.job as Record<string, unknown>;
+  return {
+    ...params,
+    job: {
+      ...job,
+      payload: {
+        kind: "agentTurn",
+        message: "check allowed tools",
+        toolsAllow,
+        toolsAllowIsDefault: true,
       },
     } as never,
   };
@@ -125,6 +147,116 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+    },
+  );
+
+  it(
+    "adds cron diagnostics when web_search is allowed without a selected provider",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
+      resolveWebSearchProviderIdMock.mockReturnValue("");
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      const call = requireEmbeddedAgentCall();
+      expect(call.toolsAllow).toEqual(["web_search"]);
+      expect(result.diagnostics?.summary).toBe(MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE);
+      expect(result.diagnostics?.entries).toEqual([
+        {
+          ts: expect.any(Number),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: "web_search",
+        },
+      ]);
+    },
+  );
+
+  it(
+    "does not warn for default-derived toolsAllow that includes web_search",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([]);
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParamsWithDefaultToolsAllow(["web_search"]),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics).toBeUndefined();
+    },
+  );
+
+  it(
+    "does not warn when native web_search suppresses the managed provider tool",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([]);
+      resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "gateway",
+        model: "gpt-5.5",
+      });
+      loadModelCatalogMock.mockResolvedValue([
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "gateway",
+          api: "openai-chatgpt-responses",
+        },
+      ]);
+
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParamsWithToolsAllow(["web_search"]),
+        cfg: {
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                openaiCodex: {
+                  enabled: true,
+                  mode: "cached",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics).toBeUndefined();
+    },
+  );
+
+  it(
+    "keeps web_search provider diagnostics when the run aborts",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([]);
+      resolveWebSearchProviderIdMock.mockReturnValue("");
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [],
+          meta: {
+            aborted: true,
+            agentMeta: {},
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      });
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("error");
+      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+        MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+        "cron isolated agent run aborted",
+      ]);
     },
   );
 });

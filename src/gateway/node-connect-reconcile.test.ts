@@ -118,6 +118,55 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("reapproves and then preserves Windows exec approval commands", async () => {
+    const commands = [
+      "system.run.prepare",
+      "system.run",
+      "system.which",
+      "system.execApprovals.get",
+      "system.execApprovals.set",
+    ];
+    const previouslyApprovedCommands = ["system.run.prepare", "system.run", "system.which"];
+    const connectParams = makeNodeConnectParams({
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "test",
+        platform: "windows",
+        deviceFamily: "Windows",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+      caps: ["system"],
+      commands,
+    });
+    const requestPairing = makePendingPairingRequest("req-windows");
+
+    const upgrade = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams,
+      pairedNode: makePairedNode({ caps: ["system"], commands: previouslyApprovedCommands }),
+      requestPairing,
+    });
+
+    expect(upgrade.declaredCommands).toEqual(commands);
+    expect(upgrade.effectiveCommands).toEqual(previouslyApprovedCommands);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands,
+      }),
+    );
+
+    const approvedPairingRequest = vi.fn();
+    const approvedReconnect = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams,
+      pairedNode: makePairedNode({ caps: ["system"], commands }),
+      requestPairing: approvedPairingRequest,
+    });
+
+    expect(approvedReconnect.effectiveCommands).toEqual(commands);
+    expect(approvedPairingRequest).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],
@@ -174,7 +223,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
   });
 
-  it("preserves the approved surface when paired node upgrade pairing is throttled", async () => {
+  it("keeps the approved surface when paired-node reapproval is throttled", async () => {
     const requestPairing = vi.fn(async () => null);
 
     const result = await reconcileNodePairingOnConnect({
@@ -195,6 +244,27 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectiveCommands).toEqual([]);
     expect(result.declaredCaps).toEqual(["camera", "screen"]);
     expect(result.pendingPairing).toBeUndefined();
+    expect(result.shouldClearPendingPairings).toBeUndefined();
+  });
+
+  it("defers stale pending reapproval cleanup when the node returns to its approved surface", async () => {
+    const requestPairing = makePendingPairingRequest("req-unused");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera"],
+        commands: ["canvas.snapshot"],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera"],
+        commands: ["canvas.snapshot"],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.shouldClearPendingPairings).toBe(true);
   });
 
   it("requires a fresh pairing request when paired node permissions change", async () => {

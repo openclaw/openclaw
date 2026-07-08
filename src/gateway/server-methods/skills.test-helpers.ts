@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 /** Captured JSON-RPC response tuple emitted by a gateway request handler. */
-export type CapturedGatewayResponse = {
+type CapturedGatewayResponse = {
   ok: boolean | null;
   response: unknown;
   error: unknown;

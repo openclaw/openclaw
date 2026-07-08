@@ -10,7 +10,7 @@ import {
   safeTrajectorySessionFileName,
 } from "./paths.js";
 
-export type RemovedTrajectoryArtifact = {
+type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
   path: string;
 };

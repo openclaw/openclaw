@@ -115,6 +115,52 @@ describe("provider-usage.format", () => {
     ]);
   });
 
+  it("formats typed balances and budgets across compact and detailed surfaces", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          windows: [],
+          plan: "Production",
+          billing: [
+            { type: "balance", label: "Account balance", amount: 64.5, unit: "USD" },
+            {
+              type: "budget",
+              label: "API key budget",
+              used: 5,
+              limit: 20,
+              unit: "USD",
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Account balance: $64.50");
+    expect(formatUsageSummaryLine(summary, { now })).toBe(
+      "📊 Usage: OpenRouter Account balance: $64.50",
+    );
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  OpenRouter (Production)",
+      "    Account balance: $64.50",
+      "    API key budget: $5.00 / $20.00",
+    ]);
+  });
+
+  it("places a negative currency sign before the symbol", () => {
+    expect(
+      formatUsageWindowSummary({
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        windows: [],
+        billing: [{ type: "balance", amount: -2.5, unit: "USD" }],
+      }),
+    ).toBe("Balance: -$2.50");
+  });
+
   it("returns null summary line when providers are errored or have no windows", () => {
     expect(
       formatUsageSummaryLine({

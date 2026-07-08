@@ -15,9 +15,9 @@
  * assistant + toolResult) into the OpenClaw transcript via the same
  * plugin-sdk primitives that the codex extension uses
  * (extensions/codex/src/app-server/transcript-mirror.ts). Both writers
- * cooperate via idempotency-key dedupe: each mirrored entry carries a
- * stable `${idempotencyScope}:${identity}` key, and we skip any key
- * already present in the transcript on disk before appending. Both
+ * cooperate via idempotency-key dedupe: user entries retain a gateway
+ * turn key when present; other entries use `${idempotencyScope}:${identity}`.
+ * We skip any key already present in the transcript on disk. Both
  * attempt-execution's untagged entries (no idempotencyKey) and our
  * tagged mirror entries can coexist; attempt-execution dedupes its own
  * final-assistant append via `embeddedAssistantGapFill` content match.
@@ -29,16 +29,16 @@
  */
 
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import {
-  acquireSessionWriteLock,
-  appendSessionTranscriptMessage,
-  emitSessionTranscriptUpdate,
-  resolveSessionWriteLockAcquireTimeoutMs,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  publishSessionTranscriptUpdateByIdentity,
+  withSessionTranscriptWriteLock,
+  type SessionTranscriptTargetParams,
+  type SessionTranscriptWriteLockParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
@@ -93,8 +93,9 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
   return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
 }
 
-export interface MirrorCopilotTranscriptParams {
+interface MirrorCopilotTranscriptParams {
   sessionFile: string;
+  sessionId: string;
   sessionKey?: string;
   agentId?: string;
   messages: AgentMessage[];
@@ -106,7 +107,7 @@ export interface MirrorCopilotTranscriptParams {
    * entry collide with its existing on-disk key and be a true no-op.
    */
   idempotencyScope?: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: SessionTranscriptWriteLockParams["config"];
 }
 
 export async function mirrorCopilotTranscript(
@@ -120,82 +121,99 @@ export async function mirrorCopilotTranscript(
     return;
   }
 
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.sessionFile,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-  });
-  try {
-    const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
-    for (const message of messages) {
-      const dedupeIdentity = buildMirrorDedupeIdentity(message);
-      const idempotencyKey = params.idempotencyScope
-        ? `${params.idempotencyScope}:${dedupeIdentity}`
-        : undefined;
-      if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
-        continue;
+  const transcriptTarget = resolveCopilotMirrorTranscriptTarget(params);
+  const didAppend = await withSessionTranscriptWriteLock(
+    { ...transcriptTarget, config: params.config },
+    async (transcript) => {
+      let didAppendMessage = false;
+      const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await transcript.readEvents());
+      for (const message of messages) {
+        const dedupeIdentity = buildMirrorDedupeIdentity(message);
+        const sourceIdempotencyKey = (message as unknown as { idempotencyKey?: unknown })
+          .idempotencyKey;
+        const sourceUserIdempotencyKey =
+          message.role === "user" &&
+          typeof sourceIdempotencyKey === "string" &&
+          sourceIdempotencyKey.trim()
+            ? sourceIdempotencyKey.trim()
+            : undefined;
+        const idempotencyKey =
+          sourceUserIdempotencyKey ??
+          (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
+        if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+          continue;
+        }
+        const transcriptMessage = {
+          ...message,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        } as AgentMessage;
+        const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+          message: transcriptMessage,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        });
+        if (!nextMessage) {
+          continue;
+        }
+        const messageToAppend = (
+          idempotencyKey
+            ? {
+                ...(nextMessage as unknown as Record<string, unknown>),
+                idempotencyKey,
+              }
+            : nextMessage
+        ) as AgentMessage;
+        const appended = await transcript.appendMessage({
+          message: messageToAppend,
+          idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
+        });
+        if (!appended) {
+          continue;
+        }
+        didAppendMessage = true;
+        if (idempotencyKey) {
+          existingIdempotencyKeys.add(idempotencyKey);
+        }
       }
-      const transcriptMessage = {
-        ...message,
-        ...(idempotencyKey ? { idempotencyKey } : {}),
-      } as AgentMessage;
-      const nextMessage = runAgentHarnessBeforeMessageWriteHook({
-        message: transcriptMessage,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
-      if (!nextMessage) {
-        continue;
-      }
-      const messageToAppend = (
-        idempotencyKey
-          ? {
-              ...(nextMessage as unknown as Record<string, unknown>),
-              idempotencyKey,
-            }
-          : nextMessage
-      ) as AgentMessage;
-      await appendSessionTranscriptMessage({
-        transcriptPath: params.sessionFile,
-        message: messageToAppend,
-        config: params.config,
-      });
-      if (idempotencyKey) {
-        existingIdempotencyKeys.add(idempotencyKey);
-      }
-    }
-  } finally {
-    await lock.release();
-  }
+      return didAppendMessage;
+    },
+  );
 
-  if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
-  } else {
-    emitSessionTranscriptUpdate(params.sessionFile);
+  if (didAppend) {
+    await publishSessionTranscriptUpdateByIdentity({
+      ...transcriptTarget,
+      update: params.sessionKey ? { sessionKey: params.sessionKey } : undefined,
+    });
   }
 }
 
-async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<string>> {
-  const keys = new Set<string>();
-  let raw: string;
-  try {
-    raw = await fs.readFile(sessionFile, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    return keys;
+function resolveCopilotMirrorTranscriptTarget(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): SessionTranscriptTargetParams {
+  const sessionFile = params.sessionFile.trim();
+  if (!sessionFile) {
+    throw new Error("Copilot transcript mirror requires a sessionFile target");
   }
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) {
+  return {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey ?? "",
+  };
+}
+
+function readTranscriptIdempotencyKeys(events: unknown[]): Set<string> {
+  const keys = new Set<string>();
+  for (const event of events) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (typeof parsed.message?.idempotencyKey === "string") {
-        keys.add(parsed.message.idempotencyKey);
-      }
-    } catch {
-      continue;
+    const parsed = event as { message?: { idempotencyKey?: unknown } };
+    if (typeof parsed.message?.idempotencyKey === "string") {
+      keys.add(parsed.message.idempotencyKey);
     }
   }
   return keys;

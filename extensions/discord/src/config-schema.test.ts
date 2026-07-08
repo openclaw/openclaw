@@ -91,11 +91,11 @@ describe("discord config schema", () => {
     expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
   });
 
-  it("rejects Telegram-only native tool-progress draft config", () => {
+  it("rejects unknown preview config keys", () => {
     const issues = expectInvalidDiscordConfig({
       streaming: {
         preview: {
-          nativeToolProgress: true,
+          unknownPreviewFlag: true,
         },
       },
     });

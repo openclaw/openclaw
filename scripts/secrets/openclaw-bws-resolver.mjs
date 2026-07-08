@@ -51,6 +51,7 @@ const main = async () => {
     encoding: "utf8",
     env: {
       BWS_ACCESS_TOKEN: process.env.BWS_ACCESS_TOKEN,
+      BWS_SERVER_URL: process.env.BWS_SERVER_URL,
       PATH: process.env.PATH || "",
     },
     maxBuffer: 1024 * 1024,

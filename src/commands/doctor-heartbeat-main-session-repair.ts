@@ -33,7 +33,7 @@ type TranscriptHeartbeatSummary = {
   heartbeatOkAssistantMessages: number;
 };
 
-export type HeartbeatMainSessionRepairCandidate = {
+type HeartbeatMainSessionRepairCandidate = {
   reason: "metadata" | "transcript";
   summary?: TranscriptHeartbeatSummary;
 };

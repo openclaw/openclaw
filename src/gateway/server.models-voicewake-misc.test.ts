@@ -212,10 +212,18 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
-      params
-        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    withEnvAsync(
+      {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CODEX_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        OPENAI_OAUTH_TOKEN: undefined,
+        CHATGPT_OAUTH_TOKEN: undefined,
+      },
+      async () =>
+        params
+          ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+          : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
@@ -371,11 +379,9 @@ describe("gateway server models + voicewake", () => {
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
-        const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
-        ) as { triggers?: unknown; updatedAtMs?: unknown };
-        expect(onDisk.triggers).toEqual(["hi", "there"]);
-        expect(typeof onDisk.updatedAtMs).toBe("number");
+        await expect(
+          fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ).rejects.toThrow(/ENOENT/u);
       });
     },
   );
@@ -451,13 +457,9 @@ describe("gateway server models + voicewake", () => {
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
 
-      const onDisk = JSON.parse(
-        await fs.readFile(
-          path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
-          "utf8",
-        ),
-      ) as { routes?: unknown };
-      expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+      await expect(
+        fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
+      ).rejects.toThrow(/ENOENT/u);
 
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);

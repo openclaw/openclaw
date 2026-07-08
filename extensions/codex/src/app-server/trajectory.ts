@@ -15,6 +15,7 @@ import {
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
 /** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
@@ -28,7 +29,7 @@ type CodexTrajectoryInit = {
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
-  tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
+  tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
 };
 
@@ -39,6 +40,7 @@ const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
 const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
+const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
 
 type CodexTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
@@ -81,19 +83,57 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
     return `${line}\n`;
   }
-  const truncated = JSON.stringify({
-    ...event,
-    data: {
-      truncated: true,
-      originalBytes: bytes,
-      limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-      reason: "trajectory-event-size-limit",
-    },
-  });
-  if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return `${truncated}\n`;
+
+  const originalData =
+    event.data && typeof event.data === "object" && !Array.isArray(event.data)
+      ? (event.data as Record<string, unknown>)
+      : {};
+  const originalDataKeys = Object.keys(originalData);
+  const preservedDataKeys = new Set<string>();
+  const baseData = {
+    truncated: true,
+    originalBytes: bytes,
+    limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    reason: "trajectory-event-size-limit",
+  };
+  const buildTruncatedLine = (includeDroppedFields: boolean): string | undefined => {
+    const data: Record<string, unknown> = { ...baseData };
+    for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+      if (preservedDataKeys.has(key)) {
+        data[key] = originalData[key];
+      }
+    }
+    if (includeDroppedFields) {
+      const droppedFields = originalDataKeys.filter((key) => !preservedDataKeys.has(key));
+      if (droppedFields.length > 0) {
+        data.droppedFields = droppedFields;
+      }
+    }
+    const truncated = JSON.stringify({ ...event, data });
+    if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+      return `${truncated}\n`;
+    }
+    return undefined;
+  };
+
+  let best = buildTruncatedLine(true) ?? buildTruncatedLine(false);
+  if (!best) {
+    return undefined;
   }
-  return undefined;
+
+  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+    if (!Object.hasOwn(originalData, key)) {
+      continue;
+    }
+    preservedDataKeys.add(key);
+    const next = buildTruncatedLine(true) ?? buildTruncatedLine(false);
+    if (next) {
+      best = next;
+      continue;
+    }
+    preservedDataKeys.delete(key);
+  }
+  return best;
 }
 
 function resolveTrajectoryPointerFilePath(sessionFile: string): string {
@@ -298,12 +338,12 @@ function resolveContainedPath(baseDir: string, fileName: string): string {
 }
 
 function toTrajectoryToolDefinitions(
-  tools: Array<{ name?: string; description?: string; inputSchema?: unknown }> | undefined,
+  tools: readonly CodexDynamicToolSpec[] | undefined,
 ): Array<{ name: string; description?: string; parameters?: unknown }> | undefined {
   if (!tools || tools.length === 0) {
     return undefined;
   }
-  return tools
+  return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
       if (!name) {

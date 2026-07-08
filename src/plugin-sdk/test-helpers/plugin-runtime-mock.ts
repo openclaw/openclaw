@@ -4,6 +4,7 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -190,6 +191,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       onRecordError: record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
+    await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
     const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -224,6 +226,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           onRecordError: params.record?.onRecordError ?? (() => undefined),
           trackSessionMetaTask: params.record?.trackSessionMetaTask,
         });
+        await params.afterRecord?.();
       } catch (err) {
         try {
           await params.onPreDispatchFailure?.(err);
@@ -348,8 +351,26 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       UntrustedStructuredContext: untrustedStructuredContext,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+  const sessionRuntime = {
+    resolveStorePath: vi.fn(
+      () => "/tmp/sessions.json",
+    ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+    readSessionUpdatedAt: vi.fn(
+      () => undefined,
+    ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+    recordSessionMetaFromInbound:
+      vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
+    recordInboundSession:
+      vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+    updateLastRoute: vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
+    resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
+  };
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    gateway: {
+      isAvailable: vi.fn(async () => false),
+      request: vi.fn(),
+    },
     config: {
       current: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["current"],
       mutateConfigFile: vi.fn(async () => ({
@@ -438,6 +459,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
+        runWithWorkAdmission: vi.fn(
+          async (_params, run) => await run(new AbortController().signal),
+        ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
         saveSessionStore: vi
           .fn()
           .mockResolvedValue(
@@ -613,20 +637,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         }) as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
       media: createPluginRuntimeMediaMock(),
-      session: {
-        resolveStorePath: vi.fn(
-          () => "/tmp/sessions.json",
-        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
-        readSessionUpdatedAt: vi.fn(
-          () => undefined,
-        ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
-        recordSessionMetaFromInbound:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
-        recordInboundSession:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-        updateLastRoute:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
-      },
+      session: sessionRuntime,
       mentions: {
         buildMentionRegexes: vi.fn(() => [
           /\bbert\b/i,
@@ -799,6 +810,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    worktrees: {
+      create: vi.fn(),
+      release: vi.fn(),
+      removeIfLossless: vi.fn(),
     },
     llm: {
       complete: vi.fn(),

@@ -11,6 +11,7 @@ import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
+let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
@@ -69,6 +70,12 @@ async function loadFreshHealthModulesForTest() {
   }));
   vi.doMock("../config/sessions/store.js", () => ({
     loadSessionStore: () => testStore,
+  }));
+  vi.doMock("../config/sessions/session-accessor.js", () => ({
+    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+      listHealthSessionEntriesCalls.push(scope ?? {});
+      return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    },
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
@@ -463,6 +470,7 @@ describe("getHealthSnapshot", () => {
   beforeEach(() => {
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
+    listHealthSessionEntriesCalls = [];
     healthPluginsForTest = [createTelegramHealthPlugin()];
     setActivePluginRegistry(
       createTestRegistry([
@@ -542,6 +550,61 @@ describe("getHealthSnapshot", () => {
         error: "failed to load plugin dependency: ENOSPC",
       },
     ]);
+  });
+
+  it("includes dead-lettered delivery queue entries in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry(createTestRegistry([]));
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../infra/delivery-queue-sqlite.js");
+      const clean = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(clean.deliveryQueues).toBeUndefined();
+
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(snap.deliveryQueues?.failed).toEqual([
+        { queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) },
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits configReload when no config reloader status is supplied", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.configReload).toBeUndefined();
+  });
+
+  it("surfaces a disabled config hot-reload watcher in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 10,
+      probe: false,
+      configReloadHotReloadStatus: "disabled",
+    });
+
+    expect(snap.configReload).toEqual({ hotReloadStatus: "disabled" });
   });
 
   it("skips telegram probe when not configured", async () => {
@@ -951,5 +1014,21 @@ describe("getHealthSnapshot", () => {
     expect(main?.heartbeat.every).toBe("disabled");
     expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
     expect(ops?.heartbeat.every).toBe("1h");
+  });
+
+  it("passes agent scope when summarizing configured agent sessions", async () => {
+    testConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    };
+    testStore = {};
+
+    await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(listHealthSessionEntriesCalls).toEqual([
+      { agentId: "main", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", storePath: "/tmp/sessions.json" },
+    ]);
   });
 });

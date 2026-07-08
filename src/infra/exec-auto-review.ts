@@ -1,5 +1,5 @@
 /** Risk level returned by exec auto-reviewers for approval routing decisions. */
-export type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
+type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
 /** Auto-review outcome: either approve once or send the command to normal approval. */
 export type ExecAutoReviewDecision =
@@ -15,7 +15,7 @@ export type ExecAutoReviewDecision =
     };
 
 /** Execution host whose command policy context is being reviewed. */
-export type ExecAutoReviewHost = "gateway" | "node";
+export type ExecAutoReviewHost = "gateway" | "node" | "codex-app-server";
 
 /** Command and policy facts supplied to an exec auto-reviewer. */
 export type ExecAutoReviewInput = {

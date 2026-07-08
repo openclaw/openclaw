@@ -19,6 +19,7 @@ const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
+const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 
 vi.mock("../config/config.js", () => ({
@@ -33,7 +34,15 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
+  resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
+}));
+
+vi.mock("./session-transcript-readers.js", () => ({
   readSessionMessagesAsync: readSessionMessagesMock,
+  readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
+    messages: await readSessionMessagesMock(...args),
+    transcriptPath: await resolveSessionHistoryTranscriptPathMock(...args),
+  }),
 }));
 
 const {
@@ -144,6 +153,8 @@ async function requestManagedImage(params: {
   headers?: Record<string, string>;
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
+  resolvedTranscriptPath?: string | null;
+  onReadTranscriptMessages?: () => Promise<void> | void;
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
@@ -167,21 +178,27 @@ async function requestManagedImage(params: {
     storePath: path.join(params.stateDir, "gateway-sessions.json"),
     entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
   });
-  readSessionMessagesMock.mockReturnValue(
-    params.transcriptMessages ?? [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "image",
-            url: params.pathName,
-            openUrl: params.pathName,
-          },
-        ],
-        __openclaw: { id: "msg-1" },
-      },
-    ],
+  resolveSessionHistoryTranscriptPathMock.mockResolvedValue(
+    params.resolvedTranscriptPath ?? params.sessionEntry?.sessionFile ?? "session.jsonl",
   );
+  readSessionMessagesMock.mockImplementation(async () => {
+    await params.onReadTranscriptMessages?.();
+    return (
+      params.transcriptMessages ?? [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              url: params.pathName,
+              openUrl: params.pathName,
+            },
+          ],
+          __openclaw: { id: "msg-1" },
+        },
+      ]
+    );
+  });
 
   const auth = { mode: "test" } as never;
   const server = http.createServer((req, res) => {
@@ -272,6 +289,19 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
+    expect(readSessionMessagesMock).toHaveBeenCalledWith(
+      {
+        agentId: undefined,
+        sessionEntry: {
+          sessionFile: "session.jsonl",
+          sessionId: "sess-1",
+        },
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(stateDir, "gateway-sessions.json"),
+      },
+      expect.objectContaining({ allowResetArchiveFallback: true }),
+    );
   });
 
   it("rejects unauthenticated requests before serving bytes", async () => {
@@ -402,6 +432,99 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(third.result.statusCode).toBe(200);
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the session attachment index for archive-backed requests", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const archiveFile = path.join(
+      stateDir,
+      "sessions",
+      "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z",
+    );
+    await fs.mkdir(path.dirname(archiveFile), { recursive: true });
+    await fs.writeFile(archiveFile, '{"message":{}}\n', "utf-8");
+
+    const transcriptMessages = [
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+          },
+        ],
+      },
+    ];
+
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const first = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      sessionEntry: { sessionId: "sess-main" },
+      resolvedTranscriptPath: archiveFile,
+      transcriptMessages,
+    });
+    const second = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      sessionEntry: { sessionId: "sess-main" },
+      resolvedTranscriptPath: archiveFile,
+      transcriptMessages,
+    });
+
+    expect(first.result.statusCode).toBe(200);
+    expect(second.result.statusCode).toBe(200);
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a session attachment index when the transcript changes during the read", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const sessionFile = path.join(stateDir, "sessions", "sess-main.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, '{"message":{}}\n', "utf-8");
+
+    const transcriptMessages = [
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+          },
+        ],
+      },
+    ];
+
+    let mutatedTranscript = false;
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const first = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      sessionEntry: { sessionId: "sess-main", sessionFile },
+      transcriptMessages,
+      onReadTranscriptMessages: async () => {
+        if (!mutatedTranscript) {
+          mutatedTranscript = true;
+          await fs.appendFile(sessionFile, '{"message":{"content":"updated"}}\n', "utf-8");
+        }
+      },
+    });
+    const second = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      sessionEntry: { sessionId: "sess-main", sessionFile },
+      transcriptMessages,
+    });
+
+    expect(first.result.statusCode).toBe(200);
+    expect(second.result.statusCode).toBe(200);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -736,6 +859,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("allows managed inbound image paths before validating explicit roots", async () => {
+    const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
+    await fs.mkdir(path.dirname(inboundPath), { recursive: true });
+    await fs.writeFile(inboundPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [inboundPath],
+        stateDir,
+        localRoots: [path.parse(stateDir).root],
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(requireBlock(blocks).type).toBe("image");
+    });
+  });
+
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");
@@ -942,6 +1083,19 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).toHaveBeenCalledWith(
+      {
+        agentId: undefined,
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: path.join(stateDir, "gateway-sessions.json"),
+      },
+      expect.objectContaining({ allowResetArchiveFallback: true }),
+    );
   });
 
   it("reads each session transcript once while evaluating committed records", async () => {

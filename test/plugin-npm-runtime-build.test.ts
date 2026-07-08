@@ -58,12 +58,15 @@ describe("plugin npm runtime build planning", () => {
     const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
     expect(qqbotRuntimePlan.entry).toEqual({
       api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
+      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
       "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
+      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
       index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
       "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
       "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
       "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
       "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
+      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
     });
     expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
     expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
@@ -101,5 +104,20 @@ describe("plugin npm runtime build planning", () => {
       expect(plan.runtimeBuildOutputs).toContain("./dist/doctor-contract-api.js");
       expect(plan.packageFiles).toContain("dist/**");
     }
+  });
+
+  it("builds Tencent setup metadata for installed-package migrations", () => {
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "tencent"),
+      }),
+    );
+
+    expect(plan.entry["setup-api"]).toBe(
+      path.join(repoRoot, "extensions", "tencent", "setup-api.ts"),
+    );
+    expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 });

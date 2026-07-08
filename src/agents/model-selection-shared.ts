@@ -45,6 +45,7 @@ type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"]
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
+  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
 
@@ -62,6 +63,10 @@ type ExactConfiguredProviderRefParts = {
   configuredProvider: string;
   modelRaw: string;
 };
+
+function providerAliasKey(provider: string, alias: string): string {
+  return `${normalizeProviderId(provider)}/${normalizeLowercaseStringOrEmpty(alias)}`;
+}
 
 function hasSlashFormModelRef(raw: string): boolean {
   const trimmed = raw.trim();
@@ -554,10 +559,11 @@ function buildModelAliasIndexWithManifestContext(
   },
 ): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byProviderAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
   const aliasCandidates = listModelAliasCandidates(params.cfg);
   if (aliasCandidates.length === 0) {
-    return { byAlias, byKey };
+    return { byAlias, byProviderAlias, byKey };
   }
   const manifestPlugins = params.manifestPluginContext.get();
 
@@ -576,14 +582,18 @@ function buildModelAliasIndexWithManifestContext(
       continue;
     }
     const aliasKey = normalizeLowercaseStringOrEmpty(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
+    const match = { alias, ref: parsed };
+    byAlias.set(aliasKey, match);
+    // Bare aliases retain their existing last-wins behavior. Provider-qualified
+    // aliases stay scoped so duplicate display names cannot select another provider.
+    byProviderAlias.set(providerAliasKey(parsed.provider, alias), match);
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
     existing.push(alias);
     byKey.set(key, existing);
   }
 
-  return { byAlias, byKey };
+  return { byAlias, byProviderAlias, byKey };
 }
 
 /** Build lookup maps from user-facing aliases to normalized model refs. */
@@ -659,6 +669,10 @@ function applyModelCatalogMetadata(params: {
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
+  const nextParams =
+    params.entry.params || configuredEntry?.params
+      ? { ...params.entry.params, ...configuredEntry?.params }
+      : undefined;
   const nextCompat =
     params.entry.compat || configuredEntry?.compat
       ? { ...params.entry.compat, ...configuredEntry?.compat }
@@ -672,6 +686,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
@@ -687,6 +702,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextTokens = configuredEntry?.contextTokens;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
+  const nextParams = configuredEntry?.params;
   const nextCompat = configuredEntry?.compat;
 
   return {
@@ -698,6 +714,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
@@ -720,6 +737,15 @@ export function resolveModelRefFromString(
   const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+  }
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const providerAliasMatch = params.aliasIndex?.byProviderAlias?.get(
+      providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
+    );
+    if (providerAliasMatch) {
+      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
+    }
   }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,
@@ -1091,7 +1117,7 @@ export type ModelRefStatus = {
   allowed: boolean;
 };
 
-export type ResolveAllowedModelRefResult =
+type ResolveAllowedModelRefResult =
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -1302,6 +1328,8 @@ export function buildConfiguredModelCatalog(params: {
           ? model.contextTokens
           : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
+      const modelParams =
+        model?.params && typeof model.params === "object" ? model.params : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       const reasoning =
         typeof model?.reasoning === "boolean"
@@ -1318,6 +1346,7 @@ export function buildConfiguredModelCatalog(params: {
         contextTokens,
         reasoning,
         input,
+        ...(modelParams ? { params: modelParams } : {}),
         compat,
       });
     }
@@ -1487,7 +1516,11 @@ export type ModelVisibilityPolicy = {
   }) => ModelCatalogEntry[];
 };
 
-function dedupeModelCatalogEntries(entries: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
+export function dedupeModelCatalogEntries(
+  entries: readonly ModelCatalogEntry[],
+): ModelCatalogEntry[] {
+  // Preserve the first occurrence after precedence merging while removing
+  // provider/id duplicates from configured and auth-backed catalogs.
   const seen = new Set<string>();
   const next: ModelCatalogEntry[] = [];
   for (const entry of entries) {

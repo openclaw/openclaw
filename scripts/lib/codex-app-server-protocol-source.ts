@@ -42,18 +42,14 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
 export function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
 ): PnpmCommand {
   const env = options.env ?? process.env;
   const command = resolvePnpmRunner({
-    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    comSpec: options.comSpec,
+    env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
@@ -162,6 +158,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   repoRoot = process.cwd(),
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
+  await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
@@ -189,6 +186,41 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
+  const header = /^\s*\[workspace\.package\]\s*(?:#.*)?$/m.exec(manifest);
+  if (!header) {
+    return undefined;
+  }
+  const remainder = manifest.slice(header.index + header[0].length);
+  const nextSection = /^\s*\[/m.exec(remainder);
+  const workspacePackage = remainder.slice(0, nextSection?.index ?? remainder.length);
+  return /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(workspacePackage)?.[1];
+}
+
+export async function validateCodexProtocolSourceVersion(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const packageManifest = JSON.parse(
+    await fs.readFile(path.join(params.repoRoot, "extensions/codex/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const expectedVersion = packageManifest.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
+    throw new Error("extensions/codex/package.json must pin @openai/codex to an exact version");
+  }
+
+  const cargoManifest = await fs.readFile(
+    path.join(params.codexRepo, "codex-rs/Cargo.toml"),
+    "utf8",
+  );
+  const sourceVersion = readCargoWorkspacePackageVersion(cargoManifest);
+  if (sourceVersion !== expectedVersion) {
+    throw new Error(
+      `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
+    );
+  }
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
@@ -330,6 +362,9 @@ function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
     cwd: codexRepo,
     stdio: "inherit",
   });
+  if (result.error) {
+    throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
+  }
   if (result.status !== 0) {
     throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
   }
@@ -350,6 +385,11 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  if (result.error) {
+    throw new Error(`Failed to start protocol formatter: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
     throw new Error(
       `pnpm exec oxfmt --write --threads=1 ${root} failed with exit code ${
@@ -359,7 +399,7 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
   }
 }
 
-export async function rewriteTypeScriptImports(root: string): Promise<void> {
+async function rewriteTypeScriptImports(root: string): Promise<void> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
@@ -377,9 +417,98 @@ export async function rewriteTypeScriptImports(root: string): Promise<void> {
   );
 }
 
-export function normalizeGeneratedTypeScript(text: string): string {
+function normalizeGeneratedTypeScript(text: string): string {
   return text
     .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
     .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
     .replaceAll("| null | null", "| null");
+}
+
+// Sort typed-object arrays for schema keywords whose item order does not affect
+// payload validity; preserve order everywhere else, especially prefixItems.
+const typeSortedSchemaArrayKeys = new Set(["anyOf", "enum", "oneOf", "required"]);
+
+export function canonicalizeCodexAppServerProtocolJson(
+  value: unknown,
+  parentKey?: string,
+): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => canonicalizeCodexAppServerProtocolJson(item));
+    return parentKey !== undefined && typeSortedSchemaArrayKeys.has(parentKey)
+      ? sortCodexProtocolJsonArrayByType(items)
+      : items;
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const sorted: Record<string, unknown> = {};
+  const entries = Object.entries(value)
+    .map(([key, child]) => [key, canonicalizeCodexAppServerProtocolJson(child, key)] as const)
+    .toSorted(([left], [right]) => {
+      if (left < right) {
+        return -1;
+      }
+      if (left > right) {
+        return 1;
+      }
+      return 0;
+    });
+  for (const [key, child] of entries) {
+    sorted[key] = child;
+  }
+  return sorted;
+}
+
+export function normalizeCodexAppServerProtocolJsonText(text: string): string {
+  return JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)));
+}
+
+export function formatCodexAppServerProtocolJsonText(text: string): string {
+  return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+}
+
+function sortCodexProtocolJsonArrayByType(items: unknown[]): unknown[] {
+  if (!items.every(isPlainObject)) {
+    return items;
+  }
+
+  const typed = items
+    .map((item, index) => ({ index, item, type: stringRecordValue(item, "type") }))
+    .filter(
+      (entry): entry is { index: number; item: Record<string, unknown>; type: string } =>
+        entry.type !== undefined,
+    );
+  if (typed.length < 2) {
+    return items;
+  }
+
+  const sortedTyped = typed.toSorted((left, right) => {
+    if (left.type < right.type) {
+      return -1;
+    }
+    if (left.type > right.type) {
+      return 1;
+    }
+    return left.index - right.index;
+  });
+  const sortedByOriginalIndex = new Map(
+    typed.map((entry, index) => [entry.index, sortedTyped[index]?.item]),
+  );
+
+  return items.map((item, index) => sortedByOriginalIndex.get(index) ?? item);
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

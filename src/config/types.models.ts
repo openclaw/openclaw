@@ -5,6 +5,7 @@ import type {
   OpenAIResponsesCompat,
   ThinkingLevelMap,
 } from "../llm/types.js";
+import { isStringOption } from "../utils/string-readers.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -36,6 +37,7 @@ type SupportedOpenAICompatFields = Pick<
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
   | "requiresThinkingAsText"
+  | "requiresReasoningContentOnAssistantMessages"
   | "openRouterRouting"
   | "vercelGatewayRouting"
   | "zaiToolStream"
@@ -73,7 +75,7 @@ export const MODEL_THINKING_FORMATS = [
 
 /** Runtime guard for config-provided thinking format strings. */
 export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
-  return (MODEL_THINKING_FORMATS as readonly string[]).includes(value);
+  return isStringOption(value, MODEL_THINKING_FORMATS);
 }
 
 /** Provider/model compatibility switches consumed by request builders and tool schema adapters. */

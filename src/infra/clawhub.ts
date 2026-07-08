@@ -3,13 +3,19 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
+import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -19,6 +25,13 @@ const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+// Align with marketplace archive downloads (src/plugins/marketplace.ts).
+const CLAWHUB_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
+// ClawHub is an external marketplace: bound untrusted JSON and error bodies so
+// a hostile or malfunctioning host cannot exhaust memory with an endless stream.
+const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
@@ -59,7 +72,6 @@ export type ClawHubPackageArtifactSummary = {
   tarballUrl?: string | null;
   legacyDownloadUrl?: string | null;
 };
-export type ClawHubArtifactKind = "legacy-zip" | "npm-pack";
 export type ClawHubArtifactScanState =
   | "pending"
   | "clean"
@@ -68,14 +80,14 @@ export type ClawHubArtifactScanState =
   | "not-run"
   | (string & {});
 export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
-export type ClawHubPackageSecurityState =
-  | "pending"
-  | "approved"
-  | "limited"
-  | "quarantined"
-  | "rejected"
-  | "revoked"
-  | (string & {});
+export type ClawHubPackageSecurityTrust = {
+  scanStatus?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+  blockedFromDownload: boolean;
+  reasons: string[];
+  pending: boolean;
+  stale: boolean;
+};
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -122,15 +134,16 @@ export type ClawHubPackageArtifactResolverResponse = {
   artifact?: ClawHubResolvedArtifact | null;
 };
 export type ClawHubPackageSecurityResponse = {
-  packageId?: string | null;
-  releaseId?: string | null;
-  state: ClawHubPackageSecurityState;
-  reasonCode?: string | null;
-  moderatorNote?: string | null;
-  actorId?: string | null;
-  createdAt?: number | null;
-  scanState?: ClawHubArtifactScanState | null;
-  moderationState?: ClawHubArtifactModerationState | null;
+  package?: {
+    name?: string | null;
+    displayName?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+  } | null;
+  release?: {
+    id?: string | null;
+    version?: string | null;
+  } | null;
+  trust: ClawHubPackageSecurityTrust;
 };
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
@@ -148,33 +161,6 @@ export type ClawHubPackageClawPackSummary = {
   hostTargets?: ClawHubPackageHostTarget[];
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
-};
-export type ClawHubPackageReadinessPhase =
-  | "planned"
-  | "published"
-  | "clawpack-ready"
-  | "legacy-zip-only"
-  | "metadata-ready"
-  | "blocked"
-  | "ready-for-openclaw"
-  | (string & {});
-export type ClawHubPackageReadiness = {
-  ready?: boolean | null;
-  readyForOpenClaw?: boolean | null;
-  installReady?: boolean | null;
-  phase?: ClawHubPackageReadinessPhase | null;
-  status?: ClawHubPackageReadinessPhase | null;
-  package?: {
-    name?: string | null;
-    family?: ClawHubPackageFamily | (string & {}) | null;
-    channel?: ClawHubPackageChannel | (string & {}) | null;
-    isOfficial?: boolean | null;
-  } | null;
-  packageName?: string | null;
-  artifactKind?: ClawHubArtifactKind | (string & {}) | null;
-  blockers?: string[];
-  scanState?: ClawHubArtifactScanState | null;
-  moderationState?: ClawHubArtifactModerationState | null;
 };
 export type ClawHubPackageListItem = {
   name: string;
@@ -288,6 +274,8 @@ export type ClawHubSkillDetail = {
     displayName: string;
     summary?: string;
     tags?: Record<string, string>;
+    channel?: string | null;
+    isOfficial?: boolean | null;
     createdAt: number;
     updatedAt: number;
   } | null;
@@ -304,6 +292,9 @@ export type ClawHubSkillDetail = {
     handle?: string | null;
     displayName?: string | null;
     image?: string | null;
+    official?: boolean | null;
+    channel?: string | null;
+    isOfficial?: boolean | null;
   } | null;
 };
 
@@ -311,16 +302,23 @@ export type ClawHubSkillInstallResolutionResponse =
   | {
       ok: true;
       slug: string;
+      channel?: string | null;
+      isOfficial?: boolean | null;
       installKind: "archive";
       archive: {
         version: string;
         downloadUrl: string;
+        channel?: string | null;
+        isOfficial?: boolean | null;
       };
     }
   | {
       ok: true;
       slug: string;
+      channel?: string | null;
+      isOfficial?: boolean | null;
       installKind: "github";
+      /** Commit-pinned source approved by ClawHub's install resolver policy. */
       github: {
         repo: string;
         path: string;
@@ -344,6 +342,12 @@ export type ClawHubSkillVerificationResponse = {
   ok: boolean;
   decision: ClawHubSkillVerificationDecision;
   reasons: string[];
+  slug?: string | null;
+  displayName?: string | null;
+  pageUrl?: string | null;
+  publisherHandle?: string | null;
+  publisherDisplayName?: string | null;
+  createdAt?: number | null;
   skill: unknown;
   publisher: unknown;
   version: unknown;
@@ -356,6 +360,7 @@ export type ClawHubSkillVerificationResponse = {
 
 export type ClawHubSkillSecurityVerdictRequestItem = {
   slug: string;
+  ownerHandle?: string;
   version: string;
 };
 
@@ -384,27 +389,6 @@ export type ClawHubSkillSecurityVerdictItem = {
 export type ClawHubSkillSecurityVerdictsResponse = {
   schema: "clawhub.skill.security-verdicts.v1";
   items: ClawHubSkillSecurityVerdictItem[];
-};
-
-export type ClawHubSkillListResponse = {
-  items: Array<{
-    slug: string;
-    displayName: string;
-    summary?: string;
-    tags?: Record<string, string>;
-    latestVersion?: {
-      version: string;
-      createdAt: number;
-      changelog?: string;
-    } | null;
-    metadata?: {
-      os?: string[] | null;
-      systems?: string[] | null;
-    } | null;
-    createdAt: number;
-    updatedAt: number;
-  }>;
-  nextCursor?: string | null;
 };
 
 export type ClawHubDownloadResult = {
@@ -437,6 +421,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  headers?: Record<string, string>;
 };
 
 type ClawHubConfigLike = {
@@ -449,6 +434,10 @@ type ClawHubConfigLike = {
   credentials?: ClawHubConfigLike | null;
   user?: ClawHubConfigLike | null;
 };
+
+function resolveClawHubRequestTimeoutMs(timeoutMs: unknown): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
+}
 
 export class ClawHubRequestError extends Error {
   readonly status: number;
@@ -592,13 +581,13 @@ function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
-  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  const normalizedCorrection = normalizeOpenClawNumericCorrectionForPluginApi(version);
   if (normalizedCorrection) {
     return normalizedCorrection;
   }
   return shouldPreservePluginApiPrereleaseFloor(target)
     ? version
-    : normalizeCalVerCorrectionForPluginApi(version);
+    : normalizeOpenClawReleaseSuffixForPluginApi(version);
 }
 
 function satisfiesComparator(version: string, token: string): boolean {
@@ -656,18 +645,18 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
-  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
-const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_RELEASE_SUFFIX_PATTERN =
+  /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
 
-function normalizeCalVerNumericCorrectionForPluginApi(
+function normalizeOpenClawNumericCorrectionForPluginApi(
   pluginApiVersion: string,
 ): string | undefined {
-  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+  return OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
 }
 
-function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
-  const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
+function normalizeOpenClawReleaseSuffixForPluginApi(pluginApiVersion: string): string {
+  const match = OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(pluginApiVersion.trim());
   return match?.[1] ?? pluginApiVersion;
 }
 
@@ -705,20 +694,17 @@ async function clawhubRequest(
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
-    () =>
-      controller.abort(
-        new Error(
-          `ClawHub request timed out after ${params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS}ms`,
-        ),
-      ),
-    params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+    timeoutMs,
   );
   try {
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
+      ...params.headers,
     };
     const init: RequestInit = { signal: controller.signal };
     if (params.method) {
@@ -737,10 +723,14 @@ async function clawhubRequest(
   }
 }
 
-async function readErrorBody(response: Response): Promise<string> {
+async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
   try {
-    const text = (await response.text()).trim();
-    return text || response.statusText || `HTTP ${response.status}`;
+    const snippet = await readResponseTextSnippet(response, {
+      maxBytes: CLAWHUB_ERROR_BODY_MAX_BYTES,
+      maxChars: CLAWHUB_ERROR_BODY_MAX_CHARS,
+      chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
+    });
+    return snippet || response.statusText || `HTTP ${response.status}`;
   } catch {
     return response.statusText || `HTTP ${response.status}`;
   }
@@ -750,8 +740,9 @@ async function buildClawHubError(
   response: Response,
   url: URL,
   hasToken: boolean,
+  timeoutMs?: number,
 ): Promise<ClawHubRequestError> {
-  let body = await readErrorBody(response);
+  let body = await readErrorBody(response, timeoutMs);
   if (response.status === 429) {
     const suffix = formatRateLimitSuffix(response.headers, hasToken);
     if (suffix) {
@@ -782,10 +773,27 @@ function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   const { response, url, hasToken } = await clawhubRequest(params);
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
+  return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+}
+
+async function parseClawHubJsonBody<T>(
+  response: Response,
+  url: URL,
+  timeoutMs?: number,
+): Promise<T> {
+  const buffer = await readResponseWithLimit(response, CLAWHUB_JSON_MAX_BYTES, {
+    chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `ClawHub ${url.pathname} response exceeded ${maxBytes} bytes (${size} bytes received)`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`ClawHub ${url.pathname} response stalled after ${chunkTimeoutMs}ms`),
+  });
   try {
-    return (await response.json()) as T;
+    return JSON.parse(new TextDecoder().decode(buffer)) as T;
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }
@@ -797,16 +805,210 @@ async function readClawHubResponseBytes(params: {
   timeoutMs?: number;
   resourceLabel: string;
 }): Promise<Uint8Array> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
-  return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
+  const maxBytes = params.maxBytes ?? CLAWHUB_ARCHIVE_MAX_BYTES;
+  const contentEncoding = normalizeOptionalString(params.response.headers.get("content-encoding"));
+  const declaredSize =
+    !contentEncoding || contentEncoding.toLowerCase() === "identity"
+      ? parseStrictNonNegativeInteger(params.response.headers.get("content-length"))
+      : undefined;
+  if (declaredSize !== undefined && declaredSize > maxBytes) {
+    // Fetch may decode encoded bodies while retaining their wire length, so
+    // only identity lengths can safely short-circuit the decoded stream cap.
+    await params.response.body?.cancel().catch(() => undefined);
+    throw createClawHubBodyLimitError(params.resourceLabel, declaredSize, maxBytes, "declared");
+  }
+  return await readResponseWithLimit(params.response, maxBytes, {
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `ClawHub ${params.resourceLabel} exceeded ${maxBytes} bytes (${size} bytes received)`,
-      ),
+    onOverflow: ({ size, maxBytes: limitBytes }) =>
+      createClawHubBodyLimitError(params.resourceLabel, size, limitBytes),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
   });
+}
+
+function createClawHubBodyLimitError(
+  resourceLabel: string,
+  size: number,
+  maxBytes: number,
+  measurement: "declared" | "received" = "received",
+): Error {
+  return new Error(
+    `ClawHub ${resourceLabel} exceeded ${maxBytes} bytes (${size} bytes ${measurement})`,
+  );
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function optionalStringField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string | null | undefined {
+  const value = source[field];
+  if (value === undefined || value === null || typeof value === "string") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string or null.`);
+}
+
+function requiredBooleanField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean {
+  const value = source[field];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a boolean.`);
+}
+
+function requiredStringArrayField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string[] {
+  const value = source[field];
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
+}
+
+function requiredStringField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string {
+  const value = source[field];
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a non-empty string.`);
+}
+
+function requiredNumberField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): number {
+  const value = source[field];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a number.`);
+}
+
+function optionalBooleanField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean | undefined {
+  const value = source[field];
+  if (value === undefined || typeof value === "boolean") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a boolean.`);
+}
+
+function optionalStringArrayField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string[] | undefined {
+  const value = source[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
+}
+
+function parseOptionalSecurityPackage(value: unknown): ClawHubPackageSecurityResponse["package"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error(
+      "Malformed ClawHub security response: expected package to be an object or null.",
+    );
+  }
+  const result: NonNullable<ClawHubPackageSecurityResponse["package"]> = {};
+  const name = optionalStringField(value, "name", "security package");
+  const displayName = optionalStringField(value, "displayName", "security package");
+  const family = optionalStringField(value, "family", "security package");
+  if (name !== undefined) {
+    result.name = name;
+  }
+  if (displayName !== undefined) {
+    result.displayName = displayName;
+  }
+  if (family !== undefined) {
+    result.family = family;
+  }
+  return result;
+}
+
+function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityResponse["release"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error(
+      "Malformed ClawHub security response: expected release to be an object or null.",
+    );
+  }
+  const result: NonNullable<ClawHubPackageSecurityResponse["release"]> = {};
+  const releaseId = optionalStringField(value, "releaseId", "security release");
+  const legacyId = optionalStringField(value, "id", "security release");
+  const version = optionalStringField(value, "version", "security release");
+  const id = releaseId ?? legacyId;
+  if (id !== undefined) {
+    result.id = id;
+  }
+  if (version !== undefined) {
+    result.version = version;
+  }
+  return result;
+}
+
+function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecurityResponse {
+  if (!isJsonObject(value)) {
+    throw new Error("Malformed ClawHub security response: expected an object.");
+  }
+  const trust = value.trust;
+  if (!isJsonObject(trust)) {
+    throw new Error("Malformed ClawHub security response: expected trust to be an object.");
+  }
+  const parsedTrust: ClawHubPackageSecurityTrust = {
+    blockedFromDownload: requiredBooleanField(trust, "blockedFromDownload", "security trust"),
+    reasons: requiredStringArrayField(trust, "reasons", "security trust"),
+    pending: requiredBooleanField(trust, "pending", "security trust"),
+    stale: requiredBooleanField(trust, "stale", "security trust"),
+  };
+  const scanStatus = optionalStringField(trust, "scanStatus", "security trust");
+  const moderationState = optionalStringField(trust, "moderationState", "security trust");
+  if (scanStatus !== undefined) {
+    parsedTrust.scanStatus = scanStatus;
+  }
+  if (moderationState !== undefined) {
+    parsedTrust.moderationState = moderationState;
+  }
+  const result: ClawHubPackageSecurityResponse = { trust: parsedTrust };
+  const parsedPackage = parseOptionalSecurityPackage(value.package);
+  const parsedRelease = parseOptionalSecurityRelease(value.release);
+  if (parsedPackage !== undefined) {
+    result.package = parsedPackage;
+  }
+  if (parsedRelease !== undefined) {
+    result.release = parsedRelease;
+  }
+  return result;
 }
 
 /** Resolves the configured ClawHub base URL, falling back to the default public host. */
@@ -821,13 +1023,18 @@ export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
 function buildVersionOrTagSearch(params: {
   version?: string;
   tag?: string;
-}): { version?: string; tag?: string } | undefined {
+  ownerHandle?: string;
+}): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
+  const ownerHandle = normalizeOptionalString(params.ownerHandle);
   if (version) {
-    return { version };
+    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
   }
   const tag = normalizeOptionalString(params.tag);
-  return tag ? { tag } : undefined;
+  if (tag) {
+    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
+  }
+  return ownerHandle ? { ownerHandle } : undefined;
 }
 
 function buildGitHubZipUrl(repo: string, commit: string): string {
@@ -842,12 +1049,11 @@ function buildGitHubZipUrl(repo: string, commit: string): string {
 }
 
 function formatSha256Integrity(bytes: Uint8Array): string {
-  const digest = createHash("sha256").update(bytes).digest("base64");
-  return `sha256-${digest}`;
+  return `sha256-${sha256Base64(bytes)}`;
 }
 
 function formatSha256Hex(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return digestSha256Hex(bytes);
 }
 
 function formatSha512Integrity(bytes: Uint8Array): string {
@@ -971,7 +1177,7 @@ export async function fetchClawHubPackageSecurity(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubPackageSecurityResponse> {
-  return await fetchJson<ClawHubPackageSecurityResponse>({
+  const response = await fetchJson<unknown>({
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
@@ -980,22 +1186,7 @@ export async function fetchClawHubPackageSecurity(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   });
-}
-
-export async function fetchClawHubPackageReadiness(params: {
-  name: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-}): Promise<ClawHubPackageReadiness> {
-  return await fetchJson<ClawHubPackageReadiness>({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/readiness`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
+  return parseClawHubPackageSecurityResponse(response);
 }
 
 export async function searchClawHubPackages(params: {
@@ -1046,6 +1237,7 @@ export async function searchClawHubSkills(params: {
 
 export async function fetchClawHubSkillDetail(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1057,11 +1249,13 @@ export async function fetchClawHubSkillDetail(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
 }
 
 export async function fetchClawHubSkillInstallResolution(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1075,22 +1269,24 @@ export async function fetchClawHubSkillInstallResolution(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     search: {
+      ownerHandle: params.ownerHandle,
       forceInstall: params.forceInstall ? "1" : undefined,
     },
   });
   const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
   if (!response.ok && !isStructuredBlock) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
-  try {
-    return (await response.json()) as ClawHubSkillInstallResolutionResponse;
-  } catch (cause) {
-    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
-  }
+  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
+    response,
+    url,
+    params.timeoutMs,
+  );
 }
 
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1130,6 +1326,7 @@ export async function fetchClawHubSkillSecurityVerdicts(params: {
 
 export async function fetchClawHubSkillCard(params: {
   slug?: string;
+  ownerHandle?: string;
   url?: string;
   version?: string;
   tag?: string;
@@ -1160,7 +1357,7 @@ export async function fetchClawHubSkillCard(params: {
     skipAuth,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1169,25 +1366,6 @@ export async function fetchClawHubSkillCard(params: {
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
   return new TextDecoder().decode(bytes);
-}
-
-export async function listClawHubSkills(params: {
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-  limit?: number;
-}): Promise<ClawHubSkillListResponse> {
-  return await fetchJson<ClawHubSkillListResponse>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/skills",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1214,7 +1392,7 @@ export async function downloadClawHubPackageArchive(params: {
       fetchImpl: params.fetchImpl,
     });
     if (!response.ok) {
-      throw await buildClawHubError(response, url, hasToken);
+      throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
     }
     const bytes = await readClawHubResponseBytes({
       response,
@@ -1261,7 +1439,6 @@ export async function downloadClawHubPackageArchive(params: {
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
-      tmpDir: os.tmpdir(),
     });
     await fs.writeFile(target.path, bytes);
     return {
@@ -1293,7 +1470,7 @@ export async function downloadClawHubPackageArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1304,7 +1481,6 @@ export async function downloadClawHubPackageArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-package",
     fileName: `${params.name}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1318,6 +1494,7 @@ export async function downloadClawHubPackageArchive(params: {
 
 export async function downloadClawHubSkillArchive(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1333,12 +1510,13 @@ export async function downloadClawHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
     search: {
       slug: params.slug,
+      ownerHandle: params.ownerHandle,
       version: params.version,
       tag: params.version ? undefined : params.tag,
     },
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1349,7 +1527,6 @@ export async function downloadClawHubSkillArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
     fileName: `${params.slug}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1381,7 +1558,7 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     skipAuth,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1392,7 +1569,6 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
     fileName: "skill.zip",
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1418,7 +1594,7 @@ export async function downloadClawHubGitHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1429,7 +1605,6 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-github-skill",
     fileName: `${params.commit}.zip`,
-    tmpDir: os.tmpdir(),
   });
   await fs.writeFile(target.path, bytes);
   return {
@@ -1470,7 +1645,7 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     json: {
       roots: [
         {
-          rootId: createHash("sha256").update(path.resolve(params.root)).digest("hex"),
+          rootId: digestSha256Hex(path.resolve(params.root)),
           label: formatTelemetryRootLabel(params.root),
           skills,
         },
@@ -1478,7 +1653,7 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     },
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
 }
 
@@ -1509,14 +1684,6 @@ export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): s
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
 }
 
-/** Detects package or skill detail payloads that represent skill-family packages. */
-export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
-  if ("package" in detail) {
-    return detail.package?.family === "skill";
-  }
-  return Boolean(detail.skill);
-}
-
 /** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,
@@ -1542,4 +1709,291 @@ export function satisfiesGatewayMinimum(
     return false;
   }
   return isAtLeast(current, minimum);
+}
+
+// ─── ClawHub promotions ────────────────────────────────────────────────────
+// Promotional model offers published by ClawHub (GET /api/v1/promotions).
+// The payload is declarative only: provider/authChoiceId/pluginNames are
+// validated against the local provider catalog by the caller before any
+// install/auth action, so a malformed or hostile record cannot execute code.
+
+export type ClawHubPromotionModel = {
+  modelRef: string;
+  alias?: string;
+  suggestedDefault?: boolean;
+};
+
+export type ClawHubPromotion = {
+  slug: string;
+  title: string;
+  blurb: string;
+  sponsor?: string;
+  status: string;
+  active: boolean;
+  startsAt: number;
+  endsAt: number;
+  provider?: string;
+  authChoiceId?: string;
+  pluginNames?: string[];
+  models: ClawHubPromotionModel[];
+  signupUrl?: string;
+  docsUrl?: string;
+  launchPageUrl?: string;
+};
+
+// A hosted-feed snapshot entry: the same declarative payload without the
+// live-only status/active flags (the feed only ever contains live records;
+// clients still window-filter on startsAt/endsAt).
+export type ClawHubPromotionsFeedEntry = Omit<ClawHubPromotion, "status" | "active">;
+
+export type ClawHubPromotionsFeed = {
+  schemaVersion: number;
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  expiresAt: string;
+  entries: ClawHubPromotionsFeedEntry[];
+};
+
+// Shell-safe contract for provider/model refs: they are echoed into
+// copy-paste CLI commands, so whitespace and shell metacharacters must fail
+// parsing rather than reach a terminal.
+const CLAWHUB_PROMOTION_MODEL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPromotionModel {
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected each model to be an object.`);
+  }
+  const modelRef = requiredStringField(value, "modelRef", context);
+  if (!CLAWHUB_PROMOTION_MODEL_REF_RE.test(modelRef)) {
+    throw new Error(`Malformed ClawHub ${context}: modelRef contains unsupported characters.`);
+  }
+  const model: ClawHubPromotionModel = {
+    modelRef,
+  };
+  const alias = optionalStringField(value, "alias", context);
+  if (alias) {
+    model.alias = alias;
+  }
+  const suggestedDefault = optionalBooleanField(value, "suggestedDefault", context);
+  if (suggestedDefault !== undefined) {
+    model.suggestedDefault = suggestedDefault;
+  }
+  return model;
+}
+
+// ClawHub's server-side slug contract. Enforced here because slugs are echoed
+// into copy-paste CLI commands; anything else would be a shell-injection path.
+const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+// Safe identifier grammar for provider ids and auth choice ids.
+const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
+
+// Shared shape between the live API promotion and a feed entry: everything
+// except the live-only `status`/`active` flags.
+function parseClawHubPromotionCore(
+  value: Record<string, unknown>,
+  context: string,
+): ClawHubPromotionsFeedEntry {
+  const modelsRaw = value.models;
+  if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
+    throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
+  }
+  const slug = requiredStringField(value, "slug", context);
+  if (!CLAWHUB_PROMOTION_SLUG_RE.test(slug)) {
+    throw new Error(`Malformed ClawHub ${context}: slug must be lowercase [a-z0-9-].`);
+  }
+  const startsAt = requiredNumberField(value, "startsAt", context);
+  const endsAt = requiredNumberField(value, "endsAt", context);
+  if (endsAt <= startsAt) {
+    throw new Error(`Malformed ClawHub ${context}: promotion window must end after it starts.`);
+  }
+  const promotion: ClawHubPromotionsFeedEntry = {
+    slug,
+    title: requiredStringField(value, "title", context),
+    blurb: requiredStringField(value, "blurb", context),
+    startsAt,
+    endsAt,
+    models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
+  };
+  const optionalStrings = ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"] as const;
+  for (const field of optionalStrings) {
+    const parsed = optionalStringField(value, field, context);
+    if (parsed) {
+      promotion[field] = parsed;
+    }
+  }
+  // Identifier fields are echoed into error messages and config; hold them to
+  // a safe identifier grammar so remote payloads cannot smuggle terminal
+  // controls or whitespace through failure paths.
+  const identifierFields = ["provider", "authChoiceId"] as const;
+  for (const field of identifierFields) {
+    const parsed = optionalStringField(value, field, context);
+    if (!parsed) {
+      continue;
+    }
+    if (!CLAWHUB_PROMOTION_IDENTIFIER_RE.test(parsed)) {
+      throw new Error(`Malformed ClawHub ${context}: ${field} contains unsupported characters.`);
+    }
+    promotion[field] = parsed;
+  }
+  const pluginNames = optionalStringArrayField(value, "pluginNames", context);
+  if (pluginNames && pluginNames.length > 0) {
+    for (const name of pluginNames) {
+      const parsed = parseRegistryNpmSpec(name);
+      if (!parsed || parsed.selectorKind !== "none" || parsed.name !== name) {
+        throw new Error(
+          `Malformed ClawHub ${context}: pluginNames must contain npm package names.`,
+        );
+      }
+    }
+    promotion.pluginNames = pluginNames;
+  }
+  return promotion;
+}
+
+export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
+  return {
+    ...parseClawHubPromotionCore(value, context),
+    status: requiredStringField(value, "status", context),
+    active: requiredBooleanField(value, "active", context),
+  };
+}
+
+export async function fetchClawHubPromotions(
+  params: {
+    baseUrl?: string;
+    timeoutMs?: number;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<ClawHubPromotion[]> {
+  const response = await fetchJson<unknown>({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/promotions",
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  if (!isJsonObject(response) || !Array.isArray(response.promotions)) {
+    throw new Error("Malformed ClawHub promotions response: expected a promotions array.");
+  }
+  return response.promotions.map((entry) => parseClawHubPromotion(entry));
+}
+
+export async function fetchClawHubPromotion(params: {
+  slug: string;
+  baseUrl?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPromotion> {
+  const response = await fetchJson<unknown>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/promotions/${encodeURIComponent(params.slug)}`,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  return parseClawHubPromotion(response);
+}
+
+// ─── ClawHub promotions feed (GET /api/v1/feeds/promotions) ───────────────
+// Immutable hosted snapshot used for passive discovery: cheap conditional
+// GETs (`If-None-Match` → 304), never authoritative for claiming — `promos
+// claim` always revalidates against the live API so the kill switch wins
+// regardless of snapshot staleness.
+
+const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
+// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
+// Bump only in lockstep with the server-side schema.
+const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
+
+export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
+  const context = "promotions feed";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
+  const id = requiredStringField(value, "id", context);
+  if (id !== CLAWHUB_PROMOTIONS_FEED_ID) {
+    throw new Error(`Malformed ClawHub ${context}: unexpected feed id.`);
+  }
+  const schemaVersion = requiredNumberField(value, "schemaVersion", context);
+  if (schemaVersion !== CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION) {
+    throw new Error(`Unsupported ClawHub ${context} schema version ${schemaVersion}.`);
+  }
+  const sequence = requiredNumberField(value, "sequence", context);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error(`Malformed ClawHub ${context}: sequence must be a non-negative integer.`);
+  }
+  const generatedAt = requiredStringField(value, "generatedAt", context);
+  const expiresAt = requiredStringField(value, "expiresAt", context);
+  const generatedAtMs = Date.parse(generatedAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs)) {
+    throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
+  }
+  if (expiresAtMs <= generatedAtMs) {
+    throw new Error(`Malformed ClawHub ${context}: expiresAt must be after generatedAt.`);
+  }
+  const entriesRaw = value.entries;
+  if (!Array.isArray(entriesRaw)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an entries array.`);
+  }
+  const entries = entriesRaw.map((entry) => {
+    if (!isJsonObject(entry)) {
+      throw new Error(`Malformed ClawHub ${context}: expected each entry to be an object.`);
+    }
+    if (requiredStringField(entry, "type", context) !== "promotion") {
+      throw new Error(`Malformed ClawHub ${context}: unexpected entry type.`);
+    }
+    return parseClawHubPromotionCore(entry, context);
+  });
+  return { schemaVersion, id, generatedAt, sequence, expiresAt, entries };
+}
+
+export type ClawHubPromotionsFeedFetchResult =
+  | { status: "not-modified" }
+  | { status: "ok"; feed: ClawHubPromotionsFeed; payload: string; etag?: string };
+
+export async function fetchClawHubPromotionsFeed(
+  params: {
+    etag?: string;
+    baseUrl?: string;
+    timeoutMs?: number;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<ClawHubPromotionsFeedFetchResult> {
+  const { response, url } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/feeds/promotions",
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    // Public CDN-served snapshot; an Authorization header would only
+    // fragment edge caches.
+    skipAuth: true,
+    ...(params.etag ? { headers: { "If-None-Match": params.etag } } : {}),
+  });
+  if (response.status === 304) {
+    return { status: "not-modified" };
+  }
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, false, params.timeoutMs);
+  }
+  const buffer = await readClawHubResponseBytes({
+    response,
+    maxBytes: CLAWHUB_JSON_MAX_BYTES,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: "promotions feed",
+  });
+  const payload = new TextDecoder().decode(buffer);
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(payload);
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
+  const feed = parseClawHubPromotionsFeed(parsedJson);
+  const etag = response.headers.get("etag") ?? undefined;
+  return { status: "ok", feed, payload, ...(etag ? { etag } : {}) };
 }

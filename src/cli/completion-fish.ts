@@ -1,5 +1,5 @@
 // Fish completion line builders for subcommands and options.
-export function escapeFishDescription(value: string): string {
+function escapeFishDescription(value: string): string {
   return value.replace(/'/g, "'\\''");
 }
 

@@ -19,6 +19,7 @@ import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
+  resetConfigRuntimeState: () => undefined,
 }));
 
 function jsonRoundTrip<T>(value: T): T {
@@ -158,6 +159,29 @@ describe("flows commands", () => {
           },
         ],
       });
+    });
+  });
+
+  it("keeps truncated text rows UTF-16 well-formed", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `${"x".repeat(18)}🚀tail`,
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"x".repeat(18)}…`);
+      expect(output).not.toContain("\uD83D");
     });
   });
 

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
-import { resolveMemoryWikiConfig, type ResolvedMemoryWikiConfig } from "./config.js";
+import type { ResolvedMemoryWikiConfig } from "./config.js";
 
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
@@ -226,11 +226,3 @@ export function createWikiPromptSectionBuilder(
     return [...toolGuidance, ...digestLines];
   };
 }
-
-export const buildWikiPromptSection: MemoryPromptSectionBuilder = ({ availableTools }) =>
-  createWikiPromptSectionBuilder(
-    resolveMemoryWikiConfig({
-      vault: { path: "" },
-      context: { includeCompiledDigestPrompt: false },
-    }),
-  )({ availableTools });

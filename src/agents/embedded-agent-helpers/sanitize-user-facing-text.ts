@@ -34,12 +34,31 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
-/** Format the billing failure copy with optional provider/model context. */
-export function formatBillingErrorMessage(provider?: string, model?: string): string {
+/** Format the billing failure copy with optional provider/model context.
+ *
+ * When `authMode` is `"oauth"` or `"token"` (i.e. Anthropic Max or a static
+ * bearer-token subscription) the user has no API key to top up, so we emit
+ * neutral copy that directs them to check their account instead (#80877).
+ */
+export function formatBillingErrorMessage(
+  provider?: string,
+  model?: string,
+  authMode?: string,
+): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+
+  // OAuth and static-token credentials do not have an API key to top up.
+  const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
+  if (isSubscriptionAuth) {
+    if (providerLabel) {
+      return `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`;
+    }
+    return "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
+  }
+
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
@@ -108,14 +127,23 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
-    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-  }
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
+  const isRateLimit = isRateLimitErrorMessage(raw);
+  if (isRateLimit) {
+    const providerMessage = extractProviderRateLimitMessage(raw);
+    if (providerMessage) {
+      return providerMessage;
+    }
+  }
+  // Retry classification still owns 429 backoff; user copy can preserve the provider's
+  // overload wording when there is no more actionable retry/reset detail.
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  if (isRateLimit) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   return undefined;
 }

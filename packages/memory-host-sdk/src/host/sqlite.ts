@@ -2,12 +2,14 @@
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import { installProcessWarningFilter } from "./openclaw-runtime-io.js";
 import {
+  configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
+  type SqliteConnectionPragmaOptions,
   type SqliteWalMaintenance,
   type SqliteWalMaintenanceOptions,
 } from "./sqlite-wal.js";
-import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
@@ -29,13 +31,16 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
 
 export function configureMemorySqliteWalMaintenance(
   db: DatabaseSync,
-  options?: SqliteWalMaintenanceOptions,
+  options?: SqliteWalMaintenanceOptions & Pick<SqliteConnectionPragmaOptions, "busyTimeoutMs">,
 ): SqliteWalMaintenance {
   const existing = sqliteWalMaintenanceByDb.get(db);
   if (existing) {
     return existing;
   }
-  const maintenance = configureSqliteWalMaintenance(db, options);
+  const maintenance =
+    options?.busyTimeoutMs === undefined
+      ? configureSqliteWalMaintenance(db, options)
+      : configureSqliteConnectionPragmas(db, options);
   sqliteWalMaintenanceByDb.set(db, maintenance);
   return maintenance;
 }

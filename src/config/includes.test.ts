@@ -11,6 +11,7 @@ import {
   MAX_INCLUDE_PATH_LENGTH,
   deepMerge,
   type IncludeResolver,
+  resolveConfigIncludeWritePath,
   resolveConfigIncludes,
 } from "./includes.js";
 
@@ -336,6 +337,31 @@ describe("resolveConfigIncludes", () => {
       shared: true,
     });
   });
+});
+
+describe("resolveConfigIncludeWritePath", () => {
+  it.runIf(process.platform !== "win32")(
+    "canonicalizes missing targets through symlinks into allowed roots",
+    async () => {
+      await withTempDir({ prefix: "openclaw-include-write-path-" }, async (tempRoot) => {
+        const configDir = path.join(tempRoot, "config");
+        const allowedDir = path.join(tempRoot, "allowed");
+        const linkDir = path.join(configDir, "shared");
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.mkdir(allowedDir, { recursive: true });
+        await fs.symlink(allowedDir, linkDir);
+        const allowedRealDir = await fs.realpath(allowedDir);
+
+        expect(
+          resolveConfigIncludeWritePath({
+            configPath: path.join(configDir, "openclaw.json"),
+            includePath: path.join(linkDir, "plugins.json5"),
+            allowedRoots: [allowedDir],
+          }),
+        ).toBe(path.join(allowedRealDir, "plugins.json5"));
+      });
+    },
+  );
 });
 
 describe("real-world config patterns", () => {

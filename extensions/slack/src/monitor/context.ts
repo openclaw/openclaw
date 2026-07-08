@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -46,7 +47,7 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
-export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,
@@ -97,6 +98,7 @@ export type SlackMonitorContext = {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -159,6 +161,7 @@ export type SlackMonitorContext = {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => Promise<void>;
   getSlackAssistantThreadContext: (
     channelId: string | undefined,
@@ -184,6 +187,7 @@ export function createSlackMonitorContext(params: {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -308,20 +312,19 @@ export function createSlackMonitorContext(params: {
     threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
-    if (!channelId) {
-      return params.mainKey;
-    }
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
+    if (!channelId && (!isDirectMessage || !senderId)) {
+      return params.mainKey;
+    }
     const isGroup = channelType === "mpim";
     const from = isDirectMessage
-      ? `slack:${channelId}`
+      ? `slack:${channelId || senderId}`
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    const senderId = normalizeOptionalString(p.senderId) ?? "";
-
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.
     try {
@@ -445,6 +448,7 @@ export function createSlackMonitorContext(params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => {
     if (!p.threadTs) {
       return;
@@ -455,6 +459,7 @@ export function createSlackMonitorContext(params: {
         channel_id: p.channelId,
         thread_ts: p.threadTs,
         status: p.status,
+        ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
       });
     } catch (err) {
       logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
@@ -602,6 +607,7 @@ export function createSlackMonitorContext(params: {
     botToken: params.botToken,
     app: params.app,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,
     botId: params.botId,
     teamId: params.teamId,

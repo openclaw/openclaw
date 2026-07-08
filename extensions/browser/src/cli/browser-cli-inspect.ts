@@ -51,7 +51,11 @@ export function registerBrowserInspectCommands(
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
-    .option("--labels", "Overlay role refs on the screenshot", false)
+    .option(
+      "--labels",
+      "Overlay role refs on the screenshot (works with --full-page, --ref, and --element)",
+      false,
+    )
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -98,7 +102,7 @@ export function registerBrowserInspectCommands(
     .option("--depth <n>", "Role snapshot: max depth")
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
-    .option("--labels", "Include viewport label overlay screenshot", false)
+    .option("--labels", "Include label overlay screenshot with annotations", false)
     .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
     .action(async (opts, cmd) => {

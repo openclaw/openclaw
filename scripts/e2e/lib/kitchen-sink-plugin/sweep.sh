@@ -2,7 +2,6 @@
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
-source scripts/lib/docker-e2e-logs.sh
 
 KITCHEN_SINK_SWEEP_SOURCE_ONLY="${KITCHEN_SINK_SWEEP_SOURCE_ONLY:-0}"
 if [[ -z "${OPENCLAW_ENTRY:-}" && "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
@@ -38,10 +37,39 @@ if [[ "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 fi
 
+print_kitchen_sink_log() {
+  local log_file="$1"
+  local max_bytes
+  max_bytes="$(openclaw_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536)" || return $?
+  if [ ! -f "$log_file" ]; then
+    return 0
+  fi
+  local log_bytes
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="${log_bytes//[[:space:]]/}"
+  if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+    log_bytes="0"
+  fi
+  if [ "$log_bytes" -le "$max_bytes" ]; then
+    cat "$log_file"
+    return 0
+  fi
+  echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
+  tail -c "$max_bytes" "$log_file"
+}
+
+openclaw_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null
+
 run_kitchen_sink_openclaw_logged() {
   local label="$1"
   shift
-  run_logged_print "$label" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+  local safe_label="${label//[^[:alnum:]._-]/_}"
+  local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"
+  if ! openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1; then
+    print_kitchen_sink_log "$log_file"
+    return 1
+  fi
+  print_kitchen_sink_log "$log_file"
 }
 
 run_kitchen_sink_openclaw_capture() {
@@ -53,12 +81,13 @@ run_kitchen_sink_openclaw_capture() {
 run_expect_failure() {
   local label="$1"
   shift
-  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${label}.txt"
+  local safe_label="${label//[^[:alnum:]._-]/_}"
+  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${safe_label}.log"
   set +e
   "$@" >"$output_file" 2>&1
   local status="$?"
   set -e
-  cat "$output_file"
+  print_kitchen_sink_log "$output_file"
   if [ "$status" -eq 0 ]; then
     echo "Expected ${label} to fail, but it succeeded." >&2
     exit 1
@@ -78,20 +107,21 @@ start_kitchen_sink_clawhub_fixture_server() {
   KITCHEN_SINK_CLAWHUB_FIXTURE_DIR="$fixture_dir"
   KITCHEN_SINK_CLAWHUB_PID_FILE="$server_pid_file"
 
-  local wait_attempts="${OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS:-600}"
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS 600)" || return $?
   for _ in $(seq 1 "$wait_attempts"); do
     if [[ -s "$server_port_file" ]]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
-      cat "$server_log"
+      print_kitchen_sink_log "$server_log"
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$server_log"
+  print_kitchen_sink_log "$server_log"
   ps -p "$server_pid" -o pid=,stat=,etime=,command= || true
   echo "Timed out waiting for kitchen-sink ClawHub fixture server." >&2
   return 1

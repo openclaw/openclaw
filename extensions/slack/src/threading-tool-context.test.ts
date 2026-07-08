@@ -230,6 +230,26 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("prefers the prepared per-channel reply mode over account config", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: { replyToMode: "all" },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        ReplyToMode: "off",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.replyToMode).toBe("off");
+  });
+
   it("defaults to off when no replyToMode is configured", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
@@ -246,9 +266,20 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "channel", To: "channel:C1234ABC" },
     });
     expect(result.currentChannelId).toBe("C1234ABC");
+    expect(result.currentMessagingTarget).toBe("channel:C1234ABC");
   });
 
-  it("uses NativeChannelId for DM when To is user-prefixed", () => {
+  it("does not expose the core Channel provider as a Slack room name", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { ChatType: "channel", Channel: "slack", To: "channel:C1234ABC" },
+    });
+    expect(result).not.toHaveProperty("currentChannelName");
+    expect(result.currentChannelId).toBe("C1234ABC");
+  });
+
+  it("preserves native and routable DM targets", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
@@ -259,14 +290,16 @@ describe("buildSlackThreadingToolContext", () => {
       },
     });
     expect(result.currentChannelId).toBe("D8SRXRDNF");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 
-  it("returns undefined currentChannelId when neither channel: To nor NativeChannelId is set", () => {
+  it("uses the user target for implicit DM sends when NativeChannelId is missing", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
       context: { ChatType: "direct", To: "user:U8SUVSVGS" },
     });
-    expect(result.currentChannelId).toBeUndefined();
+    expect(result.currentChannelId).toBe("user:U8SUVSVGS");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 });

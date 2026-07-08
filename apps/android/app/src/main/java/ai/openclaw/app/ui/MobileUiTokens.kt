@@ -33,6 +33,11 @@ internal data class MobileColors(
   val codeText: Color,
   val codeBorder: Color,
   val codeAccent: Color,
+  // Syntax token colors; every value must keep >= 4.5:1 contrast against codeBg in its theme.
+  val codeKeyword: Color,
+  val codeString: Color,
+  val codeComment: Color,
+  val codeNumber: Color,
   val chipBorderConnected: Color,
   val chipBorderConnecting: Color,
   val chipBorderWarning: Color,
@@ -41,27 +46,31 @@ internal data class MobileColors(
 
 internal fun lightMobileColors() =
   MobileColors(
-    surface = Color(0xFFF6F7FA),
-    surfaceStrong = Color(0xFFECEEF3),
+    surface = Color(0xFFFAFBFC),
+    surfaceStrong = Color(0xFFEFF3F8),
     cardSurface = Color(0xFFFFFFFF),
-    border = Color(0xFFE5E7EC),
-    borderStrong = Color(0xFFD6DAE2),
-    text = Color(0xFF17181C),
-    textSecondary = Color(0xFF5D6472),
-    textTertiary = Color(0xFF99A0AE),
-    accent = Color(0xFF1D5DD8),
-    accentSoft = Color(0xFFECF3FF),
-    accentBorderStrong = Color(0xFF184DAF),
-    success = Color(0xFF2F8C5A),
-    successSoft = Color(0xFFEEF9F3),
-    warning = Color(0xFFC8841A),
-    warningSoft = Color(0xFFFFF8EC),
-    danger = Color(0xFFD04B4B),
-    dangerSoft = Color(0xFFFFF2F2),
-    codeBg = Color(0xFF15171B),
-    codeText = Color(0xFFE8EAEE),
-    codeBorder = Color(0xFF2B2E35),
-    codeAccent = Color(0xFF3FC97A),
+    border = Color(0xFFDDE3EC),
+    borderStrong = Color(0xFFC7D0DC),
+    text = Color(0xFF16181D),
+    textSecondary = Color(0xFF505B6A),
+    textTertiary = Color(0xFF8E98A7),
+    accent = Color(0xFF1B5ACB),
+    accentSoft = Color(0xFFEAF2FF),
+    accentBorderStrong = Color(0xFF174CA9),
+    success = Color(0xFF287F52),
+    successSoft = Color(0xFFEAF7F0),
+    warning = Color(0xFFAF7418),
+    warningSoft = Color(0xFFFFF4DF),
+    danger = Color(0xFFC94343),
+    dangerSoft = Color(0xFFFFECEC),
+    codeBg = Color(0xFFEFF3F8),
+    codeText = Color(0xFF172033),
+    codeBorder = Color(0xFFD7DDE7),
+    codeAccent = Color(0xFF287F52),
+    codeKeyword = Color(0xFF1B5ACB),
+    codeString = Color(0xFF1F6B45),
+    codeComment = Color(0xFF505B6A),
+    codeNumber = Color(0xFF8F5D10),
     chipBorderConnected = Color(0xFFCFEBD8),
     chipBorderConnecting = Color(0xFFD5E2FA),
     chipBorderWarning = Color(0xFFEED8B8),
@@ -91,6 +100,10 @@ internal fun darkMobileColors() =
     codeText = Color(0xFFE8EAEE),
     codeBorder = Color(0xFF2B2E35),
     codeAccent = Color(0xFF3FC97A),
+    codeKeyword = Color(0xFF6EA8FF),
+    codeString = Color(0xFF3FC97A),
+    codeComment = Color(0xFFA0A6B4),
+    codeNumber = Color(0xFFE8A844),
     chipBorderConnected = Color(0xFF1E4A30),
     chipBorderConnecting = Color(0xFF1E3358),
     chipBorderWarning = Color(0xFF3E3018),
@@ -152,15 +165,6 @@ internal val mobileFontFamily =
     Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
   )
 
-internal val mobileDisplay =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.Bold,
-    fontSize = 34.sp,
-    lineHeight = 40.sp,
-    letterSpacing = (-0.8).sp,
-  )
-
 internal val mobileTitle1 =
   TextStyle(
     fontFamily = mobileFontFamily,
@@ -168,15 +172,6 @@ internal val mobileTitle1 =
     fontSize = 24.sp,
     lineHeight = 30.sp,
     letterSpacing = (-0.5).sp,
-  )
-
-internal val mobileTitle2 =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.SemiBold,
-    fontSize = 20.sp,
-    lineHeight = 26.sp,
-    letterSpacing = (-0.3).sp,
   )
 
 internal val mobileHeadline =

@@ -25,7 +25,7 @@ import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 /** Input accepted when creating a browser profile. */
-export type CreateProfileParams = {
+type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
@@ -34,7 +34,7 @@ export type CreateProfileParams = {
 };
 
 /** Result returned after creating a browser profile. */
-export type CreateProfileResult = {
+type CreateProfileResult = {
   ok: true;
   profile: string;
   transport: "cdp" | "chrome-mcp";
@@ -46,7 +46,7 @@ export type CreateProfileResult = {
 };
 
 /** Result returned after deleting a browser profile. */
-export type DeleteProfileResult = {
+type DeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
@@ -101,11 +101,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     if (rawCdpUrl) {
-      if (driver === "existing-session") {
-        throw new BrowserValidationError(
-          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
-        );
-      }
       let parsed: ReturnType<typeof parseHttpUrl>;
       try {
         parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
@@ -139,7 +134,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profile: name,
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
-      cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
+      cdpUrl: resolved.cdpUrl || null,
       userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,

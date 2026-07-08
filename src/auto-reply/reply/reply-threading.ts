@@ -1,11 +1,17 @@
 /** Reply threading policy helpers for channel replies and status notices. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import {
+  copyReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  type ReplyDeliveryContext,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { isSingleUseReplyToMode } from "./reply-reference.js";
@@ -91,6 +97,55 @@ export function resolveReplyToMode(
     accountId: normalizedAccountId,
     chatType,
   });
+}
+
+/** Resolve the account that routed reply delivery will use when none is explicit. */
+export function resolveReplyDeliveryAccountId(
+  cfg: OpenClawConfig,
+  channel?: OriginatingChannelType,
+  accountId?: string | null,
+): string | undefined {
+  const explicitAccountId = normalizeOptionalLowercaseString(accountId);
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  if (!provider) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(provider);
+  if (!plugin) {
+    return undefined;
+  }
+  const configuredDefault = normalizeOptionalLowercaseString(plugin.config.defaultAccountId?.(cfg));
+  if (configuredDefault) {
+    return configuredDefault;
+  }
+  const channelConfiguredDefault = normalizeOptionalLowercaseString(
+    (cfg.channels as Record<string, { defaultAccount?: string | null } | undefined> | undefined)?.[
+      provider
+    ]?.defaultAccount,
+  );
+  if (channelConfiguredDefault) {
+    return channelConfiguredDefault;
+  }
+  const listedDefault = plugin.config
+    .listAccountIds(cfg)
+    .map((listedAccountId) => normalizeOptionalLowercaseString(listedAccountId))
+    .find((listedAccountId): listedAccountId is string => Boolean(listedAccountId));
+  return listedDefault ?? DEFAULT_ACCOUNT_ID;
+}
+
+/** Build the canonical reply policy context consumed by delivery adapters. */
+export function createReplyDeliveryContext(
+  replyToMode: ReplyToMode,
+  chatType?: string | null,
+): ReplyDeliveryContext {
+  const normalizedChatType = normalizeChatType(chatType ?? undefined);
+  return {
+    ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
+    replyToMode,
+  };
 }
 
 /** Create a payload filter that strips reply targets according to reply-to mode. */

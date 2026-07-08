@@ -4,7 +4,7 @@
 import crypto from "node:crypto";
 import type { NormalizedUsage } from "../usage.js";
 
-export type PromptCacheChangeCode =
+type PromptCacheChangeCode =
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -17,7 +17,7 @@ export type PromptCacheChange = {
   detail: string;
 };
 
-export type PromptCacheSnapshot = {
+type PromptCacheSnapshot = {
   provider: string;
   modelId: string;
   modelApi?: string | null;
@@ -30,7 +30,7 @@ export type PromptCacheSnapshot = {
   toolNames: string[];
 };
 
-export type PromptCacheObservationStart = {
+type PromptCacheObservationStart = {
   snapshot: PromptCacheSnapshot;
   changes: PromptCacheChange[] | null;
   previousCacheRead: number | null;
@@ -140,8 +140,19 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
-export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
-  return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
+export function collectPromptCacheToolNames(tools: readonly { name?: string }[]): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      const name = tool.name?.trim();
+      if (name) {
+        names.push(name);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return names;
 }
 
 export function beginPromptCacheObservation(params: {

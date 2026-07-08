@@ -1,5 +1,5 @@
-// Outbound delivery formatting produces human CLI summaries and JSON payloads
-// for direct and gateway send results.
+// Outbound delivery formatting produces human CLI summaries for direct and
+// gateway send results.
 import { getChatChannelMeta } from "../../channels/chat-meta.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -15,17 +15,6 @@ export type OutboundDeliveryJson = {
   to: string;
   messageId: string;
   mediaUrl: string | null;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
-  timestamp?: number;
-  toJid?: string;
-  meta?: Record<string, unknown>;
-};
-
-type OutboundDeliveryMeta = {
-  messageId?: string;
   chatId?: string;
   channelId?: string;
   roomId?: string;
@@ -54,13 +43,15 @@ const resolveChannelLabel = (channel: string) => {
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
+  opts?: { action?: string },
 ): string {
+  const action = opts?.action ?? "Sent";
   if (!result) {
-    return `✅ Sent via ${resolveChannelLabel(channel)}. Message ID: unknown`;
+    return `✅ ${action} via ${resolveChannelLabel(channel)}. Message ID: unknown`;
   }
 
   const label = resolveChannelLabel(result.channel);
-  const base = `✅ Sent via ${label}. Message ID: ${result.messageId}`;
+  const base = `✅ ${action} via ${label}. Message ID: ${result.messageId}`;
 
   if ("chatId" in result) {
     return `${base} (chat ${result.chatId})`;
@@ -75,51 +66,6 @@ export function formatOutboundDeliverySummary(
     return `${base} (conversation ${result.conversationId})`;
   }
   return base;
-}
-
-/**
- * Builds the JSON delivery payload returned by direct or gateway sends.
- */
-export function buildOutboundDeliveryJson(params: {
-  channel: string;
-  to: string;
-  result?: OutboundDeliveryMeta | OutboundDeliveryResult;
-  via?: "direct" | "gateway";
-  mediaUrl?: string | null;
-}): OutboundDeliveryJson {
-  const { channel, to, result } = params;
-  const messageId = result?.messageId ?? "unknown";
-  const payload: OutboundDeliveryJson = {
-    channel,
-    via: params.via ?? "direct",
-    to,
-    messageId,
-    mediaUrl: params.mediaUrl ?? null,
-  };
-
-  if (result && "chatId" in result && result.chatId !== undefined) {
-    payload.chatId = result.chatId;
-  }
-  if (result && "channelId" in result && result.channelId !== undefined) {
-    payload.channelId = result.channelId;
-  }
-  if (result && "roomId" in result && result.roomId !== undefined) {
-    payload.roomId = result.roomId;
-  }
-  if (result && "conversationId" in result && result.conversationId !== undefined) {
-    payload.conversationId = result.conversationId;
-  }
-  if (result && "timestamp" in result && result.timestamp !== undefined) {
-    payload.timestamp = result.timestamp;
-  }
-  if (result && "toJid" in result && result.toJid !== undefined) {
-    payload.toJid = result.toJid;
-  }
-  if (result && "meta" in result && result.meta !== undefined) {
-    payload.meta = result.meta;
-  }
-
-  return payload;
 }
 
 /**

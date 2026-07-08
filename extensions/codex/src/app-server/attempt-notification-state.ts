@@ -9,21 +9,22 @@ import {
   isFileChangePatchUpdatedNotification,
   isAssistantCommentaryCompletionNotification,
   isNativeToolProgressNotification,
-  isNativeResponseStreamDeltaNotification,
   isPendingOpenClawDynamicToolCompletionNotification,
   isRawAssistantProgressNotification,
   isRawReasoningCompletionNotification,
   isRawToolOutputCompletionNotification,
+  isReasoningProgressNotification,
   isReasoningItemCompletionNotification,
   isRetryableErrorNotification,
-  isTurnNotification,
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
+  updateActiveCompletionBlockerItemIds,
   updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
 import { CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
 import type { CodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import type { CodexServerNotification } from "./protocol.js";
 
 type CodexExecutionPhase =
@@ -69,7 +70,7 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   turnId: string;
   currentPromptTexts: string[];
 }): boolean {
-  if (!isTurnNotification(params.notification.params, params.threadId, params.turnId)) {
+  if (!isCodexNotificationForTurn(params.notification.params, params.threadId, params.turnId)) {
     return false;
   }
   return (
@@ -91,6 +92,7 @@ export function applyCodexTurnNotificationState(params: {
   currentPromptTexts: string[];
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
+  activeCompletionBlockerItemIds: Set<string>;
   activeAppServerTurnRequests: number;
   pendingOpenClawDynamicToolCompletionIds: Set<string>;
   turnCrossedToolHandoff: boolean;
@@ -104,22 +106,22 @@ export function applyCodexTurnNotificationState(params: {
   turnCrossedToolHandoff: boolean;
 } {
   const { notification, turnWatches } = params;
-  const isCurrentTurnNotification = isTurnNotification(
+  const isCurrentTurnNotification = isCodexNotificationForTurn(
     notification.params,
     params.threadId,
     params.turnId,
   );
   const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
-  const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
-  if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
+  if (isCurrentTurnNotification) {
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
     });
     params.onReportExecutionNotification(notification);
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);
+    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }
@@ -145,11 +147,13 @@ export function applyCodexTurnNotificationState(params: {
     notification,
     turnCrossedToolHandoff,
   );
-  const postToolRawAssistantCompletionNeedsTerminalGuard =
+  const postToolProgressNeedsTerminalGuard =
     isCurrentTurnNotification &&
     turnCrossedToolHandoff &&
-    isRawAssistantProgressNotification(notification) &&
-    params.activeTurnItemIds.size === 0;
+    (((isRawAssistantProgressNotification(notification) ||
+      isRawReasoningCompletionNotification(notification)) &&
+      params.activeTurnItemIds.size === 0) ||
+      isReasoningProgressNotification(notification));
   const postToolPatchUpdateNeedsTerminalGuard =
     isCurrentTurnNotification &&
     turnCrossedToolHandoff &&
@@ -160,7 +164,7 @@ export function applyCodexTurnNotificationState(params: {
     params.activeTurnItemIds.size === 0 &&
     params.activeAppServerTurnRequests === 0 &&
     !assistantCompletionCanRelease &&
-    !postToolRawAssistantCompletionNeedsTerminalGuard &&
+    !postToolProgressNeedsTerminalGuard &&
     !rawToolOutputCompletion;
   const shouldArmNoToolPostProgressReplyWatch =
     isCurrentTurnNotification &&
@@ -182,7 +186,7 @@ export function applyCodexTurnNotificationState(params: {
     !shouldArmNoToolPostProgressReplyWatch;
   const shouldUsePostToolContinuationWatch =
     turnCrossedToolHandoff &&
-    (postToolRawAssistantCompletionNeedsTerminalGuard ||
+    (postToolProgressNeedsTerminalGuard ||
       postToolPatchUpdateNeedsTerminalGuard ||
       rawToolOutputCompletion ||
       trackedDynamicToolCompletion ||
@@ -211,13 +215,11 @@ export function applyCodexTurnNotificationState(params: {
     turnWatches.disarmAssistantCompletionIdleWatch();
   } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
     turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-  } else if (
-    postToolRawAssistantCompletionNeedsTerminalGuard ||
-    postToolPatchUpdateNeedsTerminalGuard
-  ) {
-    // Post-tool assistant status and patch snapshots can be followed by more
-    // native edit streaming. Keep the short guard alive until Codex reports a
-    // terminal turn state instead of falling back to the long terminal watch.
+  } else if (postToolProgressNeedsTerminalGuard || postToolPatchUpdateNeedsTerminalGuard) {
+    // Post-tool assistant/reasoning status and patch snapshots can be followed
+    // by more native edit streaming. Keep the short guard alive until Codex
+    // reports a terminal turn state instead of falling back to the long
+    // terminal watch.
     armPostToolContinuationWatch();
   } else if (shouldArmNoToolPostProgressReplyWatch || shouldArmNoToolPostRawProgressReplyWatch) {
     armPostProgressReplyWatch();
@@ -249,10 +251,9 @@ export function applyCodexTurnNotificationState(params: {
     !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
     notification.method !== "turn/completed" &&
     isCurrentTurnNotification &&
-    !isNativeResponseStreamDelta &&
     !trackedDynamicToolCompletion &&
     !rawToolOutputCompletion &&
-    !postToolRawAssistantCompletionNeedsTerminalGuard &&
+    !postToolProgressNeedsTerminalGuard &&
     !postToolPatchUpdateNeedsTerminalGuard &&
     !rawResponseItemCompletedWithNoActiveItems &&
     !shouldArmNoToolPostProgressReplyWatch &&

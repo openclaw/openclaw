@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
@@ -14,7 +13,6 @@ const fullReleaseValidationWorkflowPath = join(
   ".github/workflows/full-release-validation.yml",
 );
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
-const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -101,7 +99,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
     const storeSeedIndex = dockerfile.indexOf(
-      "pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
+      "node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
     );
     const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
 
@@ -194,10 +192,37 @@ describe("Dockerfile", () => {
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-
-    expect(dockerfile).toContain(
-      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const qaLabBuildBlock =
+      /RUN if printf '%s\\n' "\$OPENCLAW_EXTENSIONS" \| tr ',' ' ' \| tr ' ' '\\n' \| grep -qx 'qa-lab'; then\s+pnpm_config_verify_deps_before_run=false pnpm qa:lab:build &&\s+mkdir -p dist\/extensions\/qa-lab\/web &&\s+rm -rf dist\/extensions\/qa-lab\/web\/dist &&\s+cp -R extensions\/qa-lab\/web\/dist dist\/extensions\/qa-lab\/web\/dist;\s+fi/u;
+    const qaLabExtensionCheckIndex = collapsed.indexOf("grep -qx 'qa-lab'");
+    const qaLabBuildBlockMatch = qaLabBuildBlock.exec(collapsed);
+    const privateQaExportIndex = collapsed.indexOf(
+      "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
     );
+    const buildDockerIndex = collapsed.indexOf(
+      'OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
+    );
+    const qaLabBuildIndex = collapsed.indexOf(
+      "pnpm_config_verify_deps_before_run=false pnpm qa:lab:build",
+    );
+    const qaLabDistCopyIndex = collapsed.indexOf(
+      "cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist",
+    );
+    const runtimeAssetsIndex = collapsed.indexOf("FROM build AS runtime-assets");
+
+    expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
+    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(-1);
+    expect(buildDockerIndex).toBeGreaterThan(-1);
+    expect(qaLabBuildIndex).toBeGreaterThan(-1);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(-1);
+    expect(runtimeAssetsIndex).toBeGreaterThan(-1);
+    expect(privateQaExportIndex).toBeGreaterThan(qaLabExtensionCheckIndex);
+    expect(privateQaExportIndex).toBeLessThan(buildDockerIndex);
+    expect(qaLabBuildIndex).toBeGreaterThan(buildDockerIndex);
+    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(buildDockerIndex);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(qaLabBuildIndex);
+    expect(qaLabDistCopyIndex).toBeLessThan(runtimeAssetsIndex);
     expect(dockerfile).toContain(
       "pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle",
     );
@@ -209,6 +234,11 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
+    expect(dockerfile).toContain(
+      'ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"',
+    );
+    expect(dockerfile).toContain('ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""');
+    expect(dockerfile).toContain("ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
     expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
     expect(dockerfile).toContain(
       "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
@@ -226,6 +256,8 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
     );
+    expect(dockerfile).toContain("readlink -f /app/node_modules/@openclaw/ai");
+    expect(dockerfile).toContain('mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai');
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
@@ -268,16 +300,12 @@ describe("Dockerfile", () => {
     expect(templatesCopyIndex).toBeLessThan(userIndex);
   });
 
-  it("keeps package manager patch files in runtime images", async () => {
+  it("keeps package manager metadata in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
-      patchedDependencies?: Record<string, string>;
-    };
     const pruneProd = "CI=true pnpm prune --prod";
     const finalWorkspaceCopy =
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
-    expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
     expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain("pnpm_config_frozen_lockfile=false");
@@ -305,9 +333,12 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Build and push amd64 browser image");
     expect(workflow).toContain("Build and push arm64 browser image");
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
-    expect(workflow).toContain('${IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${IMAGE}:latest-browser"');
-    expect(workflow).toContain('${IMAGE}:main-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:latest-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:latest-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:main-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:main-browser"');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -317,6 +348,36 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("if: steps.tags.outputs.browser != ''");
     expect(workflow).toContain('git show "${SOURCE_REF}:Dockerfile"');
     expect(workflow).toContain('if [[ -n "${BROWSER_TAGS}" ]]; then');
+  });
+
+  it("publishes official Docker releases to GHCR and Docker Hub", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("REGISTRY: ghcr.io");
+    expect(workflow).toContain("DOCKERHUB_REGISTRY: docker.io");
+    expect(workflow).toContain("DOCKERHUB_IMAGE_NAME: openclaw/openclaw");
+    expect(workflow).toContain("Validate Docker Hub publish credentials");
+    expect(workflow).toContain("DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets");
+    expect(workflow).toContain("Login to GitHub Container Registry");
+    expect(workflow).toContain("Login to Docker Hub");
+    expect(workflow).toContain('images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")');
+    expect(workflow).toContain("DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-amd64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-arm64");
+    expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
+  });
+
+  it("publishes beta Docker tags without advancing latest aliases", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Existing stable or beta release tag to backfill");
+    expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
+    expect(workflow).toContain("(-beta\\.[1-9][0-9]*)?");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
+    expect(workflow.split("do not advance latest/main aliases from those flows")).toHaveLength(3);
+    expect(workflow.split('"$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9]+)?$')).toHaveLength(3);
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

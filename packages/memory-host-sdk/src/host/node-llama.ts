@@ -1,7 +1,7 @@
 // Minimal node-llama-cpp type facade used by the local embedding provider.
 
 /** Embedding vector returned by node-llama-cpp. */
-export type LlamaEmbedding = {
+type LlamaEmbedding = {
   vector: Float32Array | number[];
 };
 
@@ -21,7 +21,7 @@ export type LlamaModel = {
 };
 
 /** Options accepted by node-llama-cpp model file resolution. */
-export type ResolveModelFileOptions = {
+type ResolveModelFileOptions = {
   directory?: string;
   signal?: AbortSignal;
 };
@@ -33,7 +33,7 @@ export type Llama = {
 };
 
 /** Imported node-llama-cpp module shape used by local embeddings. */
-export type NodeLlamaCppModule = {
+type NodeLlamaCppModule = {
   LlamaLogLevel: {
     error: number;
   };
@@ -47,6 +47,6 @@ export type NodeLlamaCppModule = {
 const NODE_LLAMA_CPP_MODULE = "node-llama-cpp";
 
 /** Dynamically import node-llama-cpp so the optional dependency is loaded only when needed. */
-export async function importNodeLlamaCpp() {
-  return import(NODE_LLAMA_CPP_MODULE) as Promise<NodeLlamaCppModule>;
+export async function importNodeLlamaCpp(moduleSpecifier = NODE_LLAMA_CPP_MODULE) {
+  return import(moduleSpecifier) as Promise<NodeLlamaCppModule>;
 }

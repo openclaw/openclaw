@@ -1,6 +1,6 @@
 // Cron job patch tests cover applying partial updates to scheduled jobs.
 import { describe, expect, it } from "vitest";
-import { resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import type { CronJob } from "../types.js";
 import { applyJobPatch } from "./jobs.js";
 
@@ -66,6 +66,42 @@ describe("applyJobPatch delivery merge", () => {
     applyJobPatch(job, patch);
 
     expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("preserves implicit delivery when clearing an absent override", () => {
+    const job = makeJob({ delivery: undefined });
+
+    applyJobPatch(job, {
+      delivery: { channel: null },
+    });
+
+    expect(job.delivery).toBeUndefined();
+  });
+
+  it("preserves implicit detached delivery when patching best-effort", () => {
+    const job = makeJob({ delivery: undefined });
+
+    applyJobPatch(job, {
+      delivery: { bestEffort: false },
+    });
+
+    expect(job.delivery).toEqual({ mode: "announce", bestEffort: false });
+    expect(resolveCronDeliveryPlan(job).mode).toBe("announce");
+  });
+
+  it("preserves implicit main-session delivery when patching best-effort", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    applyJobPatch(job, {
+      delivery: { bestEffort: false },
+    });
+
+    expect(job.delivery).toBeUndefined();
+    expect(resolveCronDeliveryPlan(job).mode).toBe("none");
   });
 
   it("clears nullable failure destination fields", () => {

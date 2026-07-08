@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
@@ -14,7 +15,11 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildXaiProvider } from "./provider-catalog.js";
+import {
+  buildLiveXaiOAuthProvider,
+  buildLiveXaiProvider,
+  buildXaiProvider,
+} from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -44,25 +49,14 @@ import {
 } from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
-type CodeExecutionModule = typeof import("./code-execution.js");
-type XSearchModule = typeof import("./x-search.js");
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
-let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
-let xSearchModulePromise: Promise<XSearchModule> | undefined;
+const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
 
-function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
-  codeExecutionModulePromise ??= import("./code-execution.js");
-  return codeExecutionModulePromise;
-}
-
-function loadXSearchModule(): Promise<XSearchModule> {
-  xSearchModulePromise ??= import("./x-search.js");
-  return xSearchModulePromise;
-}
+const loadXSearchModule = createLazyRuntimeModule(() => import("./x-search.js"));
 
 function classifyXaiFailoverReason(errorMessage: string) {
   if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
@@ -176,7 +170,60 @@ export default defineSingleProviderPluginEntry({
     ],
     extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
-      buildProvider: buildXaiProvider,
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        try {
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
+          if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
+            return {
+              provider: await buildLiveXaiOAuthProvider({
+                discoveryApiKey: runtimeAuth.apiKey,
+              }),
+            };
+          }
+        } catch {
+          if (auth.mode === "oauth") {
+            // OAuth discovery is advisory; fall through so configured API-key
+            // auth can still publish the standard xAI catalog.
+          }
+        }
+        if (auth.apiKey) {
+          return {
+            provider: await buildLiveXaiProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        }
+
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey.apiKey) {
+          return null;
+        }
+        return {
+          provider: await buildLiveXaiProvider({
+            apiKey: apiKey.apiKey,
+            discoveryApiKey: apiKey.discoveryApiKey,
+          }),
+        };
+      },
+      staticRun: async () => ({
+        provider: buildXaiProvider(),
+      }),
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

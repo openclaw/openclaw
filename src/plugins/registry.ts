@@ -107,7 +107,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
   clearPluginInteractiveHandlersForPlugin,
-  registerPluginInteractiveHandler,
+  registerRegistryPluginInteractiveHandler,
 } from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -132,6 +132,7 @@ import type {
   PluginRegistryParams,
   PluginSessionActionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 export type {
   PluginReloadRegistration,
@@ -232,6 +233,10 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
     `${deprecation.reason} Use ${deprecation.replacement}. ` +
     `This compatibility hook will be removed after ${removeAfter}.`
   );
+}
+
+function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
+  return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
 
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
@@ -525,15 +530,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
   ) => {
-    if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register agent tool result middleware",
-      });
-      return;
-    }
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
         level: "error",
@@ -563,6 +559,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
       });
       return;
     }
@@ -736,9 +741,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
-        // Shallow-copy to avoid mutating the shared event object
-        // passed to all handlers sequentially by triggerInternalHook
-        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+        const context = evt.context;
+        const hadPluginConfig = Object.hasOwn(context, "pluginConfig");
+        const previousPluginConfig = context.pluginConfig;
+        // Internal hooks intentionally share one mutable context object across
+        // handlers; only pluginConfig stays per-handler and is restored after.
+        context.pluginConfig = pluginConfig;
+        try {
+          return await handler({ ...evt, context });
+        } finally {
+          if (hadPluginConfig) {
+            context.pluginConfig = previousPluginConfig;
+          } else {
+            delete context.pluginConfig;
+          }
+        }
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });
@@ -914,7 +931,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.hostedMediaResolvers ??= []).push({
+    registry.hostedMediaResolvers.push({
       pluginId: record.id,
       pluginName: record.name,
       resolver,
@@ -1126,7 +1143,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.cliBackends ?? []).find((entry) => entry.backend.id === id);
+    const existing = registry.cliBackends.find((entry) => entry.backend.id === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -1136,7 +1153,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.cliBackends ??= []).push({
+    registry.cliBackends.push({
       pluginId: record.id,
       pluginName: record.name,
       backend: {
@@ -1570,7 +1587,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.reloads ??= [];
     registry.reloads.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1603,7 +1619,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.nodeHostCommands ??= [];
     const existing = registry.nodeHostCommands.find((entry) => entry.command.command === command);
     if (existing) {
       pushDiagnostic({
@@ -1653,7 +1668,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.nodeInvokePolicies ??= [];
     for (const command of commands) {
       const existing = registry.nodeInvokePolicies.find((entry) =>
         entry.policy.commands.includes(command),
@@ -1682,7 +1696,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     collector: OpenClawPluginSecurityAuditCollector,
   ) => {
-    registry.securityAuditCollectors ??= [];
     registry.securityAuditCollectors.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1934,6 +1947,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "tool",
     "run",
     "settings",
+    "tab",
   ]);
 
   const registerSessionExtension = (
@@ -1970,7 +1984,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.sessionExtensions ?? []).find(
+    const existing = registry.sessionExtensions.find(
       (entry) => entry.pluginId === record.id && entry.extension.namespace === namespace,
     );
     if (existing) {
@@ -1983,7 +1997,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     if (normalizedSessionEntrySlotKey) {
-      const existingSlot = (registry.sessionExtensions ?? []).find((entry) => {
+      const existingSlot = registry.sessionExtensions.find((entry) => {
         const existingSlotKey = entry.extension.sessionEntrySlotKey;
         if (existingSlotKey === undefined) {
           return false;
@@ -2004,7 +2018,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
-    (registry.sessionExtensions ??= []).push({
+    registry.sessionExtensions.push({
       pluginId: record.id,
       pluginName: record.name,
       extension: {
@@ -2024,12 +2038,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     policy: PluginTrustedToolPolicyRegistration,
   ) => {
-    if (record.origin !== "bundled") {
+    if (!policy || typeof policy !== "object") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "only bundled plugins can register trusted tool policies",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
       });
       return;
     }
@@ -2044,7 +2058,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.trustedToolPolicies ?? []).find((entry) => entry.policy.id === id);
+    if (
+      record.origin !== "bundled" &&
+      !(record.contracts?.trustedToolPolicies ?? []).includes(id)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.trustedToolPolicies for: ${id}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must be explicitly enabled to register trusted tool policy: ${id}`,
+      });
+      return;
+    }
+    const policies = registry.trustedToolPolicies;
+    const existing = policies.find(
+      (entry) => entry.pluginId === record.id && entry.policy.id === id,
+    );
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -2054,7 +2092,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.trustedToolPolicies ??= []).push({
+    const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,
       pluginName: record.name,
       policy: {
@@ -2062,9 +2100,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         id,
         description,
       },
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
-    });
+    };
+    if (record.origin === "bundled") {
+      const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
+      if (firstInstalledPolicyIndex === -1) {
+        policies.push(registration);
+      } else {
+        policies.splice(firstInstalledPolicyIndex, 0, registration);
+      }
+      return;
+    }
+    policies.push(registration);
   };
 
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
@@ -2098,7 +2147,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // (tools-effective-inventory.ts, tools-catalog.ts) the metadata is matched
     // back to the tool's owning pluginId so plugin-X cannot decorate plugin-Y's
     // tool (or a core tool) by registering metadata with the same name.
-    const existing = (registry.toolMetadata ?? []).find(
+    const existing = registry.toolMetadata.find(
       (entry) => entry.pluginId === record.id && entry.metadata.toolName === toolName,
     );
     if (existing) {
@@ -2127,7 +2176,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.toolMetadata ??= []).push({
+    registry.toolMetadata.push({
       pluginId: record.id,
       pluginName: record.name,
       metadata: {
@@ -2146,16 +2195,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     descriptor: PluginControlUiDescriptor,
   ) => {
+    const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
-    const label = normalizeHostHookString(descriptor.label);
+    const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
-    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
+    // The flat registerControlUiDescriptor API shipped before descriptor.surface/label were
+    // required. Keep older external JS plugins loadable while current typed plugins stay explicit.
+    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
       !id ||
       !label ||
-      !controlUiSurfaces.has(surface as PluginControlUiDescriptor["surface"]) ||
+      !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
       requiredScopes === null
@@ -2193,7 +2245,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.controlUiDescriptors ?? []).find(
+    const existing = registry.controlUiDescriptors.find(
       (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
     );
     if (existing) {
@@ -2205,19 +2257,46 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.controlUiDescriptors ??= []).push({
+    const icon = normalizeOptionalHostHookString(descriptor.icon);
+    const tabPath = normalizeOptionalHostHookString(descriptor.path);
+    // Single leading slash only: "//host" and "/\\host" are protocol-relative
+    // URLs in browsers, which would let a descriptor iframe external content.
+    const isLocalAbsolutePath =
+      tabPath === undefined ||
+      (tabPath.startsWith("/") && !tabPath.startsWith("//") && !tabPath.startsWith("/\\"));
+    if (!isLocalAbsolutePath) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor path must be a gateway-local absolute path: ${id}`,
+      });
+      return;
+    }
+    // Tab placement/order are projected to hello clients; keep junk values out.
+    const group =
+      descriptor.group === "control" || descriptor.group === "agent" ? descriptor.group : undefined;
+    const order =
+      typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
+        ? descriptor.order
+        : undefined;
+    registry.controlUiDescriptors.push({
       pluginId: record.id,
       pluginName: record.name,
       descriptor: {
         ...descriptor,
         id,
-        surface: surface as PluginControlUiDescriptor["surface"],
+        surface,
         label,
         ...(description !== undefined ? { description } : {}),
         ...(placement !== undefined ? { placement } : {}),
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
+        icon,
+        path: tabPath,
+        group,
+        order,
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -2238,7 +2317,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.runtimeLifecycles ?? []).find(
+    const existing = registry.runtimeLifecycles.find(
       (entry) => entry.pluginId === record.id && entry.lifecycle.id === id,
     );
     if (existing) {
@@ -2259,7 +2338,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.runtimeLifecycles ??= []).push({
+    registry.runtimeLifecycles.push({
       pluginId: record.id,
       pluginName: record.name,
       lifecycle: { ...lifecycle, id },
@@ -2292,7 +2371,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.agentEventSubscriptions ?? []).find(
+    const existing = registry.agentEventSubscriptions.find(
       (entry) => entry.pluginId === record.id && entry.subscription.id === id,
     );
     if (existing) {
@@ -2304,7 +2383,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.agentEventSubscriptions ??= []).push({
+    registry.agentEventSubscriptions.push({
       pluginId: record.id,
       pluginName: record.name,
       subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
@@ -2322,7 +2401,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const kind = normalizeHostHookString(job.kind);
     if (
       jobId &&
-      (registry.sessionSchedulerJobs ?? []).some(
+      registry.sessionSchedulerJobs.some(
         (entry) => entry.pluginId === record.id && entry.job.id === jobId,
       )
     ) {
@@ -2353,7 +2432,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return undefined;
     }
     if (registryParams.activateGlobalSideEffects === false) {
-      (registry.sessionSchedulerJobs ??= []).push({
+      registry.sessionSchedulerJobs.push({
         pluginId: record.id,
         pluginName: record.name,
         job: { ...job, id: jobId, sessionKey, kind },
@@ -2377,7 +2456,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
-    (registry.sessionSchedulerJobs ??= []).push({
+    registry.sessionSchedulerJobs.push({
       pluginId: record.id,
       pluginName: record.name,
       job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
@@ -2425,7 +2504,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (!validateSessionActionSchema(record, id, action.schema)) {
       return;
     }
-    const existing = (registry.sessionActions ?? []).find(
+    const existing = registry.sessionActions.find(
       (entry) => entry.pluginId === record.id && entry.action.id === id,
     );
     if (existing) {
@@ -2437,7 +2516,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.sessionActions ??= []).push({
+    registry.sessionActions.push({
       pluginId: record.id,
       pluginName: record.name,
       action: {
@@ -2606,7 +2685,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
-            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            ? withPluginRuntimePluginScope(
+                {
+                  pluginId,
+                  pluginSource: record.source,
+                  pluginOrigin: record.origin,
+                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+                },
+                run,
+              )
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
         const getRuntimeProperty = () => {
@@ -2669,6 +2756,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "gateway") {
+          const gateway = getRuntimeProperty();
+          return {
+            isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
+            request: (method, params, options) =>
+              runWithPluginScope(() => gateway.request(method, params, options)),
+          } satisfies PluginRuntime["gateway"];
+        }
+        if (prop === "nodes") {
+          const nodes = getRuntimeProperty();
+          return {
+            list: (params) => runWithPluginScope(() => nodes.list(params)),
+            invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+          } satisfies PluginRuntime["nodes"];
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();
@@ -2791,7 +2893,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
-                const result = registerPluginInteractiveHandler(record.id, registration, {
+                const result = registerRegistryPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,
                   pluginRoot: record.rootDir,
                 });
@@ -2802,7 +2904,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: result.error ?? "interactive handler registration failed",
                   });
+                  return;
                 }
+                registry.interactiveHandlers.push({
+                  ...registration,
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
               },
               onConversationBindingResolved: (handler) =>
                 registerConversationBindingResolvedHandler(record, handler),
@@ -2842,6 +2951,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   `plugin:${record.id}`,
                   {
                     allowSameOwnerRefresh: true,
+                    lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
                   },
                 );
                 if (!result.ok) {

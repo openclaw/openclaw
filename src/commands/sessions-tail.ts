@@ -6,17 +6,27 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
-import { resolveTrajectoryRuntimeFile } from "../trajectory/runtime-file.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+} from "../trajectory/paths.js";
+import {
+  isRegularNonSymlinkFile,
+  resolveTrajectoryRuntimeFile,
+} from "../trajectory/runtime-file.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { shortenText } from "./text-format.js";
@@ -83,18 +93,7 @@ function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
     return DEFAULT_TAIL_COUNT;
   }
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 0 ? value : null;
-  }
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  return Number.parseInt(trimmed, 10);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return parseStrictNonNegativeInteger(value) ?? null;
 }
 
 function toOptionalString(value: unknown): string | undefined {
@@ -282,8 +281,13 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
-    const stat = fs.statSync(filePath);
-    const text = fs.readFileSync(filePath, "utf8");
+    // Use the runtime trajectory limit so tail accepts any file the runtime
+    // would have written and rejects anything larger.
+    const { buffer, stat } = readRegularFileSync({
+      filePath,
+      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    });
+    const text = buffer.toString("utf8");
     return {
       events: parseTrajectoryEventLines(text.split(/\r?\n/u)),
       fileState: fileStateFromStat(stat),
@@ -346,26 +350,100 @@ function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): numbe
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
+function deriveSessionFileFallbackId(entry: SessionEntry): string | undefined {
+  const sessionId = entry.sessionId?.trim();
+  if (sessionId) {
+    return sessionId;
+  }
+  const sessionFile = entry.sessionFile?.trim();
+  if (!sessionFile) {
+    return undefined;
+  }
+  return "session";
+}
+
+async function readTrajectoryPointerSessionId(sessionFile: string): Promise<string | undefined> {
+  const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+  if (!(await isRegularNonSymlinkFile(pointerPath))) {
+    return undefined;
+  }
+  try {
+    const { buffer } = readRegularFileSync({
+      filePath: pointerPath,
+      maxBytes: 64 * 1024,
+    });
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
+    if (!isRecord(parsed) || typeof parsed.sessionId !== "string") {
+      return undefined;
+    }
+    const sessionId = parsed.sessionId.trim();
+    return sessionId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveTailTrajectoryPath(params: {
+  sessionFile: string;
+  sessionId?: string;
+}): Promise<string> {
+  if (params.sessionId) {
+    return (
+      (await resolveTrajectoryRuntimeFile({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+      })) ??
+      resolveTrajectoryFilePath({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+      })
+    );
+  }
+
+  const pointerSessionId = await readTrajectoryPointerSessionId(params.sessionFile);
+  if (pointerSessionId) {
+    const pointerRuntimePath = await resolveTrajectoryRuntimeFile({
+      sessionFile: params.sessionFile,
+      sessionId: pointerSessionId,
+    });
+    if (pointerRuntimePath) {
+      return pointerRuntimePath;
+    }
+    return resolveTrajectoryFilePath({
+      sessionFile: params.sessionFile,
+      sessionId: pointerSessionId,
+    });
+  }
+
+  return resolveTrajectoryFilePath({
+    env: {},
+    sessionFile: params.sessionFile,
+    sessionId: "session",
+  });
+}
+
 async function buildTailSelection(params: {
   agentId: string;
   entry: SessionEntry;
   key: string;
   storePath: string;
-}): Promise<TailSelection> {
+}): Promise<TailSelection | null> {
+  const sessionId = params.entry.sessionId?.trim();
+  const fallbackSessionId = deriveSessionFileFallbackId(params.entry);
+  if (!fallbackSessionId) {
+    return null;
+  }
   const sessionsDir = path.dirname(params.storePath);
-  const sessionFile = resolveSessionFilePath(params.entry.sessionId, params.entry, {
-    agentId: params.agentId,
-    sessionsDir,
-  });
-  const trajectoryPath =
-    (await resolveTrajectoryRuntimeFile({
-      sessionFile,
-      sessionId: params.entry.sessionId,
-    })) ??
-    resolveTrajectoryFilePath({
-      sessionFile,
-      sessionId: params.entry.sessionId,
+  let sessionFile: string;
+  try {
+    sessionFile = resolveSessionFilePath(fallbackSessionId, params.entry, {
+      agentId: params.agentId,
+      sessionsDir,
     });
+  } catch {
+    return null;
+  }
+  const trajectoryPath = await resolveTailTrajectoryPath({ sessionFile, sessionId });
   return {
     agentId: params.agentId,
     entry: params.entry,
@@ -434,7 +512,13 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
 
   const fd = fs.openSync(state.selection.trajectoryPath, "r");
   try {
-    const buffer = Buffer.alloc(fileState.size - state.offset);
+    const deltaBytes = fileState.size - state.offset;
+    if (deltaBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
+      throw new Error(
+        `Trajectory delta exceeds ${TRAJECTORY_RUNTIME_FILE_MAX_BYTES} bytes: ${deltaBytes}`,
+      );
+    }
+    const buffer = Buffer.alloc(deltaBytes);
     fs.readSync(fd, buffer, 0, buffer.length, state.offset);
     state.offset = fileState.size;
     state.fileState = fileState;
@@ -537,16 +621,19 @@ export async function sessionsTailCommand(
 
   const selections: TailSelection[] = [];
   for (const target of targets) {
-    const store = loadSessionStore(target.storePath);
-    for (const [key, entry] of Object.entries(store)) {
-      selections.push(
-        await buildTailSelection({
-          agentId: target.agentId,
-          entry,
-          key,
-          storePath: target.storePath,
-        }),
-      );
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })) {
+      const selection = await buildTailSelection({
+        agentId: target.agentId,
+        entry,
+        key: sessionKey,
+        storePath: target.storePath,
+      });
+      if (selection) {
+        selections.push(selection);
+      }
     }
   }
   const selected = selectSessionsToTail(selections, opts.sessionKey);

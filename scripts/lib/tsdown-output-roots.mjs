@@ -1,10 +1,10 @@
 // Lists package dist roots produced by tsdown builds.
 const TSDOWN_PACKAGE_NAMES = [
   "agent-core",
+  "ai",
   "gateway-client",
   "gateway-protocol",
   "llm-core",
-  "llm-runtime",
   "markdown-core",
   "media-core",
   "media-generation-core",

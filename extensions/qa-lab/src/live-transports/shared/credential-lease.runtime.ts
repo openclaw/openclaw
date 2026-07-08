@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import {
   isQaCredentialTruthyOptIn,
@@ -17,6 +18,11 @@ const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
+const CONVEX_BROKER_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+const CHUNKED_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
+const CHUNKED_PAYLOAD_MAX_CHUNKS_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
@@ -55,6 +61,8 @@ type ConvexCredentialBrokerConfig = {
   httpTimeoutMs: number;
   leaseTtlMs: number;
   ownerId: string;
+  payloadMaxBytes: number;
+  payloadMaxChunks: number;
   payloadChunkUrl: string;
   releaseUrl: string;
   role: QaCredentialRole;
@@ -66,7 +74,7 @@ type QaCredentialLeaseHeartbeat = {
   throwIfFailed(): void;
 };
 
-export type QaCredentialRole = "ci" | "maintainer";
+type QaCredentialRole = "ci" | "maintainer";
 
 type QaCredentialLeaseSource = "convex" | "env";
 
@@ -203,6 +211,16 @@ function resolveConvexCredentialBrokerConfig(params: {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
+    payloadMaxBytes: parsePositiveIntegerEnv(
+      params.env,
+      CHUNKED_PAYLOAD_MAX_BYTES_ENV,
+      DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES,
+    ),
+    payloadMaxChunks: parsePositiveIntegerEnv(
+      params.env,
+      CHUNKED_PAYLOAD_MAX_CHUNKS_ENV,
+      DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
+    ),
     acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
     heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
     payloadChunkUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "payload-chunk"),
@@ -210,7 +228,10 @@ function resolveConvexCredentialBrokerConfig(params: {
   };
 }
 
-function parseChunkedPayloadMarker(payload: unknown) {
+function parseChunkedPayloadMarker(
+  payload: unknown,
+  limits: { maxBytes: number; maxChunks: number },
+) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -225,12 +246,18 @@ function parseChunkedPayloadMarker(payload: unknown) {
   ) {
     throw new Error("Chunked credential payload marker has an invalid chunkCount.");
   }
+  if (record.chunkCount > limits.maxChunks) {
+    throw new Error(`Chunked credential payload marker exceeds ${limits.maxChunks} chunks.`);
+  }
   if (
     typeof record.byteLength !== "number" ||
     !Number.isInteger(record.byteLength) ||
     record.byteLength < 0
   ) {
     throw new Error("Chunked credential payload marker has an invalid byteLength.");
+  }
+  if (record.byteLength > limits.maxBytes) {
+    throw new Error(`Chunked credential payload marker exceeds ${limits.maxBytes} bytes.`);
   }
   return {
     chunkCount: record.chunkCount,
@@ -257,6 +284,7 @@ async function postConvexBroker(params: {
   authToken: string;
   body: Record<string, unknown>;
   fetchImpl: typeof fetch;
+  maxBytes: number;
   timeoutMs: number;
   url: string;
 }): Promise<unknown> {
@@ -271,7 +299,11 @@ async function postConvexBroker(params: {
     signal: AbortSignal.timeout(timeoutMs),
   });
 
-  const text = await response.text();
+  // Keep ordinary broker responses small, while allowing chunk payloads to use
+  // the larger declared payload ceiling.
+  const text = await readProviderTextResponse(response, "Convex credential broker", {
+    maxBytes: params.maxBytes,
+  });
   const payload: unknown = (() => {
     if (!text.trim()) {
       return undefined;
@@ -304,14 +336,19 @@ async function resolveConvexCredentialPayload(params: {
   fetchImpl: typeof fetch;
   kind: string;
 }) {
-  const marker = parseChunkedPayloadMarker(params.acquired.payload);
+  const marker = parseChunkedPayloadMarker(params.acquired.payload, {
+    maxBytes: params.config.payloadMaxBytes,
+    maxChunks: params.config.payloadMaxChunks,
+  });
   if (!marker) {
     return params.acquired.payload;
   }
   const chunks: string[] = [];
+  let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const payload = await postConvexBroker({
       fetchImpl: params.fetchImpl,
+      maxBytes: params.config.payloadMaxBytes,
       timeoutMs: params.config.httpTimeoutMs,
       authToken: params.config.authToken,
       url: params.config.payloadChunkUrl,
@@ -325,10 +362,14 @@ async function resolveConvexCredentialPayload(params: {
       },
     });
     const parsed = convexPayloadChunkSuccessSchema.parse(payload);
+    serializedBytes += Buffer.byteLength(parsed.data, "utf8");
+    if (serializedBytes > marker.byteLength) {
+      throw new Error("Chunked credential payload exceeded declared byteLength.");
+    }
     chunks.push(parsed.data);
   }
   const serialized = chunks.join("");
-  if (serialized.length !== marker.byteLength) {
+  if (serializedBytes !== marker.byteLength) {
     throw new Error("Chunked credential payload length mismatch.");
   }
   return JSON.parse(serialized) as unknown;
@@ -404,6 +445,7 @@ export async function acquireQaCredentialLease<TPayload>(
     try {
       const payload = await postConvexBroker({
         fetchImpl,
+        maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
         timeoutMs: config.httpTimeoutMs,
         authToken: config.authToken,
         url: config.acquireUrl,
@@ -419,6 +461,7 @@ export async function acquireQaCredentialLease<TPayload>(
       const releaseLease = async () => {
         const releasePayload = await postConvexBroker({
           fetchImpl,
+          maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
           timeoutMs: config.httpTimeoutMs,
           authToken: config.authToken,
           url: config.releaseUrl,
@@ -470,6 +513,7 @@ export async function acquireQaCredentialLease<TPayload>(
         async heartbeat() {
           const heartbeatPayload = await postConvexBroker({
             fetchImpl,
+            maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
             timeoutMs: config.httpTimeoutMs,
             authToken: config.authToken,
             url: config.heartbeatUrl,

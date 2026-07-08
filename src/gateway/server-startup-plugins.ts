@@ -2,15 +2,18 @@
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+} from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
-import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
 type GatewayPluginBootstrapLog = {
@@ -88,16 +91,14 @@ export async function prepareGatewayPluginBootstrap(params: {
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.
   const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
-    : mergeActivationSectionsIntoRuntimeConfig({
+    : resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.cfgAtStart,
-        activationConfig: applyPluginAutoEnable({
-          config: activationSourceConfig,
-          env: process.env,
-          ...(params.pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-          discovery: params.pluginMetadataSnapshot?.discovery,
-        }).config,
+        activationSourceConfig,
+        env: process.env,
+        ...(params.pluginMetadataSnapshot?.manifestRegistry
+          ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
+          : {}),
+        discovery: params.pluginMetadataSnapshot?.discovery,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
@@ -169,6 +170,9 @@ export async function prepareGatewayPluginBootstrap(params: {
     setActivePluginRegistry(pluginRegistry);
   }
 
+  const runtimePluginsLoaded =
+    !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins;
+
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
@@ -178,9 +182,30 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded:
-      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
+    runtimePluginsLoaded,
   };
+}
+
+/**
+ * Warn when `agents.*.memorySearch.provider` selects a memory embedding provider
+ * that no loaded plugin registered. Without the owning plugin, `active-memory`
+ * cannot embed and silently falls back to keyword/FTS-only recall.
+ */
+export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
+  config: OpenClawConfig;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): void {
+  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+    config: params.config,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
+  });
+  for (const provider of unregistered) {
+    const path = `memorySearch.${provider.source}`;
+    params.log.warn(
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+    );
+  }
 }
 
 /** Loads startup plugin runtimes through the deferred bootstrap boundary. */
@@ -201,7 +226,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  return loadGatewayStartupPlugins({
+  const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
@@ -217,4 +242,15 @@ export async function loadGatewayStartupPluginRuntime(params: {
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
   });
+  if (params.preferSetupRuntimeForChannelPlugins !== true) {
+    // Surface configured memory embedding providers after the full startup
+    // runtime load; setup-runtime pre-bind loads intentionally register only
+    // early channel hooks and would produce false missing-provider warnings.
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.cfg,
+      pluginRegistry: loaded.pluginRegistry,
+      log: params.log,
+    });
+  }
+  return loaded;
 }

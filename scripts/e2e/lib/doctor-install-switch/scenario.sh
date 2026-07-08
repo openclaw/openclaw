@@ -22,6 +22,7 @@ mkdir -p "$git_root"
 # The git-style install fixture is unpacked from the tarball so this lane does
 # not depend on checkout source files being present in the Docker image.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 (
   cd "$git_root"
   openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
@@ -33,7 +34,7 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 )
 npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
 if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz" >"$npm_log" 2>&1; then
-  cat "$npm_log"
+  openclaw_e2e_print_log "$npm_log"
   exit 1
 fi
 
@@ -53,6 +54,11 @@ fi
 git_cli="$git_root/openclaw.mjs"
 
 package_version="$(node -p "require(\"$npm_root/package.json\").version")"
+update_doctor_env="OPENCLAW_UPDATE_IN_PROGRESS=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0"
 is_legacy_package_acceptance_compat() {
   [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
@@ -136,7 +142,7 @@ run_flow() {
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   rm -f "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"
@@ -150,7 +156,7 @@ run_flow() {
   assert_entrypoint "$unit_path" "$install_expected"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
 
@@ -161,14 +167,14 @@ run_flow \
   "npm-to-git" \
   "$npm_bin daemon install --force" \
   "$npm_entry" \
-  "OPENCLAW_UPDATE_IN_PROGRESS=1 node $git_cli doctor --repair --force --yes --non-interactive" \
+  "$update_doctor_env node $git_cli doctor --repair --force --yes --non-interactive" \
   "$git_entry"
 
 run_flow \
   "git-to-npm" \
   "node $git_cli daemon install --force" \
   "$git_entry" \
-  "OPENCLAW_UPDATE_IN_PROGRESS=1 $npm_bin doctor --repair --force --yes --non-interactive" \
+  "$update_doctor_env $npm_bin doctor --repair --force --yes --non-interactive" \
   "$npm_entry"
 
 run_proxy_env_flow() {
@@ -187,7 +193,7 @@ run_proxy_env_flow() {
     HTTPS_PROXY="https://proxy.local:7890" \
     NO_PROXY="localhost,127.0.0.1" \
     "$npm_bin" gateway install --force >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
@@ -198,9 +204,14 @@ run_proxy_env_flow() {
     printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
     printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
   } >>"$unit_path"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_UPDATE_IN_PROGRESS=1 \
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1 \
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1 \
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0 \
     node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
@@ -231,7 +242,7 @@ run_wrapper_flow() {
   local unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -239,7 +250,7 @@ run_wrapper_flow() {
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --force >"$reinstall_log" 2>&1; then
-    cat "$reinstall_log"
+    openclaw_e2e_print_log "$reinstall_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -248,7 +259,7 @@ run_wrapper_flow() {
 
   sed -i "/^Environment=OPENCLAW_WRAPPER=/d" "$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    cat "$env_repair_log"
+    openclaw_e2e_print_log "$env_repair_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -256,26 +267,26 @@ run_wrapper_flow() {
 
   sed -i "s#^Environment=OPENCLAW_WRAPPER=.*#Environment=OPENCLAW_WRAPPER=/tmp/stale-openclaw-wrapper#" "$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    cat "$env_repair_log"
+    openclaw_e2e_print_log "$env_repair_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   if ! grep -Fq "Gateway service invokes OPENCLAW_WRAPPER:" "$doctor_log"; then
     echo "Expected doctor to report active wrapper"
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force >"$clear_log" 2>&1; then
-    cat "$clear_log"
+    openclaw_e2e_print_log "$clear_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "OPENCLAW_WRAPPER"

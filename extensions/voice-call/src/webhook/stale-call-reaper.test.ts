@@ -56,6 +56,34 @@ describe("startStaleCallReaper", () => {
     stop?.();
   });
 
+  it.each(["speaking", "listening"] as const)(
+    "does not reap live %s calls without answeredAt",
+    async (state) => {
+      const endCall = vi.fn(async () => {});
+      const manager = {
+        getActiveCalls: vi.fn(() => [
+          {
+            callId: `call-${state}`,
+            startedAt: Date.now() - 120_000,
+            state,
+          },
+        ]),
+        endCall,
+      };
+
+      const stop = startStaleCallReaper({
+        manager: manager as never,
+        staleCallReaperSeconds: 60,
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(endCall).not.toHaveBeenCalled();
+
+      stop?.();
+    },
+  );
+
   it("logs and swallows endCall failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const endCallError = new Error("network");

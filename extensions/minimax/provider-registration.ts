@@ -38,6 +38,7 @@ import {
   buildMinimaxProvider,
   resolveMinimaxCatalogBaseUrl,
 } from "./provider-catalog.js";
+import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -64,6 +65,8 @@ const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
   ...MINIMAX_FAST_MODE_STREAM_HOOKS,
   resolveReasoningOutputMode: () => "native" as const,
+  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
+    resolveMinimaxThinkingProfile(modelId),
 };
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
@@ -285,7 +288,7 @@ function createMinimaxOAuthMethod(region: MiniMaxRegion) {
   };
 }
 
-export function buildMinimaxApiProviderPlugin(): ProviderPlugin {
+function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   return {
     id: API_PROVIDER_ID,
     label: PROVIDER_LABEL,
@@ -322,7 +325,7 @@ export function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   };
 }
 
-export function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
+function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
   return {
     id: PORTAL_PROVIDER_ID,
     label: PROVIDER_LABEL,

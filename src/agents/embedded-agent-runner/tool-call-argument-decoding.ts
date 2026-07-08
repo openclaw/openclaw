@@ -17,7 +17,12 @@ const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 function decodeHtmlEntities(value: string): string {
   const decodeNumericEntity = (raw: string, radix: 10 | 16): string => {
     const codePoint = Number.parseInt(raw, radix);
-    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    const isValidCodePoint =
+      Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      (codePoint < 0xd800 || codePoint > 0xdfff);
+    return isValidCodePoint
       ? String.fromCodePoint(codePoint)
       : `&#${radix === 16 ? "x" : ""}${raw};`;
   };
@@ -51,15 +56,24 @@ export function decodeHtmlEntitiesInObject(value: unknown): unknown {
   return value;
 }
 
+const decodedToolCallArguments = new WeakSet<object>();
+
 function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
+    if (
+      typedBlock.type !== "toolCall" ||
+      typeof typedBlock.arguments !== "object" ||
+      !typedBlock.arguments
+    ) {
       return;
     }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
+    if (decodedToolCallArguments.has(typedBlock.arguments)) {
+      return;
     }
+    const decoded = decodeHtmlEntitiesInObject(typedBlock.arguments) as object;
+    decodedToolCallArguments.add(decoded);
+    typedBlock.arguments = decoded;
   });
 }
 

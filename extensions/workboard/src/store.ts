@@ -5,6 +5,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -102,7 +103,7 @@ function addWorkboardDurationMs(now: number, durationMs: number): number {
   return resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: now }) ?? MAX_DATE_TIMESTAMP_MS;
 }
 
-export type WorkboardCardInput = {
+type WorkboardCardInput = {
   title?: unknown;
   notes?: unknown;
   status?: unknown;
@@ -131,63 +132,63 @@ export type WorkboardCardInput = {
   parents?: unknown;
 };
 
-export type WorkboardCardPatch = Partial<WorkboardCardInput>;
-export type WorkboardCommentInput = { body?: unknown };
-export type WorkboardLinkInput = {
+type WorkboardCardPatch = Partial<WorkboardCardInput>;
+type WorkboardCommentInput = { body?: unknown };
+type WorkboardLinkInput = {
   type?: unknown;
   targetCardId?: unknown;
   title?: unknown;
   url?: unknown;
 };
-export type WorkboardLinkedCreateInput = WorkboardCardInput & {
+type WorkboardLinkedCreateInput = WorkboardCardInput & {
   parents?: unknown;
 };
-export type WorkboardProofInput = {
+type WorkboardProofInput = {
   status?: unknown;
   label?: unknown;
   command?: unknown;
   url?: unknown;
   note?: unknown;
 };
-export type WorkboardArtifactInput = {
+type WorkboardArtifactInput = {
   label?: unknown;
   url?: unknown;
   path?: unknown;
   mimeType?: unknown;
 };
-export type WorkboardAttachmentInput = {
+type WorkboardAttachmentInput = {
   fileName?: unknown;
   contentBase64?: unknown;
   mimeType?: unknown;
   note?: unknown;
 };
-export type WorkboardWorkerLogInput = {
+type WorkboardWorkerLogInput = {
   level?: unknown;
   message?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardProtocolViolationInput = {
+type WorkboardProtocolViolationInput = {
   detail?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardClaimInput = {
+type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
 };
-export type WorkboardHeartbeatInput = {
+type WorkboardHeartbeatInput = {
   token?: unknown;
   ownerId?: unknown;
   note?: unknown;
 };
-export type WorkboardBulkInput = {
+type WorkboardBulkInput = {
   ids?: unknown;
   patch?: unknown;
   archived?: unknown;
 };
-export type WorkboardCompleteInput = {
+type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
   summary?: unknown;
@@ -195,7 +196,7 @@ export type WorkboardCompleteInput = {
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
-export type WorkboardBlockInput = {
+type WorkboardBlockInput = {
   ownerId?: unknown;
   token?: unknown;
   reason?: unknown;
@@ -207,10 +208,13 @@ export type WorkboardDispatchResult = {
   orchestrated: WorkboardCard[];
   count: number;
 };
-export type WorkboardListOptions = {
+type WorkboardListOptions = {
   boardId?: unknown;
 };
-export type WorkboardBoardSummary = {
+type WorkboardDispatchOptions = WorkboardListOptions & {
+  now?: unknown;
+};
+type WorkboardBoardSummary = {
   id: string;
   name?: string;
   description?: string;
@@ -225,25 +229,25 @@ export type WorkboardBoardSummary = {
   updatedAt?: number;
   archivedAt?: number;
 };
-export type WorkboardStatsResult = WorkboardBoardSummary & {
+type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;
   oldestReadyAgeMs?: number;
 };
-export type WorkboardPromoteInput = {
+type WorkboardPromoteInput = {
   force?: unknown;
   reason?: unknown;
 };
-export type WorkboardReassignInput = {
+type WorkboardReassignInput = {
   agentId?: unknown;
   status?: unknown;
   resetFailures?: unknown;
   reason?: unknown;
 };
-export type WorkboardReclaimInput = {
+type WorkboardReclaimInput = {
   status?: unknown;
   reason?: unknown;
 };
-export type WorkboardBoardInput = {
+type WorkboardBoardInput = {
   id?: unknown;
   name?: unknown;
   description?: unknown;
@@ -253,18 +257,18 @@ export type WorkboardBoardInput = {
   orchestration?: unknown;
   archived?: unknown;
 };
-export type WorkboardSpecifyInput = WorkboardCardPatch & {
+type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
+type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
   idempotencyKey?: unknown;
 };
-export type WorkboardDecomposeInput = {
+type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
 };
-export type WorkboardNotificationSubscribeInput = {
+type WorkboardNotificationSubscribeInput = {
   boardId?: unknown;
   cardId?: unknown;
   sessionKey?: unknown;
@@ -272,20 +276,20 @@ export type WorkboardNotificationSubscribeInput = {
   target?: unknown;
   eventKinds?: unknown;
 };
-export type WorkboardNotificationListOptions = {
+type WorkboardNotificationListOptions = {
   boardId?: unknown;
   cardId?: unknown;
 };
-export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
+type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
   subscriptionId?: unknown;
   limit?: unknown;
 };
-export type WorkboardMutationScope = {
+type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
 };
 
-export type WorkboardDiagnosticsResult = {
+type WorkboardDiagnosticsResult = {
   diagnostics: Array<{
     card: WorkboardCard;
     diagnostics: WorkboardDiagnostic[];
@@ -431,6 +435,21 @@ function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
+  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
+  if (fallback) {
+    if (fallback.lastEventAt) {
+      preservedFields.lastEventAt = fallback.lastEventAt;
+    }
+    if (fallback.lastEventId) {
+      preservedFields.lastEventId = fallback.lastEventId;
+    }
+    if (fallback.lastEventSequence) {
+      preservedFields.lastEventSequence = fallback.lastEventSequence;
+    }
+    if (fallback.deliveredEventIds?.length) {
+      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
+    }
+  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -439,12 +458,7 @@ function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
+    ...preservedFields,
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -602,10 +616,27 @@ function normalizeWorkspace(
     throw new Error("dir workspace path must be absolute.");
   }
   const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  const sourcePath = normalizeBoundedString(
+    record.sourcePath,
+    fallback?.sourcePath,
+    2000,
+    "workspace source path",
+  );
+  if (sourcePath && !isAbsoluteWorkspacePath(sourcePath)) {
+    throw new Error("workspace source path must be absolute.");
+  }
+  const sourceBranch = normalizeBoundedString(
+    record.sourceBranch,
+    fallback?.sourceBranch,
+    160,
+    "workspace source branch",
+  );
   return {
     kind,
     ...(workspacePath ? { path: workspacePath } : {}),
     ...(branch ? { branch } : {}),
+    ...(kind === "worktree" && sourcePath ? { sourcePath } : {}),
+    ...(kind === "worktree" && sourceBranch ? { sourceBranch } : {}),
   };
 }
 
@@ -2009,7 +2040,7 @@ function capText(value: string | undefined, max: number): string | undefined {
   if (!value) {
     return undefined;
   }
-  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 function cardBoardId(card: WorkboardCard): string {
@@ -2965,17 +2996,6 @@ export class WorkboardStore {
       metadata: { ...child.metadata, links: nextChildLinks },
     });
     return await this.promoteDependencyReady(nextChild.id);
-  }
-
-  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
-    let child = await this.get(childId);
-    if (!child) {
-      throw new Error(`card not found: ${childId}`);
-    }
-    for (const parentId of parentIds) {
-      child = await this.linkCards(parentId, child.id);
-    }
-    return child;
   }
 
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
@@ -4098,14 +4118,18 @@ export class WorkboardStore {
     });
   }
 
-  async dispatch(now = Date.now()): Promise<WorkboardDispatchResult> {
+  async dispatch(
+    input: number | WorkboardDispatchOptions = Date.now(),
+  ): Promise<WorkboardDispatchResult> {
+    const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
+    const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
     return await this.enqueueMutation(async () => {
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
-      for (const card of await this.list()) {
+      for (const card of await this.list({ boardId })) {
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -4179,14 +4203,14 @@ export class WorkboardStore {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
-          const boardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(boardId);
+          const latestBoardId = cardBoardId(latest);
+          const board = await this.boardStore.lookup(latestBoardId);
           const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
-          const boardCount = orchestratedByBoard.get(boardId) ?? 0;
+          const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
           if (boardCount < cap) {
             latest = await this.recordOrchestrationCandidate(latest, now);
             orchestrated.push(latest);
-            orchestratedByBoard.set(boardId, boardCount + 1);
+            orchestratedByBoard.set(latestBoardId, boardCount + 1);
           }
         }
         if (wasPromoted && latest.status !== "blocked") {

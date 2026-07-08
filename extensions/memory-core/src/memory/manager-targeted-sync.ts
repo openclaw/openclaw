@@ -40,6 +40,7 @@ export async function runMemoryTargetedSessionSync(params: {
   targetSessionFiles: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
+  sessionsFullRetryDirty?: boolean;
   sessionsDirtyFiles: Set<string>;
   syncSessionFiles: (params: {
     needsFullReindex: boolean;
@@ -52,7 +53,7 @@ export async function runMemoryTargetedSessionSync(params: {
   if (!params.hasSessionSource || !params.targetSessionFiles) {
     return {
       handled: false,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || params.sessionsDirtyFiles.size > 0,
     };
   }
 
@@ -62,12 +63,13 @@ export async function runMemoryTargetedSessionSync(params: {
       targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
     });
+    const remainingSessionsDirty = clearMemorySyncedSessionFiles({
+      sessionsDirtyFiles: params.sessionsDirtyFiles,
+      targetSessionFiles: params.targetSessionFiles,
+    });
     return {
       handled: true,
-      sessionsDirty: clearMemorySyncedSessionFiles({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
-      }),
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
     };
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -76,12 +78,13 @@ export async function runMemoryTargetedSessionSync(params: {
     if (!activated) {
       throw err;
     }
+    const remainingSessionsDirty = markMemoryTargetSessionFilesDirty({
+      sessionsDirtyFiles: params.sessionsDirtyFiles,
+      targetSessionFiles: params.targetSessionFiles,
+    });
     return {
       handled: true,
-      sessionsDirty: markMemoryTargetSessionFilesDirty({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
-      }),
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
     };
   }
 }

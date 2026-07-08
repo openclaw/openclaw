@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+import type { MatrixQaFaultProxyObserver } from "../../substrate/fault-proxy.js";
 import { createMatrixQaRoomObserver } from "../../substrate/sync.js";
 import type { MatrixQaProvisionedTopology } from "../../substrate/topology.js";
 import { resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
@@ -23,6 +24,8 @@ export type MatrixQaScenarioContext = {
   driverDeviceId?: string;
   driverPassword?: string;
   driverUserId: string;
+  faultProxyObserver?: MatrixQaFaultProxyObserver;
+  faultProxyTargetBaseUrl?: string;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
   observerDeviceId?: string;
@@ -57,7 +60,7 @@ export type MatrixQaScenarioContext = {
   topology: MatrixQaProvisionedTopology;
   patchGatewayConfig?: (
     patch: Record<string, unknown>,
-    opts?: { restartDelayMs?: number },
+    opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
@@ -94,8 +97,9 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 }
 
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
-export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
+const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
   "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
+const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
 
 export function buildMatrixToolProgressTaskContent(text: string) {
   return [
@@ -112,6 +116,14 @@ export function buildMatrixToolProgressPrompt(sutUserId: string) {
     `Do not guess or send any marker before the tool result returns.`,
     `Do not read \`HEARTBEAT.md\` for this check.`,
     `After that read completes, reply with only the exact marker from the file and no other text.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressCommandPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${MATRIX_QA_TOOL_PROGRESS_COMMAND}\`.`,
+    `The QA harness must observe that exec command preview and its completion as edits to one Matrix draft.`,
+    `After that exec command completes or fails, reply exactly \`${text}\`.`,
   ].join(" ");
 }
 
@@ -183,14 +195,6 @@ export function buildMatrixReplyArtifact(
     relatesTo: event.relatesTo,
     sender: event.sender,
     ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
-  };
-}
-
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: event.body?.trim().slice(0, 200),
-    eventId: event.eventId,
-    sender: event.sender,
   };
 }
 
@@ -407,7 +411,7 @@ export async function assertNoSutReplyWindow(params: {
   };
 }
 
-export async function runConfigurableTopLevelScenario(params: {
+async function runConfigurableTopLevelScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;

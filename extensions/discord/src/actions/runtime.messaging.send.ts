@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createReusableDiscordReplyReference } from "../reply-reference.js";
 import {
   assertMediaNotDataUrl,
   jsonResult,
@@ -22,6 +23,75 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
     !Array.isArray(value) &&
     Object.keys(value as Record<string, unknown>).length > 0,
   );
+}
+
+function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
+    return undefined;
+  }
+  const record = thread as Record<string, unknown>;
+  const metadata = record.thread_metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const archiveTimestamp = (metadata as Record<string, unknown>).archive_timestamp;
+    if (typeof archiveTimestamp === "string" && archiveTimestamp.trim()) {
+      return archiveTimestamp;
+    }
+  }
+  return undefined;
+}
+
+type DiscordThreadListActionResult = {
+  ok: true;
+  threads: unknown;
+  complete: boolean;
+  hasMore: boolean;
+  returnedCount: number;
+  source: "discord.threadList.archived" | "discord.threadList.active";
+  query: {
+    guildId: string;
+    channelId?: string;
+    includeArchived: boolean;
+    before?: string;
+    limit?: number;
+  };
+  nextBefore?: string;
+};
+
+function normalizeDiscordThreadListActionResult(params: {
+  value: unknown;
+  includeArchived: boolean;
+  channelId?: string;
+  guildId: string;
+  limit?: number;
+  before?: string;
+}): DiscordThreadListActionResult {
+  const record =
+    params.value && typeof params.value === "object" && !Array.isArray(params.value)
+      ? (params.value as Record<string, unknown>)
+      : undefined;
+  const threadItems = Array.isArray(record?.threads) ? record.threads : [];
+  const hasMore = record?.has_more === true;
+  const nextBefore =
+    params.includeArchived && hasMore
+      ? readDiscordThreadArchiveTimestamp(threadItems[threadItems.length - 1])
+      : undefined;
+
+  return {
+    ok: true,
+    threads: params.value,
+    complete: !hasMore,
+    hasMore,
+    returnedCount: threadItems.length,
+    source: params.includeArchived ? "discord.threadList.archived" : "discord.threadList.active",
+    query: {
+      guildId: params.guildId,
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      includeArchived: params.includeArchived,
+      ...(params.before ? { before: params.before } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    },
+    ...(nextBefore ? { nextBefore } : {}),
+  };
 }
 
 async function appendDiscordThreadRenameResult(
@@ -181,7 +251,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           {
             ...ctx.withOpts(),
             silent,
-            replyTo: replyTo ?? undefined,
+            reply: createReusableDiscordReplyReference(replyTo),
             sessionKey: sessionKey ?? undefined,
             agentId: agentId ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
@@ -215,7 +285,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         assertMediaNotDataUrl(mediaUrl);
         const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
           ...ctx.withOpts(),
-          replyTo,
+          reply: createReusableDiscordReplyReference(replyTo),
           silent,
         });
         return jsonResult(
@@ -234,7 +304,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,
-        replyTo,
+        reply: createReusableDiscordReplyReference(replyTo),
         components,
         embeds,
         silent,
@@ -296,6 +366,15 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
+      if (channelId && includeArchived === true) {
+        await ctx.assertReadTargetAllowed({ guildId, channelId });
+      } else {
+        await ctx.assertGuildReadTargetAllowed({
+          guildId,
+          channelTargetRequiredMessage:
+            "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
+        });
+      }
       const threads = await discordMessagingActionRuntime.listThreadsDiscord(
         {
           guildId,
@@ -306,7 +385,16 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         },
         ctx.withOpts(),
       );
-      return jsonResult({ ok: true, threads });
+      return jsonResult(
+        normalizeDiscordThreadListActionResult({
+          value: threads,
+          guildId,
+          channelId,
+          includeArchived: includeArchived === true,
+          before,
+          limit,
+        }),
+      );
     }
     case "threadReply": {
       if (!ctx.isActionEnabled("threads")) {
@@ -326,7 +414,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaUrl,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
-          replyTo,
+          reply: createReusableDiscordReplyReference(replyTo),
         },
       );
       return jsonResult({ ok: true, result });

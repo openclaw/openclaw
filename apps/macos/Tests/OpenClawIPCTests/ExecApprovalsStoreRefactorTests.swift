@@ -4,15 +4,82 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
+    private var realTemporaryDirectory: URL {
+        let path = FileManager().temporaryDirectory.path
+        if path.hasPrefix("/var/") {
+            return URL(fileURLWithPath: "/private\(path)", isDirectory: true)
+        }
+        return FileManager().temporaryDirectory.resolvingSymlinksInPath()
+    }
+
+    private func withLockedEnv(
+        _ values: [String: String?],
+        _ body: () async throws -> Void) async throws
+    {
+        func restoreEnv(_ values: [String: String?]) {
+            for (key, value) in values {
+                if let value {
+                    setenv(key, value, 1)
+                } else {
+                    unsetenv(key)
+                }
+            }
+        }
+
+        await TestIsolationLock.shared.acquire()
+        var previousEnv: [String: String?] = [:]
+        for (key, value) in values {
+            previousEnv[key] = getenv(key).map { String(cString: $0) }
+            if let value {
+                setenv(key, value, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        do {
+            try await body()
+            restoreEnv(previousEnv)
+            await TestIsolationLock.shared.release()
+        } catch {
+            restoreEnv(previousEnv)
+            await TestIsolationLock.shared.release()
+            throw error
+        }
+    }
+
     private func withTempStateDir(
         _ body: @escaping @Sendable (URL) async throws -> Void) async throws
     {
-        let stateDir = FileManager().temporaryDirectory
+        let root = self.realTemporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try Self.seedCurrentApprovalsFile(in: stateDir)
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        try await self.withLockedEnv([
+            "OPENCLAW_HOME": home.path,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
             try await body(stateDir)
+        }
+    }
+
+    private func withTempHomeAndStateDir(
+        _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
+    {
+        let root = self.realTemporaryDirectory
+            .appendingPathComponent("openclaw-home-state-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await self.withLockedEnv([
+            "OPENCLAW_HOME": home.path,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            try await body(home, stateDir)
         }
     }
 
@@ -27,6 +94,50 @@ struct ExecApprovalsStoreRefactorTests {
             let secondIdentity = try Self.fileIdentity(at: url)
 
             #expect(firstIdentity == secondIdentity)
+        }
+    }
+
+    @Test
+    func `ensure file migrates default approvals into custom state dir`() async throws {
+        try await self.withTempHomeAndStateDir { home, stateDir in
+            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(
+                at: legacyDir,
+                withIntermediateDirectories: true)
+            let legacySocket = legacyDir.appendingPathComponent("exec-approvals.sock").path
+            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
+            let legacyJson = """
+            {
+              "version": 1,
+              "socket": {
+                "path": "\(legacySocket)",
+                "token": "legacy-token"
+              },
+              "defaults": {
+                "security": "deny",
+                "ask": "always"
+              },
+              "agents": {
+                "main": {
+                  "allowlist": [{ "pattern": "git status" }]
+                }
+              }
+            }
+            """
+            try Data(legacyJson.utf8).write(to: legacyFile)
+
+            let file = ExecApprovalsStore.ensureFile()
+            let targetURL = ExecApprovalsStore.fileURL()
+
+            #expect(targetURL.path == stateDir.appendingPathComponent("exec-approvals.json").path)
+            #expect(FileManager().fileExists(atPath: targetURL.path))
+            #expect(file.socket?.path == stateDir.appendingPathComponent("exec-approvals.sock").path)
+            #expect(file.socket?.token == "legacy-token")
+            #expect(file.defaults?.security == .deny)
+            #expect(file.defaults?.ask == .always)
+            #expect(file.agents?["main"]?.allowlist?.map(\.pattern) == ["git status"])
+            #expect(!FileManager().fileExists(atPath: legacyFile.path))
+            #expect(FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
         }
     }
 
@@ -85,5 +196,20 @@ struct ExecApprovalsStoreRefactorTests {
             throw MissingIdentifierError()
         }
         return identifier
+    }
+
+    private static func seedCurrentApprovalsFile(in stateDir: URL) throws {
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let file = ExecApprovalsFile(
+            version: 1,
+            socket: ExecApprovalsSocketConfig(
+                path: stateDir.appendingPathComponent("exec-approvals.sock").path,
+                token: "test-token"),
+            defaults: nil,
+            agents: [:])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(file)
+            .write(to: stateDir.appendingPathComponent("exec-approvals.json"))
     }
 }

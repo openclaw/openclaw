@@ -129,6 +129,46 @@ describe("runQaManualLane", () => {
     expect(result.reply).toBe("Protocol note: mock reply.");
   });
 
+  it("cleans up lab and mock provider when gateway startup fails", async () => {
+    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway startup failed"));
+
+    await expect(
+      runQaManualLane({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        message: "check the kickoff file",
+        timeoutMs: 5_000,
+        replySettleMs: 0,
+      }),
+    ).rejects.toThrow("gateway startup failed");
+
+    expect(gatewayStop).not.toHaveBeenCalled();
+    expect(mockStop).toHaveBeenCalledTimes(1);
+    expect(labStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues provider and lab teardown when gateway stop fails", async () => {
+    gatewayStop.mockRejectedValueOnce(new Error("gateway stop failed"));
+
+    await expect(
+      runQaManualLane({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        message: "check the kickoff file",
+        timeoutMs: 5_000,
+        replySettleMs: 0,
+      }),
+    ).rejects.toThrow("gateway stop failed");
+
+    expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(mockStop).toHaveBeenCalledTimes(1);
+    expect(labStop).toHaveBeenCalledTimes(1);
+  });
+
   it("caps the gateway client timeout for oversized manual waits", async () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",

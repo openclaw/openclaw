@@ -2,17 +2,20 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
-  isHardAgentRunTimeoutPhase,
   mergeAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 
 describe("agent run terminal outcome", () => {
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
-    expect(isHardAgentRunTimeoutPhase("preflight")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("provider")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("post_turn")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("queue")).toBe(false);
-    expect(isHardAgentRunTimeoutPhase("gateway_draining")).toBe(false);
+    expect(
+      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
+        (timeoutPhase) =>
+          buildAgentRunTerminalOutcome({
+            status: "timeout",
+            timeoutPhase,
+          }).reason,
+      ),
+    ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
   });
 
   it("keeps queue and gateway draining timeouts non-sticky", () => {
@@ -49,7 +52,7 @@ describe("agent run terminal outcome", () => {
     });
 
     expect(rpcCancel.reason).toBe("cancelled");
-    expect(rpcCancel.status).toBe("timeout");
+    expect(rpcCancel.status).toBe("error");
     expect(mergeAgentRunTerminalOutcome(rpcCancel, lateCompletion)).toBe(rpcCancel);
     expect(
       buildAgentRunTerminalOutcome({
@@ -58,6 +61,43 @@ describe("agent run terminal outcome", () => {
         timeoutPhase: "gateway_draining",
       }).reason,
     ).toBe("cancelled");
+  });
+
+  it("keeps restart cancellation sticky over late completion", () => {
+    const restartCancel = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      stopReason: "restart",
+      timeoutPhase: "gateway_draining",
+      providerStarted: true,
+      endedAt: 100,
+    });
+    const lateCompletion = buildAgentRunTerminalOutcome({
+      status: "ok",
+      endedAt: 200,
+    });
+
+    expect(restartCancel).toMatchObject({
+      reason: "cancelled",
+      status: "error",
+      stopReason: "restart",
+    });
+    expect(mergeAgentRunTerminalOutcome(restartCancel, lateCompletion)).toBe(restartCancel);
+  });
+
+  it("keeps explicit provider timeout attribution ahead of restart cancellation", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason: "restart",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      stopReason: "restart",
+      timeoutPhase: "provider",
+    });
   });
 
   it("does not treat successful model stop metadata as cancellation", () => {
@@ -163,6 +203,35 @@ describe("agent run terminal outcome", () => {
       status: "timeout",
       error: "provider request timed out",
       livenessState: "blocked",
+    });
+  });
+
+  it("classifies abandoned successful waits as incomplete failures", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "ok",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "abandoned",
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      livenessState: "abandoned",
+    });
+  });
+
+  it("keeps explicit cancellation ahead of abandoned liveness", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        stopReason: "stop",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "cancelled",
+      status: "error",
+      stopReason: "stop",
+      livenessState: "abandoned",
     });
   });
 

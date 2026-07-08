@@ -20,8 +20,10 @@ import {
 } from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreSnapshot,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
+  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
@@ -97,6 +99,49 @@ function expectOAuthCredentialFields(
 }
 
 describe("promoteAuthProfileInOrder", () => {
+  it("marks newly saved runtime snapshot profiles as persisted", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-profile-runtime-persisted-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        replaceRuntimeAuthProfileStoreSnapshots([
+          {
+            agentDir,
+            store: {
+              version: AUTH_STORE_VERSION,
+              profiles: {},
+            },
+          },
+        ]);
+        try {
+          saveAuthProfileStore(
+            {
+              version: AUTH_STORE_VERSION,
+              profiles: {
+                "openai:work": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "access-token",
+                  refresh: "refresh-token",
+                  expires: Date.now() + 60_000,
+                  accountId: "account-123",
+                },
+              },
+            },
+            agentDir,
+          );
+
+          expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimePersistedProfileIds).toEqual([
+            "openai:work",
+          ]);
+        } finally {
+          clearRuntimeAuthProfileStoreSnapshots();
+        }
+      },
+      { clearOAuthDir: true },
+    );
+  });
+
   it("normalizes copied secrets when using the locked upsert path", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-profile-upsert-",
@@ -122,7 +167,11 @@ describe("promoteAuthProfileInOrder", () => {
           agentDir,
         });
 
-        const profiles = loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles;
+        const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+        expect(store.runtimePersistedProfileIds).toEqual(["anthropic:key", "openai:manual"]);
+        expect(store.runtimeExternalProfileIds).toBeUndefined();
+        expect(store.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
+        const profiles = store.profiles;
         expect(profiles["openai:manual"]).toMatchObject({
           type: "token",
           provider: "openai",

@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 
 type PluginManifestMetadataRecord = {
@@ -21,7 +22,6 @@ type CandidateDir = {
   origin?: string;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 let manifestMetadataCache:
   | {
@@ -45,31 +45,6 @@ function resolveStateDir(env: NodeJS.ProcessEnv): string {
   }
   const home = env.OPENCLAW_HOME ?? env.HOME ?? env.USERPROFILE ?? os.homedir();
   return path.join(home, ".openclaw");
-}
-
-function areBundledPluginsDisabled(env: NodeJS.ProcessEnv): boolean {
-  const value = normalizeTrimmedString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS)?.toLowerCase();
-  return value === "1" || value === "true";
-}
-
-function hasManifestDir(root: string | undefined): root is string {
-  return Boolean(root && fs.existsSync(root));
-}
-
-function resolveBundledPluginRoot(env: NodeJS.ProcessEnv): string | undefined {
-  if (areBundledPluginsDisabled(env)) {
-    return undefined;
-  }
-
-  const override = normalizeTrimmedString(env.OPENCLAW_BUNDLED_PLUGINS_DIR);
-  if (override) {
-    return resolveUserPath(override, env);
-  }
-
-  const sourceRoot = path.join(OPENCLAW_PACKAGE_ROOT, "extensions");
-  const runtimeRoot = path.join(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions");
-  const distRoot = path.join(OPENCLAW_PACKAGE_ROOT, "dist", "extensions");
-  return [sourceRoot, runtimeRoot, distRoot].find(hasManifestDir);
 }
 
 function listChildPluginDirs(
@@ -141,6 +116,41 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
   return dirs;
 }
 
+function isSourceCheckoutRoot(packageRoot: string): boolean {
+  return (
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    fs.existsSync(path.join(packageRoot, "src")) &&
+    fs.existsSync(path.join(packageRoot, "extensions"))
+  );
+}
+
+function resolvePackageRootsForSourceManifestMetadata(): string[] {
+  const roots: string[] = [];
+  for (const params of [
+    { argv1: process.argv[1] },
+    { moduleUrl: import.meta.url },
+  ] satisfies Array<{ argv1?: string; moduleUrl?: string }>) {
+    const root = resolveOpenClawPackageRootSync(params);
+    if (root && !roots.includes(root)) {
+      roots.push(root);
+    }
+  }
+  return roots;
+}
+
+function listSourceCheckoutPluginDirs(startOrder: number): CandidateDir[] {
+  const dirs: CandidateDir[] = [];
+  let order = startOrder;
+  for (const packageRoot of resolvePackageRootsForSourceManifestMetadata()) {
+    if (!isSourceCheckoutRoot(packageRoot)) {
+      continue;
+    }
+    dirs.push(...listChildPluginDirs(path.join(packageRoot, "extensions"), 3, order, "source"));
+    order = startOrder + dirs.length;
+  }
+  return dirs;
+}
+
 function resolveComparablePath(filePath: string): string {
   try {
     return fs.realpathSync(filePath);
@@ -171,7 +181,9 @@ export function listOpenClawPluginManifestMetadata(
   let order = 0;
   candidates.push(...listPersistedIndexPluginDirs(env, order));
   order = candidates.length;
-  candidates.push(...listChildPluginDirs(resolveBundledPluginRoot(env), 2, order, "bundled"));
+  candidates.push(...listChildPluginDirs(resolveBundledPluginsDir(env), 2, order, "bundled"));
+  order = candidates.length;
+  candidates.push(...listSourceCheckoutPluginDirs(order));
   order = candidates.length;
   candidates.push(
     ...listChildPluginDirs(path.join(resolveStateDir(env), "extensions"), 4, order, "global"),

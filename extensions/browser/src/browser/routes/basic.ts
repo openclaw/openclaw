@@ -195,7 +195,11 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
-    transport: capabilities.usesChromeMcp ? ("chrome-mcp" as const) : ("cdp" as const),
+    transport: capabilities.usesChromeMcp
+      ? ("chrome-mcp" as const)
+      : capabilities.mode === "local-extension"
+        ? ("extension" as const)
+        : ("cdp" as const),
     running: cdpReady,
     cdpReady,
     cdpHttp,
@@ -204,7 +208,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
+    cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,

@@ -9,9 +9,11 @@ import {
   formatSessionGoalStatus,
   getSessionEntry,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -30,6 +32,7 @@ const GOAL_ACTIONS = new Set([
   "complete",
   "create",
   "done",
+  "edit",
   "pause",
   "resume",
   "set",
@@ -170,6 +173,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const snapshot = await getSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          fallbackEntry: params.sessionEntry,
+          persist: false,
         });
         syncGoalSessionEntry(params);
         return goalReply(formatSessionGoalStatus(snapshot.goal));
@@ -188,8 +193,23 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
+      }
+      case "edit": {
+        const objective = normalizeOptionalString(parsed.text);
+        if (!objective) {
+          return goalReply("Usage: /goal edit <objective>");
+        }
+        const goal = await updateSessionGoalObjective({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          objective,
+        });
+        syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
+        return goalReply(`Goal updated: ${goal.objective}`);
       }
       case "pause": {
         const goal = await updateSessionGoalStatus({
@@ -199,6 +219,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
@@ -209,6 +230,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         const message = formatGoalResumeContinuationPrompt(parsed.text);
         applyGoalContinuationPrompt(params, message);
         return goalContinuation();
@@ -222,6 +244,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
       }
       case "block":
@@ -233,6 +256,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
       case "clear": {
@@ -241,11 +265,14 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
         });
         syncGoalSessionEntry(params);
+        if (removed) {
+          markCommandSessionMetadataChanged(params);
+        }
         return goalReply(removed ? "Goal cleared." : "No goal to clear.");
       }
       default:
         return goalReply(
-          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         );
     }
   } catch (error) {

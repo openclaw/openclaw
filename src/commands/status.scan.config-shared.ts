@@ -27,7 +27,10 @@ export function resolveStatusScanColdStart(params?: {
 /** Loads best-effort config, resolves read-only secrets, and appends status secret diagnostics. */
 export async function loadStatusScanCommandConfig(params: {
   commandName: string;
-  readBestEffortConfig: () => Promise<OpenClawConfig>;
+  readConfigSnapshot: () => Promise<{
+    config: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
+  }>;
   resolveConfig: (
     sourceConfig: OpenClawConfig,
   ) => Promise<{ resolvedConfig: OpenClawConfig; diagnostics: string[] }>;
@@ -44,14 +47,16 @@ export async function loadStatusScanCommandConfig(params: {
     env,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
   });
-  const sourceConfig =
+  const configSnapshot =
     coldStart && params.allowMissingConfigFastPath === true
-      ? {}
-      : await params.readBestEffortConfig();
+      ? { config: {}, sourceConfig: {} }
+      : await params.readConfigSnapshot();
+  const loadedConfig = configSnapshot.config;
+  const sourceConfig = configSnapshot.sourceConfig;
   const { resolvedConfig, diagnostics } =
     coldStart && params.allowMissingConfigFastPath === true
-      ? { resolvedConfig: sourceConfig, diagnostics: [] }
-      : await params.resolveConfig(sourceConfig);
+      ? { resolvedConfig: loadedConfig, diagnostics: [] }
+      : await params.resolveConfig(loadedConfig);
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
   // Token source conflicts are config-level diagnostics, even when secret resolution itself succeeded.
   return {

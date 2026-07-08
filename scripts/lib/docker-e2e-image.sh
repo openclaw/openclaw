@@ -33,6 +33,50 @@ docker_e2e_resolve_image() {
   printf '%s\n' "$default_image"
 }
 
+docker_e2e_read_nonnegative_decimal_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  local integer_part="${value%%.*}"
+  local fractional_part=""
+  if [[ "$value" == *.* ]]; then
+    fractional_part="${value#*.}"
+  fi
+  # These suite knobs are human-authored resource/time ceilings. Reject
+  # pathological decimal strings before Docker setup instead of failing later.
+  if [ "${#integer_part}" -gt 9 ] || [ "${#fractional_part}" -gt 6 ]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
+docker_e2e_read_tcp_port_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  local decimal_value=$((10#$value))
+  if [ "$decimal_value" -lt 1 ] || [ "$decimal_value" -gt 65535 ]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
 docker_e2e_build_or_reuse() {
   local image_name="$1"
   local label="$2"
@@ -131,6 +175,7 @@ docker_e2e_sample_stats_until_exit() {
   if ! [[ "$heartbeat_seconds" =~ ^[0-9]+$ ]] || [ "$heartbeat_seconds" -lt 1 ]; then
     heartbeat_seconds="30"
   fi
+  heartbeat_seconds="$((10#$heartbeat_seconds))"
 
   while kill -0 "$docker_pid" 2>/dev/null; do
     if docker_e2e_docker_cmd inspect "$container_name" >/dev/null 2>&1; then

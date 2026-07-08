@@ -58,10 +58,7 @@ function directoryPatternCoversInclude(excludePattern: string, includePattern: s
   return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
 }
 
-export function includePatternIsFullyExcluded(
-  includePattern: string,
-  excludePattern: string,
-): boolean {
+function includePatternIsFullyExcluded(includePattern: string, excludePattern: string): boolean {
   const include = normalizePathPattern(includePattern);
   const exclude = normalizePathPattern(excludePattern);
   return (
@@ -150,6 +147,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-docker",
     "tooling-isolated",
     "tooling",
     "tui",
@@ -159,7 +157,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "unit-security",
     "unit-src",
     "unit-support",
-    "unit-ui",
     "utils",
     "wizard",
   ].map((name, index) => [name, index + 10]),

@@ -19,6 +19,8 @@ import {
 } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
+const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
+
 /** Remove deprecated command config keys that no runtime reads anymore. */
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
@@ -56,10 +58,14 @@ export function normalizeLegacyBrowserConfig(
     delete browser.relayBindHost;
     browserChanged = true;
     changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
     );
   }
 
+  // driver "extension" is a live driver again (Chrome extension relay v2). Old
+  // relay-era profiles could carry a cdpUrl pointing at the retired gateway
+  // relay endpoint; the new driver owns its endpoint, so drop the stale URL
+  // instead of failing schema validation.
   const rawProfiles = browser.profiles;
   if (isRecord(rawProfiles)) {
     const profiles = { ...rawProfiles };
@@ -69,16 +75,15 @@ export function normalizeLegacyBrowserConfig(
         continue;
       }
       const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
-      if (rawDriver !== "extension") {
+      if (rawDriver !== "extension" || !normalizeOptionalString(rawProfile.cdpUrl)) {
         continue;
       }
-      profiles[profileName] = {
-        ...rawProfile,
-        driver: "existing-session",
-      };
+      const nextProfile = { ...rawProfile };
+      delete nextProfile.cdpUrl;
+      profiles[profileName] = nextProfile;
       profilesChanged = true;
       changes.push(
-        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+        `Removed browser.profiles.${profileName}.cdpUrl (extension driver profiles own their relay endpoint).`,
       );
     }
     if (profilesChanged) {
@@ -174,10 +179,34 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     for (const key of keysToMove) {
       delete nextChannel[key];
     }
-    nextChannel.accounts = {
+    const inheritedPolicyKeys = INHERITED_ACCOUNT_POLICY_KEYS.filter((key) =>
+      keysToMove.includes(key),
+    );
+    const nextAccounts: Record<string, unknown> = {
       ...rawAccounts,
       [DEFAULT_ACCOUNT_ID]: defaultAccount,
     };
+    if (inheritedPolicyKeys.length > 0) {
+      for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
+        if (!isRecord(rawAccount)) {
+          continue;
+        }
+        const nextAccount = { ...rawAccount };
+        let accountChanged = false;
+        for (const key of inheritedPolicyKeys) {
+          if (hasOwnKey(nextAccount, key)) {
+            continue;
+          }
+          const value = rawChannel[key];
+          nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+          accountChanged = true;
+        }
+        if (accountChanged) {
+          nextAccounts[accountId] = nextAccount;
+        }
+      }
+    }
+    nextChannel.accounts = nextAccounts;
 
     nextChannels[channelId] = nextChannel;
     channelsChanged = true;

@@ -6,6 +6,7 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
+import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -16,18 +17,16 @@ type AimockRequestSnapshot = {
   model: string;
   providerVariant: "openai" | "anthropic" | "unknown";
   imageInputCount: number;
+  plannedToolCallId?: string;
   plannedToolName?: string;
+  toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
 };
 
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 function stringifyContent(content: unknown): string {
   if (typeof content === "string") {
@@ -63,10 +62,21 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      return stringifyContent(message.content);
+      const text = stringifyContent(message.content);
+      if (!isInternalRuntimeContextCarrierText(text)) {
+        return text;
+      }
     }
   }
   return "";
+}
+
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
 }
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
@@ -85,6 +95,32 @@ function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
     }
   }
   return "";
+}
+
+function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
+  const messages = requestMessages(body);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; tool_call_id?: unknown };
+    if (message?.role === "tool" && typeof message.tool_call_id === "string") {
+      return message.tool_call_id;
+    }
+  }
+  return "";
+}
+
+function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
+  const messages = requestMessages(body);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as {
+      role?: unknown;
+      isError?: unknown;
+      is_error?: unknown;
+    };
+    if (message?.role === "tool") {
+      return message.isError === true || message.is_error === true;
+    }
+  }
+  return false;
 }
 
 function countImageInputs(value: unknown): number {
@@ -131,6 +167,17 @@ function extractPlannedToolName(entry: JournalEntry) {
   return typeof name === "string" && name.length > 0 ? name : undefined;
 }
 
+function extractPlannedToolCallId(entry: JournalEntry) {
+  const response = entry.response.fixture?.response as
+    | { toolCalls?: Array<{ id?: unknown; callId?: unknown; toolCallId?: unknown }> }
+    | undefined;
+  const candidate =
+    response?.toolCalls?.[0]?.id ??
+    response?.toolCalls?.[0]?.callId ??
+    response?.toolCalls?.[0]?.toolCallId;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+}
+
 function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
   const body = entry.body ?? null;
   const model = typeof body?.model === "string" ? body.model : "";
@@ -143,29 +190,45 @@ function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
     model,
     providerVariant: resolveProviderVariant(model),
     imageInputCount: countImageInputs(requestMessages(body)),
+    plannedToolCallId: extractPlannedToolCallId(entry),
     plannedToolName: extractPlannedToolName(entry),
+    toolOutputCallId: extractToolOutputCallId(body) || undefined,
+    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
   };
+}
+
+function toRequestSnapshots(entries: JournalEntry[]): AimockRequestSnapshot[] {
+  const snapshots = entries.map((entry) => toRequestSnapshot(entry));
+  const pendingPlannedIndexes: number[] = [];
+  for (const [index, snapshot] of snapshots.entries()) {
+    if (snapshot.toolOutputCallId && pendingPlannedIndexes.length > 0) {
+      const plannedIndex = pendingPlannedIndexes.shift();
+      if (plannedIndex !== undefined) {
+        snapshots[plannedIndex] = {
+          ...snapshots[plannedIndex],
+          plannedToolCallId: snapshot.toolOutputCallId,
+        };
+      }
+    }
+    if (snapshot.plannedToolName && !snapshot.plannedToolCallId) {
+      pendingPlannedIndexes.push(index);
+    }
+  }
+  return snapshots;
 }
 
 function createDebugMount(mock: LLMock): Mountable {
   return {
     async handleRequest(_req: IncomingMessage, res: ServerResponse, pathname: string) {
       const entries = mock.getRequests();
+      const snapshots = toRequestSnapshots(entries);
       if (pathname === "/last-request") {
-        const lastEntry = entries.at(-1);
-        writeJson(
-          res,
-          200,
-          lastEntry ? toRequestSnapshot(lastEntry) : { ok: false, error: "no request recorded" },
-        );
+        const lastSnapshot = snapshots.at(-1);
+        writeJson(res, 200, lastSnapshot ?? { ok: false, error: "no request recorded" });
         return true;
       }
       if (pathname === "/requests") {
-        writeJson(
-          res,
-          200,
-          entries.map((entry) => toRequestSnapshot(entry)),
-        );
+        writeJson(res, 200, snapshots);
         return true;
       }
       if (pathname === "/image-generations") {

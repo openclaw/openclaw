@@ -8,6 +8,41 @@ import { parsePositiveInt } from "../lib/numeric-options.mjs";
 
 const DEFAULT_LIMIT = 30;
 
+export function usage() {
+  return "Usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>";
+}
+
+export function shouldPrintHelp(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--limit") {
+      const value = argv[index + 1];
+      try {
+        parsePositiveInt(value, "--limit");
+      } catch {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--limit=")) {
+      try {
+        parsePositiveInt(arg.slice("--limit=".length), "--limit");
+      } catch {
+        return false;
+      }
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Parses CPU profile file paths and --limit.
  */
@@ -23,6 +58,13 @@ export function parseArgs(argv) {
     if (arg.startsWith("--limit=")) {
       limit = parsePositiveInt(arg.slice("--limit=".length), "--limit");
       continue;
+    }
+    if (arg === "--") {
+      files.push(...argv.slice(index + 1));
+      break;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
     }
     files.push(arg);
   }
@@ -59,8 +101,28 @@ function add(map, key, micros) {
   map.set(key, (map.get(key) ?? 0) + micros);
 }
 
-function summarizeProfile(file, limit) {
+function validateProfile(profile, file) {
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    throw new Error(`${file}: CPU profile must be a JSON object`);
+  }
+  if (!Array.isArray(profile.nodes) || profile.nodes.length === 0) {
+    throw new Error(`${file}: CPU profile has no nodes`);
+  }
+  if (!Array.isArray(profile.samples) || profile.samples.length === 0) {
+    throw new Error(`${file}: CPU profile has no samples`);
+  }
+  if (
+    !Number.isFinite(profile.startTime) ||
+    !Number.isFinite(profile.endTime) ||
+    profile.endTime <= profile.startTime
+  ) {
+    throw new Error(`${file}: CPU profile duration must be positive`);
+  }
+}
+
+export function summarizeProfile(file, limit) {
   const profile = JSON.parse(fs.readFileSync(file, "utf8"));
+  validateProfile(profile, file);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
   const samples = Array.isArray(profile.samples) ? profile.samples : [];
   const deltas = Array.isArray(profile.timeDeltas) ? profile.timeDeltas : [];
@@ -83,8 +145,11 @@ function summarizeProfile(file, limit) {
     add(byFrame, `${functionName}\t${url}${line}`, micros);
     add(byModule, groupUrl(frame.url ?? ""), micros);
   }
+  if (byFrame.size === 0) {
+    throw new Error(`${file}: CPU profile samples did not match profile nodes`);
+  }
 
-  const durationMs = ((profile.endTime ?? 0) - (profile.startTime ?? 0)) / 1000;
+  const durationMs = (profile.endTime - profile.startTime) / 1000;
   console.log(`\n${file}`);
   console.log(`duration_ms: ${durationMs.toFixed(1)} samples: ${samples.length}`);
   console.log("top_frames:");
@@ -102,6 +167,10 @@ function summarizeProfile(file, limit) {
 }
 
 function main() {
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    console.log(usage());
+    return;
+  }
   let options;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -110,11 +179,16 @@ function main() {
     process.exit(1);
   }
   if (options.files.length === 0) {
-    console.error("usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>");
+    console.error(usage());
     process.exit(2);
   }
-  for (const file of options.files) {
-    summarizeProfile(file, options.limit);
+  try {
+    for (const file of options.files) {
+      summarizeProfile(file, options.limit);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 }
 

@@ -7,6 +7,7 @@ const optionalBundledClusters = [
   "memory-lancedb",
   "msteams",
   "nostr",
+  "raft",
   "tlon",
   "twitch",
   "ui",

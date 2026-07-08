@@ -428,6 +428,36 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(getStreamMock().update).toHaveBeenCalled();
   });
 
+  it("replaces command progress items with matching command output", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onItemEvent?.({
+      itemId: "tool:call-1",
+      toolCallId: "call-1",
+      kind: "command",
+      name: "exec",
+      progressText: "install dependencies",
+    });
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "tool:call-1-output",
+      toolCallId: "call-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+
+    const lastUpdate = getStreamMock().update.mock.calls.at(-1)?.[0];
+    expect(lastUpdate).toContain("install dependencies");
+    expect(lastUpdate).not.toContain("completed");
+  });
+
   it("replaces reasoning progress snapshots in progress mode", async () => {
     const dispatcher = createDispatcher("personal", {
       streaming: {

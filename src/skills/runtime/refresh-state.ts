@@ -7,7 +7,8 @@ export type SkillsChangeEvent = {
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
-let globalVersion = 0;
+const INITIAL_SKILLS_SNAPSHOT_VERSION = Date.now();
+let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let listenerErrorHandler: ((err: unknown) => void) | undefined;
 
 function bumpVersion(current: number): number {
@@ -85,6 +86,6 @@ export function shouldRefreshSnapshotForVersion(
 export function resetSkillsRefreshStateForTest(): void {
   listeners.clear();
   workspaceVersions.clear();
-  globalVersion = 0;
+  globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
   listenerErrorHandler = undefined;
 }

@@ -5,7 +5,7 @@ import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 
-export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
+type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
   options?: SimpleStreamOptions;
   payload: TPayload;

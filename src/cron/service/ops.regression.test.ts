@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import {
   clearCommandLane,
+  enqueueCommandInLane,
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
@@ -264,6 +265,41 @@ describe("cron service ops regressions", () => {
     expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
   });
 
+  it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.now();
+    const marker =
+      "SERIALIZATION_PROBE: reply exactly with the marker token you received and nothing else.";
+    const job = createIsolatedRegressionJob({
+      id: "manual-payload-message",
+      name: "manual payload message",
+      scheduledAt: nowMs,
+      schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
+      payload: { kind: "agentTurn", message: marker },
+      state: { nextRunAtMs: nowMs + 3_600_000 },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const runResult = await run(state, job.id, "force");
+
+    expect(runResult).toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    const [params] = requireMockCall(runIsolatedAgentJob, 0, "runIsolatedAgentJob") as [
+      { message?: unknown }?,
+    ];
+    expect(params?.message).toBe(marker);
+  });
+
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
     vi.useFakeTimers();
     try {
@@ -433,6 +469,56 @@ describe("cron service ops regressions", () => {
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
+
+    clearCommandLane(CommandLane.Cron);
+  });
+
+  it("skips queued manual runs when the old cron service stops before lane admission", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const job = createDueIsolatedJob({
+      id: "queued-stopped-manual",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const blockerStarted = createDeferred<void>();
+    const releaseBlocker = createDeferred<void>();
+    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+      blockerStarted.resolve();
+      return await releaseBlocker.promise;
+    });
+
+    await blockerStarted.promise;
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expectQueuedRunAck(ack);
+
+    state.stopped = true;
+    releaseBlocker.resolve();
+    await blocker;
+    await waitForActiveTasks(5_000);
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(
+      state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
+    ).toBeUndefined();
 
     clearCommandLane(CommandLane.Cron);
   });

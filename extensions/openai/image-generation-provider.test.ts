@@ -50,7 +50,8 @@ const {
   logInfoMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   ensureAuthProfileStore: ensureAuthProfileStoreMock,
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
   listProfilesForProvider: listProfilesForProviderMock,
@@ -64,6 +65,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
+  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
@@ -398,6 +401,61 @@ describe("openai image generation provider", () => {
             providers: {
               openai: {
                 baseUrl: "https://openai-compatible.example.test/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // Config-only auth: a provider apiKey in config, with no env var and no
+    // auth profile.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey: "gateway-token",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // Blank placeholders resolve to no usable credential in the generate
+    // path, so readiness must not count them either.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey,
                 models: [],
               },
             },
@@ -1001,6 +1059,42 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it("cancels oversized Codex OAuth image response streams", async () => {
+    mockCodexAuthOnly();
+    let canceled = false;
+    let chunkSent = false;
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunkSent) {
+          return;
+        }
+        chunkSent = true;
+        controller.enqueue(new Uint8Array(64 * 1024 * 1024 + 1));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(stream),
+      release,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an oversized Codex lighthouse",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
@@ -1187,6 +1281,31 @@ describe("openai image generation provider", () => {
     expect(body.tools?.[0]?.output_format).toBe("png");
     expect(body.tools?.[0]?.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
+  });
+
+  it("forwards OpenAI moderation into Codex Responses image-generation tool requests", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-moderated-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a low-moderation Codex preview",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+      providerOptions: {
+        openai: {
+          moderation: "low",
+        },
+      },
+    });
+
+    const request = jsonRequestCall();
+    const body = request.body as { tools?: Array<Record<string, unknown>> };
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(body.tools?.[0]?.type).toBe("image_generation");
+    expect(body.tools?.[0]?.moderation).toBe("low");
   });
 
   it("omits output compression for PNG Codex image requests", async () => {

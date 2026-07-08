@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../sessions/session-manager.js";
 import { prepareSessionManagerForRun } from "./session-manager-init.js";
 
@@ -46,6 +46,7 @@ describe("prepareSessionManagerForRun", () => {
       labelsById: new Map([["old", {}]]),
       leafId: "old",
     };
+    const readFileSpy = vi.spyOn(fs, "readFile");
 
     await prepareSessionManagerForRun({
       sessionManager,
@@ -68,7 +69,66 @@ describe("prepareSessionManagerForRun", () => {
     expect(sessionManager.labelsById.size).toBe(0);
     expect(sessionManager.leafId).toBeNull();
     expect(sessionManager.flushed).toBe(false);
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
     expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
+  });
+
+  it("clears the append parent when resetting a real user-only manager", async () => {
+    const sessionFile = await makeTempFile();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "old-session",
+          timestamp: "2026-05-27T00:00:00.000Z",
+          cwd: "/old/cwd",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp: "2026-05-27T00:00:01.000Z",
+          message: { role: "user", content: "old prompt" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const sessionManager = SessionManager.open(sessionFile, path.dirname(sessionFile), "/old/cwd");
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "new-session",
+      cwd: "/tmp/task-repo",
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "response" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    const entries = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; parentId?: string | null });
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toEqual(expect.objectContaining({ type: "message", parentId: null }));
   });
 
   it("rewrites forked transcript headers with copied assistant messages to the runtime cwd", async () => {
@@ -154,6 +214,85 @@ describe("prepareSessionManagerForRun", () => {
     expect(JSON.parse(assistantLine ?? "{}")).toEqual(assistantEntry);
   });
 
+  it("preserves a forked empty branch and its opaque append cursor", async () => {
+    const sessionFile = await makeTempFile();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "forked-session",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: "/old/cwd",
+          parentSession: "/sessions/parent.jsonl",
+        }),
+        JSON.stringify({
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: null,
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "empty-leaf",
+          parentId: "plugin-metadata",
+          targetId: null,
+          appendParentId: "plugin-metadata",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const sessionManager = SessionManager.open(sessionFile, path.dirname(sessionFile), "/old/cwd");
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "child-session",
+      cwd: "/tmp/task-repo",
+    });
+
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    const records = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records[0]).toMatchObject({
+      type: "session",
+      id: "child-session",
+      cwd: "/tmp/task-repo",
+      parentSession: "/sessions/parent.jsonl",
+    });
+    expect(records.some((record) => record.id === "plugin-metadata")).toBe(true);
+    expect(records.some((record) => record.id === "empty-leaf")).toBe(true);
+    expect(records.find((record) => record.id === userId)).toMatchObject({
+      type: "message",
+      parentId: "plugin-metadata",
+    });
+  });
+
   it("does not truncate an existing transcript with a corrupted header", async () => {
     // A corrupt header may still be followed by useful transcript entries; fail
     // closed instead of truncating unknown persisted user data.
@@ -213,6 +352,119 @@ describe("prepareSessionManagerForRun", () => {
       },
     ]);
     expect(sessionManager.flushed).toBe(true);
+  });
+
+  it("does not truncate a blank-prefixed transcript with a corrupted header", async () => {
+    const sessionFile = await makeTempFile();
+    const originalTranscript =
+      [
+        "",
+        "   ",
+        '{"type":"session","id":"broken"',
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-27T00:00:01.000Z",
+          message: { role: "user", content: "persisted prompt" },
+        }),
+      ].join("\n") + "\n";
+    await fs.writeFile(sessionFile, originalTranscript, "utf-8");
+    const sessionManager = {
+      sessionId: "fresh-session",
+      cwd: "/srv/openclaw/main",
+      flushed: true,
+      fileEntries: [
+        {
+          type: "session",
+          id: "fresh-session",
+          cwd: "/srv/openclaw/main",
+        },
+        {
+          type: "message",
+          message: { role: "user" },
+        },
+      ],
+      byId: new Map([["user-1", {}]]),
+      labelsById: new Map(),
+      leafId: "user-1",
+    };
+
+    await expect(
+      prepareSessionManagerForRun({
+        sessionManager,
+        sessionFile,
+        hadSessionFile: true,
+        sessionId: "new-session",
+        cwd: "/tmp/task-repo",
+      }),
+    ).rejects.toThrow("Refusing to reset session transcript with unreadable header");
+
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe(originalTranscript);
+    expect(sessionManager.flushed).toBe(true);
+  });
+
+  it("resets when the first non-empty header is beyond the old scan cap", async () => {
+    const sessionFile = await makeTempFile();
+    const blankPrefix = " \n".repeat(33_000);
+    const originalTranscript =
+      blankPrefix +
+      [
+        JSON.stringify({
+          type: "session",
+          id: "fresh-session",
+          cwd: "/srv/openclaw/main",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-27T00:00:01.000Z",
+          message: { role: "user", content: "persisted prompt" },
+        }),
+      ].join("\n") +
+      "\n";
+    await fs.writeFile(sessionFile, originalTranscript, "utf-8");
+    const sessionManager = {
+      sessionId: "fresh-session",
+      cwd: "/srv/openclaw/main",
+      flushed: true,
+      fileEntries: [
+        {
+          type: "session",
+          id: "fresh-session",
+          cwd: "/srv/openclaw/main",
+        },
+        {
+          type: "message",
+          message: { role: "user" },
+        },
+      ],
+      byId: new Map([["user-1", {}]]),
+      labelsById: new Map(),
+      leafId: "user-1",
+    };
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "new-session",
+      cwd: "/tmp/task-repo",
+    });
+
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
+    expect(sessionManager.fileEntries).toEqual([
+      {
+        type: "session",
+        id: "new-session",
+        cwd: "/tmp/task-repo",
+      },
+    ]);
+    expect(sessionManager.byId.size).toBe(0);
+    expect(sessionManager.labelsById.size).toBe(0);
+    expect(sessionManager.leafId).toBeNull();
+    expect(sessionManager.flushed).toBe(false);
   });
 
   it("keeps recovered user-only transcripts through open and run preparation", async () => {

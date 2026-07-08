@@ -19,7 +19,7 @@ const getSubCliEntriesMock = vi.hoisted(() =>
 const registerSubCliByNameMock = vi.hoisted(() =>
   vi.fn(async (program: Command, name: string) => {
     if (name === "qa") {
-      throw new Error("qa scenario pack not found: qa/scenarios/index.md");
+      throw new Error("qa scenario pack not found: qa/scenarios/index.yaml");
     }
     program.command(name);
     return true;
@@ -95,7 +95,7 @@ describe("completion-cli write-state", () => {
         expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
         expect(stderrWrites.mock.calls).toEqual([
           [
-            "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.md\n",
+            "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
           ],
         ]);
       });

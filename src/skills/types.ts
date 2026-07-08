@@ -51,8 +51,19 @@ export type SkillCommandDispatchSpec = {
 
 export type SkillTelemetrySource = "bundled" | "unknown" | "workspace";
 
+export type SkillUsagePath = {
+  /** Path visible to the tool runtime when it reads SKILL.md. */
+  readPath: string;
+  /** Canonical source SKILL.md path used as the lifecycle identity. */
+  skillFile: string;
+  skillName: string;
+  skillSource: SkillTelemetrySource;
+};
+
 export type SkillCommandSpec = {
   name: string;
+  /** Canonical SKILL.md path for file-scoped usage accounting. */
+  skillFile?: string;
   skillName: string;
   description: string;
   /** Bounded source label used for diagnostics. */
@@ -99,6 +110,8 @@ export type SkillEligibilityContext = {
   };
 };
 
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 1;
+
 export type SkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
@@ -106,4 +119,5 @@ export type SkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+  promptFormatVersion?: number;
 };

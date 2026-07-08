@@ -1,20 +1,27 @@
 // SSH sandbox helper tests cover temp auth materialization, remote command
 // validation, shell quoting, and upload symlink safety.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
+  VALIDATE_REMOTE_WORKDIR_SCRIPT,
 } from "./ssh.js";
 
 const sessions: SshSandboxSession[] = [];
 const tempDirs: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(
@@ -175,6 +182,164 @@ describe("sandbox ssh helpers", () => {
       }),
     ).not.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when remote upload directory validation fails",
+    () => {
+      expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows symlinked ancestors before the trusted remote root",
+    async () => {
+      const realParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-real-"));
+      tempDirs.push(realParent);
+      const linkParent = `${realParent}-link`;
+      tempDirs.push(linkParent);
+      await fs.symlink(realParent, linkParent);
+
+      const root = path.join(linkParent, "runtime");
+      const target = path.join(root, "workspace", ".openclaw", "sandbox-skills");
+      await execFileAsync("/bin/sh", [
+        "-c",
+        ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+        "openclaw-remote-dir",
+        target,
+        root,
+      ]);
+
+      await expect(
+        fs.stat(path.join(realParent, "runtime", "workspace", ".openclaw", "sandbox-skills")),
+      ).resolves.toMatchObject({ dev: expect.any(Number) });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves caller positional args for commands after remote directory validation",
+    async () => {
+      const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
+      const root = path.join(realParent, "runtime");
+      const target = path.join(root, "workspace", ".openclaw", "sandbox-skills");
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        [
+          ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+          'printf "%s\\n%s\\n" "$1" "$2"',
+          'touch "$1/proof"',
+          'find "$1" -mindepth 1 -maxdepth 1 -name proof -print',
+        ].join("\n"),
+        "openclaw-remote-dir",
+        target,
+        root,
+      ]);
+
+      expect(stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "validates exec workdirs without creating missing directories",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
+      const project = path.join(root, "workspace", "project");
+      await fs.mkdir(project, { recursive: true });
+      const canonicalProject = await fs.realpath(project);
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        VALIDATE_REMOTE_WORKDIR_SCRIPT,
+        "openclaw-validate-workdir",
+        project,
+        path.join(root, "workspace"),
+      ]);
+
+      expect(stdout.trim()).toBe(canonicalProject);
+      await expect(
+        execFileAsync("/bin/sh", [
+          "-c",
+          VALIDATE_REMOTE_WORKDIR_SCRIPT,
+          "openclaw-validate-workdir",
+          path.join(root, "workspace", "missing"),
+          path.join(root, "workspace"),
+        ]),
+      ).rejects.toThrow(/remote directory not found/);
+      await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked exec workdirs inside the trusted remote root",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.symlink(root, path.join(workspace, "escape"));
+
+      await expect(
+        execFileAsync("/bin/sh", [
+          "-c",
+          VALIDATE_REMOTE_WORKDIR_SCRIPT,
+          "openclaw-validate-workdir",
+          path.join(workspace, "escape"),
+          workspace,
+        ]),
+      ).rejects.toThrow(/unsafe remote directory symlink/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "validates exec workdirs when the trusted remote root is slash",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-root-");
+      const project = path.join(root, "project");
+      await fs.mkdir(project, { recursive: true });
+      const canonicalProject = await fs.realpath(project);
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        VALIDATE_REMOTE_WORKDIR_SCRIPT,
+        "openclaw-validate-workdir",
+        canonicalProject,
+        "/",
+      ]);
+
+      expect(stdout.trim()).toBe(canonicalProject);
+    },
+  );
+
+  it("builds remote workdir validation commands with quoted literal paths", () => {
+    const command = buildRemoteWorkdirValidationCommand({
+      workdir: "/remote/workspace/project one",
+      root: "/remote/workspace",
+    });
+
+    expect(command).toContain("openclaw-validate-workdir");
+    expect(command).toContain("project one");
+    expect(command).toContain("remote directory must be absolute");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked directories inside the trusted remote root",
+    async () => {
+      const realParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-real-"));
+      tempDirs.push(realParent);
+      const root = path.join(realParent, "runtime");
+      await fs.mkdir(path.join(root, "workspace"), { recursive: true });
+      await fs.symlink(realParent, path.join(root, "workspace", ".openclaw"));
+
+      await expect(
+        execFileAsync("/bin/sh", [
+          "-c",
+          ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+          "openclaw-remote-dir",
+          path.join(root, "workspace", ".openclaw", "sandbox-skills"),
+          root,
+        ]),
+      ).rejects.toThrow(/unsafe remote directory symlink/);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects upload trees with symlinks that escape the local workspace",

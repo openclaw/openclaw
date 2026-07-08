@@ -19,7 +19,8 @@ DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
 NODE_MIN_MINOR=19
-NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
+NODE_23_MIN_MINOR=11
+NODE_SUPPORTED_VERSION_LABEL="22.19+, 23.11+, or 24+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -31,6 +32,21 @@ cleanup_tmpfiles() {
     done
 }
 trap cleanup_tmpfiles EXIT
+
+abort_install_int() {
+    cleanup_tmpfiles
+    echo ""
+    ui_warn "Installation interrupted"
+    exit 130
+}
+abort_install_term() {
+    cleanup_tmpfiles
+    echo ""
+    ui_warn "Installation terminated"
+    exit 143
+}
+trap abort_install_int INT
+trap abort_install_term TERM
 
 mktempfile() {
     local f
@@ -54,6 +70,21 @@ resolve_openclaw_effective_home() {
         return
     fi
     echo "$openclaw_home"
+}
+
+resolve_openclaw_user_path() {
+    local input="$1"
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
+    if [[ "$input" == "~" ]]; then
+        echo "$effective_home"
+    elif [[ "$input" == \~/* ]]; then
+        echo "${effective_home}${input:1}"
+    elif [[ "$input" == /* ]]; then
+        echo "$input"
+    else
+        echo "$PWD/$input"
+    fi
 }
 
 DOWNLOADER=""
@@ -495,12 +526,15 @@ run_quiet_step() {
     log="$(mktempfile)"
     local showed_progress=false
 
+    local cmd_exit=0
+
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
         local log_quoted=""
         printf -v cmd_quoted '%q ' "$@"
         printf -v log_quoted '%q' "$log"
-        if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
+        run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || cmd_exit=$?
+        if (( cmd_exit == 0 )); then
             return 0
         fi
         showed_progress=true
@@ -508,7 +542,8 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if "$@" >"$log" 2>&1; then
+        "$@" >"$log" 2>&1 || cmd_exit=$?
+        if (( cmd_exit == 0 )); then
             return 0
         fi
     fi
@@ -521,7 +556,22 @@ run_quiet_step() {
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
     fi
+    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
+    # like run_doctor can distinguish user cancellation from normal errors.
+    # Return 1 for all other failures to keep existing caller semantics.
+    if (( cmd_exit > 128 )); then
+        return "$cmd_exit"
+    fi
     return 1
+}
+
+run_required_step() {
+    local title="$1"
+    shift
+    if run_quiet_step "$title" "$@"; then
+        return 0
+    fi
+    exit 1
 }
 
 cleanup_legacy_submodules() {
@@ -617,10 +667,6 @@ is_arch_linux() {
             return 0
         fi
     fi
-    # Fallback: check for pacman
-    if command -v pacman &> /dev/null; then
-        return 0
-    fi
     return 1
 }
 
@@ -667,7 +713,7 @@ install_build_tools_linux() {
         return 0
     fi
 
-    if command -v pacman &> /dev/null || is_arch_linux; then
+    if command -v pacman &> /dev/null && is_arch_linux; then
         if is_root; then
             run_quiet_step "Installing build tools" pacman -Sy --noconfirm base-devel python make cmake gcc
         else
@@ -1470,23 +1516,32 @@ node_major_version() {
     return 1
 }
 
-node_is_at_least_required() {
+node_version_components_are_supported() {
+    local major="$1"
+    local minor="$2"
+    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq 23 && "$minor" -ge "$NODE_23_MIN_MINOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -gt 23 ]]; then
+        return 0
+    fi
+    return 1
+}
+
+node_is_supported() {
     local version_components major minor
     version_components="$(parse_node_version_components || true)"
     read -r major minor <<< "$version_components"
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
-        return 0
-    fi
-    return 1
+    node_version_components_are_supported "$major" "$minor"
 }
 
-node_binary_is_at_least_required() {
+node_binary_is_supported() {
     local node_bin="$1"
     local version_components major minor
     version_components="$(parse_node_version_components_for_binary "$node_bin" || true)"
@@ -1494,13 +1549,7 @@ node_binary_is_at_least_required() {
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
-        return 0
-    fi
-    return 1
+    node_version_components_are_supported "$major" "$minor"
 }
 
 prepend_path_dir() {
@@ -1576,7 +1625,7 @@ promote_supported_node_binary() {
             continue
         fi
         seen_dirs="${seen_dirs}${dir}:"
-        if node_binary_is_at_least_required "$candidate"; then
+        if node_binary_is_supported "$candidate"; then
             prepend_path_dir "$dir" || continue
             if [[ "$OS" == "linux" ]]; then
                 persist_shell_path_prepend "$dir" || true
@@ -1624,9 +1673,7 @@ ensure_macos_default_node_active() {
         fi
     fi
 
-    local major=""
-    major="$(node_major_version || true)"
-    if [[ -n "$major" && "$major" -ge 22 ]]; then
+    if node_is_supported; then
         return 0
     fi
 
@@ -1647,13 +1694,9 @@ ensure_macos_default_node_active() {
     return 1
 }
 
-ensure_macos_node22_active() {
-    ensure_macos_default_node_active "$@"
-}
-
 ensure_default_node_active_shell() {
     promote_supported_node_binary || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         return 0
     fi
 
@@ -1661,7 +1704,7 @@ ensure_default_node_active_shell() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Active Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+    ui_error "Active Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
     local nvm_detected=0
@@ -1681,7 +1724,7 @@ ensure_default_node_active_shell() {
         echo "Then open a new shell and rerun:"
         echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
     else
-        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} (or Node ${NODE_MIN_VERSION}+ minimum) and ensure it is first on PATH, then rerun installer."
+        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
     fi
 
     return 1
@@ -1711,15 +1754,15 @@ load_nvm_for_node_detection() {
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if node_is_at_least_required; then
+        if node_is_supported; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
         else
             if [[ -n "$NODE_VERSION" ]]; then
-                ui_info "Node.js $(node -v) found, upgrading to v${NODE_MIN_VERSION}+"
+                ui_info "Node.js $(node -v) found, upgrading to a supported version"
             else
-                ui_info "Node.js found but version could not be parsed; reinstalling v${NODE_MIN_VERSION}+"
+                ui_info "Node.js found but version could not be parsed; reinstalling a supported version"
             fi
             return 1
         fi
@@ -1731,11 +1774,11 @@ check_node() {
 
 finish_linux_node_install() {
     activate_supported_node_on_path || true
-    if ! node_is_at_least_required; then
+    if ! node_is_supported; then
         local active_path active_version
         active_path="$(command -v node 2>/dev/null || echo "not found")"
         active_version="$(node -v 2>/dev/null || echo "missing")"
-        ui_error "Installed Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+        ui_error "Installed Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
         echo "Upgrade the system Node.js package or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
         exit 1
     fi
@@ -1747,29 +1790,29 @@ finish_linux_node_install() {
 install_node_with_apk() {
     ui_info "Installing Node.js via apk (Alpine Linux detected)"
     if is_root; then
-        run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" apk add --no-cache nodejs npm
     else
-        run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm
     fi
 
     activate_supported_node_on_path || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         finish_linux_node_install
         return 0
     fi
 
     local apk_node_version
     apk_node_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
+    ui_warn "Alpine nodejs package installed ${apk_node_version}, outside the supported range (${NODE_SUPPORTED_VERSION_LABEL})"
     ui_info "Trying Alpine nodejs-current package"
     if is_root; then
-        run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
     else
-        run_quiet_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
     fi
 
     activate_supported_node_on_path || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         finish_linux_node_install
         return 0
     fi
@@ -1777,7 +1820,7 @@ install_node_with_apk() {
     local active_path active_version
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_error "Alpine apk repositories did not provide Node.js v${NODE_MIN_VERSION}+; found ${active_version} (${active_path})"
+    ui_error "Alpine apk repositories did not provide Node.js ${NODE_SUPPORTED_VERSION_LABEL}; found ${active_version} (${active_path})"
     echo "Use Alpine 3.21+ or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
     exit 1
 }
@@ -1807,12 +1850,12 @@ install_node() {
         fi
 
         # Arch-based distros: use pacman with official repos
-        if command -v pacman &> /dev/null || is_arch_linux; then
+        if command -v pacman &> /dev/null && is_arch_linux; then
             ui_info "Installing Node.js via pacman (Arch-based distribution detected)"
             if is_root; then
-                run_quiet_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
             else
-                run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
             finish_linux_node_install
             return 0
@@ -1827,39 +1870,39 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" sudo -E bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" dnf install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" yum install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually (or Node ${NODE_MIN_VERSION}+ minimum): https://nodejs.org"
+            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually: https://nodejs.org"
             exit 1
         fi
 
@@ -1879,19 +1922,6 @@ check_git() {
 
 is_root() {
     [[ "$(id -u)" -eq 0 ]]
-}
-
-# Run a command with sudo only if not already root
-maybe_sudo() {
-    if is_root; then
-        # Skip -E flag when root (env is already preserved)
-        if [[ "${1:-}" == "-E" ]]; then
-            shift
-        fi
-        "$@"
-    else
-        sudo "$@"
-    fi
 }
 
 require_sudo() {
@@ -1928,7 +1958,7 @@ install_git() {
         elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
             run_quiet_step "Installing Git" apt_get_install git
-        elif command -v pacman &> /dev/null || is_arch_linux; then
+        elif command -v pacman &> /dev/null && is_arch_linux; then
             if is_root; then
                 run_quiet_step "Installing Git" pacman -Sy --noconfirm git
             else
@@ -2119,6 +2149,15 @@ EOF
 }
 
 run_pnpm() {
+    if [[ "${PNPM_CMD[*]}" == "corepack pnpm" && "${1:-}" == "-C" && -n "${2:-}" ]]; then
+        local repo_dir="$2"
+        shift 2
+        if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
+            ensure_pnpm
+        fi
+        (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
+        return
+    fi
     if ! pnpm_cmd_is_ready; then
         ensure_pnpm
     fi
@@ -2251,6 +2290,10 @@ activate_repo_pnpm_version() {
         ui_info "Activating repo pnpm ${version}"
         corepack prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
         refresh_shell_command_cache
+        if [[ "$(cd "$repo_dir" && corepack pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+            set_pnpm_cmd corepack pnpm
+            return 0
+        fi
         detect_pnpm_cmd || true
     fi
 }
@@ -2459,6 +2502,20 @@ warn_shell_path_missing_dir() {
         return 0
     fi
 
+    # persist_shell_path_prepend may already have written the export line; in
+    # that case new shells are fine and the user only needs to reload this one.
+    # RC lines may spell the home dir as $HOME instead of the expanded path.
+    local dir_home_form="\$HOME${dir#"$HOME"}"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [[ -f "$rc" ]] && { grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc"; }; then
+            echo ""
+            ui_info "PATH updated in ${rc}: added ${label} (${dir})"
+            echo "  New terminals pick this up automatically."
+            echo "  For this shell, run: source ${rc}; hash -r"
+            return 0
+        fi
+    done
+
     echo ""
     ui_warn "PATH missing ${label}: ${dir}"
     echo "  This can make openclaw show as \"command not found\" in new terminals."
@@ -2473,8 +2530,9 @@ openclaw_command_for_user() {
         return 0
     fi
 
-    local claw_dir="${claw%/*}"
-    if [[ "$claw_dir" != "$claw" ]] && path_has_dir "$ORIGINAL_PATH" "$claw_dir"; then
+    local original_claw=""
+    original_claw="$(PATH="$ORIGINAL_PATH" type -P openclaw 2>/dev/null || true)"
+    if [[ "$original_claw" == "$claw" ]]; then
         echo "openclaw"
         return 0
     fi
@@ -2609,6 +2667,25 @@ resolve_openclaw_bin() {
     return 1
 }
 
+resolve_installed_openclaw_bin() {
+    local installed_bin=""
+    if [[ "$INSTALL_METHOD" == "git" ]]; then
+        installed_bin="$HOME/.local/bin/openclaw"
+    elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+        local npm_bin=""
+        npm_bin="$(npm_global_bin_dir || true)"
+        if [[ -n "$npm_bin" ]]; then
+            installed_bin="${npm_bin}/openclaw"
+        fi
+    fi
+
+    if [[ -n "$installed_bin" && -x "$installed_bin" ]]; then
+        echo "$installed_bin"
+        return 0
+    fi
+    resolve_openclaw_bin
+}
+
 install_openclaw_from_git() {
     local repo_dir="$1"
     local repo_url="https://github.com/openclaw/openclaw.git"
@@ -2654,10 +2731,26 @@ install_openclaw_from_git() {
 
     ensure_user_local_bin_on_path
 
+    local node_bin="" node_bin_quoted="" entry_path_quoted=""
+    node_bin="$(type -P node 2>/dev/null || true)"
+    if [[ -n "$node_bin" && "$node_bin" != /* ]]; then
+        local node_dir=""
+        node_dir="$(cd "$(dirname "$node_bin")" && pwd -P 2>/dev/null)" || node_dir=""
+        if [[ -n "$node_dir" ]]; then
+            node_bin="${node_dir}/$(basename "$node_bin")"
+        fi
+    fi
+    if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
+        ui_error "Node.js runtime not found after build"
+        return 1
+    fi
+    printf -v node_bin_quoted "%q" "$node_bin"
+    printf -v entry_path_quoted "%q" "${repo_dir}/dist/entry.js"
+
     cat > "$HOME/.local/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec node "${repo_dir}/dist/entry.js" "\$@"
+exec ${node_bin_quoted} ${entry_path_quoted} "\$@"
 EOF
     chmod +x "$HOME/.local/bin/openclaw"
     ui_success "OpenClaw wrapper installed to \$HOME/.local/bin/openclaw"
@@ -2805,7 +2898,14 @@ run_doctor() {
         warn_openclaw_not_found
         return 0
     fi
-    run_quiet_step "Running doctor" "$claw" doctor --non-interactive || true
+    local doctor_exit=0
+    run_quiet_step "Running doctor" "$claw" doctor --non-interactive || doctor_exit=$?
+    if (( doctor_exit == 130 )); then
+        abort_install_int
+    fi
+    if (( doctor_exit != 0 )); then
+        return "$doctor_exit"
+    fi
     ui_success "Doctor complete"
 }
 
@@ -2823,68 +2923,32 @@ maybe_open_dashboard() {
     "$claw" dashboard || true
 }
 
-resolve_workspace_dir() {
-    local profile="${OPENCLAW_PROFILE:-default}"
+has_openclaw_config() {
     local effective_home
     effective_home="$(resolve_openclaw_effective_home)"
-    if [[ "${profile}" != "default" ]]; then
-        echo "${effective_home}/.openclaw/workspace-${profile}"
-    else
-        echo "${effective_home}/.openclaw/workspace"
-    fi
-}
-
-run_bootstrap_onboarding_if_needed() {
-    if [[ "${NO_ONBOARD}" == "1" ]]; then
+    if [[ -n "${OPENCLAW_CONFIG_PATH:-}" ]]; then
+        local config_path
+        config_path="$(resolve_openclaw_user_path "$OPENCLAW_CONFIG_PATH")"
+        [[ -f "$config_path" ]]
         return
     fi
 
-    local effective_home
-    effective_home="$(resolve_openclaw_effective_home)"
-    local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
-    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
-    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
-    if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
-        return
-    fi
-    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
-        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
-            return
+    if [[ -n "${OPENCLAW_STATE_DIR:-}" ]]; then
+        local state_dir
+        state_dir="$(resolve_openclaw_user_path "$OPENCLAW_STATE_DIR")"
+        if [[ -f "$state_dir/openclaw.json" || -f "$state_dir/clawdbot.json" ]]; then
+            return 0
         fi
+        return 1
     fi
 
-    local workspace
-    workspace="$(resolve_workspace_dir)"
-    local bootstrap="${workspace}/BOOTSTRAP.md"
-
-    if [[ ! -f "${bootstrap}" ]]; then
-        return
+    if [[ -f "$effective_home/.openclaw/openclaw.json" ||
+        -f "$effective_home/.openclaw/clawdbot.json" ||
+        -f "$effective_home/.clawdbot/openclaw.json" ||
+        -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
+        return 0
     fi
-
-    if ! is_promptable; then
-        local user_claw
-        user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-        ui_info "BOOTSTRAP.md found but no TTY; run ${user_claw} onboard to finish setup"
-        return
-    fi
-
-    ui_info "BOOTSTRAP.md found; starting onboarding"
-    local claw="${OPENCLAW_BIN:-}"
-    if [[ -z "$claw" ]]; then
-        claw="$(resolve_openclaw_bin || true)"
-    fi
-    if [[ -z "$claw" ]]; then
-        ui_info "BOOTSTRAP.md found but openclaw not on PATH; skipping onboarding"
-        warn_openclaw_not_found
-        return
-    fi
-
-    "$claw" onboard || {
-        local user_claw
-        user_claw="$(openclaw_command_for_user "$claw")"
-        ui_error "Onboarding failed; run ${user_claw} onboard to retry"
-        return
-    }
+    return 1
 }
 
 load_install_version_helpers() {
@@ -2995,7 +3059,9 @@ refresh_gateway_service_if_loaded() {
     if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
         ui_success "Gateway service restarted"
     else
-        ui_warn "Gateway service restart failed; continuing"
+        local user_claw
+        user_claw="$(openclaw_command_for_user "$claw")"
+        ui_warn "Gateway service restart failed; continuing. Run: ${user_claw} gateway restart"
         return 0
     fi
 
@@ -3006,6 +3072,7 @@ verify_installation() {
     if [[ "${VERIFY_INSTALL}" != "1" ]]; then
         return 0
     fi
+    local verify_gateway="${1:-true}"
 
     ui_stage "Verifying installation"
     local claw="${OPENCLAW_BIN:-}"
@@ -3020,10 +3087,14 @@ verify_installation() {
 
     run_quiet_step "Checking OpenClaw version" "$claw" --version || return 1
 
-    if is_gateway_daemon_loaded "$claw"; then
+    if [[ "$verify_gateway" != "true" ]]; then
+        ui_info "Setup not complete; skipping gateway service check"
+    elif is_gateway_daemon_loaded "$claw"; then
         run_quiet_step "Checking gateway service" "$claw" gateway status --deep || {
+            local user_claw
+            user_claw="$(openclaw_command_for_user "$claw")"
             ui_error "Install verify failed: gateway service unhealthy"
-            ui_info "Run: openclaw gateway status --deep"
+            ui_info "Run: ${user_claw} gateway status --deep"
             return 1
         }
     else
@@ -3098,7 +3169,6 @@ main() {
         is_upgrade=true
     fi
     local should_open_dashboard=false
-    local skip_onboard=false
 
     ui_stage "Preparing environment"
 
@@ -3153,7 +3223,7 @@ main() {
 
     ui_stage "Finalizing setup"
 
-    OPENCLAW_BIN="$(resolve_openclaw_bin || true)"
+    OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
     # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
@@ -3168,20 +3238,11 @@ main() {
         fi
     fi
 
-    refresh_gateway_service_if_loaded
-
-    # Step 6: Run doctor for migrations on upgrades and git installs
-    local run_doctor_after=false
-    if [[ "$is_upgrade" == "true" || "$INSTALL_METHOD" == "git" ]]; then
-        run_doctor_after=true
+    local config_present=false
+    if has_openclaw_config; then
+        config_present=true
+        refresh_gateway_service_if_loaded
     fi
-    if [[ "$run_doctor_after" == "true" ]]; then
-        run_doctor
-        should_open_dashboard=true
-    fi
-
-    # Step 7: If BOOTSTRAP.md is still present in the workspace, resume onboarding
-    run_bootstrap_onboarding_if_needed
 
     local installed_version
     installed_version=$(resolve_openclaw_version)
@@ -3238,67 +3299,27 @@ main() {
     echo ""
 
     if [[ "$INSTALL_METHOD" == "git" && -n "$final_git_dir" ]]; then
+        local user_claw
+        user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
         ui_section "Source install details"
         ui_kv "Checkout" "$final_git_dir"
         ui_kv "Wrapper" "$HOME/.local/bin/openclaw"
-        ui_kv "Update command" "openclaw update"
+        ui_kv "Update command" "${user_claw} update"
         ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
-    elif [[ "$is_upgrade" == "true" ]]; then
-        ui_info "Upgrade complete"
-        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
-            local claw="${OPENCLAW_BIN:-}"
-            if [[ -z "$claw" ]]; then
-                claw="$(resolve_openclaw_bin || true)"
-            fi
-            if [[ -z "$claw" ]]; then
-                ui_info "Skipping doctor (openclaw not on PATH yet)"
-                warn_openclaw_not_found
-                return 0
-            fi
-            local -a doctor_args=()
-            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
-                doctor_args+=("--non-interactive")
-            fi
-            ui_info "Running openclaw doctor"
-            local doctor_ok=0
-            if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
-            else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
-            fi
-            if (( doctor_ok )); then
-                ui_info "Updating plugins"
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
-            else
-                ui_warn "Doctor failed; skipping plugin updates"
-            fi
-        else
-            local user_claw
-            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "No TTY; run ${user_claw} doctor and ${user_claw} plugins update --all manually"
-        fi
-    else
-        if [[ "$NO_ONBOARD" == "1" || "$skip_onboard" == "true" ]]; then
+    fi
+
+    if [[ "$config_present" != "true" ]]; then
+        if [[ "$NO_ONBOARD" == "1" ]]; then
             local user_claw
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
         else
-            local effective_home
-            effective_home="$(resolve_openclaw_effective_home)"
-            local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
-                ui_info "Config already present; running doctor"
-                run_doctor
-                should_open_dashboard=true
-                ui_info "Config already present; skipping onboarding"
-                skip_onboard=true
-            fi
             ui_info "Starting setup"
             echo ""
             if is_promptable; then
                 local claw="${OPENCLAW_BIN:-}"
                 if [[ -z "$claw" ]]; then
-                    claw="$(resolve_openclaw_bin || true)"
+                    claw="$(resolve_installed_openclaw_bin || true)"
                 fi
                 if [[ -z "$claw" ]]; then
                     ui_info "Skipping onboarding (openclaw not on PATH yet)"
@@ -3311,30 +3332,87 @@ main() {
             local user_claw
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "No TTY; run ${user_claw} onboard to finish setup"
-            return 0
         fi
+    elif [[ "$is_upgrade" == "true" ]]; then
+        ui_info "Upgrade complete"
+        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+            local claw="${OPENCLAW_BIN:-}"
+            if [[ -z "$claw" ]]; then
+                claw="$(resolve_installed_openclaw_bin || true)"
+            fi
+            if [[ -z "$claw" ]]; then
+                ui_info "Skipping doctor (openclaw not on PATH yet)"
+                warn_openclaw_not_found
+                return 0
+            fi
+            local -a doctor_args=()
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
+            fi
+            ui_info "Running openclaw doctor"
+            local doctor_ok=0
+            local doctor_exit=0
+            if (( ${#doctor_args[@]} )); then
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
+            else
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty || doctor_exit=$?
+            fi
+            if (( doctor_exit == 130 )); then
+                abort_install_int
+            fi
+            # Clear dashboard flag if the doctor was cancelled or failed,
+            # since the upgrade did not complete successfully.
+            if (( doctor_exit != 0 )); then
+                should_open_dashboard=false
+            fi
+            if (( doctor_exit == 0 )); then
+                doctor_ok=1
+            fi
+            if (( doctor_ok )); then
+                should_open_dashboard=true
+                ui_info "Updating plugins"
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
+            else
+                ui_warn "Doctor failed; skipping plugin updates"
+            fi
+        else
+            if run_doctor; then
+                should_open_dashboard=true
+            fi
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} plugins update --all manually"
+        fi
+    else
+        ui_info "Config already present; running doctor"
+        if run_doctor; then
+            should_open_dashboard=true
+        fi
+        ui_info "Config already present; skipping onboarding"
     fi
 
-    if command -v openclaw &> /dev/null; then
+    if [[ "$config_present" == "true" ]]; then
         local claw="${OPENCLAW_BIN:-}"
         if [[ -z "$claw" ]]; then
-            claw="$(resolve_openclaw_bin || true)"
+            claw="$(resolve_installed_openclaw_bin || true)"
         fi
         if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
+            local user_claw
+            user_claw="$(openclaw_command_for_user "$claw")"
             if [[ "$DRY_RUN" == "1" ]]; then
-                ui_info "Gateway daemon detected; would restart (openclaw daemon restart)"
+                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
             else
                 ui_info "Gateway daemon detected; restarting"
                 if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart >/dev/null 2>&1; then
                     ui_success "Gateway restarted"
                 else
-                    ui_warn "Gateway restart failed; try: openclaw daemon restart"
+                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
                 fi
             fi
         fi
     fi
 
-    if ! verify_installation; then
+    if ! verify_installation "$config_present"; then
         exit 1
     fi
 

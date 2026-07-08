@@ -6,6 +6,7 @@ import {
   applySubagentWaitOutcome,
   buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
+  dedupeLatestChildCompletionRows,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
 
@@ -62,6 +63,22 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
     },
   ];
 }
+
+describe("dedupeLatestChildCompletionRows", () => {
+  it("prefers the newer generation when child runs share a creation timestamp", () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const older = {
+      runId: "run-older",
+      generation: 1,
+      childSessionKey,
+      task: "older",
+      createdAt: 1_000,
+    };
+    const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
+
+    expect(dedupeLatestChildCompletionRows([older, newer])).toStrictEqual([newer]);
+  });
+});
 
 describe("buildCompactAnnounceStatsLine", () => {
   afterEach(() => {
@@ -216,9 +233,10 @@ describe("readSubagentOutput", () => {
       }),
     ).resolves.toBe("fresh recovered output");
     expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
-      "agent:main:subagent:child",
-      undefined,
-      "/tmp/openclaw-internal-run.jsonl",
+      {
+        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+        sessionId: "agent:main:subagent:child",
+      },
       { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
     );
     expect(deps.callGateway).not.toHaveBeenCalled();
@@ -354,6 +372,26 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
+  it("treats abandoned ok wait snapshots as incomplete failures", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "abandoned",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
   it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
@@ -376,7 +414,7 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
-  it("keeps rpc timeout wait snapshots as timeout outcomes", () => {
+  it("keeps explicit cancellation distinct from timeout outcomes", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
         status: "timeout",
@@ -388,7 +426,8 @@ describe("applySubagentWaitOutcome", () => {
     });
 
     expect(applied.outcome).toEqual({
-      status: "timeout",
+      status: "error",
+      error: "subagent run terminated",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

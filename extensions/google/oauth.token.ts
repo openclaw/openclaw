@@ -3,6 +3,10 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
@@ -10,6 +14,7 @@ import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+const GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 async function requestTokenGrant(body: URLSearchParams): Promise<{
   access_token?: string;
@@ -27,15 +32,18 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    const errorText = await readResponseTextLimited(
+      response,
+      GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES,
+    );
     throw new Error(`Token exchange failed: ${errorText}`);
   }
 
-  return (await response.json()) as {
+  return readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: unknown;
-  };
+  }>(response, "google.token");
 }
 
 function resolveExpiredTokenTimestampMs(nowMs: number): number {

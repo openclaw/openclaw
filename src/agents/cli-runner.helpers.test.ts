@@ -1,14 +1,18 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCliArgs,
+  buildClaudeOwnerKey,
   loadPromptRefImages,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
@@ -17,7 +21,6 @@ import {
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
@@ -286,6 +289,42 @@ describe("writeCliImages", () => {
     }
   });
 
+  it("sweeps stale workspace-scoped CLI image files", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-sweep-"),
+    );
+    const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
+    const stalePath = path.join(imageRoot, "stale.png");
+    const freshPath = path.join(imageRoot, "fresh.png");
+    const image: ImageContent = {
+      type: "image",
+      data: "bmV3LWltYWdl",
+      mimeType: "image/png",
+    };
+
+    await fs.mkdir(imageRoot, { recursive: true });
+    await fs.writeFile(stalePath, "stale");
+    await fs.writeFile(freshPath, "fresh");
+    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
+    await fs.utimes(stalePath, staleTime, staleTime);
+
+    const written = await writeCliImages({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      workspaceDir,
+      images: [image],
+    });
+
+    try {
+      await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
+      await expect(fs.readFile(written.paths[0])).resolves.toEqual(
+        Buffer.from(image.data, "base64"),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("hydrates prompt media refs into codex image args through the helper seams", async () => {
     const tempDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
@@ -459,6 +498,55 @@ describe("writeCliImages", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("merges inline payloads with offloaded refs in attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mixed-images-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const historyImagePath = path.join(workspaceDir, "history.png");
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), offloadedImage);
+    await fs.writeFile(historyImagePath, historyImage);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+          input: "arg",
+        },
+        prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
+        imagePrompt: currentTurn,
+        workspaceDir,
+        images: [
+          {
+            type: "image",
+            data: inlineImage.toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+        imageOrder: ["offloaded", "inline"],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(2);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(offloadedImage);
+      await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeCliSystemPromptFile", () => {
@@ -491,7 +579,7 @@ describe("writeCliSystemPromptFile", () => {
 });
 
 describe("resolveCliRunQueueKey", () => {
-  it("scopes Claude CLI serialization to the workspace for fresh runs", () => {
+  it("falls back to workspaceDir when no ownerKey is supplied (legacy)", () => {
     expect(
       resolveCliRunQueueKey({
         backendId: "claude-cli",
@@ -502,6 +590,18 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:workspace:/tmp/project-a");
   });
 
+  it("scopes Claude CLI serialization to the owner identity for fresh runs", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-1b",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+
   it("scopes Claude CLI serialization to the resumed CLI session id", () => {
     expect(
       resolveCliRunQueueKey({
@@ -510,6 +610,19 @@ describe("resolveCliRunQueueKey", () => {
         runId: "run-2",
         workspaceDir: "/tmp/project-a",
         cliSessionId: "claude-session-123",
+      }),
+    ).toBe("claude-cli:session:claude-session-123");
+  });
+
+  it("prefers cliSessionId over ownerKey when resuming", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-2b",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+        ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:session:claude-session-123");
   });
@@ -535,5 +648,61 @@ describe("resolveCliRunQueueKey", () => {
         workspaceDir: "/tmp/project-a",
       }),
     ).toBe("claude-cli:run-4");
+  });
+
+  it("keeps Claude live sessions serialized when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+
+  it("keeps resumed Claude live sessions on the owner lane", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: true,
+        runId: "run-live-resumed",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+});
+
+describe("buildClaudeOwnerKey", () => {
+  it("is deterministic and distinguishes session keys", () => {
+    const base = {
+      agentAccountId: "acct-1",
+      agentId: "agent-main",
+      authProfileId: "profile-a",
+      sessionId: "sess-1",
+      sessionKey: "key-a",
+    };
+    const a1 = buildClaudeOwnerKey(base);
+    const a2 = buildClaudeOwnerKey(base);
+    expect(a1).toBe(a2);
+    const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
+    expect(a1).not.toBe(b);
+  });
+
+  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
+    expect(
+      buildClaudeOwnerKey({
+        agentAccountId: "acct-1",
+        agentId: "agent-main",
+        authProfileId: "profile-a",
+        sessionId: "sess-1",
+        sessionKey: "key-a",
+      }),
+    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
   });
 });

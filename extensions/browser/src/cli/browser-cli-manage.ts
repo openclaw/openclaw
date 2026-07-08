@@ -152,6 +152,24 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
+function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const errorRecord = error as Error & { code?: unknown };
+  return (
+    errorRecord.name === "GatewaySecretRefUnavailableError" ||
+    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
+  );
+}
+
+function formatBrowserDoctorGatewayError(error: unknown): string {
+  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
+    return String(error);
+  }
+  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
+}
+
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
   let status: BrowserStatus | null;
@@ -167,7 +185,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     checks.push({
       name: "gateway",
       ok: false,
-      detail: String(err),
+      detail: formatBrowserDoctorGatewayError(err),
     });
     return { ok: false, checks };
   }
@@ -274,26 +292,41 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
+type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";
+
 function usesChromeMcpTransport(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
 }): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
+function usesExtensionTransport(params: {
+  transport?: BrowserTransport;
+  driver?: BrowserProfileDriver;
+}): boolean {
+  return params.transport === "extension" || params.driver === "extension";
+}
+
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
   isRemote?: boolean;
   cdpPort?: number | null;
   cdpUrl?: string | null;
   userDataDir?: string | null;
 }): string {
   if (usesChromeMcpTransport(params)) {
+    if (params.cdpUrl) {
+      return `transport: chrome-mcp, cdpUrl: ${redactCdpUrl(params.cdpUrl)}`;
+    }
     const userDataDir = params.userDataDir ? shortenHomePath(params.userDataDir) : null;
     return userDataDir
       ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
       : "transport: chrome-mcp";
+  }
+  if (usesExtensionTransport(params)) {
+    return `transport: extension, relayPort: ${params.cdpPort ?? "(unset)"}`;
   }
   if (params.isRemote) {
     return `cdpUrl: ${params.cdpUrl ? redactCdpUrl(params.cdpUrl) : "(unset)"}`;
@@ -331,9 +364,11 @@ export function registerBrowserManageCommands(
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,
                   `cdpUrl: ${redactCdpUrl(status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`)}`,
                 ]
-              : status.userDataDir
-                ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
-                : []),
+              : status.cdpUrl
+                ? [`cdpUrl: ${redactCdpUrl(status.cdpUrl)}`]
+                : status.userDataDir
+                  ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
+                  : []),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -687,7 +722,7 @@ export function registerBrowserManageCommands(
     .description("Create a new browser profile")
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
-    .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
+    .option("--cdp-url <url>", "DevTools endpoint URL (http/https/ws/wss)")
     .option("--user-data-dir <path>", "User data dir for existing-session Chromium attach")
     .option("--driver <driver>", "Profile driver (openclaw|existing-session). Default: openclaw")
     .action(

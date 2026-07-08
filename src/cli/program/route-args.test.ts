@@ -44,6 +44,48 @@ describe("route-args", () => {
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout"])).toBeNull();
   });
 
+  it("defers status/health --timeout with a present-but-invalid value to Commander", () => {
+    // Regression: the route-first fast path used to silently accept invalid
+    // --timeout values (0, negative, non-numeric, unit-suffixed) and run with
+    // the default timeout, diverging from the full Commander path which rejects
+    // them with a non-zero exit. Returning null defers to Commander so both
+    // paths share the same validation.
+    for (const bad of ["0", "-5", "nope", "5s"]) {
+      expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", bad])).toBeNull();
+      expect(parseHealthRouteArgs(["node", "openclaw", "health", "--timeout", bad])).toBeNull();
+    }
+    expect(
+      parseStatusRouteArgs([
+        "node",
+        "openclaw",
+        "status",
+        "--timeout",
+        "5000",
+        "--timeout",
+        "nope",
+      ]),
+    ).toBeNull();
+    expect(
+      parseHealthRouteArgs([
+        "node",
+        "openclaw",
+        "health",
+        "--timeout",
+        "nope",
+        "--timeout",
+        "5000",
+      ]),
+    ).toMatchObject({ timeoutMs: 5000 });
+    // A valid positive integer still parses on the fast path.
+    expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", "5000"])).toMatchObject(
+      { timeoutMs: 5000 },
+    );
+    // No --timeout flag at all still uses the fast path (undefined timeout).
+    expect(parseStatusRouteArgs(["node", "openclaw", "status"])).toMatchObject({
+      timeoutMs: undefined,
+    });
+  });
+
   it("parses gateway status route args and rejects probe-only ssh flags", () => {
     expect(
       parseGatewayStatusRouteArgs([

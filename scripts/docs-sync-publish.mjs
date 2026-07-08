@@ -91,6 +91,13 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "hi",
+    dir: "hi",
+    navFile: "hi-navigation.json",
+    tmFile: "hi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ar",
     dir: "ar",
     navFile: "ar-navigation.json",
@@ -168,9 +175,24 @@ const GENERATED_LOCALES = [
     // once the docs host accepts it.
     navigation: false,
   },
+  {
+    language: "ru",
+    dir: "ru",
+    navFile: "ru-navigation.json",
+    tmFile: "ru.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     target: "",
     sourceRepo: "",
@@ -185,27 +207,27 @@ function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = argv[index + 1] ?? "";
+        args.target = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = argv[index + 1] ?? "";
+        args.sourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = argv[index + 1] ?? "";
+        args.sourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = argv[index + 1] ?? "";
+        args.clawhubRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = argv[index + 1] ?? "";
+        args.clawhubSourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = argv[index + 1] ?? "";
+        args.clawhubSourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       default:

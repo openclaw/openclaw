@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import * as backupShared from "./backup-shared.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./backup-shared.js";
 import {
   backupVerifyCommandMock,
+  createMockTarStream,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
@@ -77,9 +79,7 @@ describe("backup commands", () => {
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
     tarCreateMock.mockReset();
-    tarCreateMock.mockImplementation(async ({ file }: { file: string }) => {
-      await fs.writeFile(file, "archive-bytes", "utf8");
-    });
+    tarCreateMock.mockImplementation(() => createMockTarStream());
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -103,15 +103,16 @@ describe("backup commands", () => {
   async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-    const runtime = createBackupTestRuntime();
 
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    const runtime = createBackupTestRuntime();
     try {
       return await fn(runtime);
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      envSnapshot.restore();
     }
   }
 
@@ -233,8 +234,9 @@ describe("backup commands", () => {
     let capturedManifest: CapturedBackupManifest | null = null;
     let capturedEntryPaths: string[] = [];
     let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     try {
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       await fs.writeFile(
         configPath,
         JSON.stringify({
@@ -265,17 +267,16 @@ describe("backup commands", () => {
         }),
       );
       tarCreateMock.mockImplementationOnce(
-        async (
-          options: { file: string; onWriteEntry?: (entry: { path: string }) => void },
-          entryPaths: string[],
-        ) => {
-          capturedManifest = JSON.parse(
-            await fs.readFile(entryPaths[0], "utf8"),
-          ) as CapturedBackupManifest;
-          capturedEntryPaths = entryPaths;
-          capturedOnWriteEntry = options.onWriteEntry ?? null;
-          await fs.writeFile(options.file, "archive-bytes", "utf8");
-        },
+        (options: { onWriteEntry?: (entry: { path: string }) => void }, entryPaths: string[]) =>
+          createMockTarStream({
+            beforeRead: async () => {
+              capturedManifest = JSON.parse(
+                await fs.readFile(entryPaths[0], "utf8"),
+              ) as CapturedBackupManifest;
+              capturedEntryPaths = entryPaths;
+              capturedOnWriteEntry = options.onWriteEntry ?? null;
+            },
+          }),
       );
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
@@ -351,7 +352,7 @@ describe("backup commands", () => {
         ),
       );
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      envSnapshot.restore();
       await fs.rm(externalWorkspace, { recursive: true, force: true });
       await fs.rm(backupDir, { recursive: true, force: true });
     }
@@ -364,21 +365,20 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        async (
-          options: { file: string; filter?: (entryPath: string) => boolean },
-          entryPaths: string[],
-        ) => {
-          const manifestPath = entryPaths[0];
-          const stateRoot = entryPaths[1];
-          if (!manifestPath || !stateRoot) {
-            throw new Error("backup test expected manifest and state entries");
-          }
-          expect(options.filter?.(manifestPath)).toBe(true);
-          expect(
-            options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
-          ).toBe(false);
-          await fs.writeFile(options.file, "archive-bytes", "utf8");
-        },
+        (options: { filter?: (entryPath: string) => boolean }, entryPaths: string[]) =>
+          createMockTarStream({
+            beforeRead: () => {
+              const manifestPath = entryPaths[0];
+              const stateRoot = entryPaths[1];
+              if (!manifestPath || !stateRoot) {
+                throw new Error("backup test expected manifest and state entries");
+              }
+              expect(options.filter?.(manifestPath)).toBe(true);
+              expect(
+                options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+              ).toBe(false);
+            },
+          }),
       );
 
       const result = await backupCreateCommand(runtime, {

@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -16,6 +17,7 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
+  resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
   type ExecSecurity,
@@ -101,6 +103,12 @@ export type RegisteredExecApprovalRequestContext = {
 export type ExecApprovalFollowupTarget = {
   approvalId: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested. Lets the followup be
+   *  dropped if `/new` or `/reset` rebinds the session key to a new session. */
+  expectedSessionId?: string;
+  /** Session-store template, so the direct/denied path can resolve the key's
+   *  current sessionId and drop a rebound followup before sending. */
+  sessionStore?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -139,7 +147,7 @@ export function createExecApprovalPendingState(params: {
 }
 
 /** Builds pending approval state plus rounded notice duration. */
-export function createExecApprovalRequestState(params: {
+function createExecApprovalRequestState(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -155,7 +163,7 @@ export function createExecApprovalRequestState(params: {
 }
 
 /** Creates a fresh approval id/slug/context key for a pending request. */
-export function createExecApprovalRequestContext(params: {
+function createExecApprovalRequestContext(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -180,7 +188,7 @@ export function createExecApprovalRequestContext(params: {
 }
 
 /** Creates a pending approval context using the default approval timeout. */
-export function createDefaultExecApprovalRequestContext(params: {
+function createDefaultExecApprovalRequestContext(params: {
   warnings: string[];
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
@@ -352,6 +360,8 @@ export function buildExecApprovalFollowupTarget(
   return {
     approvalId: params.approvalId,
     sessionKey: params.sessionKey,
+    expectedSessionId: params.expectedSessionId,
+    sessionStore: params.sessionStore,
     turnSourceChannel: params.turnSourceChannel,
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
@@ -429,7 +439,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    "Stricter values from tools.exec and ~/.openclaw/exec-approvals.json both apply.",
+    `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
     "Fix one of these:",
     '- align both files to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
@@ -457,6 +467,8 @@ export async function sendExecApprovalFollowupResult(
   await send({
     approvalId: target.approvalId,
     sessionKey: target.sessionKey,
+    expectedSessionId: target.expectedSessionId,
+    sessionStore: target.sessionStore,
     turnSourceChannel: target.turnSourceChannel,
     turnSourceTo: target.turnSourceTo,
     turnSourceAccountId: target.turnSourceAccountId,
@@ -470,6 +482,9 @@ export async function sendExecApprovalFollowupResult(
         }
       : {}),
   }).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return;
+    }
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

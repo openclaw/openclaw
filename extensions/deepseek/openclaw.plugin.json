@@ -1,11 +1,15 @@
 {
   "id": "deepseek",
+  "icon": "https://cdn.simpleicons.org/deepseek",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
+  "contracts": {
+    "usageProviders": ["deepseek"]
+  },
   "providerEndpoints": [
     {
       "endpointClass": "deepseek-native",
@@ -119,6 +123,7 @@
       "provider": "deepseek",
       "method": "api-key",
       "choiceId": "deepseek-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "DeepSeek API key",
       "groupId": "deepseek",
       "groupLabel": "DeepSeek",

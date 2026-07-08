@@ -13,6 +13,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 type SourceReplyTranscriptMirrorParams = {
@@ -31,22 +32,24 @@ type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams &
   sessionKey: string;
 };
 
+type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
+
 // Mirror only enough delivered payload detail to preserve transcript context.
 function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function readFirstString(
   params: Record<string, unknown>,
   keys: readonly string[],
 ): string | undefined {
-  for (const key of keys) {
-    const value = normalizeOptionalString(params[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(params, keys);
 }
 
 function resolveSourceReplyTarget(params: Record<string, unknown>): string | undefined {
@@ -55,6 +58,50 @@ function resolveSourceReplyTarget(params: Record<string, unknown>): string | und
 
 function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): string | undefined {
   return readFirstString(params.actionParams, ["threadId", "messageThreadId"]);
+}
+
+function resolveDeliveredThreadPlacement(
+  params: SourceReplyTranscriptMirrorParams,
+  currentThreadId: string | undefined,
+): SourceReplyThreadPlacement | undefined {
+  const payload = asRecord(params.deliveredPayload);
+  const result = asRecord(payload?.result);
+  const receipt = asRecord(result?.receipt) ?? asRecord(payload?.receipt);
+  if (!receipt) {
+    return undefined;
+  }
+  const deliveredThreadId = normalizeOptionalString(receipt.threadId);
+  return deliveredThreadId
+    ? deliveredThreadId === currentThreadId
+      ? "match"
+      : "mismatch"
+    : currentThreadId
+      ? "mismatch"
+      : "match";
+}
+
+function resolveSourceReplyThreadPlacement(
+  params: SourceReplyTranscriptMirrorParams,
+): SourceReplyThreadPlacement {
+  const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
+  const deliveredPlacement = resolveDeliveredThreadPlacement(params, currentThreadId);
+  if (deliveredPlacement) {
+    return deliveredPlacement;
+  }
+  if (params.actionParams.topLevel === true) {
+    return currentThreadId ? "mismatch" : "match";
+  }
+  for (const key of ["threadId", "messageThreadId"] as const) {
+    if (!Object.hasOwn(params.actionParams, key)) {
+      continue;
+    }
+    const explicitThreadId = normalizeOptionalString(params.actionParams[key]);
+    if (!explicitThreadId) {
+      return currentThreadId ? "mismatch" : "match";
+    }
+    return explicitThreadId === currentThreadId ? "match" : "mismatch";
+  }
+  return currentThreadId ? "unknown" : "match";
 }
 
 function resolveThreadedSourceTarget(
@@ -100,23 +147,48 @@ function isCurrentSourceConversation(
   if (!params.sessionKey?.trim()) {
     return false;
   }
-  const currentChannel = normalizeOptionalLowercaseString(
-    params.toolContext?.currentChannelProvider,
-  );
+  const toolContext = params.toolContext;
+  if (!toolContext) {
+    return false;
+  }
+  const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
   if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
     return false;
   }
-  const currentTarget = normalizeOptionalString(params.toolContext?.currentChannelId);
-  if (!currentTarget) {
+  const currentTargets = [
+    normalizeOptionalString(toolContext.currentMessagingTarget),
+    normalizeOptionalString(toolContext.currentChannelId),
+  ].filter((target): target is string => Boolean(target));
+  if (currentTargets.length === 0) {
     return false;
   }
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
   if (!requestedTarget) {
     return false;
   }
-  return (
-    requestedTarget === currentTarget ||
-    resolveThreadedSourceTarget(params, requestedTarget) === currentTarget
+  const threadPlacement = resolveSourceReplyThreadPlacement(params);
+  if (threadPlacement === "mismatch") {
+    return false;
+  }
+  const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
+  const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
+    ?.matchesToolContextTarget;
+  if (
+    threadPlacement === "match" &&
+    (matchesToolContextTarget?.({
+      target: requestedTarget,
+      toolContext,
+    }) ||
+      (threadedTarget !== requestedTarget &&
+        matchesToolContextTarget?.({
+          target: threadedTarget,
+          toolContext,
+        })))
+  ) {
+    return true;
+  }
+  return currentTargets.some(
+    (currentTarget) => requestedTarget === currentTarget || threadedTarget === currentTarget,
   );
 }
 

@@ -72,6 +72,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],
@@ -81,7 +84,15 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/ai": ["../dist/plugin-sdk/packages/ai/src/index.d.ts"],
+  "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
+  "@openclaw/ai/event-stream": ["../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"],
+  "@openclaw/ai/providers": ["../dist/plugin-sdk/packages/ai/src/providers.d.ts"],
+  "@openclaw/ai/types": ["../dist/plugin-sdk/packages/ai/src/types.d.ts"],
+  "@openclaw/ai/validation": ["../dist/plugin-sdk/packages/ai/src/validation.d.ts"],
+  "@openclaw/ai/internal/*": ["../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
@@ -169,9 +180,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-core/read-byte-stream-with-limit": [
     "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
   ],
-  "@openclaw/media-core/read-response-with-limit": [
-    "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
-  ],
   "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
   "@openclaw/normalization-core/record-coerce": [
     "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",
@@ -253,6 +261,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
       "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
       "@openclaw/discord/api.js": _omitDiscord,
       "@openclaw/slack/api.js": _omitSlack,
+      "@openclaw/telegram/api.js": _omitTelegram,
       "@openclaw/whatsapp/api.js": _omitWhatsApp,
       ...rest
     }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
@@ -265,6 +274,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
   ],
   "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],

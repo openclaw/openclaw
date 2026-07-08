@@ -185,6 +185,53 @@ internal fun ClawIconButton(
   }
 }
 
+/** Transparent circular icon button for low-emphasis toolbar actions. */
+@Composable
+internal fun ClawPlainIconButton(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+    }
+  }
+}
+
+/** Compact label/value row for health and readiness summaries. */
+@Composable
+internal fun ClawStatusRow(
+  title: String,
+  value: String,
+  healthy: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Text(
+      text = title,
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+      modifier = Modifier.weight(1f),
+      maxLines = 1,
+    )
+    ClawStatusPill(
+      text = value,
+      status = if (healthy) ClawStatus.Success else ClawStatus.Warning,
+    )
+  }
+}
+
 /** Compact status chip with a semantic color dot. */
 @Composable
 internal fun ClawStatusPill(
@@ -411,6 +458,7 @@ internal fun ClawSegmentedControl(
   selected: String,
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
+  enabledOptions: Set<String> = options.toSet(),
 ) {
   Row(
     modifier =
@@ -422,20 +470,26 @@ internal fun ClawSegmentedControl(
   ) {
     options.forEach { option ->
       val active = option == selected
+      val enabled = option in enabledOptions
       Box(
         modifier =
           Modifier
             .weight(1f)
             .clip(RoundedCornerShape(ClawTheme.radii.control))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable { onSelect(option) }
+            .clickable(enabled = enabled) { onSelect(option) }
             .padding(horizontal = 9.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = option,
           style = ClawTheme.type.caption,
-          color = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
+          color =
+            when {
+              active -> ClawTheme.colors.primaryText
+              enabled -> ClawTheme.colors.textMuted
+              else -> ClawTheme.colors.textSubtle
+            },
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )

@@ -12,7 +12,7 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/exa-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/exa-plugin`
 
 ## Surface
 

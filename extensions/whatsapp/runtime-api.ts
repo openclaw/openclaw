@@ -50,8 +50,12 @@ export {
   extractText,
   monitorWebInbox,
   resetWebInboundDedupe,
+  type LegacyFlatWebInboundMessage,
+  type WebInboundCallbackMessage,
   type WebInboundMessage,
+  type WebInboundMessageInput,
   type WebListenerCloseReason,
+  type WhatsAppInboundAdmission,
 } from "./src/inbound.js";
 export { loginWeb } from "./src/login.js";
 export {

@@ -32,6 +32,7 @@ import {
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
 import type {
+  BrowserOperationOptions,
   BrowserServerState,
   BrowserTab,
   ProfileRuntimeState,
@@ -45,7 +46,7 @@ type TabOpsDeps = {
 };
 
 type ProfileTabOps = {
-  listTabs: () => Promise<BrowserTab[]>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
 };
@@ -200,10 +201,10 @@ export function createProfileTabOps({
     };
   };
 
-  const readTabs = async (): Promise<BrowserTab[]> => {
+  const readTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      return await listChromeMcpTabs(profile.name, profile);
+      return await listChromeMcpTabs(profile.name, profile, options);
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -211,8 +212,17 @@ export function createProfileTabOps({
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
         const ssrfPolicy = getCdpControlPolicy();
+        const resolved = state().resolved;
+        const timeoutMs = Math.max(
+          resolved.remoteCdpTimeoutMs,
+          resolved.remoteCdpHandshakeTimeoutMs,
+        );
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
+        const pages = await listPagesViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          ssrfPolicy,
+          timeoutMs,
+        });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,
           title: p.title,
@@ -231,19 +241,29 @@ export function createProfileTabOps({
         type?: string;
       }>
     >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
-    return raw
-      .map((t) => ({
+    const cdpControlPolicy = getCdpControlPolicy();
+    const tabs: BrowserTab[] = [];
+    for (const t of raw) {
+      const tab: BrowserTab = {
         targetId: t.id ?? "",
         title: t.title ?? "",
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
-      }))
-      .filter((t) => Boolean(t.targetId) && isSelectableCdpBrowserTarget(t));
+      };
+      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
+        continue;
+      }
+      if (tab.wsUrl) {
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, { source: "discovered" });
+      }
+      tabs.push(tab);
+    }
+    return tabs;
   };
 
-  const listTabs = async (): Promise<BrowserTab[]> => {
-    const tabs = await readTabs();
+  const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
+    const tabs = await readTabs(options);
     return assignTabAliases(getProfileState(), tabs);
   };
 
@@ -304,6 +324,7 @@ export function createProfileTabOps({
         const page = await createPageViaPlaywright({
           cdpUrl: profile.cdpUrl,
           url,
+          cdpPolicy: getCdpControlPolicy(),
           ...ssrfPolicyOpts,
         });
         const profileState = getProfileState();
@@ -400,6 +421,10 @@ export function createProfileTabOps({
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
+    if (wsUrl) {
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), { source: "discovered" });
+    }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({
       profileState,
@@ -408,7 +433,7 @@ export function createProfileTabOps({
         targetId: created.id,
         title: created.title ?? "",
         url: resolvedUrl,
-        wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
+        wsUrl,
         type: created.type,
       },
     });

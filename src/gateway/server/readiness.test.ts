@@ -32,6 +32,8 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -68,6 +70,7 @@ function createReadinessHarness(params: {
   accounts?: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
+  getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
@@ -83,6 +86,7 @@ function createReadinessHarness(params: {
       startedAt,
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
+      getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
@@ -178,6 +182,35 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports not ready while the gateway command queue is draining for restart", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        getGatewayDraining: () => true,
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not cache gateway-draining readiness", () => {
+    withReadinessClock(() => {
+      let gatewayDraining = true;
+      const { manager, readiness } = createReadinessHarness({
+        getGatewayDraining: () => gatewayDraining,
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      gatewayDraining = false;
+      expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -234,6 +267,25 @@ describe("createReadinessChecker", () => {
 
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports crash-loop suppressed stopped channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "safe mode",
+          }),
+        },
+      });
+      vi.mocked(manager.getAutostartSuppression).mockReturnValue({
+        reason: "crash-loop-breaker",
+        message: "safe mode",
+      });
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
     });
   });
 

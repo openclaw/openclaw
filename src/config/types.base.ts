@@ -303,6 +303,8 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /** Log export sink: OTLP by default, stdout JSONL, or both. */
+  logsExporter?: "otlp" | "stdout" | "both";
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
@@ -338,6 +340,15 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type AuditConfig = {
+  /**
+   * Record metadata-only audit events (agent runs and tool actions) into the
+   * shared state database. Content is never stored. Default: true. Disabling
+   * stops new writes; existing records stay readable until they expire.
+   */
+  enabled?: boolean;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -365,7 +376,7 @@ export type WebWhatsAppConfig = {
   keepAliveIntervalMs?: number;
   /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
   connectTimeoutMs?: number;
-  /** Baileys query timeout in milliseconds. Default: 60000. */
+  /** Baileys query and WhatsApp outbound/read-receipt operation timeout in milliseconds. Default: 60000. */
   defaultQueryTimeoutMs?: number;
 };
 

@@ -11,6 +11,5 @@ export {
   resolveRegularFileAppendFlags,
   statRegularFile,
   statRegularFileSync,
-  type AppendRegularFileOptions,
   type RegularFileStatResult,
 } from "@openclaw/fs-safe/advanced";

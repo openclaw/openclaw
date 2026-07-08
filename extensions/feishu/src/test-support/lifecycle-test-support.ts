@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import { setFeishuRuntime } from "../runtime.js";
+import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
 const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
@@ -437,6 +437,9 @@ export async function setupFeishuLifecycleHandler(params: {
   } else {
     params.createEventDispatcherMock.mockReturnValue({ register });
   }
+  getFeishuRuntime().config.current = vi.fn(
+    () => params.cfg,
+  ) as unknown as PluginRuntime["config"]["current"];
 
   const monitorSingleAccount = await loadMonitorSingleAccount();
   await monitorSingleAccount({

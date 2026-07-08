@@ -12,7 +12,7 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 /** Resolved session entry and transcript file targeted by an export command. */
-export interface ExportCommandSessionTarget {
+interface ExportCommandSessionTarget {
   entry: SessionEntry;
   sessionFile: string;
 }

@@ -33,6 +33,7 @@ import {
   runObsidianOpen,
   runObsidianSearch,
 } from "./obsidian.js";
+import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import {
   getMemoryWikiPage,
   searchMemoryWiki,
@@ -86,6 +87,10 @@ type WikiLintCommandOptions = {
 type WikiIngestCommandOptions = {
   json?: boolean;
   title?: string;
+};
+
+type WikiOkfImportCommandOptions = {
+  json?: boolean;
 };
 
 type WikiSearchCommandOptions = {
@@ -521,7 +526,7 @@ export async function runWikiDoctor(params: {
   return report;
 }
 
-export async function runWikiInit(params: {
+async function runWikiInit(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -535,7 +540,7 @@ export async function runWikiInit(params: {
   });
 }
 
-export async function runWikiCompile(params: {
+async function runWikiCompile(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -552,7 +557,7 @@ export async function runWikiCompile(params: {
   });
 }
 
-export async function runWikiLint(params: {
+async function runWikiLint(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -569,7 +574,7 @@ export async function runWikiLint(params: {
   });
 }
 
-export async function runWikiIngest(params: {
+async function runWikiIngest(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
@@ -590,7 +595,25 @@ export async function runWikiIngest(params: {
   });
 }
 
-export async function runWikiSearch(params: {
+export async function runWikiOkfImport(params: {
+  config: ResolvedMemoryWikiConfig;
+  bundlePath: string;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      importMemoryWikiOkfBundle({
+        config: params.config,
+        bundlePath: params.bundlePath,
+      }),
+    render: formatOkfImportSummary,
+  });
+}
+
+async function runWikiSearch(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   query: string;
@@ -628,7 +651,7 @@ export async function runWikiSearch(params: {
   return results;
 }
 
-export async function runWikiGet(params: {
+async function runWikiGet(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   lookup: string;
@@ -656,7 +679,7 @@ export async function runWikiGet(params: {
   return result;
 }
 
-export async function runWikiApplySynthesis(params: {
+async function runWikiApplySynthesis(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   title: string;
@@ -697,7 +720,7 @@ export async function runWikiApplySynthesis(params: {
   return result;
 }
 
-export async function runWikiApplyMetadata(params: {
+async function runWikiApplyMetadata(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   lookup: string;
@@ -762,7 +785,7 @@ export async function runWikiBridgeImport(params: {
   });
 }
 
-export async function runWikiUnsafeLocalImport(params: {
+async function runWikiUnsafeLocalImport(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -781,7 +804,7 @@ export async function runWikiUnsafeLocalImport(params: {
   });
 }
 
-export async function runWikiObsidianStatus(params: {
+async function runWikiObsidianStatus(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -797,7 +820,7 @@ export async function runWikiObsidianStatus(params: {
   });
 }
 
-export async function runWikiObsidianSearch(params: {
+async function runWikiObsidianSearch(params: {
   config: ResolvedMemoryWikiConfig;
   query: string;
   json?: boolean;
@@ -811,7 +834,7 @@ export async function runWikiObsidianSearch(params: {
   });
 }
 
-export async function runWikiObsidianOpenCli(params: {
+async function runWikiObsidianOpenCli(params: {
   config: ResolvedMemoryWikiConfig;
   vaultPath: string;
   json?: boolean;
@@ -825,7 +848,7 @@ export async function runWikiObsidianOpenCli(params: {
   });
 }
 
-export async function runWikiObsidianCommandCli(params: {
+async function runWikiObsidianCommandCli(params: {
   config: ResolvedMemoryWikiConfig;
   id: string;
   json?: boolean;
@@ -839,7 +862,7 @@ export async function runWikiObsidianCommandCli(params: {
   });
 }
 
-export async function runWikiObsidianDailyCli(params: {
+async function runWikiObsidianDailyCli(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -963,6 +986,16 @@ export function registerWikiCli(
     .option("--json", "Print JSON")
     .action(async (inputPath: string, opts: WikiIngestCommandOptions) => {
       await runWikiIngest({ config, inputPath, title: opts.title, json: opts.json });
+    });
+
+  const okf = wiki.command("okf").description("Import Open Knowledge Format bundles");
+  okf
+    .command("import")
+    .description("Import an unpacked OKF bundle into wiki concept pages")
+    .argument("<path>", "OKF bundle directory")
+    .option("--json", "Print JSON")
+    .action(async (bundlePath: string, opts: WikiOkfImportCommandOptions) => {
+      await runWikiOkfImport({ config, bundlePath, json: opts.json });
     });
 
   addWikiSearchConfigOptions(

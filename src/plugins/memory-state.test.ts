@@ -1,7 +1,6 @@
 // Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -18,6 +17,7 @@ import {
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
+  type MemoryPluginPublicArtifact,
 } from "./memory-state.js";
 
 function createMemoryRuntime() {
@@ -205,6 +205,87 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("normalizes public memory artifacts without agent ids", async () => {
+    const legacyArtifact = {
+      kind: "memory-root",
+      workspaceDir: "/tmp/workspace",
+      relativePath: "MEMORY.md",
+      absolutePath: "/tmp/workspace/MEMORY.md",
+      contentType: "markdown" as const,
+    } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact;
+
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [legacyArtifact];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("drops malformed public memory artifacts instead of crashing the sort", async () => {
+    // Record-shaped artifact as shipped by @mem0/openclaw-mem0 <= 1.0.14 —
+    // none of the file-backed fields the sort dereferences.
+    const recordShapedArtifact = {
+      id: "mem0:memory:1",
+      type: "memory",
+      title: "A memory",
+      content: "memory text",
+    } as unknown as MemoryPluginPublicArtifact;
+
+    registerMemoryCapability("openclaw-mem0", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            recordShapedArtifact,
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("ignores a non-array public artifact listing", async () => {
+    registerMemoryCapability("openclaw-mem0", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return { artifacts: [] } as unknown as MemoryPluginPublicArtifact[];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
+  });
+
   it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
     const runtime = createMemoryRuntime();
     const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
@@ -333,7 +414,7 @@ describe("memory plugin state", () => {
     });
     const snapshot = createMemoryStateSnapshot();
 
-    resetMemoryPluginState();
+    clearMemoryPluginState();
     expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);

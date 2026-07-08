@@ -41,7 +41,7 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
 }) => Promise<Record<string, ProviderConfig>>;
 
 /** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
-export type ModelsJsonPlan =
+type ModelsJsonPlan =
   | {
       action: "skip";
       pluginCatalogWrites?: Record<string, string>;
@@ -107,8 +107,17 @@ export async function resolveProvidersForModelsJsonWithDeps(
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
   },
 ): Promise<Record<string, ProviderConfig>> {
-  const { cfg, agentDir, env } = params;
-  const explicitProviders = cfg.models?.providers ?? {};
+  const { agentDir, env } = params;
+  const explicitProviders = stripBlankProviderBaseUrls(params.cfg.models?.providers ?? {});
+  const cfg = params.cfg.models?.providers
+    ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
+    : params.cfg;
+  // When models.mode is "replace" the user opts out of provider discovery, so
+  // skip the (potentially slow) implicit-provider resolver entirely and return
+  // only the explicit providers. See openclaw#66957.
+  if (cfg.models?.mode === "replace") {
+    return mergeProviders({ implicit: {}, explicit: explicitProviders });
+  }
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
@@ -131,6 +140,23 @@ export async function resolveProvidersForModelsJsonWithDeps(
     implicit: implicitProviders,
     explicit: explicitProviders,
   });
+}
+
+function stripBlankProviderBaseUrls(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    if (typeof provider?.baseUrl === "string" && provider.baseUrl.trim() === "") {
+      const { baseUrl: _blank, ...rest } = provider;
+      next[key] = rest as ProviderConfig;
+      mutated = true;
+      continue;
+    }
+    next[key] = provider;
+  }
+  return mutated ? next : providers;
 }
 
 function resolveProvidersForMode(params: {

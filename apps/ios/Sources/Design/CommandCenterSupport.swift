@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 struct CommandPanel<Content: View>: View {
@@ -23,7 +24,7 @@ struct CommandPanel<Content: View>: View {
             tint: self.tint,
             isProminent: self.isProminent,
             padding: self.padding,
-            radius: 12)
+            radius: OpenClawProMetric.cardRadius)
         {
             self.content
         }
@@ -31,73 +32,50 @@ struct CommandPanel<Content: View>: View {
 }
 
 struct CommandControlBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        LinearGradient(
-            colors: self.colorScheme == .dark ? self.darkColors : self.lightColors,
-            startPoint: .top,
-            endPoint: .bottom)
-            .overlay(alignment: .top) {
-                if self.colorScheme == .light {
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.34),
-                            Color.clear,
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing)
-                        .frame(height: 260)
-                }
-            }
-            .ignoresSafeArea()
-    }
-
-    private var darkColors: [Color] {
-        [
-            Color(red: 12 / 255, green: 13 / 255, blue: 15 / 255),
-            Color(red: 7 / 255, green: 8 / 255, blue: 10 / 255),
-            Color(red: 4 / 255, green: 5 / 255, blue: 6 / 255),
-        ]
-    }
-
-    private var lightColors: [Color] {
-        [
-            Color(red: 247 / 255, green: 248 / 255, blue: 249 / 255),
-            Color(red: 251 / 255, green: 252 / 255, blue: 253 / 255),
-            .white,
-        ]
+        OpenClawProBackground()
     }
 }
 
 struct CommandSessionRow: View {
-    @Environment(\.colorScheme) private var colorScheme
     let item: CommandCenterTab.WorkItem
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: self.item.icon)
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(self.item.color)
                 .frame(width: 30, height: 30)
                 .background {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
                         .fill(self.item.color.opacity(0.12))
                 }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if self.item.isUnread {
+                        Circle()
+                            .fill(OpenClawBrand.accent)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
+                    }
                     Text(self.item.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                     Spacer(minLength: 6)
+                    if self.item.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawBrand.accent)
+                            .accessibilityHidden(true)
+                    }
                     Text(self.item.trailing)
-                        .font(.caption2.weight(.medium))
+                        .font(OpenClawType.caption2Medium)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
                     Text(self.item.detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 6)
@@ -106,27 +84,20 @@ struct CommandSessionRow: View {
                             .frame(width: 68)
                     }
                     Text(self.progressLabel)
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(self.item.color)
                         .lineLimit(1)
                         .frame(width: 48, alignment: .trailing)
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.rowFill)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(self.rowBorder, lineWidth: 1)
-                }
-        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 
     private var progressLabel: String {
-        guard let progress = self.item.progress else {
+        guard let progress = item.progress else {
             return self.item.state
         }
         if self.item.state == "offline" || self.item.state == "off" || self.item.state == "idle" {
@@ -134,51 +105,234 @@ struct CommandSessionRow: View {
         }
         return "\(Int((progress * 100).rounded()))%"
     }
+}
 
-    private var rowFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025)
+struct CommandSessionActionsModifier: ViewModifier {
+    private enum Editor {
+        case rename
+        case newGroup
     }
 
-    private var rowBorder: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.065) : Color.black.opacity(0.045)
+    let session: OpenClawChatSessionEntry
+    let categories: [String]
+    let isArchived: Bool
+    let isEnabled: Bool
+    let onRename: (String?) -> Void
+    let onMoveToGroup: (String?) -> Void
+    let onTogglePinned: () -> Void
+    let onToggleUnread: () -> Void
+    let onFork: () -> Void
+    let onToggleArchived: () -> Void
+    let onDelete: () -> Void
+
+    @State private var editor: Editor?
+    @State private var draftText = ""
+    @State private var confirmsDelete = false
+
+    func body(content: Content) -> some View {
+        if self.isEnabled {
+            self.managedContent(content)
+        } else {
+            content
+        }
+    }
+
+    private func managedContent(_ content: Content) -> some View {
+        content
+            .contextMenu {
+                if self.isArchived {
+                    self.actionButton("Unarchive", systemImage: "archivebox") {
+                        self.onToggleArchived()
+                    }
+                    self.deleteButton
+                } else {
+                    self.actionButton(
+                        self.session.pinned == true ? "Unpin" : "Pin",
+                        systemImage: self.session.pinned == true ? "pin.slash" : "pin")
+                    {
+                        self.onTogglePinned()
+                    }
+                    self.actionButton(
+                        self.session.unread == true ? "Mark as Read" : "Mark as Unread",
+                        systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
+                    {
+                        self.onToggleUnread()
+                    }
+                    self.actionButton("Rename…", systemImage: "pencil") {
+                        self.beginRename()
+                    }
+                    self.actionButton("Fork", systemImage: "arrow.triangle.branch") {
+                        self.onFork()
+                    }
+                    self.groupMenu
+                    self.actionButton("Archive", systemImage: "archivebox") {
+                        self.onToggleArchived()
+                    }
+                    self.deleteButton
+                }
+            }
+            .alert(self.editorTitle, isPresented: self.editorBinding) {
+                TextField(self.editorPlaceholder, text: self.$draftText)
+                    .font(OpenClawType.body)
+                Button {
+                    self.commitEditor()
+                } label: {
+                    Text(self.editor == .rename ? "Save" : "Create")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {
+                    self.editor = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+            .confirmationDialog(
+                "Delete Session?",
+                isPresented: self.$confirmsDelete,
+                titleVisibility: .visible)
+            {
+                Button(role: .destructive) {
+                    self.onDelete()
+                } label: {
+                    Text("Delete Session")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            } message: {
+                Text("This permanently deletes the session and its transcript.")
+                    .font(OpenClawType.caption)
+            }
+    }
+
+    private var groupMenu: some View {
+        Menu {
+            ForEach(self.categories, id: \.self) { category in
+                self.actionButton(category, systemImage: "folder") {
+                    self.onMoveToGroup(category)
+                }
+            }
+            self.actionButton("New Group…", systemImage: "folder.badge.plus") {
+                self.draftText = ""
+                self.editor = .newGroup
+            }
+            if self.normalized(self.session.category) != nil {
+                self.actionButton("Remove from Group", systemImage: "folder.badge.minus") {
+                    self.onMoveToGroup(nil)
+                }
+            }
+        } label: {
+            Label("Move to Group", systemImage: "folder")
+                .font(OpenClawType.subhead)
+        }
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            self.confirmsDelete = true
+        } label: {
+            Label("Delete…", systemImage: "trash")
+                .font(OpenClawType.subhead)
+        }
+    }
+
+    private var editorBinding: Binding<Bool> {
+        Binding(
+            get: { self.editor != nil },
+            set: { if !$0 { self.editor = nil } })
+    }
+
+    private var editorTitle: String {
+        self.editor == .newGroup ? "New Group" : "Rename Session"
+    }
+
+    private var editorPlaceholder: String {
+        self.editor == .newGroup ? "Group name" : "Session name"
+    }
+
+    private func actionButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(OpenClawType.subhead)
+        }
+    }
+
+    private func beginRename() {
+        self.draftText = self.normalized(self.session.label)
+            ?? self.normalized(self.session.displayName)
+            ?? ""
+        self.editor = .rename
+    }
+
+    private func commitEditor() {
+        let value = self.normalized(self.draftText)
+        switch self.editor {
+        case .rename:
+            self.onRename(value)
+        case .newGroup:
+            if let value {
+                // Web parity: only prompt-created groups join the stored list,
+                // so they survive as empty sections after members leave.
+                SessionGroupStore.remember(value)
+                self.onMoveToGroup(value)
+            }
+        case nil:
+            break
+        }
+        self.editor = nil
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
-struct CommandApprovalRow: View {
-    let item: CommandCenterTab.ApprovalItem
+extension View {
+    func commandSessionActions(
+        session: OpenClawChatSessionEntry,
+        categories: [String],
+        isArchived: Bool = false,
+        isEnabled: Bool = true,
+        onRename: @escaping (String?) -> Void,
+        onMoveToGroup: @escaping (String?) -> Void,
+        onTogglePinned: @escaping () -> Void,
+        onToggleUnread: @escaping () -> Void,
+        onFork: @escaping () -> Void,
+        onToggleArchived: @escaping () -> Void,
+        onDelete: @escaping () -> Void) -> some View
+    {
+        self.modifier(CommandSessionActionsModifier(
+            session: session,
+            categories: categories,
+            isArchived: isArchived,
+            isEnabled: isEnabled,
+            onRename: onRename,
+            onMoveToGroup: onMoveToGroup,
+            onTogglePinned: onTogglePinned,
+            onToggleUnread: onToggleUnread,
+            onFork: onFork,
+            onToggleArchived: onToggleArchived,
+            onDelete: onDelete))
+    }
+}
 
+struct CommandViewMoreRow: View {
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: self.item.icon)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.item.color)
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(self.item.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(self.item.detail)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text(self.item.priority)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(self.item.color)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background {
-                    Capsule()
-                        .fill(self.item.color.opacity(0.10))
-                }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        Label("View More", systemImage: "chevron.right")
+            .font(OpenClawType.subheadBold)
+            .foregroundStyle(OpenClawBrand.accent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
     }
 }
 
@@ -190,92 +344,25 @@ struct CommandEmptyStateRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: self.icon)
-                .font(.caption.weight(.bold))
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(OpenClawBrand.ok)
                 .frame(width: 30, height: 30)
                 .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous)
                         .fill(OpenClawBrand.ok.opacity(0.10))
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.detail)
-                    .font(.caption2.weight(.medium))
+                    .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 9)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.06))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.055), lineWidth: 1)
-                }
-        }
-    }
-}
-
-struct CommandTaskRow: View {
-    let item: CommandCenterTab.WorkItem
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            Text(self.item.title)
-                .font(.footnote.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.80)
-                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
-            Text(self.item.detail)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .frame(width: 64, alignment: .leading)
-            if let progress = self.item.progress {
-                ProProgressBar(progress: progress, color: self.item.color)
-                    .frame(width: 56)
-            }
-            Text(self.item.state)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(self.item.progress == nil ? self.item.color : .secondary)
-                .lineLimit(1)
-                .frame(width: self.item.progress == nil ? 58 : 34, alignment: .trailing)
-        }
-        .padding(.vertical, 8)
-    }
-}
-
-struct CommandLiveActivityRow: View {
-    let title: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProStatusDot(color: self.color)
-            Text(self.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(self.value)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.08))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-                }
-        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
     }
 }

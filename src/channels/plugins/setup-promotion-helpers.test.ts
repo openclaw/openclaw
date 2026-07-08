@@ -14,10 +14,7 @@ vi.mock("./registry.js", () => ({
   getLoadedChannelPlugin: getLoadedChannelPluginMock,
 }));
 
-import {
-  resolveSingleAccountKeysToMove,
-  shouldMoveSingleAccountChannelKey,
-} from "./setup-promotion-helpers.js";
+import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
 
 describe("setup promotion helpers", () => {
   beforeEach(() => {
@@ -76,11 +73,13 @@ describe("setup promotion helpers", () => {
     });
 
     expect(
-      shouldMoveSingleAccountChannelKey({
+      resolveSingleAccountKeysToMove({
         channelKey: "demo",
-        key: "customAuth",
+        channel: {
+          customAuth: "secret",
+        },
       }),
-    ).toBe(true);
+    ).toEqual(["customAuth"]);
     expect(getBundledChannelPluginMock).toHaveBeenCalledWith("demo");
   });
 

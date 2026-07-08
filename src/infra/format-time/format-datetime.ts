@@ -17,12 +17,12 @@ export function resolveTimezone(value: string): string | undefined {
   }
 }
 
-export type FormatTimestampOptions = {
+type FormatTimestampOptions = {
   /** Include seconds in the output. Default: false */
   displaySeconds?: boolean;
 };
 
-export type FormatZonedTimestampOptions = FormatTimestampOptions & {
+type FormatZonedTimestampOptions = FormatTimestampOptions & {
   /** IANA timezone string (e.g., 'America/New_York'). Default: system timezone */
   timeZone?: string;
 };

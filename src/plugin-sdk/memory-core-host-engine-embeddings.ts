@@ -74,5 +74,6 @@ export type {
   MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
+  MemoryEmbeddingProviderIndexIdentity,
   MemoryEmbeddingProviderRuntime,
 } from "../plugins/memory-embedding-providers.js";

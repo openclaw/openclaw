@@ -39,6 +39,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_clip",
   "photos_latest",
   "screen_record",
+  "screen_snapshot",
   "location_get",
   "notifications_list",
   "notifications_action",
@@ -97,7 +98,7 @@ const NodesToolSchema = Type.Object({
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip
+  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
@@ -263,6 +264,15 @@ export function createNodesTool(options?: {
             });
           }
           case "screen_record": {
+            return await executeNodeMediaAction({
+              action,
+              params,
+              gatewayOpts,
+              modelHasVision: options?.modelHasVision,
+              imageSanitization,
+            });
+          }
+          case "screen_snapshot": {
             return await executeNodeMediaAction({
               action,
               params,

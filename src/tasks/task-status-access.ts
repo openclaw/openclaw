@@ -11,13 +11,17 @@ import type { TaskRecord } from "./task-registry.types.js";
 /** Returns only the session lookup fields needed by task status commands. */
 export function getTaskSessionLookupByIdForStatus(
   taskId: string,
-): Pick<TaskRecord, "requesterSessionKey" | "runId" | "agentId"> | undefined {
+):
+  | Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "runId" | "agentId" | "requesterAgentId">
+  | undefined {
   const task = getTaskById(taskId);
   return task
     ? {
         requesterSessionKey: task.requesterSessionKey,
+        ownerKey: task.ownerKey,
         ...(task.runId ? { runId: task.runId } : {}),
         ...(task.agentId ? { agentId: task.agentId } : {}),
+        ...(task.requesterAgentId ? { requesterAgentId: task.requesterAgentId } : {}),
       }
     : undefined;
 }

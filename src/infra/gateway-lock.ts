@@ -1,6 +1,5 @@
 // Coordinates gateway lock files, ports, and stale owner detection.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -14,7 +13,9 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
+import { sha256HexPrefix } from "./crypto-digest.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -25,6 +26,7 @@ type LockPayload = {
   pid: number;
   createdAt: string;
   configPath: string;
+  port?: number;
   startTime?: number;
 };
 
@@ -32,6 +34,7 @@ const LockPayloadSchema = z.object({
   pid: z.number(),
   createdAt: z.string(),
   configPath: z.string(),
+  port: z.number().int().min(1).max(65_535).optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
 
@@ -79,32 +82,8 @@ function readLinuxCmdline(pid: number): string[] | null {
 
 const CMDLINE_EXEC_TIMEOUT_MS = 1000;
 
-/**
- * Read the command line of a Windows process via `wmic`.
- * Returns an argv-style array, or null when the lookup fails (process gone,
- * `wmic` missing/deprecated, timeout, etc.).
- */
 function readWindowsCmdline(pid: number): string[] | null {
-  try {
-    // Omit `encoding` so execFileSync returns a Buffer — wmic emits UTF-16LE
-    // (with BOM) on most Windows 10/11 builds, which would be garbled as UTF-8.
-    const buf = execFileSync(
-      "wmic",
-      ["process", "where", `processid=${pid}`, "get", "CommandLine", "/value"],
-      { timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-    ) as Buffer;
-    const raw =
-      buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe
-        ? buf.toString("utf16le")
-        : buf.toString("utf8");
-    const match = raw.match(/CommandLine=(.+)/);
-    if (!match) {
-      return null;
-    }
-    return parseWindowsCmdline(match[1].trim());
-  } catch {
-    return null;
-  }
+  return readWindowsProcessArgsSync(pid, CMDLINE_EXEC_TIMEOUT_MS);
 }
 
 /**
@@ -195,6 +174,7 @@ async function resolveGatewayOwnerStatus(
   platform: NodeJS.Platform,
   port: number | undefined,
   readCmdline?: (pid: number) => string[] | null,
+  opts: { trustUnknownCmdlineOwner?: boolean } = {},
 ): Promise<LockOwnerStatus> {
   if (port != null) {
     const portFree = await checkPortFree(port);
@@ -227,9 +207,11 @@ async function resolveGatewayOwnerStatus(
     // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
     // very old locks. On win32/darwin/other, conservatively assume "alive" to
     // preserve single-instance guarantees when wmic/ps is unavailable.
-    return platform === "linux" ? "unknown" : "alive";
+    return platform === "linux" || opts.trustUnknownCmdlineOwner === false ? "unknown" : "alive";
   }
-  return isGatewayArgv(args) ? "alive" : "dead";
+  // Long-running gateways retitle themselves so macOS/BSD process inspection
+  // can identify the owner after the original argv is no longer available.
+  return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
@@ -244,9 +226,29 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
 function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+  const hash = sha256HexPrefix(configPath, 8);
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
+}
+
+export async function readActiveGatewayLockPort(
+  opts: Pick<GatewayLockOptions, "env" | "lockDir" | "platform" | "readProcessCmdline"> = {},
+): Promise<number | undefined> {
+  const env = opts.env ?? process.env;
+  const { lockPath } = resolveGatewayLockPath(env, opts.lockDir);
+  const payload = await readLockPayload(lockPath);
+  if (!payload?.port) {
+    return undefined;
+  }
+  const ownerStatus = await resolveGatewayOwnerStatus(
+    payload.pid,
+    payload,
+    opts.platform ?? process.platform,
+    undefined,
+    opts.readProcessCmdline,
+    { trustUnknownCmdlineOwner: false },
+  );
+  return ownerStatus === "alive" ? payload.port : undefined;
 }
 
 export async function acquireGatewayLock(
@@ -285,16 +287,27 @@ export async function acquireGatewayLock(
   while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
-      const payload: LockPayload = {
-        pid: process.pid,
-        createdAt: resolveTimestampMsToIsoString(now()),
-        configPath,
-      };
-      if (typeof startTime === "number" && Number.isFinite(startTime)) {
-        payload.startTime = startTime;
+      try {
+        const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
+        const payload: LockPayload = {
+          pid: process.pid,
+          createdAt: resolveTimestampMsToIsoString(now()),
+          configPath,
+        };
+        if (typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65_535) {
+          payload.port = port;
+        }
+        if (typeof startTime === "number" && Number.isFinite(startTime)) {
+          payload.startTime = startTime;
+        }
+        await handle.writeFile(JSON.stringify(payload), "utf8");
+      } catch (error) {
+        // Acquisition owns both resources until the release callback exists.
+        // Unwind them if payload preparation fails before ownership transfers.
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw error;
       }
-      await handle.writeFile(JSON.stringify(payload), "utf8");
       return {
         lockPath,
         configPath,

@@ -21,9 +21,12 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-/** Return whether a plugin package is marked for npm publishing. */
-export function isPublishablePluginPackage(packageJson) {
-  return packageJson.openclaw?.release?.publishToNpm === true;
+/** Return whether a plugin package publishes through an artifact release workflow. */
+function isPublishablePluginPackage(packageJson) {
+  return (
+    packageJson.openclaw?.release?.publishToNpm === true ||
+    packageJson.openclaw?.release?.publishToClawHub === true
+  );
 }
 
 function normalizePackageEntry(value) {
@@ -93,7 +96,7 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables npm publishing. */
+/** List extension package dirs whose package metadata enables artifact publishing. */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -118,7 +121,7 @@ export function listPluginNpmRuntimeBuildOutputs(plan) {
 }
 
 /** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
-export function resolvePluginNpmRuntimePackageFiles(plan) {
+function resolvePluginNpmRuntimePackageFiles(plan) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
       ? plan.packageJson.files.filter((entry) => typeof entry === "string")
@@ -164,7 +167,7 @@ function resolveOpenClawPeerRange(packageJson, rootPackageJson) {
 }
 
 /** Resolve package peer dependency metadata for the OpenClaw plugin API. */
-export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
+function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
   const openclawPeerRange = resolveOpenClawPeerRange(plan.packageJson, plan.rootPackageJson);
   if (!openclawPeerRange) {
     throw new Error(
@@ -294,17 +297,38 @@ export async function buildPluginNpmRuntime(params) {
   };
 }
 
-function parseArgs(argv) {
-  const packageDir = argv[0];
-  if (!packageDir) {
-    throw new Error("usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>");
+function usage() {
+  return "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>";
+}
+
+function readPackageDirArg(argv) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const packageDir = args[0];
+  if (packageDir === "--help" || packageDir === "-h") {
+    return { help: true, packageDir: "" };
+  }
+  if (!packageDir || packageDir.startsWith("-")) {
+    throw new Error(usage());
+  }
+  const extraArg = args[1];
+  if (extraArg) {
+    throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
   return { packageDir };
 }
 
+export function parseArgs(argv) {
+  return readPackageDirArg(argv);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const { packageDir } = parseArgs(process.argv.slice(2));
+    const args = parseArgs(process.argv.slice(2));
+    if (args.help) {
+      console.log(usage());
+      process.exit(0);
+    }
+    const { packageDir } = args;
     const result = await buildPluginNpmRuntime({ packageDir });
     if (result) {
       console.error(

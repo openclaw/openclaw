@@ -4,6 +4,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -136,6 +137,12 @@ function buildSyntheticMessageEvent(
   chatType: "p2p" | "group",
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
+  // card-action-c-* IDs are temporary callback tokens, not valid Feishu message IDs.
+  // Using them as reply targets causes "Invalid ids" errors from the streaming reply API.
+  const isTemporaryCardActionId = replyTargetMessageId?.startsWith("card-action-c-");
+  const validReplyTargetId = replyTargetMessageId && !isTemporaryCardActionId
+    ? replyTargetMessageId
+    : undefined;
   return {
     sender: {
       sender_id: {
@@ -146,8 +153,9 @@ function buildSyntheticMessageEvent(
     },
     message: {
       message_id: `card-action-${event.token}`,
-      ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
-      ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
+      ...(validReplyTargetId ? { reply_target_message_id: validReplyTargetId } : {}),
+      ...(validReplyTargetId ? { typing_target_message_id: validReplyTargetId } : {}),
+      ...(!validReplyTargetId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",
@@ -237,7 +245,7 @@ function pruneChatTypeCache(now: number): void {
 }
 
 function sanitizeLogValue(v: string): string {
-  return v.replace(/[\r\n]/g, " ").slice(0, 500);
+  return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
 }
 
 function resolveFeishuApprovalCardExpiresAt(nowRaw = Date.now()): number | undefined {

@@ -82,8 +82,7 @@ class CanvasController {
 
   /** Navigates the canvas to a remote URL or back to the bundled scaffold for blank/root input. */
   fun navigate(url: String) {
-    val trimmed = url.trim()
-    this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
+    this.url = CanvasNavigationPolicy.normalize(url).ifBlank { null }
     _currentUrl.value = this.url
     reload()
   }
@@ -96,8 +95,6 @@ class CanvasController {
   }
 
   fun currentUrl(): String? = url
-
-  fun isDefaultCanvas(): Boolean = url == null
 
   fun setDebugStatusEnabled(enabled: Boolean) {
     debugStatusEnabled = enabled
@@ -202,24 +199,6 @@ class CanvasController {
         wv.evaluateJavascript(javaScript) { result ->
           cont.resume(result ?: "")
         }
-      }
-    }
-
-  suspend fun snapshotPngBase64(maxWidth: Int?): String =
-    withContext(Dispatchers.Main) {
-      val wv = webView ?: throw IllegalStateException("no webview")
-      val bmp = wv.captureBitmap()
-      try {
-        val scaled = bmp.scaleForMaxWidth(maxWidth)
-        try {
-          val out = ByteArrayOutputStream()
-          scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
-          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-        } finally {
-          if (scaled !== bmp) scaled.recycle()
-        }
-      } finally {
-        bmp.recycle()
       }
     }
 

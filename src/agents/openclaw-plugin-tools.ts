@@ -25,6 +25,7 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   sandboxRoot?: string;

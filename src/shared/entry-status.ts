@@ -8,7 +8,7 @@ import {
   type RequirementsMetadata,
 } from "./requirements.js";
 
-export type EntryMetadataRequirementsParams = Parameters<
+type EntryMetadataRequirementsParams = Parameters<
   typeof evaluateEntryMetadataRequirements
 >[0];
 

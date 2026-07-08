@@ -52,6 +52,10 @@
       "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
       "default": "./src/number-runtime.ts"
     },
+    "./outbound-media": {
+      "types": "./dist/src/plugin-sdk/outbound-media.d.ts",
+      "default": "./src/outbound-media.ts"
+    },
     "./secure-random-runtime": {
       "types": "./dist/src/plugin-sdk/secure-random-runtime.d.ts",
       "default": "./src/secure-random-runtime.ts"
@@ -139,6 +143,10 @@
     "./provider-auth-runtime": {
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
       "default": "./src/provider-auth-runtime.ts"
+    },
+    "./provider-auth-login-flow-runtime": {
+      "types": "./dist/src/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+      "default": "./src/provider-auth-login-flow-runtime.ts"
     },
     "./provider-env-vars": {
       "types": "./dist/src/plugin-sdk/provider-env-vars.d.ts",

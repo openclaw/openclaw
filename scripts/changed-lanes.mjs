@@ -30,11 +30,11 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
  */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
-  "apps/android/app/build.gradle.kts",
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
-  "apps/ios/Config/Version.xcconfig",
-  "apps/ios/fastlane/metadata/en-US/release_notes.txt",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
@@ -79,6 +79,10 @@ export function createEmptyChangedLanes() {
     releaseMetadata: false,
     all: false,
   };
+}
+
+export function isChangedLaneTestPath(changedPath) {
+  return TEST_PATH_RE.test(normalizeChangedPath(changedPath));
 }
 
 /**
@@ -165,7 +169,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     }
 
     if (EXTENSION_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension test`);
       } else {
@@ -177,7 +181,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     }
 
     if (CORE_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core test`);
       } else {
@@ -353,7 +357,7 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 /**
  * Classifies package.json script-only changes from git content.
  */
-export function classifyPackageJsonChangeFromGit(params) {
+function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
     if (isLiveDockerPackageScriptOnlyChange(before, after)) {
@@ -478,7 +482,7 @@ function stableJson(value) {
 /**
  * Writes changed-lane booleans to the GitHub Actions output file.
  */
-export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
+function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
@@ -498,6 +502,9 @@ function toSnakeCase(value) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -508,8 +515,8 @@ function parseArgs(argv) {
     help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
@@ -523,14 +530,16 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(arg);
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
 }
 
 function printUsage() {
@@ -579,7 +588,13 @@ function printHuman(result) {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     printUsage();
     process.exit(0);

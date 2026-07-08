@@ -27,7 +27,7 @@ function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
   );
 }
 
-export type SessionManagerCache = {
+type SessionManagerCache = {
   clear: () => void;
   isSessionManagerCached: (sessionFile: string) => boolean;
   keys: () => string[];

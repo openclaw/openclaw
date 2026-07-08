@@ -36,6 +36,7 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
 
 type PluginMetadataSnapshotMemo = {
   key: string;
@@ -85,16 +86,6 @@ export type {
   PluginMetadataSnapshotRegistryDiagnostic,
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
-
-function fileFingerprint(filePath: string): unknown {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
-  } catch {
-    return [filePath, "missing"];
-  }
-}
 
 function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
   let entries: fs.Dirent[];
@@ -246,7 +237,6 @@ function resolvePersistedRegistryMemoLookupContextHash(params: {
 
 function resolvePersistedRegistryMemoState(params: {
   env: NodeJS.ProcessEnv;
-  index?: InstalledPluginIndex;
   preferPersisted?: boolean;
   stateDir?: string;
 }): PersistedRegistryMemoState {
@@ -263,12 +253,10 @@ function resolvePersistedRegistryMemoState(params: {
       fingerprint: fastFingerprint,
     };
   }
-  const index =
-    params.index ??
-    readPersistedInstalledPluginIndexSync({
-      env: params.env,
-      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-    });
+  const index = readPersistedInstalledPluginIndexSync({
+    env: params.env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+  });
   return {
     contextHash,
     fastHash,
@@ -590,16 +578,7 @@ export function loadPluginMetadataSnapshot(
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = findPluginMetadataSnapshotMemo(memoKey);
   if (memo?.key === memoKey) {
-    return measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => memo.snapshot, {
-      phase: activeTimelineSpan?.phase ?? "startup",
-      config: params.config,
-      env: params.env,
-      attributes: {
-        cacheHit: true,
-        hasWorkspaceDir: params.workspaceDir !== undefined,
-        hasInstalledIndex: params.index !== undefined,
-      },
-    });
+    return memo.snapshot;
   }
 
   const result = measureDiagnosticsTimelineSpanSync(
@@ -617,19 +596,11 @@ export function loadPluginMetadataSnapshot(
   );
   const snapshot = freezePluginMetadataSnapshot(result.snapshot);
   if (canMemoizePluginMetadataSnapshotResult(result)) {
-    const cachedRegistryState =
-      result.registrySource === "derived"
-        ? resolvePersistedRegistryMemoState({
-            env,
-            index: snapshot.index,
-            ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
-            ...(params.preferPersisted !== undefined
-              ? { preferPersisted: params.preferPersisted }
-              : {}),
-          })
-        : registryState;
+    // Store under the exact key this call looked up by. Derived registries used
+    // to re-key off the freshly built snapshot.index, so the store key never
+    // matched the next lookup and every call re-ran the full manifest scan.
     rememberPluginMetadataSnapshotMemo({
-      key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
+      key: memoKey,
       lookupContextHash: resolvePersistedRegistryMemoLookupContextHash({
         env,
         ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
@@ -637,7 +608,7 @@ export function loadPluginMetadataSnapshot(
           ? { preferPersisted: params.preferPersisted }
           : {}),
       }),
-      registryState: cachedRegistryState,
+      registryState,
       snapshot,
     });
   }

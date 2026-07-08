@@ -1,9 +1,7 @@
 // Exercises per-session fallback skip markers, TTL expiry, and opt-in cache defaults.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  DEFAULT_FALLBACK_SKIP_TTL_MS,
   resetFallbackSkipCacheForTest,
-  clearFallbackSkipCacheForSession,
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
@@ -167,40 +165,6 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
-  it("clearFallbackSkipCacheForSession drops every marker for that session", () => {
-    markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      reason: "auth",
-      now: 1_000,
-    });
-    markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-      reason: "auth",
-      now: 1_000,
-    });
-    clearFallbackSkipCacheForSession("s1");
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 30_000,
-      }),
-    ).toBe(false);
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "google",
-        model: "gemini-3.1-pro-preview",
-        now: 30_000,
-      }),
-    ).toBe(false);
-  });
-
   it("re-marking the same triple refreshes the TTL", () => {
     markFallbackCandidateSkipped({
       sessionId: "s1",
@@ -296,7 +260,6 @@ describe("fallback-skip-cache", () => {
         now: 1_000,
       }),
     ).toBe(false);
-    expect(DEFAULT_FALLBACK_SKIP_TTL_MS).toBe(0);
   });
 
   it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {

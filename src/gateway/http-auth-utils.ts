@@ -260,3 +260,14 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   }
   return resolveHttpSenderIsOwner(req, requestAuth);
 }
+
+export function authorizeOpenAiCompatibleHttpModelOverride(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): { allowed: true } | { allowed: false; missingScope: typeof ADMIN_SCOPE } {
+  const requestedModelOverride = normalizeOptionalString(getHeader(req, "x-openclaw-model"));
+  if (!requestedModelOverride || resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+    return { allowed: true };
+  }
+  return { allowed: false, missingScope: ADMIN_SCOPE };
+}

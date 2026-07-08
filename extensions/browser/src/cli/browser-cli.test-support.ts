@@ -43,28 +43,3 @@ export function getBrowserCliRuntimeCapture(): CliRuntimeCapture {
 export function getBrowserCliRuntime() {
   return getBrowserCliRuntimeCapture().defaultRuntime;
 }
-
-/** Provides a mock module shape for defaultRuntime imports. */
-export async function mockBrowserCliDefaultRuntime() {
-  browserCliRuntimeState.capture ??= createCliRuntimeCapture();
-  return { defaultRuntime: browserCliRuntimeState.capture.defaultRuntime };
-}
-
-/** Runs a command action through the same error callback shape as the real helper. */
-export async function runCommandWithRuntimeMock(
-  _runtime: unknown,
-  action: () => Promise<void>,
-  onError: (err: unknown) => void,
-) {
-  return await action().catch(onError);
-}
-
-/** Provides a mock module shape for core runCommandWithRuntime imports. */
-export async function createBrowserCliUtilsMockModule() {
-  return { runCommandWithRuntime: runCommandWithRuntimeMock };
-}
-
-/** Provides a mock module shape for Browser CLI runtime imports. */
-export async function createBrowserCliRuntimeMockModule() {
-  return await mockBrowserCliDefaultRuntime();
-}

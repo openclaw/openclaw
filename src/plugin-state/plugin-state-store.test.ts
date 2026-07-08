@@ -13,7 +13,7 @@ import {
 import {
   clearPluginStateStoreForTests,
   closePluginStateDatabase,
-  createCorePluginStateKeyedStore,
+  createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   PluginStateStoreError,
@@ -215,6 +215,38 @@ describe("plugin state keyed store", () => {
       await expect(store.lookup("claim")).resolves.toEqual({ version: 2 });
       await expect(store.entries()).resolves.toEqual([
         { key: "claim", value: { version: 2 }, createdAt: 1200 },
+      ]);
+    });
+  });
+
+  it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
+    await withPluginStateTestState(async () => {
+      vi.useFakeTimers();
+      const store = createPluginStateKeyedStore<number>("codex", {
+        namespace: "durable-bindings",
+        maxEntries: 2,
+        overflowPolicy: "reject-new",
+      });
+      vi.setSystemTime(1000);
+      await store.register("first", 1);
+      vi.setSystemTime(2000);
+      await store.register("second", 2);
+
+      await expect(store.register("third", 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.registerIfAbsent("first", 99)).resolves.toBe(false);
+      if (!store.update) {
+        throw new Error("plugin state update unavailable");
+      }
+      vi.setSystemTime(3000);
+      await expect(store.update("first", () => 10)).resolves.toBe(true);
+      await expect(store.update("third", () => 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.entries()).resolves.toEqual([
+        expect.objectContaining({ key: "second", value: 2 }),
+        expect.objectContaining({ key: "first", value: 10 }),
       ]);
     });
   });
@@ -657,13 +689,13 @@ describe("plugin state keyed store", () => {
 
   it("allows core owners and reserves core-prefixed plugin ids", async () => {
     await withPluginStateTestState(async () => {
-      const store = createCorePluginStateKeyedStore<{ stopped: boolean }>({
+      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>({
         ownerId: "core:channel-intent",
         namespace: "stopped",
         maxEntries: 10,
       });
-      await store.register("telegram:personal", { stopped: true });
-      await expect(store.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      store.register("telegram:personal", { stopped: true });
+      expect(store.lookup("telegram:personal")).toEqual({ stopped: true });
       expect(() =>
         createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
       ).toThrow(PluginStateStoreError);

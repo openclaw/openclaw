@@ -5,6 +5,7 @@ import { expect, vi } from "vitest";
 type MockWithReset = {
   mockReset(): void;
   mockResolvedValue?(value: unknown): void;
+  mockReturnValue?(value: unknown): void;
 };
 
 export const taskExecutorMocks = {
@@ -16,6 +17,7 @@ export const taskExecutorMocks = {
 
 export const announceDeliveryMocks = {
   deliverSubagentAnnouncement: vi.fn(),
+  loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
 };
 
 export const taskDeliveryRuntimeMocks = {
@@ -35,6 +37,7 @@ type TaskDeliveryBackgroundMocks = {
 
 type AnnouncementBackgroundMocks = {
   deliverSubagentAnnouncement: MockWithReset;
+  loadRequesterSessionEntry: MockWithReset;
 };
 
 type MediaBackgroundResetMocks = {
@@ -54,15 +57,6 @@ type ProgressExpectation = {
   taskExecutorMocks: TaskExecutorBackgroundMocks;
   runId: string;
   progressSummary: string;
-};
-
-type DirectSendExpectation = {
-  sendMessageMock: unknown;
-  channel: string;
-  to: string;
-  threadId: string;
-  content: string;
-  mediaUrls: string[];
 };
 
 type FallbackAnnouncementExpectation = {
@@ -150,6 +144,8 @@ export function resetMediaBackgroundMocks({
     result: { messageId: "msg-1" },
   });
   announceDeliveryMocksLocal.deliverSubagentAnnouncement.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReturnValue?.({ entry: undefined });
 }
 
 export function expectQueuedTaskRun({
@@ -178,22 +174,6 @@ export function expectRecordedTaskProgress({
   );
   expect(params.runId).toBe(runId);
   expect(params.progressSummary).toBe(progressSummary);
-}
-
-export function expectDirectMediaSend({
-  sendMessageMock,
-  channel,
-  to,
-  threadId,
-  content,
-  mediaUrls,
-}: DirectSendExpectation): void {
-  const params = requireMockFirstParam(sendMessageMock, "sendMessage params");
-  expect(params.channel).toBe(channel);
-  expect(params.to).toBe(to);
-  expect(params.threadId).toBe(threadId);
-  expect(params.content).toBe(content);
-  expect(params.mediaUrls).toEqual(mediaUrls);
 }
 
 export function expectFallbackMediaAnnouncement({

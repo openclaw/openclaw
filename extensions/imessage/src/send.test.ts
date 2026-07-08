@@ -1,4 +1,5 @@
 // Imessage tests cover send plugin behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,13 @@ const IMESSAGE_TEST_CFG = {
     },
   },
 };
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 function createClient(result: Record<string, unknown>): IMessageRpcClient {
   return {
@@ -79,6 +87,7 @@ describe("sendMessageIMessage receipts", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    spawnMock.mockReset();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -119,6 +128,159 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("drops reply metadata from text sends when reply actions are disabled", async () => {
+    const client = createClient({ guid: "p:0/imsg-plain" });
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            actions: { reply: false },
+            accounts: { default: {} },
+          },
+        },
+      },
+      client,
+      replyToId: "reply-1",
+    });
+
+    const sendParams = getClientMocks(client).request.mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(sendParams).not.toHaveProperty("reply_to");
+    expect(result.receipt.replyToId).toBeUndefined();
+    expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+  });
+
+  it("resends unthreaded when the transport cannot deliver a threaded reply (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/imsg-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+    });
+
+    // First attempt carried reply_to and hard-failed on the AppleScript-only
+    // transport; the retry drops reply_to and delivers rather than losing it.
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    expect(result.messageId).toBe("p:0/imsg-plain-fallback");
+    expect(result.sentText).toBe("hello");
+    // The receipt reflects the unthreaded send that was actually delivered.
+    expect(result.receipt.replyToId).toBeUndefined();
+    expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+  });
+
+  it("resends a media reply unthreaded when threaded replies are unsupported (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/media-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    // A media reply (file + reply_to) takes the main send path, not send-attachment.
+    const result = await sendMessageIMessage("chat_id:42", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+    });
+
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toMatchObject({ reply_to: "reply-1", file: "/tmp/image.png" });
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    // The media itself is still delivered on the retry, just unthreaded.
+    expect(sendParams[1]).toHaveProperty("file", "/tmp/image.png");
+    expect(result.messageId).toBe("p:0/media-plain-fallback");
+    expect(result.receipt.replyToId).toBeUndefined();
+  });
+
+  it("passes the default RPC send transport", async () => {
+    const client = createClient({ guid: "p:0/imsg-transport-default" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        text: "hello",
+        transport: "auto",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes the configured RPC send transport", async () => {
+    const client = createClient({ guid: "p:0/imsg-transport-bridge" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "applescript",
+            accounts: {
+              work: {
+                sendTransport: "bridge",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        text: "hello",
+        transport: "bridge",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
+    const client = createClient({ guid: "p:0/imsg-1" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
+      timeoutMs: 150_000,
+    });
   });
 
   it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {
@@ -166,6 +328,103 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("sends audioAsVoice media through send-attachment audio transport", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/voice-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it("preserves audioAsVoice media when replying to an iMessage thread", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/threaded-voice-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      replyToId: "p:0/reply-guid",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/threaded-voice-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--reply-to",
+          "p:0/reply-guid",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+    expect(result.receipt.replyToId).toBe("p:0/reply-guid");
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it("drops reply metadata from media sends when reply actions are disabled", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/plain-media-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: {
+        channels: {
+          imessage: {
+            actions: { reply: false },
+            accounts: { default: {} },
+          },
+        },
+      },
+      client,
+      mediaUrl: "/tmp/image.png",
+      replyToId: "p:0/reply-guid",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/plain-media-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
+    ]);
+    expect(result.receipt.replyToId).toBeUndefined();
+    expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("resolves chat_id media-only payloads before using send-attachment", async () => {
@@ -588,6 +847,69 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
+  it("persists an echo marker before awaiting the bridge send result", async () => {
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-1" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
+  });
+
+  it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-04T00:00:00Z"));
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "slow hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(61_000);
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "slow hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-slow" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-slow" });
+  });
+
   it("resolves numeric chat.db ROWIDs to GUIDs for approval reaction binding", async () => {
     const client = createClient({ message_id: 12345 });
     const resolveMessageGuidImpl = vi.fn(async () => "p:0/resolved-guid");
@@ -716,19 +1038,13 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for custom cliPath wrappers", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-remote");
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: {
           channels: {
@@ -747,6 +1063,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalledWith({
@@ -758,6 +1076,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for auto-detected ssh wrappers", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-wrapper-"));
     const wrapperPath = path.join(wrapperDir, "imsg");
@@ -766,15 +1085,8 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-ssh-wrapper");
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
     try {
-      await expect(
+      const rejection = expect(
         sendMessageIMessage("chat_id:42", approvalText, {
           config: IMESSAGE_TEST_CFG,
           client,
@@ -783,6 +1095,8 @@ describe("sendMessageIMessage receipts", () => {
           resolveSentMessageGuidImpl,
         }),
       ).rejects.toThrow("imsg rpc timeout (send)");
+      await vi.runAllTimersAsync();
+      await rejection;
     } finally {
       fs.rmSync(wrapperDir, { recursive: true, force: true });
     }
@@ -796,10 +1110,10 @@ describe("sendMessageIMessage receipts", () => {
     });
   });
 
-  it("throws the rpc timeout without resending for generic text", async () => {
+  it("throws the rpc timeout without matching generic text to older sent rows", async () => {
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
-    const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/stale-guid");
+    const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/older-identical-text-guid");
 
     await expect(
       sendMessageIMessage("chat_id:42", "hello", {
@@ -815,19 +1129,72 @@ describe("sendMessageIMessage receipts", () => {
     expect(resolveSentMessageGuidImpl).not.toHaveBeenCalled();
   });
 
+  it("throws the rpc timeout without resending when sent-row recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+    const resolveSentMessageGuidImpl = vi.fn(async () => null);
+    const rejection = expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        createClient: async () => client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+        resolveSentMessageGuidImpl,
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
+
+    expect(getClientMocks(client).stop).toHaveBeenCalledTimes(1);
+    expect(runCliJson).not.toHaveBeenCalled();
+  });
+
+  it("does not stop caller-owned rpc clients after sent-row recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+    const resolveSentMessageGuidImpl = vi.fn(async () => null);
+    const rejection = expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+        resolveSentMessageGuidImpl,
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
+  });
+
+  it("throws the rpc timeout without resending when sent-row checks are unavailable", async () => {
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
+  });
+
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: IMESSAGE_TEST_CFG,
         client,
@@ -836,6 +1203,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalled();
@@ -903,5 +1272,68 @@ describe("sendMessageIMessage receipts", () => {
     ).rejects.toThrow("imsg rpc error (send)");
 
     expect(runCliJson).not.toHaveBeenCalled();
+  });
+});
+
+function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
+  const kill = vi.fn();
+  spawnMock.mockImplementationOnce(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
+      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
+      kill: (signal: string) => void;
+    };
+    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.kill = kill;
+    queueMicrotask(() => {
+      child[stream].emit("error", error);
+    });
+    return child;
+  });
+  return kill;
+}
+
+describe("sendMessageIMessage CLI stream errors", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+    resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
+  });
+
+  afterEach(() => {
+    clearIMessageApprovalReactionTargetsForTest();
+    resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    spawnMock.mockReset();
+  });
+
+  it("rejects on stdout stream error during attachment send", async () => {
+    const kill = mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      }),
+    ).rejects.toThrow("iMessage CLI stdout stream error: stdout pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("rejects on stderr stream error during attachment send", async () => {
+    const kill = mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      }),
+    ).rejects.toThrow("iMessage CLI stderr stream error: stderr pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
 });

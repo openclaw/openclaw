@@ -7,7 +7,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
+import { resolveTelegramPrimaryMedia, resolveTelegramRichMessageBody } from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -19,16 +19,17 @@ import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
-export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
+  messageId: string;
   sourceMessage: Message;
 };
 
-export type TelegramConversationContextNode = {
+type TelegramConversationContextNode = {
   node: TelegramCachedMessageNode;
   isReplyTarget?: boolean;
 };
 
-export type TelegramMessageCache = {
+type TelegramMessageCache = {
   record: (params: {
     accountId: string;
     chatId: string | number;
@@ -65,6 +66,9 @@ export type TelegramMessageCache = {
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
+type MessageWithPromptContextTimestamp = Message & {
+  openclaw_prompt_context_timestamp_ms?: unknown;
+};
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
@@ -92,7 +96,7 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cac
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
-export type PersistedTelegramMessageCacheValue = {
+type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   threadId?: string;
 };
@@ -151,11 +155,20 @@ function resolveMessageBody(msg: Message): string | undefined {
   if (location) {
     return formatLocationText(location);
   }
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
+  return resolveTelegramRichMessageBody(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 function resolveMediaType(placeholder?: string): string | undefined {
   return placeholder?.match(/^<media:([^>]+)>$/)?.[1];
+}
+
+function resolveMessageTimestamp(msg: Message): number | undefined {
+  const promptContextTimestamp = (msg as MessageWithPromptContextTimestamp)
+    .openclaw_prompt_context_timestamp_ms;
+  if (typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)) {
+    return promptContextTimestamp;
+  }
+  return msg.date ? msg.date * 1000 : undefined;
 }
 
 function normalizeMessageNode(
@@ -171,13 +184,14 @@ function normalizeMessageNode(
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
   const threadId = normalizeTelegramCacheThreadId(params.threadId);
+  const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
     sender: buildSenderName(msg) ?? "unknown sender",
     ...(msg.from?.id != null ? { senderId: String(msg.from.id) } : {}),
     ...(msg.from?.username ? { senderUsername: msg.from.username } : {}),
-    ...(msg.date ? { timestamp: msg.date * 1000 } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     ...(body ? { body } : {}),
     ...(media ? { mediaType: resolveMediaType(media.placeholder) ?? media.placeholder } : {}),
     ...(fileId ? { mediaRef: `telegram:file/${fileId}` } : {}),
@@ -772,11 +786,15 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
-function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
-  const body = node.body?.trim();
+export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
+  const body = text?.trim();
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
   );
+}
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  return isTelegramSessionBoundaryCommandText(node.body);
 }
 
 function isAfterSessionBoundary(
@@ -886,6 +904,7 @@ export async function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
+  includeNode?: (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => boolean;
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
@@ -893,13 +912,16 @@ export async function buildTelegramConversationContext(params: {
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
-      return;
+      return false;
     }
     if (!isAfterSessionBoundary(node, sessionBoundary)) {
-      return;
+      return false;
     }
     if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
-      return;
+      return false;
+    }
+    if (params.includeNode && !params.includeNode(node, flags)) {
+      return false;
     }
     const existing = selected.get(node.messageId);
     const isReplyTarget = existing?.isReplyTarget === true || flags?.replyTarget === true;
@@ -907,6 +929,7 @@ export async function buildTelegramConversationContext(params: {
       node: existing?.node ?? node,
       isReplyTarget: isReplyTarget ? true : undefined,
     });
+    return true;
   };
   const addReplyTargetWindow = async (messageId: string) => {
     replyTargetIds.add(messageId);
@@ -930,18 +953,18 @@ export async function buildTelegramConversationContext(params: {
     limit: params.recentLimit,
   });
   for (const node of currentWindow) {
-    addNode(node);
-    if (node.replyToId) {
+    const added = addNode(node);
+    if (added && node.replyToId) {
       await addReplyTargetWindow(node.replyToId);
     }
   }
 
   for (const [index, node] of params.replyChainNodes.entries()) {
-    addNode(node, { replyTarget: index === 0 });
-    if (index === 0 && node.messageId) {
+    const added = addNode(node, { replyTarget: index === 0 });
+    if (added && index === 0 && node.messageId) {
       await addReplyTargetWindow(node.messageId);
     }
-    if (node.replyToId) {
+    if (added && node.replyToId) {
       replyTargetIds.add(node.replyToId);
     }
   }

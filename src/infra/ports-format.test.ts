@@ -18,11 +18,43 @@ const multipleListenersHint =
 describe("ports-format", () => {
   it.each([
     [{ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, "ssh"],
+    [{ commandLine: "ssh -NL 18789:127.0.0.1:18789 user@host" }, "ssh"],
+    [{ commandLine: "ssh -NfL18789:127.0.0.1:18789 user@host" }, "ssh"],
+    [
+      { commandLine: '"C:\\Program Files\\Git\\usr\\bin\\ssh.exe" -N -L18789:127.0.0.1:22 host' },
+      "ssh",
+    ],
+    [{ commandLine: "ssh -N -L 127.0.0.1:18789:remote:22 host" }, "ssh"],
+    [{ commandLine: "ssh -N -R 18789:localhost:22 host" }, "ssh"],
+    [{ commandLine: "ssh -N -D 18789 host" }, "ssh"],
+    [{ commandLine: "ssh -ND18789 host" }, "ssh"],
+    [{ commandLine: "ssh -N -D 127.0.0.1:18789 host" }, "ssh"],
+    [{ commandLine: "ssh -N -o 'LocalForward 18789 localhost:22' host" }, "ssh"],
+    [{ commandLine: "ssh -N -oLocalForward=127.0.0.1:18789 localhost:22 host" }, "ssh"],
+    [{ commandLine: "ssh -N -o DynamicForward=18789 host" }, "ssh"],
+    [{ command: "ssh", commandLine: "ssh -N host-from-ssh-config" }, "ssh"],
     [{ command: "ssh" }, "ssh"],
+    // ssh-named processes that do not forward *this* port are not tunnels; the
+    // "close the tunnel / change -L port" remediation does not apply to them.
+    [{ command: "sshd" }, "non_gateway"],
+    [{ command: "sshd-session.exe" }, "non_gateway"],
+    [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "non_gateway"],
+    // ssh-named non-tunnel that merely mentions the queried port with a colon: there
+    // is no -L/-R forward, so it must not classify as a tunnel or emit the hint.
+    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
+    [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
+  });
+
+  it("does not emit the SSH tunnel hint for an ssh-named non-tunnel process", () => {
+    const hints = buildPortHints([{ command: "sshd" }], 18789);
+    expect(hints).not.toContain(
+      "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
+    );
+    expect(hints).toContain("Another process is listening on this port.");
   });
 
   it("builds ordered hints for mixed listener kinds and multiplicity", () => {

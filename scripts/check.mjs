@@ -23,7 +23,7 @@ export function usage() {
 /**
  * Parses aggregate check runner arguments.
  */
-export function parseCheckArgs(argv) {
+function parseCheckArgs(argv) {
   const args = {
     help: false,
     includeArchitecture: false,
@@ -88,6 +88,7 @@ export async function main(argv = process.argv.slice(2)) {
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
         { name: "changelog attributions", args: ["check:changelog-attributions"] },
+        { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
         {
           name: "guarded extension wildcard re-exports",
           args: ["lint:extensions:no-guarded-wildcard-reexports"],

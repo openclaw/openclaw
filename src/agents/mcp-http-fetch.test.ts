@@ -1,3 +1,5 @@
+import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 /**
  * Regression coverage for MCP HTTP fetch wrappers.
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
@@ -8,7 +10,6 @@ import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
-  type FetchLike,
 } from "./mcp-http-fetch.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
@@ -30,6 +31,34 @@ class TestEnvHttpProxyAgent {
 
 class TestProxyAgent {
   constructor(readonly options: unknown) {}
+}
+
+function useBodylessForeignResponse(params: { text: string; contentLength?: string }) {
+  const text = vi.fn(async () => params.text);
+  const headers = new Headers({ "content-type": "application/json" });
+  if (params.contentLength !== undefined) {
+    headers.set("content-length", params.contentLength);
+  }
+  testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: TestAgent,
+    EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+    ProxyAgent: TestProxyAgent,
+    fetch: async () =>
+      ({
+        status: 400,
+        statusText: "Bad Request",
+        headers,
+        body: null,
+        ok: false,
+        text,
+      }) as unknown as Response,
+  };
+  return text;
+}
+
+async function fetchOAuthRegistrationError(): Promise<Response> {
+  const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+  return await fetch("https://auth.example.com/oauth/register", { method: "POST" });
 }
 
 function redirectResponse(location: string, status = 302): Response {
@@ -120,6 +149,21 @@ describe("MCP HTTP fetch helpers", () => {
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
+  it.each([204, 205, 304])("preserves bodyless HTTP %s responses", async (status) => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new Response(null, { status }),
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+
+    expect(response.status).toBe(status);
+    expect(response.body).toBeNull();
+  });
+
   it("keeps same-origin TLS overrides ahead of configured env proxy", async () => {
     vi.stubEnv("https_proxy", "http://proxy.example:8080");
     const fetch = buildMcpHttpFetch({
@@ -194,5 +238,38 @@ describe("MCP HTTP fetch helpers", () => {
     expect(new Headers(calls[0]?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(calls[0]?.[1]?.headers).get("mcp-protocol-version")).toBe("2025-06-18");
     expect(calls[1]?.[1]?.headers).toBeUndefined();
+  });
+
+  it.each([undefined, "64", "1048577"])(
+    "drops body-less foreign OAuth text without trusting Content-Length %s",
+    async (contentLength) => {
+      const text = useBodylessForeignResponse({
+        text: '{"error_description":"unbounded"}',
+        contentLength,
+      });
+
+      const response = await fetchOAuthRegistrationError();
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+      const error = await parseErrorResponse(response);
+      expect(error.message).toContain("HTTP 400");
+    },
+  );
+
+  it("never materializes a body-less foreign response with a lying safe length", async () => {
+    const text = useBodylessForeignResponse({
+      text: "x".repeat(1024 * 1024 + 1),
+      contentLength: "64",
+    });
+
+    const response = await fetchOAuthRegistrationError();
+
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
   });
 });

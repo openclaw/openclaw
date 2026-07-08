@@ -7,7 +7,13 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
-import { derivePromptTokens, normalizeUsage } from "../../usage.js";
+import {
+  deriveContextPromptTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type ContextUsage,
+  type NormalizedUsage,
+} from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
@@ -16,6 +22,7 @@ type UsageSnapshot = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
 };
 
@@ -37,6 +44,15 @@ const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
 const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
+// Same-model in-place rate_limit retry: provider RPM caps reset on a
+// minute scale, so wait out the current provider/model window before spending
+// a profile rotation or model failover.
+export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
+// Linear step: retriesSoFar=0 -> 10s, 1 -> 20s, 2 -> 30s. Total wait across the
+// 3-retry budget is 60s, roughly one RPM window.
+const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;
+const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
+
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
@@ -49,6 +65,31 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
   return (
     cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
   );
+}
+
+/**
+ * Backoff before the next same-model rate_limit retry, given how many such
+ * retries already happened. Linear and deterministic (no jitter) so RPM
+ * windows clear predictably and tests can assert exact values.
+ */
+export function resolveSameModelRateLimitRetryDelayMs(params: {
+  retriesSoFar: number;
+  retryAfterSeconds?: number;
+}): number {
+  const backoffDelayMs =
+    SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, params.retriesSoFar) + 1);
+  const backoffMs = Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, backoffDelayMs);
+  const retryAfterMs = Number.isFinite(params.retryAfterSeconds)
+    ? Math.ceil(Math.max(0, params.retryAfterSeconds ?? 0) * 1000)
+    : 0;
+  return Math.max(backoffMs, Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, retryAfterMs));
+}
+
+export function resolveNextSameModelRateLimitRetryCount(params: {
+  retriesSoFar: number;
+  retriedSameModelRateLimit: boolean;
+}): number {
+  return params.retriedSameModelRateLimit ? Math.max(0, params.retriesSoFar) + 1 : 0;
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -150,6 +191,20 @@ export function resolveReportedModelRef(params: {
   };
 }
 
+export function resolveLatestCallUsage(params: {
+  currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+}): {
+  currentAttempt: NormalizedUsage | undefined;
+  latest: NormalizedUsage | undefined;
+} {
+  const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  return {
+    currentAttempt,
+    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+  };
+}
+
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
@@ -160,9 +215,15 @@ export function buildUsageAgentMetaFields(params: {
   if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
-  const lastCallUsage =
-    normalizeUsage(params.lastAssistantUsage as never) ?? toLastCallUsage(params.usageAccumulator);
-  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
+  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
+    ? lastAssistantUsage
+    : hasNonzeroUsage(params.lastRunPromptUsage)
+      ? params.lastRunPromptUsage
+      : toLastCallUsage(params.usageAccumulator);
+  const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastRunPromptUsage,
+  });
   return {
     usage,
     lastCallUsage,

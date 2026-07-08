@@ -1,10 +1,10 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
+import "./monitor.send.test-mocks.js";
 import { testing } from "./monitor.js";
 import "./zalo-js.test-mocks.js";
-import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";

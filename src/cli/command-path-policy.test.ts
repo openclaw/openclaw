@@ -13,6 +13,7 @@ const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   routeConfigGuard: "never",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
+  ownsProtocolStdout: false,
   hideBanner: false,
   ensureCliPath: true,
   networkProxy: "default",
@@ -334,6 +335,13 @@ describe("command-path-policy", () => {
 
   it("treats bare gateway invocations with options as the gateway runtime", () => {
     const argv = ["node", "openclaw", "gateway", "--port", "1234"];
+
+    expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
+    expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
+  });
+
+  it("resolves gateway runs after root options with values", () => {
+    const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
 
     expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
     expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");

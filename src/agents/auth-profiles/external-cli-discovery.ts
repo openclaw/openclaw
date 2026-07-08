@@ -64,20 +64,6 @@ export function externalCliDiscoveryNone(params?: {
   };
 }
 
-/** Allows discovery of already-existing external CLI auth profiles. */
-export function externalCliDiscoveryExisting(params?: {
-  config?: OpenClawConfig;
-  allowKeychainPrompt?: boolean;
-}): ExternalCliAuthDiscovery {
-  return {
-    mode: "existing",
-    ...(params?.allowKeychainPrompt !== undefined
-      ? { allowKeychainPrompt: params.allowKeychainPrompt }
-      : {}),
-    ...(params?.config ? { config: params.config } : {}),
-  };
-}
-
 /** Allows external CLI auth discovery for specific providers and/or profiles. */
 export function externalCliDiscoveryScoped(params: {
   config?: OpenClawConfig;

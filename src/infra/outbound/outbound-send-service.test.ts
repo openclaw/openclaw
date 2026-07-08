@@ -728,6 +728,8 @@ describe("executeSendAction", () => {
       },
       to: "channel:123",
       message: "hello",
+      replyToId: "reply-1",
+      threadId: "thread-1",
     });
 
     expect(prepareSendPayload).toHaveBeenCalledWith(
@@ -742,6 +744,8 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
+      replyToId: "reply-1",
+      threadId: "thread-1",
     });
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {

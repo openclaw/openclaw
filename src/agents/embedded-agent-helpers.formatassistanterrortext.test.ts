@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -70,6 +71,14 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("preserves overload wording for Z.AI rate-limit errors", () => {
+    const msg = makeAssistantError(
+      '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
   it("rewrites generic provider internal errors without support request ids", () => {
     const msg = makeAssistantError(
       "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
@@ -115,6 +124,21 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("classifies provider upstream_error payloads as server errors for fallback", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "Upstream request failed",
+      errorType: "upstream_error",
+    });
+
+    expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantError(
+          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+        ),
+      ),
+    ).toBe("server_error");
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
@@ -244,6 +268,16 @@ describe("formatAssistantErrorText", () => {
       model: "openai/gpt-5.5",
     });
     expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
+  });
+  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
+    const msg = makeAssistantError(
+      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    });
+    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -561,6 +595,23 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
+
+  it("uses structured error body detail for model-not-found copy", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -623,6 +674,33 @@ describe("formatRawAssistantErrorForUi", () => {
       "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
+
+  it("truncates fallback raw error text on UTF-16 code-point boundary without dangling surrogates", () => {
+    // 601 UTF-16 code units: emoji (surrogate pair) straddles the 600-unit truncation boundary
+    const prefix = "x".repeat(599);
+    const emoji = "🎉"; // U+1F389 — high surrogate 0xD83C + low surrogate 0xDF89
+    const raw = prefix + emoji; // 601 code units total
+
+    const result = formatRawAssistantErrorForUi(raw);
+
+    // Result must end with "…" after truncation
+    expect(result).toMatch(/…$/);
+
+    // Verify the truncated portion contains no dangling surrogates
+    for (let i = 0; i < result.length - 1; i++) {
+      const codeUnit = result.charCodeAt(i);
+      // High surrogate (0xD800-0xDBFF) must be followed by a low surrogate
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = result.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+      }
+      // Low surrogate (0xDC00-0xDFFF) must be preceded by a high surrogate
+      if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        const prev = i > 0 ? result.charCodeAt(i - 1) : -1;
+        expect(prev >= 0xd800 && prev <= 0xdbff).toBe(true);
+      }
+    }
+  });
 });
 
 describe("raw API error payload helpers", () => {
@@ -643,6 +721,38 @@ describe("raw API error payload helpers", () => {
     expect(formatRawAssistantErrorForUi(raw)).toBe(
       "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
     );
+  });
+});
+
+describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
+  // OAuth/Max users should NOT see "API key" or "top up" language.
+  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
+  });
+
+  it("returns neutral copy for token authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+  });
+
+  it("REGRESSION: api_key authMode still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "api_key");
+    expect(result).toMatch(/api key/i);
+    expect(result).toMatch(/top up/i);
+  });
+
+  it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
+    expect(result).toMatch(/api key/i);
+  });
+
+  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
+    const result = formatBillingErrorMessage();
+    expect(result).toMatch(/api key/i);
   });
 });
 

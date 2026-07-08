@@ -12,6 +12,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { listOfficialExternalProviderEndpointManifests } from "../plugins/official-external-provider-endpoints.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -331,6 +332,14 @@ function collectManifestProviderEndpoints(): ManifestProviderEndpointCacheEntry[
   for (const { manifest } of listOpenClawPluginManifestMetadata()) {
     entries.push(...readManifestProviderEndpoints(manifest));
   }
+  // Externalized official provider plugins are excluded from dist builds, so
+  // their manifests are invisible unless installed. The bundled catalog keeps
+  // their endpoint classes resolvable: users can point a generic provider key
+  // at DashScope/Moonshot/... and still need native request policy. Matching
+  // is first-wins, so installed/bundled manifests stay authoritative.
+  for (const manifest of listOfficialExternalProviderEndpointManifests()) {
+    entries.push(...readManifestProviderEndpoints(manifest));
+  }
   return entries;
 }
 
@@ -510,6 +519,25 @@ function buildNvidiaAttributionPolicy(
   };
 }
 
+function buildGoogleAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "google",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+    reviewNote:
+      "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+    ...identity,
+    headers: {
+      "x-goog-api-client": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
+    },
+  };
+}
+
 function buildOpenAIAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -572,18 +600,13 @@ export function listProviderAttributionPolicies(
   return [
     buildOpenRouterAttributionPolicy(env),
     buildNvidiaAttributionPolicy(env),
+    buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
       "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "google",
-      "user-agent-extra",
-      "Google GenAI JS SDK exposes userAgentExtra/httpOptions, but provider-side attribution is not yet verified.",
       env,
     ),
     buildSdkHookOnlyPolicy(
@@ -614,17 +637,6 @@ export function resolveProviderAttributionPolicy(
   const normalized = normalizeProviderId(provider ?? "");
   const canonical = normalized === "openai" ? "openai" : normalized;
   return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
-}
-
-export function resolveProviderAttributionHeaders(
-  provider?: string | null,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  const policy = resolveProviderAttributionPolicy(provider, env);
-  if (!policy?.enabledByDefault) {
-    return undefined;
-  }
-  return policy.headers;
 }
 
 export function resolveProviderRequestPolicy(
@@ -665,6 +677,9 @@ export function resolveProviderRequestPolicy(
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
   }
+  if (!attributionProvider && endpointClass === "google-generative-ai") {
+    attributionProvider = "google";
+  }
 
   const attributionPolicy = attributionProvider
     ? resolveProviderAttributionPolicy(attributionProvider, env)
@@ -692,13 +707,6 @@ export function resolveProviderRequestPolicy(
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
-}
-
-export function resolveProviderRequestAttributionHeaders(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  return resolveProviderRequestPolicy(input, env).attributionHeaders;
 }
 
 export function resolveProviderRequestCapabilities(

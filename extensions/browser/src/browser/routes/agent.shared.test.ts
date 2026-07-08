@@ -41,24 +41,28 @@ function profileContext(tabs: Array<{ targetId: string; url: string }>) {
   };
 }
 
-function routeContextForTab(url: string): BrowserRouteContext {
+function routeContextForTab(
+  url: string,
+  ensureTabAvailable = vi.fn(async () => ({
+    targetId: "tab-1",
+    title: "Tab",
+    url,
+    type: "page",
+  })),
+): BrowserRouteContext {
   const profileCtx = {
     profile: {
       cdpUrl: "http://127.0.0.1:9222",
       name: "default",
     },
-    ensureTabAvailable: vi.fn(async () => ({
-      targetId: "tab-1",
-      title: "Tab",
-      url,
-      type: "page",
-    })),
+    ensureTabAvailable,
   } as unknown as ProfileContext;
 
   return {
     forProfile: () => profileCtx,
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         ssrfPolicy: {},
       },
     }),
@@ -132,6 +136,29 @@ describe("browser route shared helpers", () => {
   });
 
   describe("withRouteTabContext", () => {
+    it("opts agent routes into Playwright target-id fallback", async () => {
+      const response = createBrowserRouteResponse();
+      const ensureTabAvailable = vi.fn(async () => ({
+        targetId: "tab-1",
+        title: "Tab",
+        url: "https://example.com",
+        type: "page",
+      }));
+
+      await withRouteTabContext({
+        req: requestWithBody({}),
+        res: response.res,
+        ctx: routeContextForTab("https://example.com", ensureTabAvailable),
+        run: async () => {},
+      });
+
+      expect(ensureTabAvailable).toHaveBeenCalledWith(undefined, {
+        allowPlaywrightFallback: true,
+        signal: undefined,
+        timeoutMs: 60_000,
+      });
+    });
+
     it("does not enforce current-tab URL policy unless requested", async () => {
       const response = createBrowserRouteResponse();
       const run = vi.fn(async () => {

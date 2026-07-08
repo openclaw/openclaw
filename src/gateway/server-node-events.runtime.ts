@@ -8,8 +8,8 @@ export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
-export { updateSessionStore } from "../config/sessions.js";
-export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+export { canonicalizeSessionEntryAliases } from "../config/sessions.js";
+export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -18,11 +18,14 @@ export { enqueueSystemEvent } from "../infra/system-events.js";
 export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";
-export { parseMessageWithAttachments, resolveChatAttachmentMaxBytes } from "./chat-attachments.js";
+export {
+  parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
+  resolveChatAttachmentMaxBytes,
+} from "./chat-attachments.js";
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 export {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "./session-utils.js";

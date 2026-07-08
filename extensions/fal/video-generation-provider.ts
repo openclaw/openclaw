@@ -5,6 +5,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -163,6 +164,21 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
     error: isRecord(error) ? { message: normalizeOptionalString(error.message) } : undefined,
+  };
+}
+
+function readFalCompletedQueueResult(payload: unknown): FalQueueResponse {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (
+    payload.response !== undefined ||
+    (payload.video === undefined && payload.videos === undefined)
+  ) {
+    return readFalQueueResponse(payload);
+  }
+  return {
+    response: readFalVideoPayload(payload),
   };
 }
 
@@ -465,9 +481,12 @@ async function fetchFalJson(params: {
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
     try {
-      return await response.json();
-    } catch {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      return await readProviderJsonResponse<unknown>(response, params.errorContext);
+    } catch (error) {
+      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
+      }
+      throw error;
     }
   } finally {
     await release();
@@ -509,7 +528,7 @@ async function waitForFalQueueResult(params: {
     }
     lastStatus = status;
     if (status === "COMPLETED") {
-      return readFalQueueResponse(
+      return readFalCompletedQueueResult(
         await fetchFalJson({
           url: params.responseUrl,
           init: {

@@ -20,7 +20,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
@@ -153,6 +153,11 @@ async function resumeOrphanedSession(params: {
       nextRunId: result.runId,
       fallback: params.originalRun,
       transcriptFile: resolveInternalSessionEffectsTranscriptPath(result.runId),
+      // Persist the stable original task (not the synthetic resume wrapper) so
+      // that any further post-restart redispatch reconstructs the same
+      // canonical task. Persisting `resumeMessage` instead would accumulate a
+      // wrapped-resume-of-resume cascade across repeated restarts.
+      task: params.task,
     });
     if (!remapped) {
       log.warn(
@@ -294,9 +299,13 @@ export async function recoverOrphanedSubagentSessions(params: {
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
         const messages = await readSessionMessagesAsync(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
+          {
+            agentId: resolveAgentIdFromSessionKey(childSessionKey),
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: childSessionKey,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: 200,

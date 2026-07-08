@@ -145,6 +145,46 @@ describe("source delivery plan", () => {
     expect(outcome.unverifiedMessageToolDelivery).toBe(false);
   });
 
+  it("synthesizes the planned target for legacy message-tool sends by default", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool_then_direct_fallback",
+      reason: "cron_announce",
+      target: { channel: "slack", to: "channel:C1" },
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+    });
+
+    expect(outcome.visibleDeliveries).toEqual([
+      {
+        via: "message_tool",
+        verifiedTarget: true,
+        target: { tool: "message", provider: "slack", to: "channel:C1" },
+      },
+    ]);
+    expect(outcome.verifiedMessageToolDelivery).toBe(true);
+    expect(outcome.satisfiesSourceDelivery).toBe(true);
+  });
+
+  it("does not synthesize the planned target when explicit target evidence is required", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool_then_direct_fallback",
+      reason: "cron_announce",
+      target: { channel: "slack", to: "channel:C1" },
+      requireExplicitMessageTargetEvidence: true,
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+    });
+
+    expect(outcome.visibleDeliveries).toEqual([]);
+    expect(outcome.verifiedMessageToolDelivery).toBe(false);
+    expect(outcome.satisfiesSourceDelivery).toBe(false);
+    expect(outcome.unverifiedMessageToolDelivery).toBe(false);
+  });
+
   it("does not synthesize an implicit target without a concrete recipient", () => {
     const contract = createSourceDeliveryPlan({
       owner: "direct_fallback",

@@ -1,10 +1,28 @@
 // npm publish plan tests validate package publish planning rules.
 import { describe, expect, it } from "vitest";
 import {
+  collectReleaseVersionFloorErrors,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
+
+describe("collectReleaseVersionFloorErrors", () => {
+  it("blocks June 2026 stable and beta release trains below the published beta floor", () => {
+    expect(collectReleaseVersionFloorErrors("2026.6.4")).toEqual([
+      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4".',
+    ]);
+    expect(collectReleaseVersionFloorErrors("2026.6.4-beta.1")).toEqual([
+      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4-beta.1".',
+    ]);
+  });
+
+  it("keeps alpha compatibility and patch-floor release trains valid during the transition", () => {
+    expect(collectReleaseVersionFloorErrors("2026.6.4-alpha.1")).toEqual([]);
+    expect(collectReleaseVersionFloorErrors("2026.6.5-beta.2")).toEqual([]);
+    expect(collectReleaseVersionFloorErrors("2026.7.1")).toEqual([]);
+  });
+});
 
 describe("shouldRequireNpmDistTagMirrorAuth", () => {
   it("does not require npm auth for dry-run preview commands", () => {
@@ -77,5 +95,30 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
         hasAuth: auth.hasAuth,
       }),
     ).toBe(false);
+  });
+});
+
+describe("extended-stable npm publish override", () => {
+  it("publishes final patch 33 and later to extended-stable without mirrors", () => {
+    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual({
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    });
+    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual({
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    });
+  });
+
+  it.each([
+    ["pre-.33 final", "2026.7.32", "extended-stable"],
+    ["correction", "2026.7.33-1", "extended-stable"],
+    ["alpha", "2026.7.33-alpha.1", "extended-stable"],
+    ["beta", "2026.7.33-beta.1", "extended-stable"],
+    ["open override", "2026.7.33", "latest"],
+  ])("rejects %s releases", (_label, version, override) => {
+    expect(() => resolveNpmPublishPlan(version, undefined, override)).toThrow();
   });
 });

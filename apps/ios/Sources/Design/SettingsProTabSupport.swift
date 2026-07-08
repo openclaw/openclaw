@@ -1,123 +1,175 @@
 import Darwin
+import OpenClawKit
 import SwiftUI
-import UIKit
+import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
+    case approvals
     case permissions
+    case channels
     case voice
     case diagnostics
     case privacy
     case notifications
+    case licenses
     case about
 }
 
 enum SettingsLayout {
-    static let cardRadius: CGFloat = 12
+    static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
     static let rowHeight: CGFloat = 58
-    static let bottomContentPadding: CGFloat = 12
 }
 
-struct SettingsBottomOverlayInsetReader: UIViewRepresentable {
-    @Binding var inset: CGFloat
+/// Canonical label/value list row for Settings and Talk surfaces. Keep every
+/// detail row on this view so row typography cannot drift between sections;
+/// plain `LabeledContent(String, value:)` renders unbranded system fonts.
+struct SettingsDetailRow: View {
+    let label: String
+    let value: String
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(inset: self.$inset)
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
     }
 
-    func makeUIView(context: Context) -> SettingsBottomOverlayInsetProbeView {
-        let view = SettingsBottomOverlayInsetProbeView()
-        view.onInsetChange = { value in
-            context.coordinator.updateInset(value)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: SettingsBottomOverlayInsetProbeView, context: Context) {
-        context.coordinator.inset = self.$inset
-        uiView.onInsetChange = { value in
-            context.coordinator.updateInset(value)
-        }
-        uiView.updateInset()
-    }
-
-    final class Coordinator {
-        var inset: Binding<CGFloat>
-
-        init(inset: Binding<CGFloat>) {
-            self.inset = inset
-        }
-
-        func updateInset(_ value: CGFloat) {
-            let rounded = max(0, ceil(value))
-            guard abs(self.inset.wrappedValue - rounded) > 0.5 else { return }
-            self.inset.wrappedValue = rounded
+    var body: some View {
+        LabeledContent {
+            Text(self.value)
+                .font(OpenClawType.subhead)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } label: {
+            Text(self.label)
+                .font(OpenClawType.body)
         }
     }
 }
 
-final class SettingsBottomOverlayInsetProbeView: UIView {
-    var onInsetChange: ((CGFloat) -> Void)?
+struct SettingsApprovalItem: Identifiable {
+    let id: String
+    let icon: String
+    let title: String
+    let detail: String
+    let priority: String
+    let color: Color
+}
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        self.updateInset()
-    }
+struct SettingsApprovalRow: View {
+    let item: SettingsApprovalItem
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        self.updateInset()
-    }
-
-    func updateInset() {
-        let value = self.visibleTabBarHeight()
-        DispatchQueue.main.async { [weak self] in
-            self?.onInsetChange?(value)
-        }
-    }
-
-    private func visibleTabBarHeight() -> CGFloat {
-        let tabBarController = self.nearestViewController()?.tabBarController
-            ?? self.findTabBarController(in: self.window?.rootViewController)
-        guard let tabBar = tabBarController?.tabBar,
-              !tabBar.isHidden,
-              tabBar.alpha > 0.01,
-              tabBar.window != nil,
-              self.window != nil
-        else {
-            return 0
-        }
-
-        let tabFrame = tabBar.convert(tabBar.bounds, to: nil)
-        guard tabFrame.height.isFinite else { return 0 }
-        return max(0, tabFrame.height)
-    }
-
-    private func nearestViewController() -> UIViewController? {
-        var responder: UIResponder? = self
-        while let current = responder {
-            if let viewController = current as? UIViewController {
-                return viewController
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: self.item.icon)
+                .font(OpenClawType.captionBold)
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(self.item.color)
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.item.title)
+                    .font(OpenClawType.subheadSemiBold)
+                    .lineLimit(1)
+                Text(self.item.detail)
+                    .font(OpenClawType.caption2Medium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            responder = current.next
+            Spacer(minLength: 8)
+            Text(self.item.priority)
+                .font(OpenClawType.captionBold)
+                .foregroundStyle(self.item.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background {
+                    Capsule()
+                        .fill(self.item.color.opacity(0.10))
+                }
         }
-        return nil
+        .padding(.vertical, 7)
+    }
+}
+
+enum SettingsNotificationStatus: Equatable {
+    case checking
+    case allowed
+    case notAllowed
+    case notSet
+    case unknown
+
+    init(_ status: UNAuthorizationStatus) {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            self = .allowed
+        case .denied:
+            self = .notAllowed
+        case .notDetermined:
+            self = .notSet
+        @unknown default:
+            self = .unknown
+        }
     }
 
-    private func findTabBarController(in viewController: UIViewController?) -> UITabBarController? {
-        guard let viewController else { return nil }
-        if let tabBarController = viewController as? UITabBarController {
-            return tabBarController
+    var text: String {
+        switch self {
+        case .checking: "Checking"
+        case .allowed: "Enabled"
+        case .notAllowed: "Denied"
+        case .notSet: "Not Enabled"
+        case .unknown: "Unknown"
         }
-        if let tabBarController = self.findTabBarController(in: viewController.presentedViewController) {
-            return tabBarController
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .notSet:
+            "Enable Notifications"
+        case .checking:
+            "Checking"
+        case .allowed:
+            "Manage in iOS Settings"
+        case .notAllowed, .unknown:
+            "Open iOS Settings"
         }
-        for child in viewController.children {
-            if let tabBarController = self.findTabBarController(in: child) {
-                return tabBarController
-            }
+    }
+
+    var actionIcon: String {
+        switch self {
+        case .allowed:
+            "gear"
+        case .notAllowed, .unknown:
+            "gear.badge"
+        case .checking:
+            "hourglass"
+        case .notSet:
+            "bell.badge"
         }
-        return nil
+    }
+
+    var color: Color {
+        switch self {
+        case .allowed:
+            OpenClawBrand.ok
+        case .notAllowed, .unknown:
+            OpenClawBrand.warn
+        case .checking, .notSet:
+            .secondary
+        }
+    }
+
+    var shouldOpenNotificationSettings: Bool {
+        switch self {
+        case .allowed, .notAllowed, .unknown:
+            true
+        case .checking, .notSet:
+            false
+        }
+    }
+
+    var allowsNotifications: Bool {
+        self == .allowed
     }
 }
 
@@ -133,13 +185,13 @@ enum SettingsDiagnostics {
         gatewayConnected: Bool,
         discoveredGatewayCount: Int,
         talkConfigLoaded: Bool,
-        notificationStatusText: String) -> [SettingsDiagnosticIssue]
+        notificationsAllowed: Bool) -> [SettingsDiagnosticIssue]
     {
         var issues: [SettingsDiagnosticIssue] = []
         if !gatewayConnected { issues.append(.gatewayOffline) }
         if discoveredGatewayCount == 0 { issues.append(.discoveryUnavailable) }
         if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
-        if notificationStatusText != "Allowed" { issues.append(.notificationsUnavailable) }
+        if !notificationsAllowed { issues.append(.notificationsUnavailable) }
         return issues
     }
 
@@ -147,13 +199,13 @@ enum SettingsDiagnostics {
         gatewayConnected: Bool,
         discoveredGatewayCount: Int,
         talkConfigLoaded: Bool,
-        notificationStatusText: String) -> Int
+        notificationsAllowed: Bool) -> Int
     {
         self.issues(
             gatewayConnected: gatewayConnected,
             discoveredGatewayCount: discoveredGatewayCount,
             talkConfigLoaded: talkConfigLoaded,
-            notificationStatusText: notificationStatusText).count
+            notificationsAllowed: notificationsAllowed).count
     }
 
     static func timestamp(_ date: Date) -> String {
@@ -208,3 +260,163 @@ extension SettingsProTab {
         return a == 100 && b >= 64 && b <= 127
     }
 }
+
+#if DEBUG
+#Preview("Gateway settings states") {
+    SettingsGatewayStatesPreview()
+}
+
+private struct SettingsGatewayStatesPreview: View {
+    var body: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.stateSection("Connected") {
+                        self.gatewayStatusCard(
+                            title: "Gateway online",
+                            detail: "Connected to openclaw-gateway.tailnet.ts.net.",
+                            value: "online",
+                            color: OpenClawBrand.ok)
+                        self.gatewayFactsCard(
+                            address: "100.88.41.20:18789",
+                            server: "openclaw-gateway",
+                            discovered: "3",
+                            agent: "Aiden")
+                    }
+
+                    self.stateSection("Loading") {
+                        self.gatewayStatusCard(
+                            title: "Checking gateway",
+                            detail: "Refreshing connection, discovery, and device trust state.",
+                            value: "loading",
+                            color: OpenClawBrand.accent)
+                        self.gatewayActionsCard(isBusy: true)
+                    }
+
+                    self.stateSection("Empty") {
+                        self.gatewayStatusCard(
+                            title: "No gateway configured",
+                            detail: "Scan a setup QR code, paste a setup code, or choose a discovered gateway.",
+                            value: "setup",
+                            color: .secondary)
+                        self.setupActionsCard
+                    }
+
+                    self.stateSection("Error") {
+                        self.gatewayStatusCard(
+                            title: "Tailscale warning",
+                            detail: "Tailscale is off on this device. Turn it on, then try again.",
+                            value: "network",
+                            color: OpenClawBrand.warn)
+                    }
+                }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                .padding(.vertical, 18)
+            }
+        }
+    }
+
+    private func stateSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View) -> some View
+    {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private func gatewayStatusCard(
+        title: String,
+        detail: String,
+        value: String,
+        color: Color) -> some View
+    {
+        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+            ProStatusRow(
+                icon: value == "online" ? "antenna.radiowaves.left.and.right" : "wifi.slash",
+                title: title,
+                detail: detail,
+                value: value,
+                color: color,
+                actionTitle: value == "setup" ? "Scan QR" : nil,
+                action: value == "setup" ? {} : nil)
+        }
+    }
+
+    private func gatewayFactsCard(
+        address: String,
+        server: String,
+        discovered: String,
+        agent: String) -> some View
+    {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(spacing: 0) {
+                self.factRow("Address", value: address)
+                Divider()
+                self.factRow("Server", value: server)
+                Divider()
+                self.factRow("Discovered", value: discovered)
+                Divider()
+                self.factRow("Default Agent", value: agent)
+            }
+        }
+    }
+
+    private func factRow(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(OpenClawType.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(OpenClawType.captionMedium)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .frame(height: SettingsLayout.rowHeight)
+    }
+
+    private func gatewayActionsCard(isBusy: Bool) -> some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            HStack(spacing: 10) {
+                self.previewButton("Reconnect", systemImage: "arrow.triangle.2.circlepath", isBusy: isBusy)
+                self.previewButton("Diagnose", systemImage: "cross.case", isBusy: isBusy)
+            }
+        }
+    }
+
+    private var setupActionsCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    self.previewButton("Scan QR", systemImage: "qrcode.viewfinder", isBusy: false)
+                    self.previewButton("Connect", systemImage: "link", isBusy: false)
+                }
+                Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func previewButton(
+        _ title: String,
+        systemImage: String,
+        isBusy: Bool) -> some View
+    {
+        Button {} label: {
+            Label(title, systemImage: systemImage)
+                .font(OpenClawType.captionSemiBold)
+                .frame(maxWidth: .infinity)
+        }
+        .font(OpenClawType.captionSemiBold)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(isBusy)
+    }
+}
+#endif

@@ -7,13 +7,53 @@ import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readCodexAppServerBinding,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
-} from "./app-server/session-binding.js";
+} from "./app-server/session-binding.test-helpers.js";
 import {
-  setCodexConversationFastMode,
-  setCodexConversationModel,
-  setCodexConversationPermissions,
+  setCodexConversationFastMode as setCodexConversationFastModeImpl,
+  setCodexConversationModel as setCodexConversationModelImpl,
+  setCodexConversationPermissions as setCodexConversationPermissionsImpl,
 } from "./conversation-control.js";
+
+function controlTarget(sessionFile: string) {
+  return {
+    identity: { kind: "session" as const, agentId: "main", sessionId: sessionFile },
+    bindingStore: testCodexAppServerBindingStore,
+  };
+}
+
+function setCodexConversationFastMode(
+  params: Omit<
+    Parameters<typeof setCodexConversationFastModeImpl>[0],
+    "identity" | "bindingStore"
+  > & {
+    sessionFile: string;
+  },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationFastModeImpl({ ...rest, ...controlTarget(sessionFile) });
+}
+
+function setCodexConversationModel(
+  params: Omit<Parameters<typeof setCodexConversationModelImpl>[0], "identity" | "bindingStore"> & {
+    sessionFile: string;
+  },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationModelImpl({ ...rest, ...controlTarget(sessionFile) });
+}
+
+function setCodexConversationPermissions(
+  params: Omit<
+    Parameters<typeof setCodexConversationPermissionsImpl>[0],
+    "identity" | "bindingStore"
+  > & { sessionFile: string },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationPermissionsImpl({ ...rest, ...controlTarget(sessionFile) });
+}
 
 let tempDir: string;
 
@@ -29,6 +69,7 @@ vi.mock("./app-server/shared-client.js", () => ({
 
 describe("codex conversation controls", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -97,15 +138,110 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({ sessionFile, agentDir, model: "gpt-5.5" }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
-    const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
     const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
     expect(sharedClientParams?.agentDir).toBe(agentDir);
-    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
+  });
+
+  it("keeps Guardian reviewer when switching a stale local binding to a provider-qualified OpenAI model", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "openai/gpt-5.5",
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(resumeParams?.model).toBe("gpt-5.5");
+    expect(resumeParams?.modelProvider).toBe("openai");
+    expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(binding?.modelProvider).toBe("openai");
+  });
+
+  it("keeps the bound local provider when switching to another unqualified model", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "local-model-2",
+      modelProvider: "lmstudio",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "local-model-2",
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toBe("Codex model set to local-model-2.");
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(resumeParams?.model).toBe("local-model-2");
+    expect(resumeParams?.modelProvider).toBe("lmstudio");
+    expect(resumeParams?.approvalsReviewer).toBe("user");
+  });
+
+  it("keeps the bound local provider when reselecting a model id with a slash", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "openai/gpt-oss-20b",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "openai/gpt-oss-20b",
+      modelProvider: "lmstudio",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "openai/gpt-oss-20b",
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(resumeParams?.model).toBe("openai/gpt-oss-20b");
+    expect(resumeParams?.modelProvider).toBe("lmstudio");
+    expect(resumeParams?.approvalsReviewer).toBe("user");
+    expect(binding?.modelProvider).toBe("lmstudio");
   });
 
   it("escapes model names returned from Codex before chat display", async () => {

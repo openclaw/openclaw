@@ -10,8 +10,6 @@ import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
-  resolveConfigPath,
-  resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
@@ -23,7 +21,7 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 };
 
 /** Platform helpers re-exported for skill loading callers and tests. */
-export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
+export { hasBinary };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;

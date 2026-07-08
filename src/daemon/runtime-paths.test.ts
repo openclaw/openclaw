@@ -20,10 +20,10 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
-  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 
@@ -442,7 +442,7 @@ describe("resolveSystemNodeInfo", () => {
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("below the required Node 22.19+");
+    expect(warning).toContain("outside the supported range");
     expect(warning).toContain(darwinNode);
   });
 

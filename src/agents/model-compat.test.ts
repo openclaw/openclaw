@@ -2,8 +2,9 @@
  * Regression coverage for model compatibility and live-model curation.
  * Exercises catalog compatibility, provider modernity hooks, and live sweep selection.
  */
+import path from "node:path";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
@@ -22,7 +23,6 @@ import {
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  isPrioritizedSmallLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
   listPrioritizedSmallLiveModelRefs,
@@ -89,8 +89,15 @@ function expectNativeStreamingSupported(overrides: Partial<Model>): void {
 }
 
 beforeEach(() => {
+  // Endpoint capabilities come from manifests. Keep source tests independent
+  // from partial dist output left by an earlier build in the same checkout.
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
   providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
   providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
@@ -654,10 +661,12 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
       { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "anthropic", id: "claude-sonnet-5" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "moonshot", id: "kimi-k2.7-code" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
@@ -686,11 +695,8 @@ describe("isSmallLiveModelRef", () => {
   });
 });
 
-describe("isPrioritizedSmallLiveModelRef", () => {
+describe("listPrioritizedSmallLiveModelRefs", () => {
   it("lists priority refs as provider/id pairs", () => {
-    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
-      true,
-    );
     expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
       { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
       { provider: "vllm", id: "qwen/qwen3-8b" },

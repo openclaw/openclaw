@@ -31,12 +31,16 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
+import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -53,18 +57,14 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   ContextEngineHealthSummary,
+  DeliveryQueueHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
-export type {
-  AgentHealthSummary,
-  ChannelAccountHealthSummary,
-  ChannelHealthSummary,
-  HealthSummary,
-} from "./health.types.js";
+export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -73,6 +73,54 @@ const debugHealth = (...args: unknown[]) => {
     console.warn("[health:debug]", ...args);
   }
 };
+
+function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
+  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+}
+
+export async function emitReachableGatewayAuthDiagnostic(params: {
+  error: unknown;
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  token?: string;
+  password?: string;
+  localPortOverride?: number;
+  json?: boolean;
+}): Promise<boolean> {
+  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+    return false;
+  }
+  const details = await buildGatewayProbeConnectionDetails({
+    config: params.config,
+    token: params.token,
+    password: params.password,
+    localPortOverride: params.localPortOverride,
+  });
+  const probe = await probeGatewayStatus({
+    url: details.url,
+    token: params.token,
+    password: params.password,
+    tlsFingerprint: details.tlsFingerprint,
+    preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    config: params.config,
+    json: params.json,
+  });
+  if (!gatewayProbeResultSawGateway(probe)) {
+    return false;
+  }
+  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  if (params.json) {
+    writeRuntimeJson(params.runtime, diagnostic);
+    params.runtime.exit(1);
+    return true;
+  }
+  params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+  params.runtime.log(diagnostic.error.message);
+  params.runtime.exit(1);
+  return true;
+}
 
 const loadConfigRuntime = async () => await import("../config/config.js");
 
@@ -198,6 +246,54 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
+/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+  // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
+  // health surface; a storage read failure must not take health down with it.
+  try {
+    const failed = countFailedDeliveryQueueEntries().map((queue) => {
+      const entry: DeliveryQueueHealthSummary["failed"][number] = {
+        queueName: queue.queueName,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+    return failed.length > 0 ? { failed } : undefined;
+  } catch (error) {
+    debugHealth("delivery queue health read failed", error);
+    return undefined;
+  }
+}
+
+/** Formats dead-lettered delivery queue entries for text health output. */
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  if (failed.length === 0) {
+    return null;
+  }
+  const counts = failed.map((queue) => `${queue.queueName}: ${queue.count}`).join(", ");
+  const oldest = failed
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+}
+
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -233,12 +329,14 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string) => {
-  const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath, { clone: false });
-  const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
+const buildSessionSummary = async (storePath: string, agentId?: string) => {
+  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
+  const sessions = listSessionEntries({
+    ...(agentId ? { agentId } : {}),
+    storePath,
+  })
+    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+    .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
@@ -415,6 +513,7 @@ export async function getHealthSnapshot(params?: {
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = await readRuntimeHealthConfig();
@@ -424,8 +523,10 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
-    sessionCache.set(storePath, sessions);
+    const sessionCacheKey = `${storePath}\0${entry.id}`;
+    const sessions =
+      sessionCache.get(sessionCacheKey) ?? (await buildSessionSummary(storePath, entry.id));
+    sessionCache.set(sessionCacheKey, sessions);
     agents.push({
       agentId: entry.id,
       name: entry.name,
@@ -440,7 +541,10 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
+    (await buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      defaultAgentId,
+    ));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -607,6 +711,7 @@ export async function getHealthSnapshot(params?: {
 
   const pluginHealth = buildPluginHealthSummary();
   const contextEngineHealth = buildContextEngineHealthSummary();
+  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
@@ -614,6 +719,10 @@ export async function getHealthSnapshot(params?: {
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
+    ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),
+    ...(params?.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -640,6 +749,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
@@ -661,37 +771,25 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          localPortOverride: opts.localPortOverride,
         }),
     );
   } catch (error) {
-    if (isGatewayCredentialsRequiredError(error)) {
-      const details = await buildGatewayProbeConnectionDetails({
+    if (
+      await emitReachableGatewayAuthDiagnostic({
+        error,
         config: cfg,
+        runtime,
+        timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
-      });
-      const probe = await probeGatewayStatus({
-        url: details.url,
-        token: opts.token,
-        password: opts.password,
-        tlsFingerprint: details.tlsFingerprint,
-        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        config: cfg,
+        localPortOverride: opts.localPortOverride,
         json: opts.json,
-      });
-      if (gatewayProbeResultSawGateway(probe)) {
-        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
-        if (opts.json) {
-          writeRuntimeJson(runtime, diagnostic);
-          runtime.exit(1);
-          return;
-        }
-        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
-        runtime.log(diagnostic.error.message);
-        runtime.exit(1);
-        return;
-      }
+      })
+    ) {
+      return;
+    }
+    if (isGatewayHealthAuthUnavailableError(error)) {
       throw error;
     }
     if (opts.json) {
@@ -713,7 +811,10 @@ export async function healthCommand(
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
     const rich = isRich();
     if (opts.verbose) {
-      const details = buildGatewayConnectionDetails({ config: cfg });
+      const details = buildGatewayConnectionDetails({
+        config: cfg,
+        localPortOverride: opts.localPortOverride,
+      });
       logGatewayConnectionDetails({
         runtime,
         info,
@@ -723,18 +824,21 @@ export async function healthCommand(
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents: AgentHealthSummary[] = [];
-    for (const entry of localAgents.ordered) {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      fallbackAgents.push({
-        agentId: entry.id,
-        name: entry.name,
-        isDefault: entry.id === localAgents.defaultAgentId,
-        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary(storePath),
-      });
-    }
-    const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
+    const resolvedAgents =
+      agents.length > 0
+        ? agents
+        : await Promise.all(
+            localAgents.ordered.map(async (entry) => {
+              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              return {
+                agentId: entry.id,
+                name: entry.name,
+                isDefault: entry.id === localAgents.defaultAgentId,
+                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+                sessions: await buildSessionSummary(storePath, entry.id),
+              } satisfies AgentHealthSummary;
+            }),
+          );
     const displayAgents = opts.verbose
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
@@ -853,6 +957,14 @@ export async function healthCommand(
     const contextEngineLine = formatContextEngineHealthLine(summary);
     if (contextEngineLine) {
       runtime.log(styleHealthChannelLine(contextEngineLine, rich));
+    }
+    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
+    if (deliveryQueueLine) {
+      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
+    }
+    const configReloadLine = formatConfigReloadHealthLine(summary);
+    if (configReloadLine) {
+      runtime.log(styleHealthChannelLine(configReloadLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

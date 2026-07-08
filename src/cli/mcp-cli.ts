@@ -563,8 +563,13 @@ async function probeMcpServersOrFail(params: {
   }
 }
 
+const OPENCLAW_MCP_REGISTRY_SCOPE_NOTE =
+  "Note: this command only shows OpenClaw-managed mcp.servers entries and does not include mcporter servers from config/mcporter.json.";
+
 export function registerMcpCli(program: Command) {
-  const mcp = program.command("mcp").description("Manage OpenClaw MCP config and channel bridge");
+  const mcp = program
+    .command("mcp")
+    .description("Manage OpenClaw mcp.servers config and channel bridge");
 
   mcp
     .command("serve")
@@ -610,7 +615,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("list")
-    .description("List configured MCP servers")
+    .description("List OpenClaw-managed MCP servers from mcp.servers")
     .option("--json", "Print JSON")
     .action(async (opts: { json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
@@ -624,19 +629,22 @@ export function registerMcpCli(program: Command) {
       const names = Object.keys(loaded.mcpServers).toSorted();
       if (names.length === 0) {
         defaultRuntime.log(
-          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
+          `No OpenClaw-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
         );
+        defaultRuntime.log(OPENCLAW_MCP_REGISTRY_SCOPE_NOTE);
         return;
       }
-      defaultRuntime.log(`MCP servers (${loaded.path}):`);
+      defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       for (const name of names) {
         defaultRuntime.log(`- ${name}`);
       }
+      defaultRuntime.log("");
+      defaultRuntime.log(OPENCLAW_MCP_REGISTRY_SCOPE_NOTE);
     });
 
   mcp
     .command("show")
-    .description("Show one configured MCP server or the full MCP config")
+    .description("Show one OpenClaw-managed MCP server or the full mcp.servers config")
     .argument("[name]", "MCP server name")
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
@@ -655,9 +663,9 @@ export function registerMcpCli(program: Command) {
         return;
       }
       if (name) {
-        defaultRuntime.log(`MCP server "${name}" (${loaded.path}):`);
+        defaultRuntime.log(`OpenClaw-managed MCP server "${name}" (${loaded.path}):`);
       } else {
-        defaultRuntime.log(`MCP servers (${loaded.path}):`);
+        defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       }
       printJson(value ?? {});
     });
@@ -983,7 +991,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("set")
-    .description("Set one configured MCP server from a JSON object")
+    .description("Set one OpenClaw-managed MCP server from a JSON object")
     .argument("<name>", "MCP server name")
     .argument("<value>", 'JSON object, for example {"command":"uvx","args":["context7-mcp"]}')
     .action(async (name: string, rawValue: string) => {
@@ -1309,7 +1317,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("unset")
-    .description("Remove one configured MCP server")
+    .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
       const loaded = await listConfiguredMcpServers();

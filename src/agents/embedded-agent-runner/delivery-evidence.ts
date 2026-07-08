@@ -16,11 +16,14 @@ type AgentPayloadLike = {
   presentation?: unknown;
   interactive?: unknown;
   channelData?: unknown;
+  attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: unknown;
 };
 
-export type AgentDeliveryEvidence = {
+type AgentDeliveryEvidence = {
   payloads?: unknown;
   deliveryStatus?: {
     status?: unknown;
@@ -39,6 +42,11 @@ export type AgentDeliveryEvidence = {
   };
 };
 
+type SourceReplyDeliveryEvidence = {
+  didDeliverSourceReplyViaMessageTool?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -49,6 +57,34 @@ function hasNonEmptyArray(value: unknown): boolean {
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasVisibleMessagingToolTarget(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const target = value as { text?: unknown; mediaUrls?: unknown; hasRichContent?: unknown };
+  if ("text" in target || "mediaUrls" in target || "hasRichContent" in target) {
+    return (
+      hasNonEmptyString(target.text) ||
+      hasNonEmptyStringArray(target.mediaUrls) ||
+      target.hasRichContent === true
+    );
+  }
+  return true;
+}
+
+function hasVisibleAttachmentReference(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const urls = new Set<string>();
+  for (const attachment of value) {
+    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
+    }
+  }
+  return urls.size > 0;
 }
 
 function collectStringValues(value: unknown, output: Set<string>) {
@@ -66,7 +102,19 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
-function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+function collectMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+  output: Set<string>,
+  // Payloads arrive as in-process `unknown` objects, so a malformed
+  // self-referential `attachments` chain would recurse until the stack
+  // overflows. Track visited records to bound the descent, matching
+  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
+  seen = new WeakSet<object>(),
+) {
+  if (seen.has(record)) {
+    return;
+  }
+  seen.add(record);
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -76,7 +124,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
       }
     }
   }
@@ -170,6 +218,7 @@ export function hasVisibleAgentPayload(
       hasNonEmptyString(record.text) ||
       hasNonEmptyString(record.mediaUrl) ||
       hasNonEmptyStringArray(record.mediaUrls) ||
+      hasVisibleAttachmentReference(record.attachments) ||
       record.presentation ||
       record.interactive ||
       record.channelData,
@@ -198,13 +247,67 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether any outbound side effect makes a retry unsafe. */
-export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+/** Returns whether messaging-tool metadata proves a user-visible committed delivery. */
+export function hasVisibleCommittedMessagingToolDeliveryEvidence(
+  result: Pick<
+    AgentDeliveryEvidence,
+    "messagingToolSentTexts" | "messagingToolSentMediaUrls" | "messagingToolSentTargets"
+  >,
+): boolean {
+  return (
+    hasNonEmptyStringArray(result.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
+    (Array.isArray(result.messagingToolSentTargets) &&
+      result.messagingToolSentTargets.some(hasVisibleMessagingToolTarget))
+  );
+}
+
+function hasGranularMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    result.messagingToolSentTexts !== undefined ||
+    result.messagingToolSentMediaUrls !== undefined ||
+    result.messagingToolSentTargets !== undefined
+  );
+}
+
+/** Returns whether a source reply was visibly delivered through the message tool. */
+export function hasCommittedSourceReplyDeliveryEvidence(
+  result: SourceReplyDeliveryEvidence,
+): boolean {
+  return (
+    result.didDeliverSourceReplyViaMessageTool === true ||
+    hasVisibleAgentPayload({ payloads: result.messagingToolSourceReplyPayloads })
+  );
+}
+
+/** Returns whether outbound metadata proves a visible message, spawn, or cron side effect. */
+export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+    // The coarse flag is the only evidence available for older callers. Once detailed
+    // metadata exists, it owns visibility so blank sends cannot suppress recovery.
+    (result.didSendViaMessagingTool === true &&
+      !hasGranularMessagingToolDeliveryEvidence(result)) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether committed outbound evidence makes replay unsafe. */
+export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
+export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasCommittedOutboundDeliveryEvidence(result) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
 }

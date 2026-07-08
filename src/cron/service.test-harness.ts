@@ -176,7 +176,7 @@ export async function withCronServiceForTest(
 
 export function createRunningCronServiceState(params: {
   storePath: string;
-  log: ReturnType<typeof createNoopLogger>;
+  log: CronServiceDeps["log"];
   nowMs: () => number;
   jobs: CronJob[];
 }) {
@@ -233,6 +233,11 @@ export function createMockCronStateForJobs(params: {
   return {
     store: { version: 1, jobs: params.jobs },
     running: false,
+    stopped: false,
+    restartRecoveryPending: false,
+    pendingCatchupDeferralJobIds: new Set<string>(),
+    activeManualRunJobIds: new Set<string>(),
+    manualSetupTimeoutNotified: false,
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),

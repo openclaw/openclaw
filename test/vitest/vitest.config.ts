@@ -12,7 +12,6 @@ export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVit
 
 export const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
-  "test/vitest/vitest.unit-ui.config.ts",
   "test/vitest/vitest.infra.config.ts",
   "test/vitest/vitest.boundary.config.ts",
   "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -50,6 +49,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.media-understanding.config.ts",
   "test/vitest/vitest.shared-core.config.ts",
   "test/vitest/vitest.tasks.config.ts",
+  "test/vitest/vitest.tooling-docker.config.ts",
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.tui.config.ts",

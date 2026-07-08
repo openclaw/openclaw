@@ -619,6 +619,37 @@ describe("createWebhookHandler", () => {
     expectBotReplySentTo("123");
   });
 
+  it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {
+    // Previously this webhook handler wrapped deliver with a hardcoded 120s
+    // Promise.race that overrode the configurable agents.defaults.timeoutSeconds
+    // from core. That wrapper created a setTimeout(_, 120000) on every deliver
+    // call. We spy on setTimeout to prove no such call exists in the current code.
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    try {
+      const deliver = vi.fn().mockResolvedValue("late reply");
+      const handler = createWebhookHandler({
+        account: makeAccount({ accountId: "no-hardcoded-timeout-" + Date.now() }),
+        deliver,
+        log,
+      });
+
+      const res = makeRes();
+      const req = makeReq("POST", validBody);
+      await handler(req, res);
+
+      expect(res.status).toBe(204);
+
+      // Collect all setTimeout delays used during this handler run
+      const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+      // Every delay should be well under 120s — the old hardcoded wrapper would
+      // have produced exactly one call with delay === 120000.
+      const longDelays = delays.filter((d) => typeof d === "number" && d >= 120_000);
+      expect(longDelays).toEqual([]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("sanitizes input before delivery", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({

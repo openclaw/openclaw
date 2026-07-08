@@ -29,45 +29,26 @@ extension AgentProTab {
 
     func agentDetail(for agent: AgentSummary) -> String {
         let parts = [
-            self.normalized(agent.workspace),
             self.modelLabel(for: agent),
-            agent.id == self.appModel.gatewayDefaultAgentId ? "default" : nil,
+            agent.id == self.appModel.gatewayDefaultAgentId ? "Default" : nil,
         ].compactMap(\.self)
         return parts.isEmpty ? agent.id : parts.joined(separator: " • ")
     }
 
-    func agentSessionSummary(_ agent: AgentSummary) -> String {
-        guard self.gatewayConnected else { return "0" }
-        if agent.id == self.activeAgentID {
-            return self.appModel.isOperatorGatewayConnected ? "1 running" : "0"
-        }
-        return "0"
-    }
-
-    func agentRuntimeSummary(_ agent: AgentSummary) -> String {
-        if let runtime = agent.agentruntime,
-           let id = runtime["id"]?.value as? String,
-           let normalized = self.normalized(id)
-        {
-            return normalized
-        }
-        if let model = self.modelLabel(for: agent) {
-            return Self.shortModelLabel(model)
-        }
-        return "default"
+    func agentAccessibilityLabel(
+        _ agent: AgentSummary,
+        isActive: Bool,
+        state: AgentRosterState) -> String
+    {
+        let status = state == .online ? "Online" : "Ready"
+        let selection = isActive ? "Selected" : "Not selected"
+        return "\(self.agentName(for: agent)), \(self.agentDetail(for: agent)), \(status), \(selection)"
     }
 
     func agentRosterState(for agent: AgentSummary) -> AgentRosterState {
-        guard self.gatewayConnected else { return .idle }
+        guard self.gatewayConnected else { return .ready }
         if agent.id == self.activeAgentID { return .online }
-        if self.cronJobsContain(agentID: agent.id) { return .busy }
-        return .idle
-    }
-
-    func cronJobsContain(agentID: String) -> Bool {
-        self.recentCronJobs.contains { job in
-            self.normalized(job.agentid) == agentID && job.enabled
-        }
+        return .ready
     }
 
     func modelLabel(for agent: AgentSummary) -> String? {
@@ -80,15 +61,6 @@ extension AgentProTab {
             }
         }
         return nil
-    }
-
-    static func shortModelLabel(_ model: String) -> String {
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "default" }
-        let leaf = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
-        return leaf
-            .replacingOccurrences(of: "claude-", with: "")
-            .replacingOccurrences(of: "gpt-", with: "")
     }
 
     func presenceLabel(_ entry: PresenceEntry) -> String? {
@@ -124,7 +96,7 @@ extension AgentProTab {
     @MainActor
     func refreshOverview(force: Bool) async {
         guard self.scenePhase == .active else { return }
-        guard self.appModel.isOperatorGatewayConnected else {
+        guard self.liveGatewayConnected else {
             self.overview = nil
             self.overviewErrorText = nil
             self.overviewLoading = false

@@ -60,6 +60,7 @@ describe("loadCrestodianOverview", () => {
     expect(overview.agents.map((agent) => agent.id)).toEqual(["main", "work"]);
     expect(overview.tools.codex.found).toBe(true);
     expect(overview.tools.claude.found).toBe(false);
+    expect(overview.tools.gemini.found).toBe(false);
     expect(overview.gateway.url).toBe("ws://127.0.0.1:19001");
     expect(overview.gateway.reachable).toBe(false);
     expect(overview.references.docsPath).toMatch(/docs$/);

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { buildWikiPromptSection, createWikiPromptSectionBuilder } from "./prompt-section.js";
+import { createWikiPromptSectionBuilder } from "./prompt-section.js";
 
 let suiteRoot = "";
 
@@ -18,9 +18,16 @@ afterAll(async () => {
   }
 });
 
-describe("buildWikiPromptSection", () => {
+const buildDefaultWikiPromptSection = createWikiPromptSectionBuilder(
+  resolveMemoryWikiConfig({
+    vault: { path: "" },
+    context: { includeCompiledDigestPrompt: false },
+  }),
+);
+
+describe("default wiki prompt section", () => {
   it("prefers shared memory corpus guidance when memory tools are available", () => {
-    const lines = buildWikiPromptSection({
+    const lines = buildDefaultWikiPromptSection({
       availableTools: new Set(["memory_search", "memory_get", "wiki_search", "wiki_get"]),
     });
 
@@ -30,7 +37,9 @@ describe("buildWikiPromptSection", () => {
   });
 
   it("stays empty when no wiki or memory-adjacent tools are registered", () => {
-    expect(buildWikiPromptSection({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
+    expect(
+      buildDefaultWikiPromptSection({ availableTools: new Set(["web_search"]) }),
+    ).toStrictEqual([]);
   });
 
   it("can append a compact compiled digest snapshot when enabled", async () => {

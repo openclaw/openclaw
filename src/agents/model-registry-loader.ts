@@ -9,7 +9,7 @@ import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js
 import type { ModelRegistry } from "./sessions/index.js";
 
 /** Options controlling model discovery, credential reads, and normalization. */
-export type LoadAgentModelRegistryOptions = {
+type LoadAgentModelRegistryOptions = {
   providerFilter?: string;
   normalizeModels?: boolean;
   readOnly?: boolean;

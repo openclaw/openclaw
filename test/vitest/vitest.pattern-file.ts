@@ -124,7 +124,7 @@ function patternsCouldOverlap(value: string, pattern: string): boolean {
   );
 }
 
-export function loadPatternListFile(filePath: string, label: string): string[] {
+function loadPatternListFile(filePath: string, label: string): string[] {
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
   if (!Array.isArray(parsed)) {
     throw new TypeError(`${label} must point to a JSON array: ${filePath}`);
@@ -141,10 +141,6 @@ export function loadPatternListFromEnv(
     return null;
   }
   return loadPatternListFile(filePath, envKey);
-}
-
-export function loadPatternListFromArgv(argv: string[] = process.argv): string[] | null {
-  return loadPatternListFromArgvForScope(argv);
 }
 
 function loadPatternListFromArgvForScope(

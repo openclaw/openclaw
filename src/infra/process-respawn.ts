@@ -26,16 +26,36 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
+  /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
+
+function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
+  // pnpm can expose argv[1] as a versioned realpath that self-update removes.
+  // Respawn through the stable OpenClaw package wrapper instead.
+  return entryPath.replace(
+    PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
+    "$1$2node_modules$2openclaw$2openclaw.mjs",
+  );
+}
+
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   child: ChildProcess;
   pid?: number;
 } {
-  const args = [...process.execArgv, ...process.argv.slice(1)];
+  const [entryArg, ...entryArgs] = process.argv.slice(1);
+  const args = [
+    ...process.execArgv,
+    ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
+    ...entryArgs,
+  ];
   const child = spawn(process.execPath, args, {
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
     detached: true,
     stdio: "inherit",
   });
+  // Detached spawn failures can arrive asynchronously after spawn() returns.
+  // Keep this listener before unref() so the parent does not crash during handoff.
+  child.on("error", () => {});
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }
@@ -101,11 +121,12 @@ export function restartGatewayProcessWithFreshPid(
 export function respawnGatewayProcessForUpdate(
   opts: GatewayRespawnOptions = {},
 ): GatewayUpdateRespawnResult {
-  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
-    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
-  }
-  const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (supervisor) {
+    // Managed update handoffs require the original PID to exit before the
+    // detached helper can mutate the install, even when respawn is disabled.
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -116,6 +137,9 @@ export function respawnGatewayProcessForUpdate(
       }
     }
     return { mode: "supervised" };
+  }
+  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
+    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {
     const { child, pid } = spawnDetachedGatewayProcess(opts);

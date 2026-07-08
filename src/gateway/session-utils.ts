@@ -9,7 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMeta,
+  readAcpSessionMetaForEntry,
+  repairAcpSessionMetaKeyForMigration,
+} from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -21,6 +25,7 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -50,14 +55,14 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { insideGitCheckout } from "../agents/worktrees/git.js";
+import { listThinkingLevelOptions, resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   getSessionStoreCacheVersion,
-  loadSessionStore,
+  isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -67,16 +72,18 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -85,30 +92,35 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
+import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { listGatewayAgentIds } from "./agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import {
-  readRecentSessionUsageFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-  readSessionTitleFieldsFromTranscript,
-} from "./session-utils.fs.js";
+  readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync,
+  readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript,
+} from "./session-transcript-readers.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
-  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  resolveSessionHistoryTranscriptPathAsync,
+  resolveSessionTranscriptCandidates,
+} from "./session-utils.fs.js";
+export {
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
@@ -125,10 +137,13 @@ export {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
   visitSessionMessagesAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
+export type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
@@ -230,6 +245,11 @@ export function deriveSessionTitle(
     return undefined;
   }
 
+  const label = normalizeOptionalString(entry.label);
+  if (label) {
+    return label;
+  }
+
   if (normalizeOptionalString(entry.displayName)) {
     return normalizeOptionalString(entry.displayName);
   }
@@ -261,8 +281,17 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+export function deriveSessionUnread(
+  entry?: Pick<
+    SessionEntry,
+    "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
+  >,
+): boolean {
+  return (
+    entry?.markedUnreadAt !== undefined ||
+    (entry?.lastReadAt !== undefined &&
+      Math.max(entry.lastInteractionAt ?? 0, entry.lastActivityAt ?? 0) > entry.lastReadAt)
+  );
 }
 
 type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
@@ -409,10 +438,6 @@ const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
 function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
 }
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
@@ -871,11 +896,14 @@ function resolveTranscriptUsageFallback(params: {
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
     : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const snapshot = readRecentSessionUsageFromTranscript(
-    entry.sessionId,
-    params.storePath,
-    entry.sessionFile,
-    agentId,
+  const snapshot = readScopedRecentSessionUsageFromTranscript(
+    {
+      agentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: params.key,
+      storePath: params.storePath,
+    },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -913,14 +941,60 @@ function resolveTranscriptUsageFallback(params: {
   };
 }
 
+function readAcpMetaForDeletedAgentCheck(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  entry?: Pick<SessionEntry, "acp" | "sessionId"> | null;
+  acpMetadataSessionKey?: string | null;
+}) {
+  if (params.entry?.acp) {
+    return params.entry.acp;
+  }
+
+  const acpMetadataSessionKey = normalizeOptionalString(params.acpMetadataSessionKey);
+  const directKeys = new Set<string>();
+  if (acpMetadataSessionKey) {
+    directKeys.add(acpMetadataSessionKey);
+  } else {
+    const acpMeta = readAcpSessionMeta({ sessionKey: params.sessionKey, cfg: params.cfg });
+    if (acpMeta) {
+      return acpMeta;
+    }
+  }
+  directKeys.add(params.sessionKey);
+
+  for (const directKey of directKeys) {
+    const acpMeta = readAcpSessionMetaForEntry({
+      sessionKey: directKey,
+      entry: params.entry ?? undefined,
+    });
+    if (acpMeta) {
+      return acpMeta;
+    }
+  }
+
+  repairAcpSessionMetaKeyForMigration({
+    sessionKey: params.sessionKey,
+    candidateSessionKeys: directKeys,
+    entry: params.entry ?? undefined,
+  });
+  return readAcpSessionMetaForEntry({
+    sessionKey: params.sessionKey,
+    entry: params.entry ?? undefined,
+  });
+}
+
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
  * longer present in config (deleted). Returns null for non-agent legacy/global
- * keys, or when the owning agent still exists (#65524).
+ * keys, confirmed ACP runtime session keys, or when the owning agent still
+ * exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
+  entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -929,6 +1003,20 @@ export function resolveDeletedAgentIdFromSessionKey(
   const agentId = normalizeAgentId(parsed.agentId);
   if (listAgentIds(cfg).includes(agentId)) {
     return null;
+  }
+  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
+    // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
+    // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
+    // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
+    const acpMeta = readAcpMetaForDeletedAgentCheck({
+      cfg,
+      sessionKey,
+      entry,
+      acpMetadataSessionKey: options?.acpMetadataSessionKey,
+    });
+    if (acpMeta) {
+      return null;
+    }
   }
   return agentId;
 }
@@ -952,11 +1040,12 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
     store,
     entry: freshestMatch?.entry,
     canonicalKey: target.canonicalKey,
+    storeKeys: target.storeKeys,
     legacyKey,
   };
 }
 
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -995,12 +1084,6 @@ function findFreshestStoreMatch(
     if (exact) {
       matches.set(trimmed, { entry: exact, key: trimmed });
     }
-    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
-      const entry = store[key];
-      if (entry) {
-        matches.set(key, { entry, key });
-      }
-    }
   }
   if (matches.size === 0) {
     return undefined;
@@ -1012,24 +1095,6 @@ function findFreshestStoreMatch(
     }
   }
   return freshest;
-}
-
-/**
- * Find all on-disk store keys that match the given key case-insensitively.
- * Returns every key from the store whose lowercased form equals the target's lowercased form.
- */
-export function findStoreKeysIgnoreCase(
-  store: Record<string, unknown>,
-  targetKey: string,
-): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  const matches: string[] = [];
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
-      matches.push(key);
-    }
-  }
-  return matches;
 }
 
 /**
@@ -1049,11 +1114,6 @@ export function pruneLegacyStoreKeys(params: {
     }
     if (trimmed !== params.canonicalKey) {
       keysToDelete.add(trimmed);
-    }
-    for (const match of findStoreKeysIgnoreCase(params.store, trimmed)) {
-      if (match !== params.canonicalKey) {
-        keysToDelete.add(match);
-      }
     }
   }
   for (const key of keysToDelete) {
@@ -1140,42 +1200,6 @@ function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
 
-function listExistingAgentIdsFromDisk(): string[] {
-  const root = resolveStateDir();
-  const agentsDir = path.join(root, "agents");
-  try {
-    const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  ids.add(defaultId);
-
-  for (const entry of cfg.agents?.list ?? []) {
-    if (entry?.id) {
-      ids.add(normalizeAgentId(entry.id));
-    }
-  }
-
-  for (const id of listExistingAgentIdsFromDisk()) {
-    ids.add(id);
-  }
-
-  const sorted = Array.from(ids).filter(Boolean);
-  sorted.sort((a, b) => a.localeCompare(b));
-  return sorted.includes(defaultId)
-    ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
-    : sorted;
-}
-
 function normalizeFallbackList(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -1256,9 +1280,7 @@ export function listAgentsForGateway(
       .filter(Boolean),
   );
   const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
-    allowedIds ? allowedIds.has(id) : true,
-  );
+  let agentIds = listGatewayAgentIds(cfg).filter((id) => (allowedIds ? allowedIds.has(id) : true));
   if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
@@ -1271,12 +1293,17 @@ export function listAgentsForGateway(
       resolvedModel.model,
       modelCatalog,
     );
+    const workspace = resolveAgentWorkspaceDir(cfg, id);
+    // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
+    // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
+    const workspaceGit = insideGitCheckout(workspace);
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
-        workspace: resolveAgentWorkspaceDir(cfg, id),
+        workspace,
+        workspaceGit,
         agentRuntime: resolveModelAgentRuntimeMetadata({
           cfg,
           agentId: id,
@@ -1346,6 +1373,18 @@ function resolveGatewaySessionStoreCandidates(
   return [...targets.values()];
 }
 
+function loadGatewaySessionLookupStore(
+  storePath: string,
+  clone: boolean | undefined,
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listAccessorSessionEntries({
+      ...(clone === false ? { clone: false } : {}),
+      storePath,
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
 function resolveGatewaySessionStoreLookup(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1364,9 +1403,9 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
+  const loadStore = (storePath: string) => loadGatewaySessionLookupStore(storePath, params.clone);
   let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath, loadOptions);
+  let selectedStore = params.initialStore ?? loadStore(fallback.storePath);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1375,7 +1414,7 @@ function resolveGatewaySessionStoreLookup(params: {
     if (!candidate) {
       continue;
     }
-    const store = loadSessionStore(candidate.storePath, loadOptions);
+    const store = loadStore(candidate.storePath);
     const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
@@ -1402,7 +1441,6 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   clone?: boolean;
-  scanLegacyKeys?: boolean;
 }): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
@@ -1433,12 +1471,11 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
         match: { entry: SessionEntry; key: string };
       }
     | undefined;
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadSessionStore(target.storePath, loadOptions);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1456,13 +1493,8 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     storeKeys.add(params.key);
   }
   storeKeys.add(best.match.key);
-  if (params.scanLegacyKeys !== false) {
-    for (const seed of lookupSeeds) {
-      storeKeys.add(seed);
-      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
-        storeKeys.add(legacyKey);
-      }
-    }
+  for (const seed of lookupSeeds) {
+    storeKeys.add(seed);
   }
   return {
     agentId: legacyAgentId,
@@ -1478,7 +1510,6 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   key: string;
   agentId?: string;
   clone?: boolean;
-  scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
@@ -1486,7 +1517,6 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     cfg: params.cfg,
     key,
     clone: params.clone,
-    scanLegacyKeys: params.scanLegacyKeys,
   });
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
@@ -1515,26 +1545,9 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     return { agentId, storePath, canonicalKey, storeKeys, store };
   }
 
-  const storeKeys = new Set<string>();
-  storeKeys.add(canonicalKey);
-  if (key && key !== canonicalKey) {
-    storeKeys.add(key);
-  }
-  if (params.scanLegacyKeys !== false) {
-    // Scan the on-disk store for case variants of every target to find
-    // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
-    const scanTargets = buildGatewaySessionStoreScanTargets({
-      cfg: params.cfg,
-      key,
-      canonicalKey,
-      agentId,
-    });
-    for (const seed of scanTargets) {
-      for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
-        storeKeys.add(legacyKey);
-      }
-    }
-  }
+  const storeKeys = new Set<string>(
+    buildGatewaySessionStoreScanTargets({ cfg: params.cfg, key, canonicalKey, agentId }),
+  );
   return {
     agentId,
     storePath,
@@ -1549,7 +1562,6 @@ export function resolveGatewaySessionStoreTarget(params: {
   key: string;
   agentId?: string;
   clone?: boolean;
-  scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
   const { store: _store, ...target } = resolveGatewaySessionStoreTargetWithStore(params);
@@ -1558,7 +1570,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-export function resolveGatewaySessionThinkingDefault(params: {
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -1886,7 +1898,10 @@ export function buildGatewaySessionRow(params: {
   const origin = entry?.origin;
   const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
+  // A user-assigned label is an explicit rename; it must win over stored
+  // channel-derived display names or renames silently vanish on refresh.
   const displayName =
+    entry?.label ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -1898,7 +1913,6 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label ??
     originLabel;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
@@ -1973,8 +1987,8 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const needsTranscriptTotalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
@@ -2018,10 +2032,10 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    freshSessionTotalTokens !== undefined ||
+    (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const goal = entry?.goal
@@ -2111,12 +2125,13 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(
-      entry.sessionId,
+    const fields = readScopedSessionTitleFieldsFromTranscript({
+      agentId: sessionAgentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: key,
       storePath,
-      entry.sessionFile,
-      sessionAgentId,
-    );
+    });
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -2137,6 +2152,18 @@ export function buildGatewaySessionRow(params: {
   });
   const thinkingLevels = thinkingMetadata.levels;
   const thinkingDefault = thinkingMetadata.defaultLevel;
+  const fastModeState = resolveFastModeState({
+    cfg,
+    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
+    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
+    agentId: sessionAgentId,
+    sessionEntry:
+      entry?.fastMode !== undefined
+        ? {
+            fastMode: entry.fastMode,
+          }
+        : undefined,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -2151,6 +2178,7 @@ export function buildGatewaySessionRow(params: {
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
+    category: entry?.category,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -2161,6 +2189,13 @@ export function buildGatewaySessionRow(params: {
     chatType: entry?.chatType,
     origin,
     updatedAt,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
+    pinned: entry?.pinnedAt !== undefined,
+    pinnedAt: entry?.pinnedAt,
+    unread: deriveSessionUnread(entry),
+    lastReadAt: entry?.lastReadAt,
+    lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
@@ -2169,6 +2204,9 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault,
     fastMode: entry?.fastMode,
+    effectiveFastMode: fastModeState.mode,
+    effectiveFastModeSource: fastModeState.source,
+    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
@@ -2189,6 +2227,11 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
+    effectiveResponseUsage: resolveEffectiveResponseUsage(
+      entry?.responseUsage,
+      cfg.messages?.responseUsage,
+      channel,
+    ),
     modelProvider: rowModelProvider,
     model: rowModel,
     agentRuntime,
@@ -2411,8 +2454,19 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
-function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
-  return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): number {
+  const aPinnedAt = a[1]?.pinnedAt ?? 0;
+  const bPinnedAt = b[1]?.pinnedAt ?? 0;
+  if (aPinnedAt !== bPinnedAt) {
+    return bPinnedAt - aPinnedAt;
+  }
+  const byUpdatedAt = (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+  if (byUpdatedAt !== 0) {
+    return byUpdatedAt;
+  }
+  // Timestamp ties fall back to the key so list order (and offset paging) stays
+  // deterministic across calls; locale-independent code-unit comparison.
+  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
 function resolveSessionsListLimit(
@@ -2447,7 +2501,7 @@ function selectNewestLimitedEntries(
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
     const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairsByUpdatedAt(entry, candidate) < 0,
+      (candidate) => compareSessionEntryPairs(entry, candidate) < 0,
     );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
@@ -2468,7 +2522,7 @@ function sortAndLimitSessionEntries(
   if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
     return selectNewestLimitedEntries(entries, limit);
   }
-  const sorted = entries.toSorted(compareSessionEntryPairsByUpdatedAt);
+  const sorted = entries.toSorted(compareSessionEntryPairs);
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
@@ -2550,6 +2604,10 @@ function filterSessionEntries(params: {
         shouldKeepStoreOnlyChildLink(entry, now) &&
         (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
       );
+    })
+    .filter(([, entry]) => {
+      const archived = entry?.archivedAt !== undefined;
+      return opts.archived === true ? archived : !archived;
     })
     .filter(([, entry]) => {
       if (!label) {
@@ -2681,7 +2739,7 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2740,109 +2798,117 @@ export async function listSessionsFromStoreAsync(params: {
   modelCatalog?: ModelCatalogEntry[];
   opts: SessionsListParams;
 }): Promise<SessionsListResult> {
-  const { cfg, storePath, store, opts } = params;
-  const now = Date.now();
-  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
-  const sessionListTranscriptFieldRows = 100;
-  let rowContext: SessionListRowContext | undefined;
-  const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now });
-    return rowContext;
-  };
-  const includeDerivedTitles = opts.includeDerivedTitles === true;
-  const includeLastMessage = opts.includeLastMessage === true;
-  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
+  // Pin the active plugin-registry workspace dir for the duration of this
+  // call so per-row metadata lookups use a stable memo key. Without this pin,
+  // concurrent agent turns / crons mutate the process-global workspace dir
+  // between rows, the memo never hits, and each row triggers a full
+  // loadPluginMetadataSnapshot scan (~100 ms).
+  return withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    const { cfg, storePath, store, opts } = params;
+    const now = Date.now();
+    const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+    const sessionListTranscriptFieldRows = 100;
+    let rowContext: SessionListRowContext | undefined;
+    const getRowContext = () => {
+      rowContext ??= buildSessionListRowContext({ store, now });
+      return rowContext;
+    };
+    const includeDerivedTitles = opts.includeDerivedTitles === true;
+    const includeLastMessage = opts.includeLastMessage === true;
+    const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const selection = selectSessionEntries({
-    cfg,
-    store,
-    opts,
-    now,
-    getRowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext
-        : undefined,
-    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
-  });
-  const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
-  const fullRowContext =
-    rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
-      ? getRowContext()
-      : undefined;
-  const sharedRowContext =
-    fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
-
-  const sessions: GatewaySessionRow[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const [key, entry] = entries[i];
-    const includeTranscriptFields = i < sessionListTranscriptFieldRows;
-    const rowAgentId =
-      key === "global" && typeof opts.agentId === "string"
-        ? normalizeAgentId(opts.agentId)
-        : undefined;
-    const storeChildSessionsByKey =
-      fullRowContext?.storeChildSessionsByKey ??
-      buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
-    const row = buildGatewaySessionRow({
+    const selection = selectSessionEntries({
       cfg,
-      storePath,
       store,
-      key,
-      entry,
-      agentId: rowAgentId,
-      modelCatalog: params.modelCatalog,
+      opts,
       now,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
-      transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-      storeChildSessionsByKey,
-      rowContext: sharedRowContext,
-      skipTranscriptUsageFallback: true,
-      lightweightListRow: true,
+      getRowContext:
+        hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
+          ? getRowContext
+          : undefined,
+      defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     });
-    if (
-      entry?.sessionId &&
-      includeTranscriptFields &&
-      (includeDerivedTitles || includeLastMessage)
-    ) {
-      const parsed = parseAgentSessionKey(key);
-      const sessionAgentId =
-        rowAgentId ??
-        (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
-        storePath,
-        entry.sessionFile,
-        sessionAgentId,
-      );
-      if (includeDerivedTitles) {
-        row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
-      }
-      if (includeLastMessage && fields.lastMessagePreview) {
-        row.lastMessagePreview = fields.lastMessagePreview;
-      }
-    }
-    sessions.push(row);
-    // Yield to the event loop between batches so WebSocket heartbeats,
-    // channel I/O, and concurrent RPC calls are not starved.
-    if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
-  }
+    const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
+    const fullRowContext =
+      rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
+        ? getRowContext()
+        : undefined;
+    const sharedRowContext =
+      fullRowContext ??
+      (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
-  return {
-    ts: now,
-    path: storePath,
-    count: sessions.length,
-    totalCount,
-    limitApplied,
-    offset: offset > 0 ? offset : undefined,
-    nextOffset,
-    hasMore,
-    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
-    sessions,
-  };
+    const sessions: GatewaySessionRow[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const [key, entry] = entries[i];
+      const includeTranscriptFields = i < sessionListTranscriptFieldRows;
+      const rowAgentId =
+        key === "global" && typeof opts.agentId === "string"
+          ? normalizeAgentId(opts.agentId)
+          : undefined;
+      const storeChildSessionsByKey =
+        fullRowContext?.storeChildSessionsByKey ??
+        buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store,
+        key,
+        entry,
+        agentId: rowAgentId,
+        modelCatalog: params.modelCatalog,
+        now,
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+        transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
+        storeChildSessionsByKey,
+        rowContext: sharedRowContext,
+        skipTranscriptUsageFallback: true,
+        lightweightListRow: true,
+      });
+      if (
+        entry?.sessionId &&
+        includeTranscriptFields &&
+        (includeDerivedTitles || includeLastMessage)
+      ) {
+        const parsed = parseAgentSessionKey(key);
+        const sessionAgentId =
+          rowAgentId ??
+          (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
+        const fields = await readScopedSessionTitleFieldsFromTranscriptAsync({
+          agentId: sessionAgentId,
+          sessionEntry: entry,
+          sessionId: entry.sessionId,
+          sessionKey: key,
+          storePath,
+        });
+        if (includeDerivedTitles) {
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          row.lastMessagePreview = fields.lastMessagePreview;
+        }
+      }
+      sessions.push(row);
+      // Yield to the event loop between batches so WebSocket heartbeats,
+      // channel I/O, and concurrent RPC calls are not starved.
+      if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+    }
+
+    return {
+      ts: now,
+      path: storePath,
+      count: sessions.length,
+      totalCount,
+      limitApplied,
+      offset: offset > 0 ? offset : undefined,
+      nextOffset,
+      hasMore,
+      defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
+      sessions,
+    };
+  });
 }

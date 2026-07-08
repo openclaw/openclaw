@@ -171,11 +171,14 @@ function catalogProbePriority(provider: string, modelId: string): number {
   if (id === "claude-haiku-4-5") {
     return 1;
   }
-  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
     return 2;
   }
-  if (id.startsWith("claude-sonnet-4-")) {
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
     return 3;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 4;
   }
   if (id.startsWith("claude-3-")) {
     return 100;
@@ -671,17 +674,6 @@ export function formatProbeLatency(latencyMs?: number | null) {
     return "-";
   }
   return formatMs(latencyMs);
-}
-
-/** Groups probe results by provider. */
-export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
-  const map = new Map<string, AuthProbeResult[]>();
-  for (const result of results) {
-    const list = map.get(result.provider) ?? [];
-    list.push(result);
-    map.set(result.provider, list);
-  }
-  return map;
 }
 
 /** Sorts probe results by provider and display label. */

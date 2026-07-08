@@ -1,4 +1,5 @@
 /** Normalizes cron create/patch payloads before validation and persistence. */
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -53,11 +54,54 @@ function normalizeTrimmedStringArray(
   return undefined;
 }
 
+function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries: Array<[string, string]> = [];
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeOptionalString(rawKey);
+    const val = typeof rawValue === "string" ? rawValue : undefined;
+    if (!key || val === undefined) {
+      return undefined;
+    }
+    entries.push([key, val]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function normalizeCommandArgv(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  if (value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+    return undefined;
+  }
+  return [...value];
+}
+
+function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
+  return (
+    "model" in payload ||
+    "fallbacks" in payload ||
+    "thinking" in payload ||
+    "timeoutSeconds" in payload ||
+    "toolsAllow" in payload ||
+    typeof payload.lightContext === "boolean" ||
+    typeof payload.allowUnsafeExternalContent === "boolean"
+  );
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
-  const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  const kind =
+    rawKind === "at" || rawKind === "every" || rawKind === "cron" || rawKind === "on-exit"
+      ? rawKind
+      : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const commandRaw = normalizeOptionalString(schedule.command) ?? "";
+  const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
   const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atString = normalizeOptionalString(schedule.at) ?? "";
@@ -86,6 +130,16 @@ function coerceSchedule(schedule: UnknownRecord) {
   if (anchorMs !== undefined && anchorMs >= 0) {
     next.anchorMs = Math.floor(anchorMs);
   }
+  if (commandRaw) {
+    next.command = commandRaw;
+  } else if ("command" in next) {
+    delete next.command;
+  }
+  if (cwdRaw) {
+    next.cwd = cwdRaw;
+  } else if ("cwd" in next) {
+    delete next.cwd;
+  }
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
@@ -110,6 +164,20 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
+    delete next.command;
+    delete next.cwd;
+  } else if (next.kind === "on-exit") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  }
+
+  if (next.kind !== "on-exit") {
+    delete next.command;
+    delete next.cwd;
   }
 
   return next;
@@ -122,6 +190,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "command") {
+    next.kind = "command";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -142,19 +212,29 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("model" in next) {
-    const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-    if (model !== undefined) {
-      next.model = model;
+    if (next.model === null) {
+      next.model = null;
     } else {
-      delete next.model;
+      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
+      if (model !== undefined) {
+        next.model = model;
+      } else {
+        delete next.model;
+      }
     }
   }
   if ("thinking" in next) {
-    const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-    if (thinking !== undefined) {
-      next.thinking = thinking;
+    // Preserve an explicit null so patches can clear a stored thinking override,
+    // matching the model/fallbacks/toolsAllow clear paths.
+    if (next.thinking === null) {
+      next.thinking = null;
     } else {
-      delete next.thinking;
+      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
+      if (thinking !== undefined) {
+        next.thinking = thinking;
+      } else {
+        delete next.thinking;
+      }
     }
   }
   if ("timeoutSeconds" in next) {
@@ -166,7 +246,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {
@@ -181,11 +261,61 @@ function coercePayload(payload: UnknownRecord) {
       delete next.toolsAllow;
     }
   }
+  if ("argv" in next) {
+    const argv = normalizeCommandArgv(next.argv);
+    if (Array.isArray(argv) && argv.length > 0) {
+      next.argv = argv;
+    } else {
+      delete next.argv;
+    }
+  }
+  if ("cwd" in next) {
+    const cwd = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.cwd);
+    if (cwd !== undefined) {
+      next.cwd = cwd;
+    } else {
+      delete next.cwd;
+    }
+  }
+  if ("env" in next) {
+    const env = normalizeTrimmedStringRecord(next.env);
+    if (env !== undefined) {
+      next.env = env;
+    } else {
+      delete next.env;
+    }
+  }
+  if ("input" in next && typeof next.input !== "string") {
+    delete next.input;
+  }
+  if ("noOutputTimeoutSeconds" in next) {
+    const noOutputTimeoutSeconds = parseOptionalField(
+      TimeoutSecondsFieldSchema,
+      next.noOutputTimeoutSeconds,
+    );
+    if (noOutputTimeoutSeconds !== undefined) {
+      next.noOutputTimeoutSeconds = noOutputTimeoutSeconds;
+    } else {
+      delete next.noOutputTimeoutSeconds;
+    }
+  }
+  if ("outputMaxBytes" in next) {
+    const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
+    if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
+      next.outputMaxBytes = Math.floor(outputMaxBytes);
+    } else {
+      delete next.outputMaxBytes;
+    }
+  }
   if (
     "allowUnsafeExternalContent" in next &&
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if (!("kind" in next) && typeof next.text === "string" && hasAgentTurnOnlyPayloadHint(next)) {
+    next.kind = "agentTurn";
+    next.message = next.text;
   }
   if (next.kind === "systemEvent") {
     delete next.message;
@@ -196,10 +326,40 @@ function coercePayload(payload: UnknownRecord) {
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
+    delete next.argv;
+    delete next.cwd;
+    delete next.env;
+    delete next.input;
+    delete next.noOutputTimeoutSeconds;
+    delete next.outputMaxBytes;
   } else if (next.kind === "agentTurn") {
     delete next.text;
+    delete next.argv;
+    delete next.cwd;
+    delete next.env;
+    delete next.input;
+    delete next.noOutputTimeoutSeconds;
+    delete next.outputMaxBytes;
+  } else if (next.kind === "command") {
+    delete next.text;
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
   }
   return next;
+}
+
+function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
+  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
+  const once = parseBoolean(trigger.once);
+  return {
+    script,
+    ...(once !== undefined ? { once } : {}),
+  };
 }
 
 function coerceDelivery(delivery: UnknownRecord) {
@@ -379,6 +539,30 @@ export function normalizeCronJobInput(
   const base = raw;
   const next: UnknownRecord = { ...base };
 
+  for (const field of ["declarationKey", "displayName"] as const) {
+    if (field in base && typeof base[field] === "string") {
+      const trimmed = base[field].trim();
+      if (trimmed) {
+        next[field] = trimmed;
+      } else {
+        delete next[field];
+      }
+    }
+  }
+
+  if (isRecord(base.owner)) {
+    const agentId = normalizeOptionalString(base.owner.agentId);
+    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    if (agentId || sessionKey) {
+      next.owner = {
+        ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    } else {
+      delete next.owner;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {
@@ -408,17 +592,9 @@ export function normalizeCronJobInput(
   }
 
   if ("enabled" in base) {
-    const enabled = base.enabled;
-    if (typeof enabled === "boolean") {
+    const enabled = parseBoolean(base.enabled);
+    if (enabled !== undefined) {
       next.enabled = enabled;
-    } else if (typeof enabled === "string") {
-      const trimmed = normalizeOptionalLowercaseString(enabled);
-      if (trimmed === "true") {
-        next.enabled = true;
-      }
-      if (trimmed === "false") {
-        next.enabled = false;
-      }
     }
   }
 
@@ -448,6 +624,16 @@ export function normalizeCronJobInput(
     next.payload = coercePayload(base.payload);
   }
 
+  if ("trigger" in base) {
+    if (base.trigger === null) {
+      next.trigger = null;
+    } else if (isRecord(base.trigger)) {
+      next.trigger = coerceTrigger(base.trigger);
+    } else {
+      delete next.trigger;
+    }
+  }
+
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
   }
@@ -468,7 +654,12 @@ export function normalizeCronJobInput(
     ) {
       next.name = inferCronJobName({
         schedule: next.schedule as { kind?: unknown; everyMs?: unknown; expr?: unknown },
-        payload: next.payload as { kind?: unknown; text?: unknown; message?: unknown },
+        payload: next.payload as {
+          kind?: unknown;
+          text?: unknown;
+          message?: unknown;
+          argv?: unknown;
+        },
       });
     } else if (typeof next.name === "string") {
       const trimmed = next.name.trim();
@@ -482,7 +673,7 @@ export function normalizeCronJobInput(
       // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
+      } else if (kind === "agentTurn" || kind === "command") {
         next.sessionTarget = "isolated";
       }
     }
@@ -522,13 +713,17 @@ export function normalizeCronJobInput(
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
     // Resolved "current" and custom session ids still use isolated-agent
     // delivery semantics, so they get the same default announce behavior.
-    const isIsolatedAgentTurn =
+    const isDetachedDeliveryJob =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && payloadKind === "agentTurn");
+      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (!hasDelivery && isIsolatedAgentTurn && payloadKind === "agentTurn") {
+    if (
+      !hasDelivery &&
+      isDetachedDeliveryJob &&
+      (payloadKind === "agentTurn" || payloadKind === "command")
+    ) {
       next.delivery = { mode: "announce" };
     }
   }

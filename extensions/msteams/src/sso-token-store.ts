@@ -45,7 +45,7 @@ type SsoStoreData = {
   tokens: Record<string, MSTeamsSsoStoredToken>;
 };
 
-export type MSTeamsSsoStoreData = SsoStoreData;
+type MSTeamsSsoStoreData = SsoStoreData;
 
 export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
 export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";
@@ -134,22 +134,6 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
         removed = await tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
       });
       return removed;
-    },
-  };
-}
-
-/** In-memory store, primarily useful for tests. */
-export function createMSTeamsSsoTokenStoreMemory(): MSTeamsSsoTokenStore {
-  const tokens = new Map<string, MSTeamsSsoStoredToken>();
-  return {
-    async get({ connectionName, userId }) {
-      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
-    },
-    async save(token) {
-      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
-    },
-    async remove({ connectionName, userId }) {
-      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
     },
   };
 }

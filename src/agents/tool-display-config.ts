@@ -74,6 +74,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Attach",
       detailKeys: ["path", "url", "fileName"],
     },
+    api: {
+      emoji: "🌐",
+      title: "API",
+      detailKeys: ["url", "endpoint", "path", "method", "name"],
+    },
     browser: {
       emoji: "🌐",
       title: "Browser",
@@ -218,6 +223,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "screen record",
           detailKeys: ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"],
         },
+        screen_snapshot: {
+          label: "screen snapshot",
+          detailKeys: ["node", "nodeId", "screenIndex", "maxWidth"],
+        },
       },
     },
     cron: {
@@ -280,6 +289,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧰",
       title: "Skill Workshop",
       detailKeys: ["action", "name", "proposal_id"],
+    },
+    crestodian: {
+      emoji: "🦀",
+      title: "Crestodian",
+      detailKeys: ["action", "path", "model"],
     },
     gateway: {
       emoji: "🔌",

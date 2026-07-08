@@ -2,6 +2,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { FailoverError } from "../../failover-error.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -95,21 +96,25 @@ function createMutableEmbeddedRunAuthController(params: {
   harness: MutableAuthControllerHarness;
   setRuntimeApiKey: RuntimeApiKeySetter;
   profileCandidates?: string[];
+  authStore?: AuthProfileStore;
+  fallbackConfigured?: boolean;
   warn?: (message: string) => void;
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    authStore: {
-      version: 1,
-      profiles: {},
-    } as AuthProfileStore,
+    authStore:
+      params.authStore ??
+      ({
+        version: 1,
+        profiles: {},
+      } as AuthProfileStore),
     authStorage: { setRuntimeApiKey: params.setRuntimeApiKey },
     profileCandidates: params.profileCandidates ?? ["default"],
     initialThinkLevel: "medium",
     attemptedThinking: new Set(),
-    fallbackConfigured: false,
+    fallbackConfigured: params.fallbackConfigured ?? false,
     allowTransientCooldownProbe: false,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
@@ -225,6 +230,43 @@ describe("createEmbeddedRunAuthController", () => {
     expect(harness.apiKeyInfo).toMatchObject({
       mode: "api-key",
       source: "models.providers.custom-openai",
+    });
+  });
+
+  it("preserves OAuth mode when billing-disabled profiles are all unavailable", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const profileId = "custom-openai:oauth";
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: [profileId],
+      fallbackConfigured: true,
+      authStore: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "custom-openai",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+        usageStats: {
+          [profileId]: {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing",
+          },
+        },
+      },
+    });
+
+    const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(FailoverError);
+    expect(error).toMatchObject({
+      reason: "billing",
+      authMode: "oauth",
     });
   });
 

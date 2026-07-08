@@ -18,6 +18,9 @@ function truncateHintText(text: string, limit: number): string {
 }
 
 function safeStringify(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
   try {
     const serialized = JSON.stringify(value);
     if (serialized !== undefined) {
@@ -26,7 +29,9 @@ function safeStringify(value: unknown): string {
   } catch {
     // Fall back to string coercion when value is not JSON-serializable.
   }
-  return String(value);
+  // This is the deliberate last-resort renderer; the assertion opts into
+  // String() semantics for non-JSON values without changing runtime behavior.
+  return String(value as string | number | boolean | bigint | symbol | null);
 }
 
 function toAllowedValueLabel(value: unknown): string {

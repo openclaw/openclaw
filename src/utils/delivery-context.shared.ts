@@ -13,8 +13,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-core.js";
-import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 /**
@@ -85,9 +84,7 @@ export function deliveryContextFromChannelRoute(
 }
 
 /** Converts delivery context fields into the SDK channel route reference shape. */
-export function channelRouteFromDeliveryContext(
-  context?: DeliveryContext,
-): ChannelRouteRef | undefined {
+function channelRouteFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
   return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
 }
 
@@ -119,7 +116,12 @@ function isInternalRouteContext(context?: DeliveryContext): boolean {
 
 function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
   const channel = normalizeMessageChannel(context?.channel);
-  return Boolean(channel && isDeliverableMessageChannel(channel) && context?.to);
+  return Boolean(
+    channel &&
+    !isInternalNonDeliveryChannel(channel) &&
+    isDeliverableMessageChannel(channel) &&
+    context?.to,
+  );
 }
 
 function mergeExternalDeliveryContextOverInternalRoute(
@@ -225,7 +227,7 @@ export function deliveryContextFromSession(
   return normalizeSessionDeliveryFields(source).deliveryContext;
 }
 
-/** Merges delivery contexts without mixing target/account/thread fields across channels. */
+/** Merges delivery contexts without mixing target/account/thread fields across route owners. */
 export function mergeDeliveryContext(
   primary?: DeliveryContext,
   fallback?: DeliveryContext,
@@ -239,17 +241,22 @@ export function mergeDeliveryContext(
     normalizedPrimary?.channel &&
     normalizedFallback?.channel &&
     normalizedPrimary.channel !== normalizedFallback.channel;
+  const accountsConflict =
+    normalizedPrimary?.accountId &&
+    normalizedFallback?.accountId &&
+    normalizedPrimary.accountId !== normalizedFallback.accountId;
+  const routesConflict = channelsConflict || accountsConflict;
   return normalizeDeliveryContext({
-    channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    // Keep route fields paired to their channel; avoid crossing fields between
-    // unrelated channels during session context merges.
-    to: channelsConflict
-      ? normalizedPrimary?.to
-      : (normalizedPrimary?.to ?? normalizedFallback?.to),
-    accountId: channelsConflict
+    channel: accountsConflict
+      ? normalizedPrimary?.channel
+      : (normalizedPrimary?.channel ?? normalizedFallback?.channel),
+    // Keep route fields paired to their channel account; crossing either owner
+    // can address one account's target through another account's credentials.
+    to: routesConflict ? normalizedPrimary?.to : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: routesConflict
       ? normalizedPrimary?.accountId
       : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
-    threadId: channelsConflict
+    threadId: routesConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });

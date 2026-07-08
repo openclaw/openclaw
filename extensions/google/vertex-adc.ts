@@ -3,11 +3,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GoogleAuthorizedUserCredentials = {
@@ -29,6 +31,13 @@ type GoogleVertexAdcToken = {
   expiresAtMs: number;
 };
 
+type GoogleOauthTokenResponsePayload = {
+  access_token?: unknown;
+  expires_in?: unknown;
+  error?: unknown;
+  error_description?: unknown;
+};
+
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
@@ -38,6 +47,7 @@ const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platfor
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
+const GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -238,15 +248,16 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  const payload = (await response.json().catch(() => undefined)) as
-    | { access_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown }
-    | undefined;
+  const payload = await readGoogleOauthTokenResponsePayload(response);
   if (!response.ok) {
     const description = normalizeOptionalString(payload?.error_description);
     const code = normalizeOptionalString(payload?.error);
     throw new Error(
       `Google Vertex ADC token refresh failed: ${response.status}${code ? ` ${code}` : ""}${description ? ` (${description})` : ""}`,
     );
+  }
+  if (!payload) {
+    throw new Error("Google Vertex ADC token refresh response could not be parsed as JSON.");
   }
   const token = normalizeOptionalString(payload?.access_token);
   if (!token) {
@@ -263,6 +274,61 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     };
   }
   return token;
+}
+
+async function readGoogleOauthTokenResponsePayload(
+  response: Response,
+): Promise<GoogleOauthTokenResponsePayload | undefined> {
+  const bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),
+  });
+  const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
+  if (!text.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as GoogleOauthTokenResponsePayload;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
+  if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
+    try {
+      return gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(
+        "utf8",
+      );
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ERR_BUFFER_TOO_LARGE"
+      ) {
+        throw new Error(
+          `Google OAuth token response exceeds ${GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES} decompressed bytes`,
+          { cause: error },
+        );
+      }
+      return bytes.toString("utf8");
+    }
+  }
+  return bytes.toString("utf8");
+}
+
+function shouldGunzipGoogleOauthTokenResponse(
+  bytes: Buffer,
+  contentEncoding: string | null,
+): boolean {
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    return true;
+  }
+  return (contentEncoding ?? "")
+    .split(",")
+    .map((encoding) => encoding.trim().toLowerCase())
+    .includes("gzip");
 }
 
 async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {

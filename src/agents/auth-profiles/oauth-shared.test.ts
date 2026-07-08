@@ -126,6 +126,38 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     expect(overlaid.runtimeExternalProfileIdsAuthoritative).toBe(true);
   });
 
+  it("removes persisted provenance for every externally overlaid profile", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      runtimePersistedProfileIds: ["openai:default"],
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: 1,
+        },
+      },
+    };
+
+    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
+      {
+        profileId: "openai:default",
+        persistence: "persisted",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "external-access",
+          refresh: "external-refresh",
+          expires: 2,
+        },
+      },
+    ]);
+
+    expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
+  });
+
   it("replaces an existing OAuth credential with an out-of-range expiry", () => {
     const existing: OAuthCredential = {
       type: "oauth",

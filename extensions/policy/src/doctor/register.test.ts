@@ -20,14 +20,14 @@ import {
   scanPolicyMcpServers,
 } from "../policy-state.js";
 import {
-  POLICY_RULE_METADATA,
-  isPolicyValueAtLeastAsStrict,
+  evaluatePolicy,
   registerPolicyDoctorChecks,
   resetPolicyDoctorChecksForTest,
-  type PolicyRuleMetadata,
 } from "./register.js";
 
 let workspaceDir: string;
+let originalOpenClawHome: string | undefined;
+let originalOpenClawStateDir: string | undefined;
 
 function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -100,194 +100,58 @@ async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
   return { ...result, config, remainingFindings };
 }
 
+async function runPolicyRepairCheck(checkId: string, repairCheckCtx: HealthRepairContext) {
+  resetPolicyDoctorChecksForTest();
+  const check = registerChecks().find((entry) => entry.id === checkId);
+  if (check?.detect === undefined || check.repair === undefined) {
+    throw new Error(`${checkId} repair check was not registered`);
+  }
+  const findings = await check.detect(repairCheckCtx);
+  const result = await check.repair(repairCheckCtx, findings);
+  const config = result.config ?? repairCheckCtx.cfg;
+  const remainingFindings =
+    repairCheckCtx.dryRun === true ? [] : await check.detect({ ...repairCheckCtx, cfg: config });
+  return { ...result, findings, config, remainingFindings };
+}
+
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
+    originalOpenClawHome = process.env.OPENCLAW_HOME;
+    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
+    process.env.OPENCLAW_HOME = workspaceDir;
+    delete process.env.OPENCLAW_STATE_DIR;
+    await fs.mkdir(join(workspaceDir, ".openclaw"), { recursive: true });
+    try {
+      await fs.symlink(
+        "../exec-approvals.json",
+        join(workspaceDir, ".openclaw", "exec-approvals.json"),
+      );
+    } catch (err) {
+      if (typeof err !== "object" || err === null || !("code" in err) || err.code !== "EPERM") {
+        throw err;
+      }
+      await fs.rm(join(workspaceDir, ".openclaw"), { recursive: true, force: true });
+      await fs.symlink(workspaceDir, join(workspaceDir, ".openclaw"), "junction");
+    }
   });
 
   afterEach(async () => {
+    if (originalOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = originalOpenClawHome;
+    }
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
-  });
-
-  it("describes strictness for agent-scoped policy fields", () => {
-    expect(
-      (POLICY_RULE_METADATA as readonly PolicyRuleMetadata[])
-        .filter(
-          (rule) =>
-            rule.scopeSelectors?.includes("agentIds") ||
-            rule.scopeSelectors?.includes("channelIds"),
-        )
-        .map((rule) => {
-          const description: {
-            path: string;
-            strictness: PolicyRuleMetadata["strictness"];
-            selectors: PolicyRuleMetadata["scopeSelectors"];
-            emptyList?: PolicyRuleMetadata["emptyList"];
-          } = {
-            path: rule.policyPath.join("."),
-            strictness: rule.strictness,
-            selectors: rule.scopeSelectors,
-          };
-          if (rule.emptyList !== undefined) {
-            description.emptyList = rule.emptyList;
-          }
-          return description;
-        }),
-    ).toEqual([
-      {
-        path: "agents.workspace.allowedAccess",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "agents.workspace.denyTools",
-        strictness: "denylist-superset",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.profiles.allow",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.fs.requireWorkspaceOnly",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.allowSecurity",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.requireAsk",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.allowHosts",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      { path: "tools.elevated.allow", strictness: "requires-false", selectors: ["agentIds"] },
-      {
-        path: "tools.alsoAllow.expected",
-        strictness: "exact-list",
-        emptyList: "meaningful",
-        selectors: ["agentIds"],
-      },
-      { path: "tools.denyTools", strictness: "denylist-superset", selectors: ["agentIds"] },
-      {
-        path: "sandbox.requireMode",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.allowBackends",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyHostNetwork",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyContainerNamespaceJoin",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.requireReadOnlyMounts",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyContainerRuntimeSocketMounts",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyUnconfinedProfiles",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.browser.requireCdpSourceRange",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "ingress.channels.allowDmPolicies",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "ingress.channels.denyOpenGroups",
-        strictness: "requires-true",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "ingress.channels.requireMentionInGroups",
-        strictness: "requires-true",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "dataHandling.memory.denySessionTranscriptIndexing",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-    ]);
-  });
-
-  it("compares policy values through strictness metadata", () => {
-    const allowHosts = POLICY_RULE_METADATA.find(
-      (rule) => rule.policyPath.join(".") === "tools.exec.allowHosts",
-    );
-    const denyTools = POLICY_RULE_METADATA.find(
-      (rule) => rule.policyPath.join(".") === "tools.denyTools",
-    );
-    const fsWorkspaceOnly = POLICY_RULE_METADATA.find(
-      (rule) => rule.policyPath.join(".") === "tools.fs.requireWorkspaceOnly",
-    );
-    const denyHostNetwork = POLICY_RULE_METADATA.find(
-      (rule) => rule.policyPath.join(".") === "sandbox.containers.denyHostNetwork",
-    );
-    const alsoAllow = POLICY_RULE_METADATA.find(
-      (rule) => rule.policyPath.join(".") === "tools.alsoAllow.expected",
-    );
-
-    expect(allowHosts).toBeDefined();
-    expect(denyTools).toBeDefined();
-    expect(fsWorkspaceOnly).toBeDefined();
-    expect(denyHostNetwork).toBeDefined();
-    expect(alsoAllow).toBeDefined();
-    expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox"], ["sandbox", "node"])).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox", "node"], ["sandbox"])).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(allowHosts!, [], ["sandbox"])).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox"], [])).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["exec", "write"], ["exec"])).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["write"], ["exec"])).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["group:runtime"], ["exec"])).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["exec"], ["group:runtime"])).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, true, true)).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, false, true)).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, true, true)).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, false, true)).toBe(false);
-    expect(isPolicyValueAtLeastAsStrict(alsoAllow!, ["read"], ["read"])).toBe(true);
-    expect(isPolicyValueAtLeastAsStrict(alsoAllow!, [], ["read"])).toBe(false);
   });
 
   it("allows scoped overrides that are stricter than top-level policy", async () => {
@@ -535,6 +399,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/gateway-remote-enabled",
       "policy/gateway-http-endpoint-enabled",
       "policy/gateway-http-url-fetch-unrestricted",
+      "policy/gateway-node-command-denied",
       "policy/agents-workspace-access-denied",
       "policy/agents-tool-not-denied",
       "policy/tools-profile-unapproved",
@@ -564,6 +429,13 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/secrets-insecure-provider",
       "policy/auth-profile-invalid-metadata",
       "policy/auth-profile-unapproved-mode",
+      "policy/exec-approvals-missing",
+      "policy/exec-approvals-invalid",
+      "policy/exec-approvals-default-security-unapproved",
+      "policy/exec-approvals-agent-security-unapproved",
+      "policy/exec-approvals-auto-allow-skills-enabled",
+      "policy/exec-approvals-allowlist-missing",
+      "policy/exec-approvals-allowlist-unexpected",
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",
@@ -936,6 +808,17 @@ describe("registerPolicyDoctorChecks", () => {
       "gateway requireUrlAllowlists string",
       { gateway: { http: { requireUrlAllowlists: "true" } } },
       "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
+    ],
+    ["gateway nodes array", { gateway: { nodes: [] } }, "oc://policy.jsonc/gateway/nodes"],
+    [
+      "gateway nodes denyCommands string",
+      { gateway: { nodes: { denyCommands: "system.run" } } },
+      "oc://policy.jsonc/gateway/nodes/denyCommands",
+    ],
+    [
+      "gateway nodes denyCommands blank entry",
+      { gateway: { nodes: { denyCommands: ["system.run", " "] } } },
+      "oc://policy.jsonc/gateway/nodes/denyCommands/#1",
     ],
     ["agents array", { agents: [] }, "oc://policy.jsonc/agents"],
     ["agents workspace array", { agents: { workspace: [] } }, "oc://policy.jsonc/agents/workspace"],
@@ -1543,6 +1426,10 @@ describe("registerPolicyDoctorChecks", () => {
         fixHint: "Telegram is not approved for this workspace.",
       }),
     ]);
+
+    const evaluation = await evaluatePolicy(ctx(configPath, cfg));
+    expect(evaluation.findings[0]).not.toHaveProperty("fixRecommendation");
+    expect(evaluation.attestedFindings[0]).not.toHaveProperty("fixRecommendation");
   });
 
   it("repairs denied enabled channels by disabling them when workspace repairs are enabled", async () => {
@@ -1632,6 +1519,654 @@ describe("registerPolicyDoctorChecks", () => {
       "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
     );
     expect(result.config.channels?.telegram).toEqual({ enabled: true });
+  });
+
+  it("dry-runs automatic policy narrowing repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { elevated: { allow: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck("policy/tools-elevated-enabled", {
+      ...repairCtx(configPath, cfg),
+      dryRun: true,
+    });
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual(["Set tools.elevated.enabled=false for policy conformance."]);
+    expect(result.config.tools?.elevated?.enabled).toBe(false);
+    expect(cfg.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("does not repair automatic policy narrowing config without workspace repair opt-in", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { elevated: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { elevated: { allow: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("workspace repairs are disabled");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped policy config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace policy config.",
+    ]);
+    expect(result.config.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("does not over-apply scoped elevated policy findings globally", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { elevated: { enabled: true } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { elevated: { allow: false } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.config).not.toHaveProperty("tools.elevated.enabled");
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      tools: { elevated: { enabled: true } },
+    });
+  });
+
+  it("skips scoped elevated repairs that inherit shared global tools config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { elevated: { allow: false } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped tools repair. Scoped elevated-tools policy findings are detect-only because automatic repair cannot safely choose between shared and agent-local config targets.",
+    ]);
+    expect(result.config.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("repairs automatic policy narrowing config findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+      gateway: {
+        mode: "remote",
+        remote: { enabled: true, url: "wss://remote.example.test:18789" },
+        controlUi: {
+          allowInsecureAuth: true,
+          dangerouslyDisableDeviceAuth: true,
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+      logging: { redactSensitive: "off" },
+      diagnostics: { otel: { enabled: true, captureContent: { enabled: true, toolInputs: true } } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { elevated: { allow: false } },
+        gateway: {
+          controlUi: { allowInsecure: false },
+          remote: { allow: false },
+        },
+        dataHandling: {
+          sensitiveLogging: { requireRedaction: true },
+          telemetry: { denyContentCapture: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const elevated = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+    const controlUi = await runPolicyRepairCheck(
+      "policy/gateway-control-ui-insecure",
+      repairCtx(configPath, elevated.config),
+    );
+    const remote = await runPolicyRepairCheck(
+      "policy/gateway-remote-enabled",
+      repairCtx(configPath, controlUi.config),
+    );
+    const redaction = await runPolicyRepairCheck(
+      "policy/data-handling-redaction-disabled",
+      repairCtx(configPath, remote.config),
+    );
+    const telemetry = await runPolicyRepairCheck(
+      "policy/data-handling-telemetry-content-capture",
+      repairCtx(configPath, redaction.config),
+    );
+
+    expect([
+      ...elevated.changes,
+      ...controlUi.changes,
+      ...remote.changes,
+      ...redaction.changes,
+      ...telemetry.changes,
+    ]).toEqual([
+      "Set tools.elevated.enabled=false for policy conformance.",
+      "Set gateway.controlUi.allowInsecureAuth=false for policy conformance.",
+      "Set gateway.controlUi.dangerouslyDisableDeviceAuth=false for policy conformance.",
+      "Set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=false for policy conformance.",
+      "Set gateway.mode=local for policy conformance.",
+      "Set logging.redactSensitive=tools for policy conformance.",
+      "Set diagnostics.otel.captureContent=false for policy conformance.",
+    ]);
+    expect(telemetry.remainingFindings).toEqual([]);
+    expect(telemetry.config).toMatchObject({
+      tools: { elevated: { enabled: false } },
+      gateway: {
+        mode: "local",
+        remote: {
+          enabled: true,
+        },
+        controlUi: {
+          allowInsecureAuth: false,
+          dangerouslyDisableDeviceAuth: false,
+          dangerouslyAllowHostHeaderOriginFallback: false,
+        },
+      },
+      logging: { redactSensitive: "tools" },
+      diagnostics: { otel: { captureContent: false } },
+    });
+  });
+
+  it("repairs denied gateway HTTP endpoint findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: {
+              enabled: true,
+              images: { allowUrl: true },
+            },
+            responses: {
+              enabled: true,
+              files: { allowUrl: true },
+              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            denyEndpoints: ["chatCompletions", "responses"],
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-http-endpoint-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Set gateway.http.endpoints.chatCompletions.enabled=false for policy conformance.",
+      "Set gateway.http.endpoints.responses.enabled=false for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.gateway?.http?.endpoints).toMatchObject({
+      chatCompletions: {
+        enabled: false,
+        images: { allowUrl: true },
+      },
+      responses: {
+        enabled: false,
+        files: { allowUrl: true },
+        images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+      },
+    });
+  });
+
+  it("repairs automatic channel ingress narrowing findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          requireMention: false,
+          groups: {
+            ops: {
+              topics: {
+                incidents: { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const openGroups = await runPolicyRepairCheck(
+      "policy/ingress-open-groups-denied",
+      repairCtx(configPath, cfg),
+    );
+    const mentions = await runPolicyRepairCheck(
+      "policy/ingress-group-mention-required",
+      repairCtx(configPath, openGroups.config),
+    );
+
+    expect([...openGroups.changes, ...mentions.changes]).toEqual([
+      "Set channels.telegram.groupPolicy=allowlist for policy conformance.",
+      "Set channels.telegram.groups.ops.topics.incidents.requireMention=true for policy conformance.",
+      "Set channels.telegram.requireMention=true for policy conformance.",
+    ]);
+    expect(mentions.remainingFindings).toEqual([]);
+    expect(mentions.config).toMatchObject({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          requireMention: true,
+          groups: {
+            ops: {
+              topics: {
+                incidents: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("repairs quoted channel ingress paths without splitting slash segments", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: {
+        "team/sebby": {
+          requireMention: false,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/ingress-group-mention-required",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        ocPath: 'oc://openclaw.config/channels/"team/sebby"/requireMention',
+      }),
+    ]);
+    expect(result.changes).toEqual([
+      "Set channels.team/sebby.requireMention=true for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.channels?.["team/sebby"]).toEqual({ requireMention: true });
+    expect(result.config.channels).not.toHaveProperty('"team');
+  });
+
+  it("skips scoped channel ingress repairs that would mutate inherited defaults", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: {
+        defaults: { groupPolicy: "open" },
+        telegram: {},
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          telegram: {
+            channelIds: ["telegram"],
+            ingress: {
+              channels: {
+                denyOpenGroups: true,
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/ingress-open-groups-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped channel ingress repair for channels.defaults.groupPolicy. The finding reports inherited channels.defaults config, so changing it would affect more than the scoped channel target.",
+    ]);
+    expect(result.config.channels?.defaults).toEqual({ groupPolicy: "open" });
+    expect(result.config.channels?.telegram).toEqual({});
+    expect(result.remainingFindings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/ingress-open-groups-denied",
+        ocPath: "oc://openclaw.config/channels/defaults/groupPolicy",
+        requirement: "oc://policy.jsonc/scopes/telegram/ingress/channels/denyOpenGroups",
+      }),
+    ]);
+  });
+
+  it("does not repair channel ingress config without workspace repair opt-in", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: { telegram: { groupPolicy: "open" } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/ingress-open-groups-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("workspace repairs are disabled");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped policy config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace policy config.",
+    ]);
+    expect(result.config.channels?.telegram).toEqual({ groupPolicy: "open" });
+  });
+
+  it("dry-runs required tool deny repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { deny: ["read"] },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { denyTools: ["exec", "write"] } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck("policy/tools-required-deny-missing", {
+      ...repairCtx(configPath, cfg),
+      dryRun: true,
+    });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-required-deny-missing",
+          message: "global tools config does not deny required tool 'exec'.",
+          ocPath: "oc://openclaw.config/tools/deny",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-required-deny-missing",
+          message: "global tools config does not deny required tool 'write'.",
+          ocPath: "oc://openclaw.config/tools/deny",
+        }),
+      ]),
+    );
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added exec to tools.deny for policy conformance.",
+      "Added write to tools.deny for policy conformance.",
+    ]);
+    expect(result.config.tools?.deny).toEqual(["read", "exec", "write"]);
+    expect(cfg.tools?.deny).toEqual(["read"]);
+  });
+
+  it("repairs required agent workspace deny tool findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { deny: ["exec"] },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/agents-tool-not-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added edit to agents.list[0].tools.deny for policy conformance.",
+      "Added write to agents.list[0].tools.deny for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      tools: { deny: ["exec", "edit", "write"] },
+    });
+  });
+
+  it("skips scoped required deny repairs that would mutate root tools deny", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { deny: ["exec"] },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { denyTools: ["exec", "write"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-required-deny-missing",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped deny repair for write. The finding reports inherited root tools.deny, so changing it would affect more than the scoped policy target.",
+    ]);
+    expect(result.config.tools?.deny).toEqual(["exec"]);
+    expect(result.config.agents?.list?.[0]).toEqual({ id: "reviewer" });
+    expect(result.remainingFindings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-required-deny-missing",
+        ocPath: "oc://openclaw.config/tools/deny",
+        requirement: "oc://policy.jsonc/scopes/reviewer/tools/denyTools",
+      }),
+    ]);
+  });
+
+  it("skips scoped data-handling repairs that would mutate shared config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      logging: { redactSensitive: "off" },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            dataHandling: {
+              sensitiveLogging: { requireRedaction: true },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/data-handling-redaction-disabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
+    ]);
+    expect(result.config.logging?.redactSensitive).toBe("off");
+    expect(result.remainingFindings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/data-handling-redaction-disabled",
+        requirement:
+          "oc://policy.jsonc/scopes/reviewer/dataHandling/sensitiveLogging/requireRedaction",
+      }),
+    ]);
+  });
+
+  it("does not register repair for review-required policy findings", () => {
+    const check = registerChecks().find(
+      (entry) => entry.id === "policy/gateway-http-url-fetch-unrestricted",
+    );
+
+    expect("repair" in (check ?? {})).toBe(false);
   });
 
   it("does not report denied providers for disabled channels", async () => {
@@ -6803,6 +7338,9 @@ describe("registerPolicyDoctorChecks", () => {
             },
           },
         },
+        nodes: {
+          allowCommands: ["mcp.help", "mcp.invoke", "system.run"],
+        },
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -6827,6 +7365,9 @@ describe("registerPolicyDoctorChecks", () => {
           http: {
             denyEndpoints: ["chatCompletions", "responses"],
             requireUrlAllowlists: true,
+          },
+          nodes: {
+            denyCommands: ["system.run"],
           },
         },
       }),
@@ -6886,9 +7427,79 @@ describe("registerPolicyDoctorChecks", () => {
           ocPath: "oc://openclaw.config/gateway/http/endpoints/chatCompletions/images/allowUrl",
           requirement: "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
         }),
+        expect.objectContaining({
+          checkId: "policy/gateway-node-command-denied",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+          requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
+        }),
       ]),
     );
-    expect(result.findings).toHaveLength(12);
+    expect(result.findings).toHaveLength(13);
+  });
+
+  it("does not report gateway node commands denied by runtime config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        nodes: {
+          allowCommands: ["system.run"],
+          denyCommands: ["system.run"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          nodes: {
+            denyCommands: ["system.run"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports gateway node commands denied by policy without explicit extra allows", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        nodes: {},
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          nodes: {
+            denyCommands: ["system.run"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-node-command-denied",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
+      }),
+    ]);
   });
 
   it("reports omitted gateway bind when non-loopback exposure is denied", async () => {
@@ -7801,6 +8412,768 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/policy-jsonc-invalid",
         target:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
+      }),
+    ]);
+  });
+
+  it("reports exec approvals file conformance findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          requireFile: true,
+          defaults: { allowSecurity: ["deny"] },
+          agents: {
+            allowSecurity: ["allowlist"],
+            allowlist: { expected: ["deploy", "doctor"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        socket: { path: "/tmp/openclaw.sock", token: "secret-token" },
+        defaults: { security: "full" },
+        agents: {
+          sebby: {
+            security: "full",
+            allowlist: [{ pattern: "deploy", commandText: "deploy --prod" }],
+          },
+          buddy: {
+            security: "allowlist",
+            allowlist: [{ pattern: "status" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-default-security-unapproved",
+          ocPath: "oc://exec-approvals.json/defaults",
+          requirement: "oc://policy.jsonc/execApprovals/defaults/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: "oc://exec-approvals.json/agents/sebby",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-missing",
+          target: "oc://exec-approvals.json",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowlist/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: "oc://exec-approvals.json/agents/buddy/allowlist/#0",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result.findings)).not.toContain("secret-token");
+    expect(JSON.stringify(result.findings)).not.toContain("deploy --prod");
+  });
+
+  it("compares exec approval allowlist entries with argPattern", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: { expected: [{ pattern: "deploy", argPattern: "^--prod$" }] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "deploy" }] } },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-allowlist-missing",
+        message:
+          "exec approvals allowlist is missing expected pattern 'deploy argPattern=^--prod$'.",
+        target: "oc://exec-approvals.json",
+      }),
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-allowlist-unexpected",
+        message: "exec approvals allowlist has unexpected pattern 'deploy'.",
+        ocPath: "oc://exec-approvals.json/agents/main/allowlist/#0",
+      }),
+    ]);
+  });
+
+  it("checks inherited default security for global exec approval agent rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["allowlist"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("reports inherited autoAllowSkills when policy requires manual exec allowlists", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowAutoAllowSkills: false } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { autoAllowSkills: true } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+  });
+
+  it("uses wildcard security for global exec approval agents that only add allowlist entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full" },
+        agents: {
+          "*": { security: "deny" },
+          main: { allowlist: [{ pattern: "status" }] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("checks default-inherited global exec approval agents when explicit agents exist", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["allowlist"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full" },
+        agents: { main: { security: "allowlist" } },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("applies scoped exec approvals only to selected agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["allowlist"],
+                allowlist: { expected: ["deploy", "doctor"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          sebby: {
+            security: "full",
+            allowlist: [{ pattern: "deploy" }, { pattern: "status" }],
+          },
+          buddy: {
+            security: "full",
+            allowlist: [{ pattern: "unrelated" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: "oc://exec-approvals.json/agents/sebby",
+          requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-missing",
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: "oc://exec-approvals.json/agents/sebby/allowlist/#1",
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ocPath: expect.stringContaining("agents/buddy") }),
+      ]),
+    );
+  });
+
+  it("does not inherit wildcard security when exact agent security is malformed", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: { agents: { allowSecurity: ["deny"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          "*": { security: "full" },
+          sebby: { security: "bogus" },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("uses runtime defaults for malformed exec approval mode fields", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["full"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "bogus" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("requires exec approvals artifacts for scoped exec approval rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby", "buddy"],
+            execApprovals: {
+              agents: { allowSecurity: ["allowlist"] },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
+      }),
+    ]);
+  });
+
+  it("rejects invalid exec approvals artifacts for scoped exec approval rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby", "buddy"],
+            execApprovals: {
+              agents: { allowSecurity: ["allowlist"] },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "exec-approvals.json"), "{", "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-invalid",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
+      }),
+    ]);
+  });
+
+  it("does not require exec approvals artifacts for requireFile false alone", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: false } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("applies wildcard exec approvals to scoped agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["allowlist"],
+                allowlist: { expected: ["deploy"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          "*": {
+            security: "full",
+            allowlist: [{ pattern: "status" }],
+          },
+          sebby: {
+            allowlist: [{ pattern: "deploy" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: 'oc://exec-approvals.json/agents/"*"',
+          requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: 'oc://exec-approvals.json/agents/"*"/allowlist/#0',
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+  });
+
+  it("applies wildcard autoAllowSkills posture to scoped exec approvals", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: { allowAutoAllowSkills: false },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        agents: {
+          "*": { autoAllowSkills: true },
+          buddy: { autoAllowSkills: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: 'oc://exec-approvals.json/agents/"*"',
+        requirement:
+          "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ocPath: expect.stringContaining("agents/buddy") }),
+      ]),
+    );
+  });
+
+  it("applies inherited default autoAllowSkills posture to scoped exec approvals", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: { allowAutoAllowSkills: false },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { autoAllowSkills: true },
+        agents: {
+          sebby: { allowlist: [{ pattern: "deploy" }] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement:
+          "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+  });
+
+  it("evaluates legacy default exec approvals for scoped main policies", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["main"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["deny"],
+                allowlist: { expected: ["legacy", "doctor"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          default: {
+            security: "allowlist",
+            allowlist: ["legacy", { pattern: "doctor" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/agents/default",
+        target: "oc://exec-approvals.json/agents/default",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("uses OPENCLAW_HOME for the default exec approvals artifact path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const openclawHome = join(workspaceDir, "home");
+    const approvalsDir = join(openclawHome, ".openclaw");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    await fs.mkdir(approvalsDir, { recursive: true });
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(approvalsDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    process.env.OPENCLAW_HOME = openclawHome;
+    try {
+      registerPolicyDoctorChecks();
+      const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+      expect(result.findings).toEqual([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-default-security-unapproved",
+          ocPath: "oc://exec-approvals.json/defaults",
+        }),
+      ]);
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+    }
+  });
+
+  it("uses OPENCLAW_STATE_DIR for the exec approvals artifact path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const stateDir = join(workspaceDir, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "deny" } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(stateDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-default-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+      }),
+    ]);
+  });
+
+  it("rejects unsupported exec approval allowlist requirement keys", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argpattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("targets the missing exec approvals artifact when required", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: true } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/execApprovals/requireFile",
+      }),
+    ]);
+  });
+
+  it("rejects required versionless exec approvals artifacts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: { requireFile: true, defaults: { allowSecurity: ["deny"] } },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ defaults: { security: "deny" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-invalid",
+        requirement: "oc://policy.jsonc/execApprovals",
       }),
     ]);
   });

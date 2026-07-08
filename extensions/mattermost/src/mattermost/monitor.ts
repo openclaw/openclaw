@@ -4,7 +4,8 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  formatChannelProgressDraftLineForEntry,
+  buildChannelProgressDraftLineForEntry,
+  createChannelProgressDraftCompositor,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -38,7 +39,7 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -56,6 +57,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  formatMattermostDirectMessageDropLog,
   normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
@@ -68,9 +70,14 @@ import {
   formatInboundFromLabel,
   normalizeMention,
   resolveThreadSessionKeys,
+  shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
-import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
+import {
+  createMattermostMonitorResources,
+  formatMattermostInboundMediaText,
+  type MattermostMediaInfo,
+} from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import {
   createMattermostConnectOnce,
@@ -83,6 +90,7 @@ import {
 } from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
 import {
+  createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
   type MattermostReplyDeliveryOutcome,
 } from "./reply-delivery.js";
@@ -112,6 +120,10 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import {
+  hasMattermostThreadParticipationWithPersistence,
+  recordMattermostThreadParticipation,
+} from "./thread-participation.js";
 
 export {
   evaluateMattermostMentionGate,
@@ -123,7 +135,7 @@ export type {
   MattermostRequireMentionResolverInput,
 } from "./monitor-gating.js";
 
-export type MonitorMattermostOpts = {
+type MonitorMattermostOpts = {
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
@@ -291,20 +303,6 @@ export function canFinalizeMattermostPreviewInPlace(params: {
   );
 }
 
-export function shouldClearMattermostDraftPreview(params: {
-  finalizedViaPreviewPost: boolean;
-  finalReplyDelivered: boolean;
-}): boolean {
-  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
-}
-
-export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
-  finalCount: number;
-  canFinalizeInPlace: boolean;
-}): boolean {
-  return params.finalCount === 1 && params.canFinalizeInPlace;
-}
-
 type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };
@@ -337,6 +335,10 @@ type MattermostDraftPreviewDeliverParams = {
   previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<void>;
+  // Visible same-thread finals can be delivered by editing the draft preview in
+  // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
+  // caller record thread participation on that path too.
+  recordThreadParticipation?: () => void;
 };
 
 export async function deliverMattermostReplyWithDraftPreview(
@@ -384,6 +386,9 @@ export async function deliverMattermostReplyWithDraftPreview(
       },
       onPreviewFinalized: () => {
         params.previewState.finalizedViaPreviewPost = true;
+        // The visible final reply landed by editing the preview post, so the normal
+        // deliverPayload record path is skipped; record participation explicitly here.
+        params.recordThreadParticipation?.();
       },
       buildSupplementalPayload: (payload) =>
         getReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : undefined,
@@ -442,7 +447,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
     return undefined;
   }
   const threadRootId = normalizeOptionalString(params.threadRootId);
-  if (threadRootId && params.replyToMode !== "off") {
+  if (threadRootId) {
     return threadRootId;
   }
   const postId = normalizeOptionalString(params.postId);
@@ -793,9 +798,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               },
             },
           });
+        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+          isDirect: kind === "direct",
+          dmRetryOptions: account.config.dmChannelRetry,
+        });
         const { dispatcher, replyOptions, markDispatchIdle } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
+            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+            onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
               await deliverMattermostReplyPayload({
@@ -813,6 +824,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 textLimit,
                 tableMode,
                 sendMessage: sendMessageMattermost,
+                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
@@ -990,9 +1002,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : undefined,
       });
     const capturedTexts: string[] = [];
+    const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+      isDirect: params.kind === "direct",
+      dmRetryOptions: account.config.dmChannelRetry,
+    });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...replyPipeline,
+        resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+        onDeliverySettled: deliveryBarrier.markDeliverySettled,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
           const trimmedPayload = {
@@ -1023,6 +1041,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // The picker path already converts and trims text before capture/delivery.
             tableMode: "off",
             sendMessage: sendMessageMattermost,
+            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           });
         },
         onError: (err, info) => {
@@ -1241,7 +1260,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           cfg,
           route: modelSessionRoute,
           data,
-          skipCache: true,
+          readConsistency: "latest",
         });
         const view = renderMattermostModelsPickerView({
           ownerUserId: pickerState.ownerUserId,
@@ -1316,7 +1335,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           normalizeOptionalString(payload.data?.sender_name) ??
           normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
           senderId;
-        const rawText = normalizeOptionalString(post.message) ?? "";
+        const rawPostText = typeof post.message === "string" ? post.message : "";
+        const rawText = normalizeOptionalString(rawPostText) ?? "";
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
@@ -1373,7 +1393,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               return;
             }
-            logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+            logVerboseMessage(
+              formatMattermostDirectMessageDropLog({
+                senderId,
+                dmPolicy,
+                reasonCode: accessDecision.senderAccess.reasonCode,
+              }),
+            );
             return;
           }
           if (accessDecision.ingress.reasonCode === "group_policy_disabled") {
@@ -1473,6 +1499,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+        // Threads the bot already replied in auto-engage: follow-ups resume without
+        // a re-mention even under requireMention. Keyed by the thread root id.
+        const threadAlreadyEngaged =
+          kind !== "direct" && effectiveReplyToId
+            ? await hasMattermostThreadParticipationWithPersistence({
+                accountId: account.accountId,
+                channelId,
+                threadRootId: effectiveReplyToId,
+              })
+            : false;
         const mentionDecision = evaluateMattermostMentionGate({
           kind,
           cfg,
@@ -1482,6 +1518,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           requireMentionOverride: account.requireMention,
           resolveRequireMention: core.channel.groups.resolveRequireMention,
           wasMentioned,
+          threadAlreadyEngaged,
           isControlCommand,
           commandAuthorized,
           oncharEnabled,
@@ -1505,17 +1542,27 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           recordPendingHistory();
           return;
         }
-        const mediaList = await resolveMattermostMedia(post.file_ids);
+        const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
+        const mediaList = await resolveMattermostMedia(fileIds);
         const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
-        const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
+        const downloadedText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
+        const baseText = formatMattermostInboundMediaText({
+          body: downloadedText,
+          mediaPlaceholder,
+          expectedCount: fileIds.length,
+          mediaCount: mediaList.length,
+        });
         const bodyText = normalizeMention(baseText, botUsername);
-        if (!bodyText) {
+        if (shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })) {
           logVerboseMessage(
-            `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
+            `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
           );
           return;
         }
+        // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
+        // bodies before model invocation. The guard above ensures this fallback is a bot mention.
+        const bodyForAgent = bodyText || rawText.trim();
 
         core.channel.activity.record({
           channel: "mattermost",
@@ -1574,9 +1621,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             : undefined;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: combinedBody,
-          BodyForAgent: bodyText,
+          BodyForAgent: bodyForAgent,
           InboundHistory: inboundHistory,
-          RawBody: bodyText,
+          RawBody: commandBody,
           CommandBody: commandBody,
           BodyForCommands: commandBody,
           From:
@@ -1682,6 +1729,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             })
           : createDisabledMattermostDraftStream();
         let lastPartialText = "";
+        const progressDraft = createChannelProgressDraftCompositor({
+          entry: account.config,
+          mode: account.streamingMode,
+          active: draftPreviewEnabled,
+          seed: `${account.accountId}:${channelId}`,
+          update: async (previewText, options) => {
+            draftStream.update(previewText);
+            if (options?.flush) {
+              await draftStream.flush();
+            }
+          },
+        });
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1740,12 +1799,33 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           draftStream.update(cleaned);
         };
 
+        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+          isDirect: kind === "direct",
+          dmRetryOptions: account.config.dmChannelRetry,
+        });
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
+            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+            onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
             deliver: async (payloadEntry: ReplyPayload, info) => {
+              if (info.kind === "final") {
+                progressDraft.markFinalReplyStarted();
+              }
+              // A visible same-thread final arrives either via a normal send or by editing
+              // the draft preview in place; record participation on whichever path fires.
+              const markThreadParticipation = () => {
+                if (kind !== "direct" && effectiveReplyToId) {
+                  recordMattermostThreadParticipation(
+                    account.accountId,
+                    channelId,
+                    effectiveReplyToId,
+                    { agentId: route.agentId },
+                  );
+                }
+              };
               await deliverMattermostReplyWithDraftPreview({
                 payload: payloadEntry,
                 info,
@@ -1756,6 +1836,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 resolvePreviewFinalText,
                 previewState,
                 logVerboseMessage,
+                recordThreadParticipation: markThreadParticipation,
                 deliverPayload: async (payloadToDeliver) => {
                   const outcome = await deliverMattermostReplyPayload({
                     core,
@@ -1772,7 +1853,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     textLimit,
                     tableMode,
                     sendMessage: sendMessageMattermost,
+                    onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
                   });
+                  // Record only on a visible send so threads we merely observed
+                  // (reasoning-only/empty/suppressed) do not auto-engage later.
+                  if (outcome === "text" || outcome === "media") {
+                    markThreadParticipation();
+                  }
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,
                     payload: payloadToDeliver,
@@ -1785,6 +1872,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                 },
               });
+              if (info.kind === "final") {
+                progressDraft.markFinalReplyDelivered();
+              }
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
@@ -1881,6 +1971,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         dispatcher,
                         replyOptions: {
                           ...replyOptions,
+                          allowProgressCallbacksWhenSourceDeliverySuppressed:
+                            draftToolProgressEnabled ? true : undefined,
+                          onObservedReplyDelivery: draftToolProgressEnabled
+                            ? () => draftStream.clear()
+                            : undefined,
                           disableBlockStreaming: true,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }
@@ -1893,11 +1988,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            progressDraft.resetReasoningProgress();
+                            if (account.streamingMode !== "progress") {
+                              progressDraft.reset();
+                            }
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            progressDraft.resetReasoningProgress();
+                            if (account.streamingMode !== "progress") {
+                              progressDraft.reset();
+                            }
                           },
-                          onReasoningStream: async () => {
+                          onReasoningStream: async (payloadResult) => {
+                            if (account.streamingMode === "progress") {
+                              await progressDraft.pushReasoningProgress(
+                                payloadResult.text || "Thinking…",
+                                { snapshot: payloadResult.isReasoningSnapshot === true },
+                              );
+                              return;
+                            }
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
                             }
@@ -1906,20 +2016,30 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            draftStream.update(
-                              buildMattermostToolStatusText({
-                                ...payloadValue,
-                                config: account.config,
-                              }),
+                            await progressDraft.pushToolProgress(
+                              buildChannelProgressDraftLineForEntry(
+                                account.config,
+                                {
+                                  event: "tool",
+                                  itemId: payloadValue.itemId,
+                                  toolCallId: payloadValue.toolCallId,
+                                  name: payloadValue.name,
+                                  phase: payloadValue.phase,
+                                  args: payloadValue.args,
+                                },
+                                payloadValue.detailMode
+                                  ? { detailMode: payloadValue.detailMode }
+                                  : undefined,
+                              ),
+                              { startImmediately: true },
                             );
                           },
                           onItemEvent: async (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            const progressText = formatChannelProgressDraftLineForEntry(
-                              account.config,
-                              {
+                            await progressDraft.pushToolProgress(
+                              buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",
                                 itemId: payloadLocal.itemId,
                                 itemKind: payloadLocal.kind,
@@ -1930,11 +2050,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 summary: payloadLocal.summary,
                                 progressText: payloadLocal.progressText,
                                 meta: payloadLocal.meta,
-                              },
+                              }),
+                              { startImmediately: true },
                             );
-                            if (progressText) {
-                              draftStream.update(progressText);
-                            }
                           },
                         },
                       }),

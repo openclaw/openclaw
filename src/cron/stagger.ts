@@ -3,10 +3,20 @@ import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { CronSchedule } from "./types.js";
 
 /** Default jitter window applied to recurring top-of-hour cron schedules. */
-export const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function parseCronFields(expr: string) {
   return expr.trim().split(/\s+/).filter(Boolean);
+}
+
+const HOUR_LIST_PART = /^(?:\d+|\d+-\d+)(?:\/\d+)?$|^[*?](?:\/\d+)?$/;
+
+function hasRecurringWildcardHour(field: string): boolean {
+  const parts = field.split(",");
+  return (
+    parts.every((part) => HOUR_LIST_PART.test(part)) &&
+    parts.some((part) => part.startsWith("*") || part.startsWith("?"))
+  );
 }
 
 /** Returns whether a cron expression fires recurring jobs exactly at the top of an hour. */
@@ -14,11 +24,11 @@ export function isRecurringTopOfHourCronExpr(expr: string) {
   const fields = parseCronFields(expr);
   if (fields.length === 5) {
     const [minuteField, hourField] = fields;
-    return minuteField === "0" && hourField.includes("*");
+    return minuteField === "0" && hasRecurringWildcardHour(hourField);
   }
   if (fields.length === 6) {
     const [secondField, minuteField, hourField] = fields;
-    return secondField === "0" && minuteField === "0" && hourField.includes("*");
+    return secondField === "0" && minuteField === "0" && hasRecurringWildcardHour(hourField);
   }
   return false;
 }

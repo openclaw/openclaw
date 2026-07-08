@@ -20,7 +20,7 @@ export function parseBoolEnv(value: string | undefined): boolean {
 
 export function ensureValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (value == null || value === "") {
+  if (value == null || value === "" || value.startsWith("-")) {
     die(`${flag} requires a value`);
   }
   return value;
@@ -100,7 +100,7 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
   return readPositiveIntEnv("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S", defaultSeconds);
 }
 
-export function providerTimeoutConfigJson(
+function providerTimeoutConfigJson(
   modelId: string,
   platform: Platform,
   timeoutSeconds = resolveParallelsModelTimeoutSeconds(platform),
@@ -128,7 +128,7 @@ export function providerTimeoutConfigJson(
   });
 }
 
-export function modelTransportConfigJson(modelId: string): string {
+function modelTransportConfigJson(modelId: string): string {
   if (providerIdFromModelId(modelId) !== "openai") {
     return "";
   }
@@ -140,7 +140,7 @@ export function modelTransportConfigJson(modelId: string): string {
   });
 }
 
-export function configPathMapKey(key: string): string {
+function configPathMapKey(key: string): string {
   return `[${JSON.stringify(key)}]`;
 }
 
@@ -190,6 +190,9 @@ export function parsePlatformList(value: string): Set<Platform> {
   const result = new Set<Platform>();
   for (const entry of normalized.split(",")) {
     if (entry === "macos" || entry === "windows" || entry === "linux") {
+      if (result.has(entry)) {
+        die(`duplicate --platform entry: ${entry}`);
+      }
       result.add(entry);
     } else {
       die(`invalid --platform entry: ${entry}`);

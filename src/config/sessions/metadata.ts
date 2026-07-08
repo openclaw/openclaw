@@ -7,9 +7,17 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isInternalNonDeliveryChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+
+function isSystemEventProvider(provider?: string): boolean {
+  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
+}
 
 // Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeOrigin = (
@@ -20,6 +28,30 @@ const mergeOrigin = (
     return undefined;
   }
   const merged: SessionOrigin = existing ? { ...existing } : {};
+  // A provider/surface/account change is a fresh channel identity (e.g. a dmScope:"main" session
+  // moving Slack -> Telegram, or between Slack accounts). Channel-keyed fields belong to the prior
+  // channel; drop them so an inbound that omits them does not keep reactions, native threading, and
+  // status reads pointed at the previous channel.
+  const nextProvider = next?.provider;
+  const nextIsDeliverableChannel =
+    nextProvider != null &&
+    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
+    !isInternalNonDeliveryChannel(nextProvider) &&
+    !isSystemEventProvider(nextProvider);
+  const channelChanged =
+    existing != null &&
+    nextIsDeliverableChannel &&
+    ((existing.provider != null && nextProvider !== existing.provider) ||
+      (existing.surface != null && next?.surface != null && next.surface !== existing.surface) ||
+      (existing.accountId != null &&
+        next?.accountId != null &&
+        next.accountId !== existing.accountId));
+  if (channelChanged) {
+    delete merged.nativeChannelId;
+    delete merged.nativeDirectUserId;
+    delete merged.accountId;
+    delete merged.threadId;
+  }
   if (next?.label) {
     merged.label = next.label;
   }
@@ -54,13 +86,11 @@ const mergeOrigin = (
 };
 
 /** Derives session origin metadata from an inbound message context. */
-export function deriveSessionOrigin(
+function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
-  const isSystemEventProvider =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
+  if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
@@ -122,7 +152,7 @@ export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | und
   return { ...entry.origin };
 }
 
-export function deriveGroupSessionPatch(params: {
+function deriveGroupSessionPatch(params: {
   ctx: MsgContext;
   sessionKey: string;
   existing?: SessionEntry;

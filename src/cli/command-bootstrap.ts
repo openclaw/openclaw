@@ -1,4 +1,5 @@
 // Shared command preflight: config readiness plus optional plugin registry activation.
+import type { ConfigFileSnapshot } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { CliPluginRegistryPolicy } from "./command-catalog.js";
@@ -18,6 +19,7 @@ export async function ensureCliCommandBootstrap(params: {
   suppressDoctorStdout?: boolean;
   skipConfigGuard?: boolean;
   allowInvalid?: boolean;
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   pluginRegistry?: CliPluginRegistryPolicy;
 }) {
@@ -27,6 +29,9 @@ export async function ensureCliCommandBootstrap(params: {
       runtime: params.runtime,
       commandPath: params.commandPath,
       ...(params.allowInvalid ? { allowInvalid: true } : {}),
+      ...(params.beforeStateMigrations
+        ? { beforeStateMigrations: params.beforeStateMigrations }
+        : {}),
       ...(params.suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
     });
   }

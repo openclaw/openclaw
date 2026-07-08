@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
   },
@@ -567,6 +568,16 @@
     },
     {
       "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.eu.rep.googleapis.com"],
+      "googleVertexRegion": "eu"
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.us.rep.googleapis.com"],
+      "googleVertexRegion": "us"
+    },
+    {
+      "endpointClass": "google-vertex",
       "hostSuffixes": ["-aiplatform.googleapis.com"],
       "googleVertexRegionHostSuffix": "-aiplatform.googleapis.com"
     }
@@ -617,6 +628,7 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
       "groupId": "google",
       "groupLabel": "Google",
@@ -663,7 +675,8 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "usageProviders": ["google-gemini-cli"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

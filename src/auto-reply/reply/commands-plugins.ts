@@ -1,23 +1,29 @@
 // Implements plugin command listing, install, and configuration helpers.
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
 import { resolveOfficialExternalNpmPackageTrust } from "../../cli/plugin-install-plan.js";
 import {
   createPluginInstallLogger,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
-import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+} from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { installPluginFromClawHub } from "../../plugins/clawhub.js";
+import { buildClawHubPluginInstallRecordFields } from "../../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -37,6 +43,7 @@ import {
 } from "../../plugins/status.js";
 import { resolveUserPath } from "../../utils.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
@@ -138,6 +145,10 @@ function isPluginsWriteAction(action: string): boolean {
   return action === "install" || action === "enable" || action === "disable";
 }
 
+function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
+  return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
+}
+
 function rejectNixModePluginWrite(): {
   shouldContinue: false;
   reply: { text: string };
@@ -206,8 +217,11 @@ function findTrustedCatalogPackageInstall(packageName: string):
 
 async function installPluginFromPluginsCommand(params: {
   raw: string;
+  config: OpenClawConfig;
   snapshot: ConfigSnapshotForInstallPersist;
-}): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
+}): Promise<
+  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
+> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
   if (fileSpec && !fileSpec.ok) {
     return { ok: false, error: fileSpec.error };
@@ -218,6 +232,7 @@ async function installPluginFromPluginsCommand(params: {
   if (fs.existsSync(resolved)) {
     const result = await installPluginFromPath({
       path: resolved,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -249,6 +264,7 @@ async function installPluginFromPluginsCommand(params: {
   if (gitSpec) {
     const result = await installPluginFromGitSpec({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -273,30 +289,42 @@ async function installPluginFromPluginsCommand(params: {
 
   const clawhubSpec = parseClawHubPluginSpec(params.raw);
   if (clawhubSpec) {
+    const warnings: string[] = [];
+    const logger = createPluginInstallLogger();
     const result = await installPluginFromClawHub({
       spec: params.raw,
-      logger: createPluginInstallLogger(),
+      config: params.config,
+      logger: {
+        info: logger.info,
+        warn: (message) => {
+          warnings.push(stripAnsi(message));
+          logger.warn(message);
+        },
+        terminalLinks: false,
+      },
     });
     if (!result.ok) {
-      return { ok: false, error: result.error };
+      const warning = "warning" in result ? result.warning : warnings.join("\n");
+      const warningPrefix = warning ? `${warning} ` : "";
+      if (result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED) {
+        return {
+          ok: false,
+          error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
+        };
+      }
+      return { ok: false, error: `${warningPrefix}${result.error}` };
     }
     await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: params.raw,
         installPath: result.targetDir,
         version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
       },
     });
-    return { ok: true, pluginId: result.pluginId };
+    return { ok: true, pluginId: result.pluginId, warnings };
   }
 
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
@@ -305,6 +333,7 @@ async function installPluginFromPluginsCommand(params: {
   });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    config: params.config,
     ...(officialNpmTrust
       ? {
           expectedPluginId: officialNpmTrust.pluginId,
@@ -369,12 +398,26 @@ async function loadPluginCommandConfig(): Promise<
   | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
   | { ok: false; path: string; error: string }
 > {
-  const snapshot = await readConfigFileSnapshot();
+  const prepared = await readConfigFileSnapshotForWrite();
+  const snapshot = prepared.snapshot;
   if (!snapshot.valid) {
     return {
       ok: false,
       path: snapshot.path,
       error: "Config file is invalid; fix it before using /plugins.",
+    };
+  }
+  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+  const { pluginMutation } = resolveInstallConfigMutationPreflights({
+    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+    snapshotPath: snapshot.path,
+    writeOptions,
+  });
+  if (pluginMutation.mode === "blocked") {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: pluginMutation.reason,
     };
   }
   return {
@@ -383,6 +426,7 @@ async function loadPluginCommandConfig(): Promise<
     snapshot: {
       config: structuredClone(snapshot.sourceConfig),
       baseHash: snapshot.hash,
+      writeOptions,
     },
   };
 }
@@ -423,6 +467,12 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     if (missingAdminScope) {
       return missingAdminScope;
     }
+    if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
+      if (nonOwner) {
+        return nonOwner;
+      }
+    }
     const nixModeWrite = rejectNixModePluginWrite();
     if (nixModeWrite) {
       return nixModeWrite;
@@ -439,6 +489,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     }
     const installed = await installPluginFromPluginsCommand({
       raw: pluginsCommand.spec,
+      config: loadedConfig.snapshot.config,
       snapshot: loadedConfig.snapshot,
     });
     if (!installed.ok) {
@@ -450,7 +501,10 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+        text: [
+          `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+          ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
+        ].join("\n"),
       },
     };
   }

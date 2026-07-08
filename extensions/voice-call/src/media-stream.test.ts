@@ -199,6 +199,39 @@ describe("MediaStreamHandler security hardening", () => {
     expect((error as Error).cause).toBeInstanceOf(SyntaxError);
   });
 
+  it("rejects start frames when no stream acceptance validator is configured", async () => {
+    const createSession = vi.fn(() => createStubSession());
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-unvalidated",
+          start: { callSid: "CA-unvalidated" },
+        }),
+      );
+
+      const closed = await waitForClose(ws);
+
+      expect(closed.code).toBe(1008);
+      expect(closed.reason).toBe("Unauthorized stream");
+      expect(createSession).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
     let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
     const sentAudio: Buffer[] = [];
@@ -409,6 +442,13 @@ describe("MediaStreamHandler security hardening", () => {
     expect(reason).not.toContain("\r");
     expect(reason).not.toContain("\t");
     expect(reason).toContain("forged line entry");
+  });
+
+  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", () => {
+    const reason = sanitizeLogText(`abc\uD83D\uDE80tail`, 4);
+    expect(reason).toBe("abc...");
+    expect(reason).not.toContain("\uD83D");
+    expect(reason).not.toContain("\uDE80");
   });
 
   it("closes idle pre-start connections after timeout", async () => {

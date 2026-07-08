@@ -48,9 +48,9 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qa-lab", "src/gateway-child.ts", 489),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
-  bundledPluginCallsite("qa-lab", "web/src/app.ts", 22),
-  bundledPluginCallsite("qa-lab", "web/src/app.ts", 30),
-  bundledPluginCallsite("qa-lab", "web/src/app.ts", 38),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 23),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 31),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 39),
   bundledPluginCallsite("qqbot", "src/engine/api/api-client.ts", 124),
   bundledPluginCallsite("qqbot", "src/engine/api/media-chunked.ts", 554),
   bundledPluginCallsite("qqbot", "src/engine/api/token.ts", 211),
@@ -83,7 +83,7 @@ function isRawFetchCall(expression) {
 /**
  * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
  */
-export function findRawFetchCallLines(content, fileName = "source.ts") {
+function findRawFetchCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   return collectCallExpressionLines(ts, sourceFile, (node) =>
     isRawFetchCall(node.expression) ? node.expression : null,

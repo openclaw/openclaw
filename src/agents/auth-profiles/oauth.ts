@@ -23,12 +23,12 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
-import { formatAuthDoctorHint } from "./doctor.js";
 import {
-  readExternalCliFallbackCredential,
-  readManagedExternalCliCredential,
-} from "./external-cli-sync.js";
+  evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
+} from "./credential-state.js";
+import { formatAuthDoctorHint } from "./doctor.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -132,6 +132,7 @@ type ResolveApiKeyForProfileResult = {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 };
 
 function buildApiKeyProfileResult(params: {
@@ -140,6 +141,7 @@ function buildApiKeyProfileResult(params: {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 }): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
@@ -153,6 +155,10 @@ function buildApiKeyProfileResult(params: {
     },
     profileType: {
       value: params.profileType,
+      enumerable: false,
+    },
+    credential: {
+      value: params.credential,
       enumerable: false,
     },
   });
@@ -225,19 +231,12 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ profileId, credential }) =>
-    readManagedExternalCliCredential({
+  readBootstrapCredential: ({ store, profileId, credential }) =>
+    readExternalCliBootstrapCredential({
+      store,
       profileId,
       credential,
     }),
-  readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai"
-      ? readExternalCliFallbackCredential({
-          profileId,
-          credential,
-          allowKeychainPrompt: false,
-        })
-      : null,
   isRefreshTokenReusedError,
 });
 
@@ -282,6 +281,7 @@ async function tryResolveOAuthProfile(
     email: resolved.credential.email ?? cred.email,
     profileId,
     profileType: cred.type,
+    credential: resolved.credential,
   });
 }
 
@@ -369,6 +369,9 @@ export async function resolveApiKeyForProfile(
   });
 
   if (cred.type === "api_key") {
+    if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
+      return null;
+    }
     const key = await resolveProfileSecretString({
       profileId,
       provider: cred.provider,
@@ -437,6 +440,7 @@ export async function resolveApiKeyForProfile(
       email: resolved.credential.email ?? cred.email,
       profileId,
       profileType: cred.type,
+      credential: resolved.credential,
     });
   } catch (error) {
     let refreshedStore =
@@ -445,10 +449,6 @@ export async function resolveApiKeyForProfile(
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
-    const surfacedMessageError =
-      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
-        ? error
-        : surfacedCause;
     if (isRefreshTokenReusedError(surfacedCause)) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -498,7 +498,7 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(surfacedMessageError);
+    const message = extractErrorMessage(surfacedCause);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
@@ -507,6 +507,7 @@ export async function resolveApiKeyForProfile(
     });
     throw new OAuthRefreshFailureError({
       provider: cred.provider,
+      profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +

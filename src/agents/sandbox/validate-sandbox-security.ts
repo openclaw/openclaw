@@ -58,17 +58,17 @@ let blockedHostPathsCache:
     }
   | undefined;
 
-export type ValidateBindMountsOptions = {
+type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
 };
 
-export type ValidateNetworkModeOptions = {
+type ValidateNetworkModeOptions = {
   allowContainerNamespaceJoin?: boolean;
 };
 
-export type BlockedBindReason =
+type BlockedBindReason =
   | { kind: "targets"; blockedPath: string }
   | { kind: "covers"; blockedPath: string }
   | { kind: "non_absolute"; sourcePath: string }
@@ -143,11 +143,14 @@ function getBlockedReasonForSourcePath(
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  const sourceKey = getSandboxHostPathPolicyKey(sourceNormalized);
   for (const blocked of blockedHostPaths) {
-    const blockedKey = getSandboxHostPathPolicyKey(blocked);
-    if (sourceKey === blockedKey || sourceKey.startsWith(`${blockedKey}/`)) {
+    if (isPathInsidePolicyPath(blocked, sourceNormalized)) {
       return { kind: "targets", blockedPath: blocked };
+    }
+    // Parent mounts can expose blocked descendants such as HOME credentials or
+    // the Docker socket directory even when the source root itself is allowed.
+    if (isPathInsidePolicyPath(sourceNormalized, blocked)) {
+      return { kind: "covers", blockedPath: blocked };
     }
   }
 
@@ -217,13 +220,14 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   return [...expanded];
 }
 
-function isPathInsidePosix(root: string, target: string): boolean {
-  if (root === "/") {
-    return true;
-  }
+function isPathInsidePolicyPath(root: string, target: string): boolean {
   const rootKey = getSandboxHostPathPolicyKey(root);
   const targetKey = getSandboxHostPathPolicyKey(target);
-  return targetKey === rootKey || targetKey.startsWith(`${rootKey}/`);
+  if (rootKey === "/") {
+    return true;
+  }
+  const rootPrefix = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
+  return targetKey === rootKey || targetKey.startsWith(rootPrefix);
 }
 
 function getOutsideAllowedRootsReason(
@@ -234,7 +238,7 @@ function getOutsideAllowedRootsReason(
     return null;
   }
   for (const root of allowedRoots) {
-    if (isPathInsidePosix(root, sourceNormalized)) {
+    if (isPathInsidePolicyPath(root, sourceNormalized)) {
       return null;
     }
   }
@@ -252,7 +256,7 @@ function getReservedTargetReason(bind: string): BlockedBindReason | null {
   }
   const target = normalizeHostPath(targetRaw);
   for (const reserved of RESERVED_CONTAINER_TARGET_PATHS) {
-    if (isPathInsidePosix(reserved, target)) {
+    if (isPathInsidePolicyPath(reserved, target)) {
       return {
         kind: "reserved_target",
         targetPath: target,

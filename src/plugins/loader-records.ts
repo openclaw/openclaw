@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
-import type { PluginBundleFormat, PluginFormat } from "./manifest-types.js";
+import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
@@ -116,6 +116,7 @@ export function recordPluginError(params: {
   error: unknown;
   logPrefix: string;
   diagnosticMessagePrefix: string;
+  diagnosticCode?: PluginDiagnosticCode;
 }) {
   const errorText =
     process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
@@ -141,6 +142,7 @@ export function recordPluginError(params: {
     pluginId: params.record.id,
     source: params.record.source,
     message: `${params.diagnosticMessagePrefix}${displayError}`,
+    ...(params.diagnosticCode ? { code: params.diagnosticCode } : {}),
   });
 }
 

@@ -5,9 +5,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
-  recordSessionMetaFromInbound,
+  recordInboundSessionMeta,
   resolveStorePath,
 } from "../../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +21,8 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -31,6 +34,7 @@ export type OutboundSessionRoute = {
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  plugin?: ChannelPlugin;
   agentId: string;
   accountId?: string | null;
   target: string;
@@ -108,11 +112,27 @@ function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType
   return undefined;
 }
 
+function inferPeerKindFromCapabilities(
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>,
+): ChatType | undefined {
+  const chatTypes: ChatType[] = [];
+  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
+    if (
+      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
+      !chatTypes.includes(chatType)
+    ) {
+      chatTypes.push(chatType);
+    }
+  }
+  return chatTypes.length === 1 ? chatTypes[0] : undefined;
+}
+
 function inferPeerKind(params: {
   channel: ChannelId;
+  plugin?: ChannelPlugin;
   target: string;
   resolvedTarget?: ResolvedMessagingTarget;
-}): ChatType {
+}): ChatType | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "direct";
@@ -121,7 +141,7 @@ function inferPeerKind(params: {
     return "channel";
   }
   if (resolvedKind === "group") {
-    const plugin = resolveOutboundChannelPlugin(params.channel);
+    const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
     const chatTypes = plugin?.capabilities?.chatTypes ?? [];
     const supportsChannel = chatTypes.includes("channel");
     const supportsGroup = chatTypes.includes("group");
@@ -130,13 +150,14 @@ function inferPeerKind(params: {
     }
     return "group";
   }
-  const plugin = resolveOutboundChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
   const strippedTarget = stripProviderPrefix(params.target, params.channel).trim();
   const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
   return (
     inferPeerKindFromPlugin({ plugin, targets }) ??
     inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
+    inferPeerKindFromCapabilities(plugin) ??
     "direct"
   );
 }
@@ -150,9 +171,13 @@ function resolveFallbackSession(
   }
   const peerKind = inferPeerKind({
     channel: params.channel,
+    plugin: params.plugin,
     target: params.target,
     resolvedTarget: params.resolvedTarget,
   });
+  if (!peerKind) {
+    return null;
+  }
   const peerId = stripKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -174,6 +199,7 @@ function resolveFallbackSession(
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact: false,
     peer,
     chatType,
     from,
@@ -190,8 +216,8 @@ export async function resolveOutboundSessionRoute(
     return null;
   }
   const nextParams = { ...params, target };
-  const resolver = resolveOutboundChannelPlugin(params.channel)?.messaging
-    ?.resolveOutboundSessionRoute;
+  const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
   if (resolver) {
     // Channel plugins can provide richer route semantics than the generic target parser.
     return await resolver(nextParams);
@@ -222,7 +248,7 @@ export async function ensureOutboundSessionEntry(params: {
     OriginatingTo: params.route.to,
   };
   try {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: params.route.sessionKey,
       ctx,

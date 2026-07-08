@@ -6,7 +6,8 @@ description: "Draft or post OpenClaw beta/stable Discord release announcements f
 # OpenClaw Release Announcement
 
 Use with `release-openclaw-maintainer` after a beta or stable release is live.
-Use with `openclaw-discord` when actually posting to Discord.
+Use with `$discord-user-post` when actually posting to Discord as the logged-in
+user.
 
 ## Evidence First
 
@@ -80,6 +81,7 @@ Fresh installs still point to `https://openclaw.ai`.
 
 ## Posting
 
-When asked to post, use the configured Discord workflow from
-`openclaw-discord` or the approved OpenClaw relay. Never print tokens.
-For public channels, inspect the final body before sending.
+When asked to post, use `$discord-user-post` to operate the logged-in Discord
+desktop app as the user. Resolve and visibly verify the exact server/channel,
+inspect the final body, and request action-time confirmation before entering or
+sending it. Never use OpenClaw channel sends, bots, webhooks, relays, or tokens.

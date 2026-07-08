@@ -12,6 +12,7 @@ import {
 import {
   isRequestBodyLimitError,
   normalizePluginHttpPath,
+  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   requestBodyErrorToText,
   resolveSingleWebhookTarget,
@@ -45,7 +46,7 @@ import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
-export interface MonitorLineProviderOptions {
+interface MonitorLineProviderOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -56,7 +57,7 @@ export interface MonitorLineProviderOptions {
   webhookPath?: string;
 }
 
-export interface LineProviderMonitor {
+interface LineProviderMonitor {
   account: ResolvedLineAccount;
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   stop: () => void;
@@ -174,15 +175,6 @@ export async function monitorLineProvider(
     throw new Error("LINE webhook mode requires a non-empty channel secret.");
   }
 
-  recordChannelRuntimeState({
-    channel: "line",
-    accountId: resolvedAccountId,
-    state: {
-      running: true,
-      lastStartAt: Date.now(),
-    },
-  });
-
   const bot = createLineBot({
     channelAccessToken: token,
     channelSecret: secret,
@@ -266,7 +258,7 @@ export async function monitorLineProvider(
                     }).catch(() => {});
                   }
 
-                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                  const deliveryResult = await deliverLineAutoReply({
                     payload,
                     lineData,
                     to: ctxPayload.From,
@@ -296,7 +288,16 @@ export async function monitorLineProvider(
                       },
                     },
                   });
-                  replyTokenUsed = nextReplyTokenUsed;
+                  replyTokenUsed = deliveryResult.replyTokenUsed;
+
+                  if (deliveryResult.status === "partial") {
+                    // Text reached the user but a rich/media bubble did not.
+                    // Surface the tagged partial failure after adopting the
+                    // consumed reply-token state so later blocks in this turn
+                    // route correctly; recordChannelRuntimeState is skipped
+                    // because this delivery was not a clean success.
+                    throw deliveryResult.error;
+                  }
 
                   recordChannelRuntimeState({
                     channel: "line",
@@ -337,7 +338,9 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const normalizedPath = normalizeWebhookPath(
+    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
+  );
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
@@ -467,6 +470,15 @@ export async function monitorLineProvider(
           requestLifecycle.release();
         }
       },
+    },
+  });
+
+  recordChannelRuntimeState({
+    channel: "line",
+    accountId: resolvedAccountId,
+    state: {
+      running: true,
+      lastStartAt: Date.now(),
     },
   });
 

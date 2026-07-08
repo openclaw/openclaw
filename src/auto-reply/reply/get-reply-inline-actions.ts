@@ -17,7 +17,7 @@ import {
   resolveSkillCommandInvocation,
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -27,6 +27,10 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import {
+  takeCommandSessionMetadataChangesFromTargets,
+  type CommandSessionMetadataChange,
+} from "./command-session-metadata.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -40,6 +44,10 @@ type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.
 type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
+
+type InternalGetReplyOptions = GetReplyOptions & {
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+};
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
@@ -122,7 +130,7 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
 }
 
 /** Result of attempting to handle an inbound message as an inline action. */
-export type InlineActionResult =
+type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
       kind: "continue";
@@ -130,23 +138,6 @@ export type InlineActionResult =
       abortedLastRun: boolean;
       cleanedBody: string;
     };
-
-// Command / skill-dispatch handlers ("/compact", "/status", tool-not-available
-// errors, etc.) emit system-meta feedback for an explicit user action; they
-// are not assistant source content. Mark them so dispatch-from-config does
-// not silently drop them when sourceReplyDeliveryMode === "message_tool_only"
-// (the default for many channels and group chats). See #87107.
-function markCommandReplyForDelivery(
-  reply: ReplyPayload | ReplyPayload[] | undefined,
-): ReplyPayload | ReplyPayload[] | undefined {
-  if (!reply) {
-    return reply;
-  }
-  if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
-  }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
-}
 
 function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
@@ -187,6 +178,8 @@ export async function handleInlineActions(params: {
   agentId: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  initialSessionEntry?: SessionEntry;
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -229,6 +222,8 @@ export async function handleInlineActions(params: {
     agentId,
     agentDir,
     sessionEntry,
+    initialSessionEntry,
+    allowCreateSessionEntry,
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -261,6 +256,13 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const internalOpts = opts as InternalGetReplyOptions | undefined;
+  const notifyInlineCommandSessionMetadataChanges = () => {
+    const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
+    if (changes) {
+      internalOpts?.onSessionMetadataChanges?.(changes);
+    }
+  };
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
@@ -374,6 +376,9 @@ export async function handleInlineActions(params: {
         groupId: extractExplicitGroupId(ctx.From),
         skillCommand: {
           name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
           skillName: skillInvocation.command.skillName,
           ...(skillInvocation.command.skillSource
             ? { skillSource: skillInvocation.command.skillSource }
@@ -518,6 +523,8 @@ export async function handleInlineActions(params: {
         failures: elevatedFailures,
       },
       sessionEntry: targetSessionEntry,
+      initialSessionEntry,
+      allowCreateSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,
@@ -549,6 +556,7 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await runCommands(inlineCommandContext);
+    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -599,6 +607,7 @@ export async function handleInlineActions(params: {
   const commandBodyBeforeRun = command.commandBodyNormalized;
   const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
   const commandResult = await runCommands(command);
+  notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };

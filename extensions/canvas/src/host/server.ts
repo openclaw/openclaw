@@ -30,10 +30,12 @@ import {
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
+export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type ChokidarWatch = typeof import("chokidar").watch;
 
 /** Options for Canvas host creation. */
-export type CanvasHostOpts = {
+type CanvasHostOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   port?: number;
@@ -45,7 +47,7 @@ export type CanvasHostOpts = {
 };
 
 /** Options for starting a standalone Canvas host HTTP server. */
-export type CanvasHostServerOpts = CanvasHostOpts & {
+type CanvasHostServerOpts = CanvasHostOpts & {
   handler?: CanvasHostHandler;
   ownsHandler?: boolean;
 };
@@ -58,7 +60,7 @@ export type CanvasHostServer = {
 };
 
 /** Options for creating only the Canvas host request handler. */
-export type CanvasHostHandlerOpts = {
+type CanvasHostHandlerOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   basePath?: string;
@@ -276,11 +278,22 @@ export async function createCanvasHostHandler(
   const writeStabilityThresholdMs = testMode ? 12 : 75;
   const writePollIntervalMs = testMode ? 5 : 10;
   const WebSocketServerClass = opts.webSocketServerClass ?? WebSocketServer;
-  const wss = liveReload ? new WebSocketServerClass({ noServer: true }) : null;
+  const wss = liveReload
+    ? new WebSocketServerClass({
+        noServer: true,
+        // Live reload clients never need to send application payloads; cap frames
+        // before ws buffers oversized input on this long-lived upgrade route.
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
+      })
+    : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
     wss.on("connection", (ws) => {
       sockets.add(ws);
+      // ws emits error for maxPayload rejections; close handles final cleanup.
+      ws.on("error", () => {
+        sockets.delete(ws);
+      });
       ws.on("close", () => sockets.delete(ws));
     });
   }

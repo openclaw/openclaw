@@ -23,6 +23,7 @@ import {
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -200,6 +201,12 @@ function parseCopilotTokenResponse(value: unknown): {
   return { token, expiresAt: expiresAtMs };
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function resolveCopilotProxyHost(proxyEp: string): string | null {
   const trimmed = proxyEp.trim();
   if (!trimmed) {
@@ -300,10 +307,13 @@ export async function resolveCopilotApiToken(params: {
   });
 
   if (!res.ok) {
+    await cancelUnreadResponseBody(res);
     throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
   }
 
-  const json = parseCopilotTokenResponse(await res.json());
+  const json = parseCopilotTokenResponse(
+    await readProviderJsonResponse(res, "github-copilot.token"),
+  );
   const payload: CachedCopilotToken = {
     token: json.token,
     expiresAt: json.expiresAt,
@@ -362,14 +372,16 @@ export function listUsableProviderAuthProfileIds(params: {
   cfg?: OpenClawConfig;
   /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
   /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
   /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
-    return { agentDir, profileIds };
+    const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
+    return { agentDir, profileIds: filterAuthProfileIdsByType(store, profileIds, params) };
   } catch {
     return { agentDir: "", profileIds: [] };
   }
@@ -385,6 +397,8 @@ export function isProviderAuthProfileConfigured(params: {
   cfg?: OpenClawConfig;
   /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
   /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
   /** Whether external CLI auth profiles may be discovered and included. */
@@ -403,6 +417,8 @@ export async function resolveProviderAuthProfileApiKey(params: {
   cfg?: OpenClawConfig;
   /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
   /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
   /** Whether external CLI auth profiles may be discovered and included. */
@@ -412,7 +428,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  for (const profileId of profileIds) {
+  for (const profileId of filterAuthProfileIdsByType(store, profileIds, params)) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
       store,
@@ -465,4 +481,19 @@ function resolveUsableProviderAuthProfiles(params: {
     }),
     store: fallbackStore,
   };
+}
+
+function filterAuthProfileIdsByType(
+  store: AuthProfileStore,
+  profileIds: readonly string[],
+  params: { profileTypes?: readonly AuthProfileCredential["type"][] },
+): string[] {
+  if (!params.profileTypes?.length) {
+    return [...profileIds];
+  }
+  const allowedTypes = new Set(params.profileTypes);
+  return profileIds.filter((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    return type !== undefined && allowedTypes.has(type);
+  });
 }

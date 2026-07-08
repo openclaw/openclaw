@@ -1,8 +1,11 @@
 // Mattermost tests cover monitor websocket plugin behavior.
+import { once } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
+  MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
@@ -192,6 +195,78 @@ describe("mattermost websocket monitor", () => {
     });
     expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
+  });
+
+  it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP websocket server address");
+    }
+
+    const quotedCardBody = '"'.repeat(380_000);
+    const largeProps = { cards: [{ body: quotedCardBody }] };
+    const largePostEnvelope = JSON.stringify({
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-large",
+          message: "large Mattermost integration post",
+          props: largeProps,
+        }),
+      },
+    });
+    expect(JSON.stringify(largeProps).length).toBeLessThan(800_000);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(
+      MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    );
+
+    const runtime = testRuntime();
+    const onPosted = vi.fn(async () => {});
+    server.on("connection", (socket) => {
+      socket.once("message", () => {
+        socket.send(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-1",
+                message: "normal Mattermost post",
+              }),
+            },
+          }),
+        );
+        socket.send(largePostEnvelope);
+        socket.send(Buffer.alloc(MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES + 1, 0x78));
+      });
+    });
+
+    try {
+      await createMattermostConnectOnce({
+        wsUrl: `ws://127.0.0.1:${address.port}`,
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted,
+      })();
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
+      expect.any(Object),
+    );
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-large", props: largeProps }),
+      expect.any(Object),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Max payload size exceeded"),
+    );
   });
 
   it("dispatches reaction events to the reaction handler", async () => {

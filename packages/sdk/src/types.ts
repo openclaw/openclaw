@@ -68,6 +68,10 @@ export type WorkspaceSelection = {
 
 export type ApprovalMode = "ask" | "never" | "auto" | "trusted";
 
+export type ApprovalDecisionParams = {
+  decision: "allow-once" | "allow-always" | "deny";
+};
+
 /** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
@@ -188,6 +192,11 @@ export type SDKError = {
 };
 
 /** Parameters for direct tool invocation through the SDK. */
+export type ToolsEffectiveParams = {
+  sessionKey: string;
+  agentId?: string;
+};
+
 export type ToolInvokeParams = {
   args?: JsonObject;
   sessionKey?: string;
@@ -324,3 +333,25 @@ export type SessionTarget = {
 };
 
 export type RunCreateParams = AgentRunParams;
+
+export type AgentsCreateParams = {
+  name: string;
+  workspace: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export type AgentsUpdateParams = {
+  agentId: string;
+  name?: string;
+  workspace?: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export type AgentsDeleteParams = {
+  agentId: string;
+  deleteFiles?: boolean;
+};
