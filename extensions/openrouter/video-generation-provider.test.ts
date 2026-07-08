@@ -24,13 +24,25 @@ const {
   fetchWithTimeoutGuardedMock: vi.fn(),
   postJsonRequestMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-    requestConfig: {},
-  })),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
+    const request = params.request as
+      | {
+          allowPrivateNetwork?: boolean;
+          headers?: Record<string, string>;
+        }
+      | undefined;
+    const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
+    for (const [key, value] of Object.entries(request?.headers ?? {})) {
+      headers.set(key, value);
+    }
+    return {
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: request?.allowPrivateNetwork === true,
+      headers,
+      dispatcherPolicy: undefined,
+      requestConfig: {},
+    };
+  }),
   waitProviderOperationPollIntervalMock: vi.fn(async () => {}),
 }));
 
@@ -144,6 +156,13 @@ function expectOpenRouterFetchCall(index: number, url: string, auditContext: str
   );
 }
 
+function requireFetchGuardOptions(index: number): Record<string, unknown> {
+  return requireRecord(
+    requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, index, 4, "fetch guard options"),
+    "OpenRouter fetch guard options",
+  );
+}
+
 function requirePostJsonParams(index = 0): Record<string, unknown> {
   const call = postJsonRequestMock.mock.calls[index] as unknown[] | undefined;
   if (!call) {
@@ -212,6 +231,10 @@ describe("openrouter video generation provider", () => {
   });
 
   it("maps OpenRouter video model discovery into unified catalog rows", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Catalog": "enabled" },
+    };
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
         data: [
@@ -240,6 +263,7 @@ describe("openrouter video generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request: requestOverrides,
             },
           },
         },
@@ -267,6 +291,7 @@ describe("openrouter video generation provider", () => {
         defaultBaseUrl: "https://openrouter.ai/api/v1",
         provider: "openrouter",
         capability: "video",
+        request: requestOverrides,
       },
     );
     expectOpenRouterFetchCall(
@@ -275,6 +300,8 @@ describe("openrouter video generation provider", () => {
       "openrouter-video-models",
     );
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer resolved-openrouter-key");
+    expect(requireFetchCallHeaders(0).get("x-openrouter-catalog")).toBe("enabled");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expectUnifiedModelCatalogEntries(rows, {
       provider: "openrouter",
       kind: "video_generation",
@@ -360,6 +387,10 @@ describe("openrouter video generation provider", () => {
   });
 
   it("resolves live per-model capabilities for runtime overlays", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Capabilities": "enabled" },
+    };
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
         data: [
@@ -384,6 +415,7 @@ describe("openrouter video generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request: requestOverrides,
             },
           },
         },
@@ -402,6 +434,20 @@ describe("openrouter video generation provider", () => {
       "https://custom.openrouter.test/openrouter/api/v1/videos/models",
       "openrouter-video-models",
     );
+    expectRecordFields(
+      requireRecord(
+        requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+        "request config",
+      ),
+      {
+        provider: "openrouter",
+        capability: "video",
+        baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+        request: requestOverrides,
+      },
+    );
+    expect(requireFetchCallHeaders(0).get("x-openrouter-capabilities")).toBe("enabled");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 2, "fetch")).toBe(12_345);
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 3, "fetch")).toBeTypeOf(
       "function",

@@ -9,6 +9,7 @@ import {
   assertOkOrThrowHttpError,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeOptionalString,
@@ -212,6 +213,7 @@ function projectOpenRouterVideoModelsToCatalogEntries(
 async function fetchOpenRouterVideoModels(params: {
   baseUrl: string;
   apiKey: string;
+  headers: Headers;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
@@ -219,11 +221,10 @@ async function fetchOpenRouterVideoModels(params: {
   return await getCachedLiveCatalogValue({
     keyParts: ["openrouter", "video-models", params.baseUrl, params.apiKey],
     load: async () => {
-      const headers = new Headers({
-        Authorization: `Bearer ${params.apiKey}`,
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
-      });
+      const headers = new Headers(params.headers);
+      headers.set("Authorization", `Bearer ${params.apiKey}`);
+      headers.set("HTTP-Referer", "https://openclaw.ai");
+      headers.set("X-OpenRouter-Title", "OpenClaw");
       const { response, release } = await fetchOpenRouterVideoGet({
         url: "videos/models",
         baseUrl: params.baseUrl,
@@ -253,15 +254,20 @@ export async function listOpenRouterVideoModelCatalog(
   if (!apiKey) {
     return null;
   }
-  const { baseUrl, allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-    provider: "openrouter",
-    capability: "video",
-    baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
-    defaultBaseUrl: OPENROUTER_BASE_URL,
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      provider: "openrouter",
+      capability: "video",
+      baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
+      defaultBaseUrl: OPENROUTER_BASE_URL,
+      request: sanitizeConfiguredModelProviderRequest(
+        ctx.config.models?.providers?.openrouter?.request,
+      ),
+    });
   const payload = await fetchOpenRouterVideoModels({
     baseUrl,
     apiKey,
+    headers,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -281,15 +287,20 @@ export async function resolveOpenRouterVideoModelCapabilities(
   if (!auth.apiKey) {
     return undefined;
   }
-  const { baseUrl, allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-    provider: "openrouter",
-    capability: "video",
-    baseUrl: ctx.cfg?.models?.providers?.openrouter?.baseUrl,
-    defaultBaseUrl: OPENROUTER_BASE_URL,
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      provider: "openrouter",
+      capability: "video",
+      baseUrl: ctx.cfg?.models?.providers?.openrouter?.baseUrl,
+      defaultBaseUrl: OPENROUTER_BASE_URL,
+      request: sanitizeConfiguredModelProviderRequest(
+        ctx.cfg?.models?.providers?.openrouter?.request,
+      ),
+    });
   const payload = await fetchOpenRouterVideoModels({
     baseUrl,
     apiKey: auth.apiKey,
+    headers,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     allowPrivateNetwork,
     dispatcherPolicy,
