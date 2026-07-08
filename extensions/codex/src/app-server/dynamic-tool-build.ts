@@ -8,7 +8,6 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
-  isInternalMessageChannel,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
@@ -19,6 +18,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
@@ -109,6 +109,15 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+// Matches INTERNAL_MESSAGE_CHANNEL in src/utils/message-channel-constants.ts; the
+// constant and its isInternalMessageChannel helper are intentionally not part of
+// the public plugin SDK surface, so the extension normalizes and compares locally.
+const INTERNAL_MESSAGE_CHANNEL = "webchat";
+
+function isInternalChannel(raw?: string | null): boolean {
+  return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
+}
+
 /**
  * Detects turns delivered on the internal `webchat` channel that are not bound to
  * a real user conversation: autonomous scheduler runs (heartbeat/cron) and
@@ -138,7 +147,7 @@ export function resolveCodexMessageToolProvider(
   // autonomous notification (e.g. a heartbeat send to Discord) as a cross-context
   // leak and deny delivery (#102206). Fall back to no binding for those turns,
   // matching the pre-v2026.6.9 Codex path, while keeping real user turns bound.
-  if (isInternalMessageChannel(provider) && isInternalCodexMessageTurn(params)) {
+  if (isInternalChannel(provider) && isInternalCodexMessageTurn(params)) {
     return undefined;
   }
   return provider;
