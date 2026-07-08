@@ -64,16 +64,6 @@ describe("temporal decay", () => {
     expect(calculateTemporalDecayMultiplier({ ageInDays: 30, halfLifeDays: 30 })).toBeCloseTo(0.5);
   });
 
-  it("can keep a minimum long-tail recall multiplier", () => {
-    expect(
-      calculateTemporalDecayMultiplier({
-        ageInDays: 10_000,
-        halfLifeDays: 30,
-        minMultiplier: 0.05,
-      }),
-    ).toBeCloseTo(0.05);
-  });
-
   it("does not decay evergreen memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
 
@@ -145,10 +135,8 @@ describe("temporal decay", () => {
 
     const byPath = new Map(merged.map((entry) => [entry.path, entry]));
     expect(byPath.get("memory/2099-01-01.md")?.score).toBeCloseTo(0.9);
-    expect(byPath.get("memory/2099-01-01.md")?.temporalDecayMultiplier).toBeCloseTo(1);
     expect(byPath.get("memory/2026-02-10.md")?.score).toBeCloseTo(0.8);
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
-    expect(byPath.get("memory/2000-01-01.md")?.temporalDecayMultiplier ?? 1).toBeLessThan(0.001);
   });
 
   it("uses file mtime fallback for non-memory sources", async () => {

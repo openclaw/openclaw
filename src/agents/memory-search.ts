@@ -102,7 +102,6 @@ export type ResolvedMemorySearchConfig = {
       temporalDecay: {
         enabled: boolean;
         halfLifeDays: number;
-        minMultiplier: number;
       };
     };
   };
@@ -129,7 +128,6 @@ const DEFAULT_MMR_ENABLED = false;
 const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
-const DEFAULT_TEMPORAL_DECAY_MIN_MULTIPLIER = 0;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
@@ -358,10 +356,6 @@ function mergeConfig(
         overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
         defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
         DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
-      minMultiplier:
-        overrides?.query?.hybrid?.temporalDecay?.minMultiplier ??
-        defaults?.query?.hybrid?.temporalDecay?.minMultiplier ??
-        DEFAULT_TEMPORAL_DECAY_MIN_MULTIPLIER,
     },
   };
   const cache = {
@@ -385,7 +379,6 @@ function mergeConfig(
         : DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
     ),
   );
-  const temporalDecayMinMultiplier = clampNumber(hybrid.temporalDecay.minMultiplier, 0, 1);
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
   const postCompactionForce = sync.sessions.postCompactionForce;
@@ -433,7 +426,6 @@ function mergeConfig(
         temporalDecay: {
           enabled: hybrid.temporalDecay.enabled,
           halfLifeDays: temporalDecayHalfLifeDays,
-          minMultiplier: temporalDecayMinMultiplier,
         },
       },
     },

@@ -72,11 +72,9 @@ describe("memory hybrid helpers", () => {
     const a = merged.find((r) => r.path === "memory/a.md");
     const b = merged.find((r) => r.path === "memory/b.md");
     expect(a?.score).toBeCloseTo(0.7 * 0.9);
-    expect(a?.scoreBeforeTemporalDecay).toBeCloseTo(0.7 * 0.9);
     expect(a?.vectorScore).toBeCloseTo(0.9);
     expect(a?.textScore).toBe(0);
     expect(b?.score).toBeCloseTo(0.3 * 1);
-    expect(b?.scoreBeforeTemporalDecay).toBeCloseTo(0.3 * 1);
     expect(b?.vectorScore).toBe(0);
     expect(b?.textScore).toBeCloseTo(1);
   });

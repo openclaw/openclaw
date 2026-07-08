@@ -110,8 +110,6 @@ Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
 original weight. `MEMORY.md` and other non-dated files under `memory/` are
 evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
-Set `minMultiplier` when you want very old dated notes to keep a small
-long-tail recall signal instead of decaying toward zero.
 
 <Tip>
 Enable this if your agent has months of daily notes and stale information

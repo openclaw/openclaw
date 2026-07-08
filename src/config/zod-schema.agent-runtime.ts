@@ -967,7 +967,6 @@ export const MemorySearchSchema = z
               .object({
                 enabled: z.boolean().optional(),
                 halfLifeDays: z.number().int().positive().optional(),
-                minMultiplier: z.number().min(0).max(1).optional(),
               })
               .strict()
               .optional(),

@@ -445,47 +445,6 @@ describe("memory search config", () => {
     expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
   });
 
-  it("normalizes temporal decay floor from defaults and overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            query: {
-              hybrid: {
-                temporalDecay: {
-                  enabled: true,
-                  halfLifeDays: 14,
-                  minMultiplier: 0.05,
-                },
-              },
-            },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              query: {
-                hybrid: {
-                  temporalDecay: {
-                    minMultiplier: 2,
-                  },
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.query.hybrid.temporalDecay).toEqual({
-      enabled: true,
-      halfLifeDays: 14,
-      minMultiplier: 1,
-    });
-  });
-
   it("normalizes multimodal settings", () => {
     const cfg = asConfig({
       agents: {

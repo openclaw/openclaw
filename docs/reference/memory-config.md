@@ -363,7 +363,6 @@ And under `memorySearch.query.hybrid`:
     | ----------------------------- | --------- | ------- | ---------------------------------------------------------- |
     | `temporalDecay.enabled`       | `boolean` | `false` | Enable recency boost                                       |
     | `temporalDecay.halfLifeDays`  | `number`  | `30`    | Score halves every N days                                  |
-    | `temporalDecay.minMultiplier` | `number`  | `0`     | Optional lower bound for very old dated memory, from 0 to 1 |
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
@@ -384,7 +383,7 @@ And under `memorySearch.query.hybrid`:
             vectorWeight: 0.7,
             textWeight: 0.3,
             mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30, minMultiplier: 0.05 },
+            temporalDecay: { enabled: true, halfLifeDays: 30 },
           },
         },
       },
