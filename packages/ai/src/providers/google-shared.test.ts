@@ -6,6 +6,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
 } from "./google-shared.js";
 
@@ -226,6 +227,20 @@ describe("consumeGoogleGenerateContentStream", () => {
         arguments: {},
       },
     ]);
+  });
+});
+
+describe("buildGoogleSimpleThinking", () => {
+  it("disables thinking when the requested level is clamped to off", () => {
+    const nonReasoningModel: Model<"google-generative-ai"> = {
+      ...model,
+      id: "gemini-flash-lite",
+      reasoning: false,
+    };
+
+    expect(buildGoogleSimpleThinking(nonReasoningModel, { reasoning: "high" })).toEqual({
+      enabled: false,
+    });
   });
 });
 
