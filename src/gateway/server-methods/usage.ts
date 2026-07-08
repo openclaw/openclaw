@@ -477,8 +477,11 @@ async function discoverAllSessionsForUsage(params: {
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
     : listAgentsForGateway(params.config).agents;
-  const discovered = await Promise.all(
-    agents.map(async (agent) => {
+  // Bound per-agent discovery like the sibling usage.cost cache load: an
+  // all-agent list on a 100+ agent gateway otherwise scans every agent's
+  // transcript directory concurrently and starves filesystem/IO.
+  const agentLoadResult = await runTasksWithConcurrency({
+    tasks: agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
       const sessions = await discoverAllSessions({
         agentId,
@@ -488,8 +491,13 @@ async function discoverAllSessionsForUsage(params: {
       });
       return sessions.map((session) => Object.assign({}, session, { agentId }));
     }),
-  );
-  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+    limit: USAGE_AGENT_LOAD_CONCURRENCY,
+    errorMode: "stop",
+  });
+  if (agentLoadResult.hasError) {
+    throw agentLoadResult.firstError;
+  }
+  return agentLoadResult.results.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
 function addUniqueSessionIds(target: string[], ids: Array<string | undefined>): string[] {

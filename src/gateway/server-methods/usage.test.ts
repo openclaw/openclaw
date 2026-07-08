@@ -29,10 +29,22 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         missingCostEntries: 0,
       },
     })),
+    discoverAllSessions: vi.fn(async () => []),
   };
 });
 
-import { loadCostUsageSummaryFromCache } from "../../infra/session-cost-usage.js";
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+  };
+});
+
+import {
+  discoverAllSessions,
+  loadCostUsageSummaryFromCache,
+} from "../../infra/session-cost-usage.js";
 import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
@@ -575,5 +587,57 @@ describe("gateway usage helpers", () => {
       }),
       undefined,
     );
+  });
+
+  it("bounds sessions.usage all-agent session discovery", async () => {
+    const agentCount = 13;
+    const concurrencyLimit = 12;
+    let releaseLoads!: () => void;
+    const loadsReleased = new Promise<void>((resolve) => {
+      releaseLoads = resolve;
+    });
+    let resolveFirstBatchStarted!: () => void;
+    const firstBatchStarted = new Promise<void>((resolve) => {
+      resolveFirstBatchStarted = resolve;
+    });
+    let started = 0;
+    let inFlight = 0;
+    let peakInFlight = 0;
+
+    vi.mocked(discoverAllSessions).mockImplementation(async () => {
+      started += 1;
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      if (started === concurrencyLimit) {
+        resolveFirstBatchStarted();
+      }
+      await loadsReleased;
+      inFlight -= 1;
+      return [];
+    });
+
+    const respond = vi.fn();
+    const request = usageHandlers["sessions.usage"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: {
+            list: Array.from({ length: agentCount }, (_, i) => ({ id: `agent-${i}` })),
+          },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+
+    await firstBatchStarted;
+    const startedBeforeRelease = started;
+    const peakBeforeRelease = peakInFlight;
+    releaseLoads();
+    await request;
+
+    expect(startedBeforeRelease).toBe(concurrencyLimit);
+    expect(peakBeforeRelease).toBe(concurrencyLimit);
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(agentCount);
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
   });
 });
