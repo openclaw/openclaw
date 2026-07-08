@@ -15,7 +15,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     }
   });
 
-  it("symlinks agent cache entries to the local bundled plugin and removes stale versions", async () => {
+  it("copies agent cache entries from the local bundled plugin and removes stale versions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
     cleanupPaths.push(root);
     const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
@@ -26,9 +26,114 @@ describe("Codex Computer Use shared plugin cache", () => {
       JSON.stringify({ name: "computer-use", version: "1.0.857" }),
     );
     const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
     await fs.mkdir(
       path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", "1.0.799"),
       { recursive: true },
+    );
+    await fs.symlink(bundledPluginRoot, activeCachePath, "dir");
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath,
+      config: computerUseConfig(),
+    });
+
+    expect(result).toMatchObject({
+      status: "shared",
+      changed: true,
+      version: "1.0.857",
+      removedStaleVersions: ["1.0.799"],
+    });
+    const cacheEntries = await fs.readdir(path.dirname(activeCachePath), {
+      withFileTypes: true,
+    });
+    const activeCacheEntry = cacheEntries.find((entry) => entry.name === "1.0.857");
+    expect(activeCacheEntry?.isDirectory()).toBe(true);
+    expect(activeCacheEntry?.isSymbolicLink()).toBe(false);
+    expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
+    expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
+    await expect(
+      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
+    ).resolves.toBe(undefined);
+    await expect(
+      fs.access(
+        path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", "1.0.799"),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("leaves an up-to-date copied cache entry unchanged", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await fs.mkdir(path.join(bundledPluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledPluginRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.dirname(activeCachePath), { recursive: true });
+    await fs.cp(bundledPluginRoot, activeCachePath, { recursive: true });
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath,
+      config: computerUseConfig(),
+    });
+
+    expect(result).toMatchObject({
+      status: "shared",
+      changed: false,
+      version: "1.0.857",
+      removedStaleVersions: [],
+    });
+    expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
+    expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
+    await expect(
+      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
+    ).resolves.toBe(undefined);
+  });
+
+  it("refreshes a stale copied cache entry with the bundled version", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await fs.mkdir(path.join(bundledPluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledPluginRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.799" }),
     );
 
     const result = await ensureCodexComputerUseSharedPluginCache({
@@ -38,26 +143,14 @@ describe("Codex Computer Use shared plugin cache", () => {
     });
 
     expect(result).toMatchObject({
-      status: "linked",
+      status: "shared",
       changed: true,
       version: "1.0.857",
-      removedStaleVersions: ["1.0.799"],
+      removedStaleVersions: [],
     });
-    const linkPath = path.join(
-      codexHome,
-      "plugins",
-      "cache",
-      "openai-bundled",
-      "computer-use",
-      "1.0.857",
-    );
-    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
-    expect(await fs.realpath(linkPath)).toBe(await fs.realpath(bundledPluginRoot));
     await expect(
-      fs.access(
-        path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", "1.0.799"),
-      ),
-    ).rejects.toThrow();
+      fs.readFile(path.join(activeCachePath, ".codex-plugin", "plugin.json"), "utf8"),
+    ).resolves.toContain('"version":"1.0.857"');
   });
 
   it("leaves cache entries alone in independent mode", async () => {
@@ -88,7 +181,7 @@ function computerUseConfig(
     toolCallTimeoutMs: 60_000,
     leaseTimeoutMs: 300_000,
     healthCheckIntervalMinutes: 60,
-    pluginCacheMode: "symlink",
+    pluginCacheMode: "shared",
     fallbackOnFailure: false,
     autoRepair: true,
     pluginName: "computer-use",

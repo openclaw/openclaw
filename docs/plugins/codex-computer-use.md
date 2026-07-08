@@ -226,12 +226,13 @@ OpenClaw normally launches local Codex app-server children with isolated
 per-agent `CODEX_HOME` directories. Without reconciliation, one agent can keep
 a stale cached Computer Use plugin even after Codex.app is updated elsewhere.
 
-When Computer Use is enabled, `pluginCacheMode: "symlink"` is the default.
+When Computer Use is enabled, `pluginCacheMode: "shared"` is the default.
 Before app-server startup, OpenClaw reads the locally installed Codex.app
 bundled Computer Use plugin version, removes stale per-agent Computer Use
-cache versions for that marketplace/plugin, and points the active per-agent
-cache entry at the local bundled plugin. Set `pluginCacheMode: "independent"`
-only when a runtime intentionally needs its own copied plugin cache.
+cache versions for that marketplace/plugin, and refreshes the active per-agent
+cache entry as a real copied directory that Codex can discover. Set
+`pluginCacheMode: "independent"` only when a runtime intentionally needs its own
+unmanaged plugin cache.
 
 ## Remote catalog limit
 
@@ -260,7 +261,7 @@ remote install is unsupported, run install with a local source or path:
 | `toolCallTimeoutMs`             | 60000          | Timeout budget for the real `computer-use.list_apps` MCP tool call.            |
 | `leaseTimeoutMs`                | 300000         | Default timeout used by the shared window-scope Computer Use lease manager.    |
 | `healthCheckIntervalMinutes`    | 60             | Allowed periodic health cadence: 30, 60, 120, or 240 minutes.                  |
-| `pluginCacheMode`               | `symlink`      | Share the local Codex.app bundled plugin cache, or use `independent` copies.   |
+| `pluginCacheMode`               | `shared`       | Refresh a Codex-discoverable cache copy, or use `independent` cache handling.  |
 | `fallbackOnFailure`             | false          | Allow fallback inside the Computer Use setup path instead of failing closed.   |
 | `autoRepair`                    | true           | Repair scoped stale Computer Use MCP children after a failed probe.            |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |

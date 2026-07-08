@@ -141,7 +141,7 @@ function computerUseConfig(
     toolCallTimeoutMs: 60_000,
     leaseTimeoutMs: 300_000,
     healthCheckIntervalMinutes: 60,
-    pluginCacheMode: "symlink",
+    pluginCacheMode: "shared",
     fallbackOnFailure: false,
     autoRepair: true,
     pluginName: "computer-use",

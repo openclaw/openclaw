@@ -84,7 +84,7 @@ export type CodexComputerUseConfig = {
   toolCallTimeoutMs?: number;
   leaseTimeoutMs?: number;
   healthCheckIntervalMinutes?: number;
-  pluginCacheMode?: "symlink" | "independent";
+  pluginCacheMode?: "shared" | "independent";
   fallbackOnFailure?: boolean;
   autoRepair?: boolean;
   marketplaceSource?: string;
@@ -102,7 +102,7 @@ export type ResolvedCodexComputerUseConfig = {
   toolCallTimeoutMs: number;
   leaseTimeoutMs: number;
   healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
-  pluginCacheMode: "symlink" | "independent";
+  pluginCacheMode: "shared" | "independent";
   fallbackOnFailure: boolean;
   autoRepair: boolean;
   pluginName: string;
@@ -347,7 +347,7 @@ const codexComputerUseHealthIntervalSchema = z.union([
   z.literal(120),
   z.literal(240),
 ]);
-const codexComputerUsePluginCacheModeSchema = z.enum(["symlink", "independent"]);
+const codexComputerUsePluginCacheModeSchema = z.enum(["shared", "independent"]);
 const codexPluginDestructivePolicySchema = z.union([
   z.boolean(),
   z.literal("auto"),
@@ -926,7 +926,7 @@ export function resolveCodexComputerUseConfig(
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
-    "symlink";
+    "shared";
   const fallbackOnFailure =
     params.overrides?.fallbackOnFailure ??
     config.fallbackOnFailure ??
@@ -976,8 +976,8 @@ function normalizeComputerUseHealthCheckIntervalMinutes(value: unknown): 30 | 60
     : DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES;
 }
 
-function normalizeComputerUsePluginCacheMode(value: unknown): "symlink" | "independent" | null {
-  return value === "symlink" || value === "independent" ? value : null;
+function normalizeComputerUsePluginCacheMode(value: unknown): "shared" | "independent" | null {
+  return value === "shared" || value === "independent" ? value : null;
 }
 
 export function codexAppServerStartOptionsKey(

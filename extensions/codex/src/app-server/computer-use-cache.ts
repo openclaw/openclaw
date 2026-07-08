@@ -5,10 +5,10 @@ import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 export type CodexComputerUsePluginCacheRepairResult =
   | {
-      status: "disabled" | "independent" | "source_missing" | "linked";
+      status: "disabled" | "independent" | "source_missing" | "shared";
       changed: boolean;
       message: string;
-      linkPath?: string;
+      cachePath?: string;
       targetPath?: string;
       version?: string;
       removedStaleVersions: string[];
@@ -64,18 +64,18 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     marketplaceName,
     params.config.pluginName,
   );
-  const linkPath = path.join(cacheRoot, version);
+  const cachePath = path.join(cacheRoot, version);
   const removedStaleVersions = await removeStalePluginCacheVersions(cacheRoot, version);
-  const changed = await ensureDirectorySymlink(linkPath, sourcePluginRoot);
+  const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version);
   return {
-    status: "linked",
+    status: "shared",
     changed: changed || removedStaleVersions.length > 0,
-    linkPath,
+    cachePath,
     targetPath: sourcePluginRoot,
     version,
     removedStaleVersions,
     warnings: [],
-    message: `Computer Use plugin cache ${linkPath} points at bundled plugin ${sourcePluginRoot}.`,
+    message: `Computer Use plugin cache ${cachePath} contains bundled plugin ${sourcePluginRoot}.`,
   };
 }
 
@@ -113,19 +113,21 @@ async function removeStalePluginCacheVersions(
   return removed.toSorted();
 }
 
-async function ensureDirectorySymlink(linkPath: string, targetPath: string): Promise<boolean> {
-  await fs.mkdir(path.dirname(linkPath), { recursive: true });
-  const stat = await fs.lstat(linkPath).catch(() => undefined);
-  if (stat?.isSymbolicLink()) {
-    const existingTarget = await fs.readlink(linkPath);
-    if (path.resolve(path.dirname(linkPath), existingTarget) === targetPath) {
+async function ensureRealDirectoryCopy(
+  cachePath: string,
+  sourcePluginRoot: string,
+  version: string,
+): Promise<boolean> {
+  await fs.mkdir(path.dirname(cachePath), { recursive: true });
+  const stat = await fs.lstat(cachePath).catch(() => undefined);
+  if (stat?.isDirectory() && !stat.isSymbolicLink()) {
+    const cachedVersion = await readBundledPluginVersion(cachePath);
+    if (cachedVersion === version) {
       return false;
     }
   }
-  if (stat) {
-    await fs.rm(linkPath, { recursive: true, force: true });
-  }
-  await fs.symlink(targetPath, linkPath, "dir");
+  await fs.rm(cachePath, { recursive: true, force: true });
+  await fs.cp(sourcePluginRoot, cachePath, { recursive: true });
   return true;
 }
 
