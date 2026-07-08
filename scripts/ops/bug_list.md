@@ -49,14 +49,14 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-07-07 06:00:13 UTC · hosts:eu us_
+_Last automated scan: 2026-07-08 06:00:13 UTC · hosts:eu us_
 
 | Pri | Host | Agent | Issue                             | Detail                                                                              |
 | --- | ---- | ----- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| P1  | eu   | -     | Heavy swap usage                  | 3215MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
-| P1  | eu   | -     | Low memory headroom               | Only 124MiB available (warn<500MiB); OOM risk under load.                           |
-| P1  | us   | -     | Heavy swap usage                  | 2339MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
-| P1  | us   | -     | Low memory headroom               | Only 362MiB available (warn<500MiB); OOM risk under load.                           |
+| P1  | eu   | -     | Heavy swap usage                  | 3480MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
+| P1  | eu   | -     | Low memory headroom               | Only 115MiB available (warn<500MiB); OOM risk under load.                           |
+| P1  | us   | -     | Heavy swap usage                  | 2766MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
+| P1  | us   | -     | Low memory headroom               | Only 272MiB available (warn<500MiB); OOM risk under load.                           |
 | P3  | deps | -     | Undocumented dependency candidate | host api.resend.com in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md   |
 | P3  | deps | -     | Undocumented env var candidate    | AUTH_RESEND_KEY in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md       |
 | P3  | deps | -     | Undocumented env var candidate    | NEXTAUTH_URL in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md          |
