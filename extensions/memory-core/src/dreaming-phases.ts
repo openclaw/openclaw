@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
@@ -213,7 +213,10 @@ function normalizeDailySnippet(line: string): string | null {
   if (withoutListMarker.length < DAILY_INGESTION_MIN_SNIPPET_CHARS) {
     return null;
   }
-  return truncateUtf16Safe(withoutListMarker, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+  return truncateUtf16Safe(withoutListMarker, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(
+    /\s+/g,
+    " ",
+  );
 }
 
 type DailySnippetChunk = {
@@ -734,7 +737,10 @@ function buildSessionRenderedLine(params: {
   snippet: string;
 }): string {
   const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
-  return truncateUtf16Safe(`[${source}] ${params.snippet}`, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
+  return truncateUtf16Safe(
+    `[${source}] ${params.snippet}`,
+    SESSION_INGESTION_MAX_SNIPPET_CHARS + 64,
+  );
 }
 
 function resolveSessionAgentsForWorkspace(params: {
