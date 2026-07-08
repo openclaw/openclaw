@@ -27,6 +27,7 @@ export function emitDynamicToolStartedDiagnostic(params: DynamicToolDiagnosticCo
 export function emitDynamicToolErrorDiagnostic(
   params: DynamicToolDiagnosticContext & {
     durationMs: number;
+    terminalReason?: "failed" | "cancelled" | "timed_out";
   },
 ): void {
   emitTrustedDiagnosticEvent({
@@ -38,6 +39,7 @@ export function emitDynamicToolErrorDiagnostic(
     toolCallId: params.call.callId,
     durationMs: params.durationMs,
     errorCategory: "codex_dynamic_tool_error",
+    terminalReason: params.terminalReason ?? "failed",
   });
 }
 
@@ -75,5 +77,8 @@ export function emitDynamicToolTerminalDiagnostic(
     });
     return;
   }
-  emitDynamicToolErrorDiagnostic(params);
+  emitDynamicToolErrorDiagnostic({
+    ...params,
+    terminalReason: params.response.diagnosticTerminalReason ?? "failed",
+  });
 }

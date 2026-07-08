@@ -1245,6 +1245,40 @@ function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T 
   return marked;
 }
 
+export function buildEmptyInteractiveReplyPayload(params: {
+  isInteractive: boolean;
+  isHeartbeat?: boolean;
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  isMessageToolOnly: boolean;
+  hasPendingContinuation: boolean;
+  hasExplicitSilentReply: boolean;
+  hasCommittedDelivery: boolean;
+  sessionCtx: TemplateContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload | undefined {
+  if (
+    !params.isInteractive ||
+    params.isHeartbeat === true ||
+    params.silentExpected === true ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.isMessageToolOnly ||
+    params.hasPendingContinuation ||
+    params.hasExplicitSilentReply ||
+    params.hasCommittedDelivery
+  ) {
+    return undefined;
+  }
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
 /** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;

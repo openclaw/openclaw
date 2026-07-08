@@ -150,6 +150,12 @@ export {
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -306,6 +312,7 @@ export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -314,6 +321,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";

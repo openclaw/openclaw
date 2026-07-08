@@ -356,6 +356,19 @@ export class BeforeToolCallBlockedError extends Error {
   }
 }
 
+export type BeforeToolCallFailureDisposition = "blocked" | "cancelled" | "failed" | "timed_out";
+
+/** Return the closed terminal disposition carried by a before-tool failure. */
+export function getBeforeToolCallFailureDisposition(
+  error: unknown,
+): BeforeToolCallFailureDisposition | undefined {
+  try {
+    return error instanceof BeforeToolCallBlockedError ? "blocked" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Remember hook-adjusted params for later adapter-side execution. */
 export function recordAdjustedParamsForToolCall(
   toolCallId: string | undefined,

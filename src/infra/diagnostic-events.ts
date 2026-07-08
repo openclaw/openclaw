@@ -493,6 +493,7 @@ export type DiagnosticToolParamsSummary =
   | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
 
 export type DiagnosticToolSource = "channel" | "core" | "mcp" | "plugin";
+export type DiagnosticToolTerminalReason = "failed" | "cancelled" | "timed_out";
 
 type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   runId?: string;
@@ -519,6 +520,7 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   durationMs: number;
   errorCategory: string;
   errorCode?: string;
+  terminalReason?: DiagnosticToolTerminalReason;
 };
 
 export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
