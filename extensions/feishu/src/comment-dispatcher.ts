@@ -93,7 +93,7 @@ export function createFeishuCommentReplyDispatcher(
         );
       },
       onCleanup: () => {
-        void typingReaction.cleanup();
+        void typingReaction.cleanup().catch(() => undefined);
       },
     });
 

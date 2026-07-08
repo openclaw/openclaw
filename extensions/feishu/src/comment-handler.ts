@@ -326,6 +326,6 @@ export async function handleFeishuCommentEvent(
       markRunComplete();
       markDispatchIdle();
     }
-    void cleanupTypingReaction();
+    void cleanupTypingReaction().catch(() => undefined);
   }
 }
