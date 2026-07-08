@@ -1064,12 +1064,12 @@ describe("media store", () => {
         // The stored extension is driven by the buffer/header MIME (here .txt),
         // not by the spoofed filename suffix, so the on-disk name cannot carry
         // a deceptive extension.
-        originalFilename: "report‮fdp.exe",
+        originalFilename: "report\u202efdp.exe",
         expectedIdPattern: /^report_fdp---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "neutralizes zero-width space and byte-order mark",
-        originalFilename: "ze​ro﻿width.txt",
+        originalFilename: "ze\u200bro\ufeffwidth.txt",
         expectedIdPattern: /^ze_ro_width---[a-f0-9-]{36}\.txt$/,
       },
     ] as const)("$name", async (testCase) => {
