@@ -380,6 +380,58 @@ describe("memory wiki source sync state", () => {
     expect(stillThere).toContain("must survive");
   });
 
+  it("keeps the page when read fails with a non-ENOENT error", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/keep-on-read-fail.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```",
+        "generated",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "should survive read failure",
+        "<!-- openclaw:human:end -->",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // Make the page unreadable by removing read permission.
+    await fs.chmod(pageAbsPath, 0o000);
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    // Restore permission so cleanup can proceed.
+    await fs.chmod(pageAbsPath, 0o644);
+
+    // Read failed with EACCES — the page and state entry must survive.
+    expect(removed).toBe(0);
+    const stillThere = await fs.readFile(pageAbsPath, "utf-8");
+    expect(stillThere).toContain("should survive read failure");
+  });
+
   it("rejects projected imports that would exceed the source-sync row cap", () => {
     expect(() =>
       assertMemoryWikiSourceSyncStateCapacity({

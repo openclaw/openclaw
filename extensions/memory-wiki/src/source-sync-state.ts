@@ -322,8 +322,13 @@ export async function pruneImportedSourceEntries(params: {
     try {
       const pageContent = await fs.readFile(pageAbsPath, "utf-8");
       notesBlock = extractHumanNotesBlock(pageContent);
-    } catch {
-      // Page may not exist or be unreadable; proceed with removal anyway.
+    } catch (err) {
+      // A genuinely missing page is safe to prune (it was already removed).
+      // Transient failures (EBUSY, EMFILE, EACCES, EPERM) must keep the
+      // page — otherwise Notes are lost when unlink succeeds but read fails.
+      if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT")) {
+        continue;
+      }
     }
     if (notesBlock) {
       const salvageDir = path.join(params.vaultRoot, ".salvage");
