@@ -54,6 +54,12 @@ export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package"
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
 
+const YARN_OPTIONS_WITH_VALUE = new Set(["--cwd"]);
+const YARN_FLAG_OPTIONS = new Set(["--immutable", "--silent", "-s"]);
+const YARN_DLX_OPTIONS_WITH_VALUE = new Set(["--package", "-p"]);
+const YARN_DLX_FLAG_OPTIONS = new Set(["--quiet", "-q"]);
+const YARN_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "run"]);
+
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
 }
@@ -252,6 +258,72 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
+function unwrapYarnDlxInvocation(argv: string[]): string[] | null {
+  let idx = 0;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      const tail = argv.slice(idx + 1);
+      return tail.length > 0 ? tail : null;
+    }
+    if (!token.startsWith("-")) {
+      return argv.slice(idx);
+    }
+    const flag = normalizeOptionFlag(token);
+    if (YARN_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (YARN_DLX_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapYarnExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token === "exec") {
+        const tail = argv.slice(idx + 1);
+        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
+        return normalizedTail.length > 0 ? normalizedTail : null;
+      }
+      if (token === "dlx") {
+        return unwrapYarnDlxInvocation(argv.slice(idx + 1));
+      }
+      return null;
+    }
+    const flag = normalizeOptionFlag(token);
+    if (YARN_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (YARN_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
 export function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | null {
   const resolution = resolveKnownPackageManagerExecInvocation(argv);
   return resolution.kind === "unwrapped" ? resolution.argv : null;
@@ -273,7 +345,7 @@ export function resolveKnownPackageManagerExecInvocation(
       });
       return NPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
         ? { kind: "unsafe-exec" }
-        : containsSubcommandToken(argv.slice(1), NPM_EXEC_SUBCOMMANDS)
+        : firstSubcommand === null && containsSubcommandToken(argv.slice(1), NPM_EXEC_SUBCOMMANDS)
           ? { kind: "unsafe-exec" }
           : { kind: "not-exec" };
     }
@@ -292,7 +364,21 @@ export function resolveKnownPackageManagerExecInvocation(
         flagOptions: PNPM_FLAG_OPTIONS,
       });
       return PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "") ||
-        containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS)
+        (firstSubcommand === null && containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS))
+        ? { kind: "unsafe-exec" }
+        : { kind: "not-exec" };
+    }
+    case "yarn": {
+      const unwrapped = unwrapYarnExecInvocation(argv);
+      if (unwrapped) {
+        return { kind: "unwrapped", argv: unwrapped };
+      }
+      const firstSubcommand = firstSubcommandAfterOptions(argv, {
+        optionsWithValue: new Set([...YARN_OPTIONS_WITH_VALUE, ...YARN_DLX_OPTIONS_WITH_VALUE]),
+        flagOptions: new Set([...YARN_FLAG_OPTIONS, ...YARN_DLX_FLAG_OPTIONS]),
+      });
+      return YARN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "") ||
+        (firstSubcommand === null && containsSubcommandToken(argv.slice(1), YARN_EXEC_SUBCOMMANDS))
         ? { kind: "unsafe-exec" }
         : { kind: "not-exec" };
     }

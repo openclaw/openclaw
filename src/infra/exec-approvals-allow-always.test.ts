@@ -1059,6 +1059,65 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("rejects stale yarn allow-always entries for exec-like carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const yarnPath = makeExecutable(dir, "yarn");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "yarn exec -- sh -c 'id > marker'",
+      allowlist: [{ pattern: yarnPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { command: "npm run test -- x", executable: "npm" },
+    { command: "pnpm run build -- node", executable: "pnpm" },
+  ])(
+    "keeps exec-like arguments on known non-exec package-manager subcommands allowlisted: $command",
+    async ({ command, executable }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const executablePath = makeExecutable(dir, executable);
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [{ pattern: executablePath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(true);
+    },
+  );
+
   it("requires bound args for package-manager shell script carriers", async () => {
     if (process.platform === "win32") {
       return;
@@ -1147,6 +1206,16 @@ $0 \\"$1\\"" touch {marker}`,
       platform: process.platform,
     });
     expect(chainedInner.allowlistSatisfied).toBe(true);
+
+    const yarnInner = await evaluateShellAllowlistWithAuthorization({
+      command: "yarn exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(yarnInner.allowlistSatisfied).toBe(true);
   });
 
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {
