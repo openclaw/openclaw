@@ -1,4 +1,5 @@
 // Mattermost plugin module implements client behavior.
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -17,6 +18,7 @@ import {
 import { z } from "zod";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // Mattermost REST control-plane JSON (posts, users, channels, file-upload
 // results) stays well under a megabyte; cap successful JSON the same way the
 // shared provider path is capped so an untrusted/self-hosted homeserver cannot
@@ -174,6 +176,8 @@ export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
   fetchImpl?: MattermostFetch;
+  /** Timeout for REST requests in milliseconds (default: 30000). */
+  timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
 }): MattermostClient {
@@ -183,6 +187,7 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
+  const requestTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
   // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
   // that validates the target URL before making the request (DNS rebinding protection etc.).
   // A custom fetchImpl is accepted for testing and special cases.
@@ -196,11 +201,31 @@ export function createMattermostClient(params: {
       init,
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
+      signal: init?.signal ?? undefined,
+      timeoutMs: requestTimeoutMs,
     });
     return responseWithRelease(response, release);
   };
 
-  const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
+  const timedExternalFetchImpl: MattermostFetch | undefined = externalFetchImpl
+    ? async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const { signal, cleanup } = buildTimeoutAbortSignal({
+          timeoutMs: requestTimeoutMs,
+          signal: init?.signal ?? undefined,
+          operation: "mattermost-api",
+          url,
+        });
+        try {
+          return await externalFetchImpl(input, { ...init, signal });
+        } finally {
+          cleanup();
+        }
+      }
+    : undefined;
+
+  const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
 
   const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
