@@ -2,6 +2,7 @@
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import type {
   CacheRetention,
   Context,
@@ -172,6 +173,8 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
+    fetch: getAiTransportHost().buildModelFetch(model),
   });
 }
 

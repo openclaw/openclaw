@@ -227,6 +227,32 @@ function makeSlowVersionCrabbox(helpText: string): string {
   return binDir;
 }
 
+// Fake Crabbox whose `run --help` is slow on every call and, like real Crabbox
+// 0.36, renders the provider help to stderr. Used to prove the wrapper retries a
+// cold/slow metadata probe instead of hard-failing.
+function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-help-crabbox-"));
+  tempDirs.push(binDir);
+  const crabboxPath = path.join(binDir, "crabbox");
+
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === '--version') {",
+    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
+    "  process.exit(0);",
+    "} else if (args[0] === 'run' && args[1] === '--help') {",
+    `  setTimeout(() => { process.stderr.write(${JSON.stringify(helpText)}); process.exit(0); }, ${delayMs});`,
+    "} else {",
+    "  process.exit(0);",
+    "}",
+  ].join("\n");
+  writeFileSync(crabboxPath, `${script}\n`, "utf8");
+  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
+  chmodSync(crabboxPath, 0o755);
+  return binDir;
+}
+
 function testTimingPreload(options: { clockScale?: number; spawnTimeoutMs?: number }): string {
   const key = JSON.stringify(options);
   let preloadPath = timingPreloads.get(key);
@@ -3126,6 +3152,24 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("version=unknown");
     expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+  });
+
+  it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    // First probe is SIGKILLed at 150ms; the retry gets the full generous timeout
+    // and reads the (600ms) stderr help, so the wrapper must not hard-fail.
+    const result = runWrapper(helpText, ["--version"], {
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "150" },
+      extraPathEntries: [makeSlowHelpCrabbox(helpText, 600)],
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("could not parse provider list");
+    expect(result.stderr).not.toContain("selected binary failed basic --version/--help sanity checks");
+    expect(result.stderr).toContain(
+      "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
+    );
   });
 
   it("parses provider choices from the --provider flag help format", () => {
