@@ -40,6 +40,7 @@ export const MAX_PRICING_CACHE_ENTRIES = 1000;
 
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
+const pricingAccessTimestamps = new Map<string, number>();
 const sourceFailures = new Map<
   GatewayModelPricingHealthSource,
   { lastFailureAt: number; detail: string }
@@ -65,8 +66,21 @@ export function replaceGatewayModelPricingCache(
   nextCachedAt = Date.now(),
 ): void {
   if (nextPricing.size > MAX_PRICING_CACHE_ENTRIES) {
-    const trimmed = new Map(Array.from(nextPricing).slice(0, MAX_PRICING_CACHE_ENTRIES));
-    cachedPricing = trimmed;
+    // Merge existing cache entries (which carry access history) with new pricing
+    // data so we can prefer recently-accessed entries when trimming.
+    const merged = new Map(cachedPricing);
+    for (const [key, value] of nextPricing) {
+      merged.set(key, value);
+    }
+    // Sort by last-access timestamp descending (newest first), then by key for
+    // deterministic ordering when timestamps are equal.
+    const sorted = Array.from(merged.entries()).sort(([keyA], [keyB]) => {
+      const timeA = pricingAccessTimestamps.get(keyA) ?? 0;
+      const timeB = pricingAccessTimestamps.get(keyB) ?? 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return keyA.localeCompare(keyB);
+    });
+    cachedPricing = new Map(sorted.slice(0, MAX_PRICING_CACHE_ENTRIES));
     cachedAt = nextCachedAt;
     return;
   }
@@ -144,6 +158,7 @@ export function getCachedGatewayModelPricing(params: {
   const key = modelPricingCacheKey(provider, model);
   const direct = key ? cachedPricing.get(key) : undefined;
   if (direct) {
+    pricingAccessTimestamps.set(key, Date.now());
     return direct;
   }
   const normalized = normalizeModelRef(provider, model);
@@ -151,7 +166,14 @@ export function getCachedGatewayModelPricing(params: {
   if (normalizedKey === key) {
     return undefined;
   }
-  return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
+  if (normalizedKey) {
+    const result = cachedPricing.get(normalizedKey);
+    if (result) {
+      pricingAccessTimestamps.set(normalizedKey, Date.now());
+    }
+    return result;
+  }
+  return undefined;
 }
 
 export function getGatewayModelPricingCacheMeta(): {
@@ -191,6 +213,7 @@ export function getGatewayModelPricingCacheFingerprint(): string {
 
 export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
+  pricingAccessTimestamps.clear();
 }
 
 export function setGatewayModelPricingForTest(
