@@ -11,6 +11,7 @@ import {
   testing,
   abortActiveReplyRuns,
   createReplyOperation,
+  expireStaleReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
@@ -600,6 +601,28 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reentrant-expire",
+      sessionId: "reentrant-session",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      // Mirrors the run loop's abort handler: backend cancellation propagates
+      // synchronously back into a user-shaped abort on the same operation.
+      cancel: () => {
+        operation.abortByUser();
+      },
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
   });
 
   it("cancels terminal settle when the owner clears state first", async () => {
