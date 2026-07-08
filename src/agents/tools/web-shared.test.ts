@@ -147,6 +147,24 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mark exact-limit reads as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", " world"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 11 })).resolves.toEqual({
+      text: "hello world",
+      truncated: false,
+      bytesRead: 11,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
     const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
     const text = vi.fn(async () => "hello");
