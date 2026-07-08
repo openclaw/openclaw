@@ -227,6 +227,8 @@ import {
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
   ExecApprovalsNodeGetParamsSchema,
+  type ExecApprovalsNodeSnapshot,
+  ExecApprovalsNodeSnapshotSchema,
   type ExecApprovalsNodeSetParams,
   ExecApprovalsNodeSetParamsSchema,
   type ExecApprovalsSetParams,
@@ -1053,6 +1055,9 @@ export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
+export const validateExecApprovalsNodeSnapshot = lazyCompile<ExecApprovalsNodeSnapshot>(
+  ExecApprovalsNodeSnapshotSchema,
+);
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
 export const validateTerminalInputParams =
@@ -1646,6 +1651,7 @@ export type {
   CronRunsParams,
   CronRunLogEntry,
   ExecApprovalsGetParams,
+  ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
   ExecApprovalGetParams,

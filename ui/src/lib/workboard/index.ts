@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
@@ -63,7 +64,7 @@ export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
-export const WORKBOARD_ENGINE_MODELS = {
+const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
@@ -289,7 +290,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskStatus =
+type WorkboardTaskStatus =
   | "queued"
   | "running"
   | "completed"
@@ -314,7 +315,7 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
-export type WorkboardDependencyParent = {
+type WorkboardDependencyParent = {
   id: string;
   title: string;
   status?: WorkboardStatus;
@@ -327,7 +328,7 @@ export type WorkboardDependencyState = {
   blockedParents: WorkboardDependencyParent[];
 };
 
-export type WorkboardDispatchSummary = {
+type WorkboardDispatchSummary = {
   started: number;
   failures: number;
   promoted: number;
@@ -338,9 +339,9 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
 
-export type WorkboardRefreshSource = "initial" | "manual" | "poll";
+type WorkboardRefreshSource = "initial" | "manual" | "poll";
 
-export type WorkboardViewPresetId =
+type WorkboardViewPresetId =
   | "all"
   | "default_agent"
   | "ready"
@@ -3712,7 +3713,7 @@ function buildCardSessionLabel(card: WorkboardCard): string {
     return `${title}${suffixText}`;
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
-  return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+  return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
 }
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {

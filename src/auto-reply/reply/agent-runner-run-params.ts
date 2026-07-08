@@ -39,7 +39,7 @@ export function resolveModelFallbackOptions(
 }
 
 /** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-export function resolveEnforceFinalTagWithResolver(
+function resolveEnforceFinalTagWithResolver(
   run: FollowupRun["run"],
   provider: string,
   model: string,

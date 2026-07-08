@@ -1,4 +1,3 @@
-import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -61,7 +60,6 @@ describe("sessions_spawn context modes", () => {
         fallbackEntry?: Record<string, unknown>;
         parentStoreKeys?: string[];
         sessionKey: string;
-        sessionsDir?: string;
       }) => {
         const parentEntry = params.parentStoreKeys
           ?.map((key) => store[key])
@@ -94,7 +92,6 @@ describe("sessions_spawn context modes", () => {
         const fork = await forkSessionFromParentMock({
           parentEntry,
           agentId: params.agentId,
-          sessionsDir: params.sessionsDir,
         });
         if (!fork) {
           return { status: "failed" };
@@ -191,7 +188,6 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
-      sessionsDir: path.dirname(storePath),
     });
     const childSessionKey = requireChildSessionKey(accepted);
     const childEntry = requireStoreEntry(store, childSessionKey);
@@ -329,7 +325,6 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
-      sessionsDir: path.dirname(storePath),
     });
     const cleanupRequest = requireGatewayRequest("sessions.delete");
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);

@@ -80,6 +80,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
         CHECK_IDS.policyGatewayHttpEndpointEnabled,
       );
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayHttpEndpointEnabled,
+      );
+    },
   };
   const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
     id: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,

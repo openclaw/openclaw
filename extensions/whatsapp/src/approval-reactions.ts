@@ -96,7 +96,7 @@ function readPersistedTarget(target: unknown): WhatsAppApprovalReactionTarget | 
   };
 }
 
-export function listWhatsAppApprovalReactionBindings(
+function listWhatsAppApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): WhatsAppApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });

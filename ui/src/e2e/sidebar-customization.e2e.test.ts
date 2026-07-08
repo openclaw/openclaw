@@ -74,7 +74,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/config");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
       await sidebar.getByRole("link", { name: "Overview" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
