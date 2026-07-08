@@ -117,7 +117,8 @@ signal-specific path such as `/v1/traces`, as is common with hosted OTLP
 frontends. When several signals are enabled, each signal is routed to its own
 path (`/v1/metrics`, `/v1/logs`) by rewriting that trailing segment, so a single
 shared base URL works for every signal. Signal-specific `*Endpoint` config and
-`OTEL_EXPORTER_OTLP_*_ENDPOINT` env vars are always used verbatim.
+`OTEL_EXPORTER_OTLP_*_ENDPOINT` env vars that already end in a signal path are
+used verbatim; bare signal-specific URLs still have `/v1/<signal>` appended.
 </Note>
 
 ### Environment variables
