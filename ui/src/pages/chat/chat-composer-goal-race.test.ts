@@ -95,7 +95,7 @@ describe("composer goal-pill elapsed race (U-V6)", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps rendering through elapsed ticks and shows a later plan-approval swap-in", () => {
+  it("keeps rendering through elapsed ticks and shows a later plan-approval swap-in", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     let props = createProps();
@@ -134,8 +134,12 @@ describe("composer goal-pill elapsed race (U-V6)", () => {
     });
     render(renderChatComposer(props), container);
 
-    expect(container.querySelector('[data-plan-approve="true"]')).not.toBeNull();
-    expect(container.querySelector('[data-plan-reject="true"]')).not.toBeNull();
+    // The plan-approval swap-in is the inline card; its content renders on updateComplete.
+    const approvalCard = container.querySelector("openclaw-inline-plan-approval");
+    expect(approvalCard).not.toBeNull();
+    await (approvalCard as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+    expect(approvalCard!.querySelector('[data-plan-approve="true"]')).not.toBeNull();
+    expect(approvalCard!.querySelector('[data-plan-revise="true"]')).not.toBeNull();
 
     const childPartErrors = errorSpy.mock.calls.filter((call) =>
       call.some(

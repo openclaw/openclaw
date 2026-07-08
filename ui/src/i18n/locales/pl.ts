@@ -2097,6 +2097,12 @@ export const pl: TranslationMap = {
     decision: "Plan decision",
     approve: "Approve plan",
     keepPlanning: "Keep planning",
+    approveTitle: "Implement this plan?",
+    approveCta: "Approve",
+    revise: "Revise with feedback",
+    reviseSubmit: "Send feedback",
+    revisePlaceholder: "What should change?",
+    cancel: "Cancel",
     progress: "{done}/{total} done",
     state: {
       planning: "Planning",

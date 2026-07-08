@@ -1,5 +1,11 @@
 {
   "fallbackKeys": [
+    "plan.approveCta",
+    "plan.approveTitle",
+    "plan.cancel",
+    "plan.revise",
+    "plan.revisePlaceholder",
+    "plan.reviseSubmit",
     "question.otherLabel",
     "question.otherPlaceholder",
     "question.pending",
@@ -8,12 +14,12 @@
     "question.submit",
     "question.title"
   ],
-  "generatedAt": "2026-07-08T15:19:17.024Z",
+  "generatedAt": "2026-07-08T15:25:56.913Z",
   "locale": "zh-CN",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "f885b17245291c97f3f755c02785851046a9f8171b123353995dd69aee96bd1d",
-  "totalKeys": 1713,
+  "sourceHash": "4d53fe7ce7adb7a7b45b5f5be75b1715bad1ec460ab4d02508d0797e2b2344a3",
+  "totalKeys": 1719,
   "translatedKeys": 1706,
   "workflow": 1
 }

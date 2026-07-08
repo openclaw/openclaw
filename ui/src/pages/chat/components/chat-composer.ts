@@ -8,6 +8,7 @@ import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/s
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { InlineQuestionProps } from "../../../components/inline-question-card.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/inline-plan-approval.ts";
 import "../../../components/inline-question-card.ts";
 import {
   renderProviderQuotaPill,
@@ -2262,16 +2263,20 @@ export function renderChatComposer(props: ChatComposerProps) {
             // Live checklist captured from the update_plan tool stream (stream:plan); updates in
             // real time via the throttled tool-stream sync/re-render.
             checklist: getPlanChecklist(props.sessionKey),
-            actions:
-              canCompose && props.onGoalCommand
-                ? {
-                    // Approve/keep-planning ride the /plan channel command, which resolves the
-                    // PR-A approval question (no new approval path).
-                    onApprove: () => props.onGoalCommand?.("/plan accept"),
-                    onReject: () => props.onGoalCommand?.("/plan reject"),
-                  }
-                : {},
           })}
+          ${activeSession?.plan?.status === "pending_approval" && canCompose && props.onGoalCommand
+            ? html`<openclaw-inline-plan-approval
+                .props=${{
+                  summary: activeSession.plan.lastSummary ?? null,
+                  busy: isBusy,
+                  // Approve/revise ride the /plan channel command, which resolves the PR-A
+                  // approval question (no new approval path).
+                  onApprove: () => props.onGoalCommand?.("/plan accept"),
+                  onRevise: (feedback: string) =>
+                    props.onGoalCommand?.(feedback ? `/plan reject ${feedback}` : "/plan reject"),
+                }}
+              ></openclaw-inline-plan-approval>`
+            : nothing}
         </div>
 
         <input

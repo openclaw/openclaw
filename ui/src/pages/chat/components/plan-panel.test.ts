@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionPlanState } from "../../../api/types.ts";
 import { extractPlanChecklist, type PlanChecklist } from "../../../lib/plan-checklist.ts";
 import {
@@ -56,30 +56,20 @@ describe("renderPlanPanel", () => {
     expect(container.querySelector("[data-plan-approve]")).toBeNull();
   });
 
-  it("shows approve/keep-planning controls only when awaiting approval", () => {
+  it("shows the awaiting-approval chip and summary; approval controls live in the inline card", () => {
     const pending: SessionPlanState = {
       ...planningState,
       status: "pending_approval",
       lastSummary: "Ship the feature",
     };
-    const onApprove = vi.fn();
-    const onReject = vi.fn();
-    render(
-      renderPlanPanel({ plan: pending, checklist, actions: { onApprove, onReject } }),
-      container,
-    );
+    render(renderPlanPanel({ plan: pending, checklist }), container);
     expect(container.querySelector("[data-plan-chip]")?.textContent?.trim()).toBe(
       "Awaiting approval",
     );
-    const approve = container.querySelector<HTMLButtonElement>("[data-plan-approve]");
-    const reject = container.querySelector<HTMLButtonElement>("[data-plan-reject]");
-    expect(approve).not.toBeNull();
-    expect(reject).not.toBeNull();
-    approve?.click();
-    reject?.click();
-    expect(onApprove).toHaveBeenCalledOnce();
-    expect(onReject).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Ship the feature");
+    // Approve/revise moved to the dedicated <openclaw-inline-plan-approval> card.
+    expect(container.querySelector("[data-plan-approve]")).toBeNull();
+    expect(container.querySelector("[data-plan-reject]")).toBeNull();
   });
 
   it("shows the empty state when there are no steps yet", () => {

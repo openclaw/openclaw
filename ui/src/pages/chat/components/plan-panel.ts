@@ -1,8 +1,8 @@
 // Control UI Codex-parity plan-mode side panel.
 //
-// Renders the live plan checklist (from stream:plan), the plan-mode state chip, the presented
-// plan summary, and — while awaiting approval — Approve / Keep-planning controls that resolve
-// the PR-A question via the host (question.resolve; NO new approval path).
+// Renders the live plan checklist (from stream:plan), the plan-mode state chip, and the
+// presented plan summary. Approve / Revise-with-feedback now live in the dedicated
+// <openclaw-inline-plan-approval> card (Codex "Implement this plan?" swap-in).
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionPlanState } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
@@ -16,8 +16,6 @@ import {
 } from "../../../lib/session-plan.ts";
 
 export type PlanPanelActions = {
-  onApprove?: () => void;
-  onReject?: () => void;
   onExit?: () => void;
   onViewDocument?: () => void;
 };
@@ -70,7 +68,6 @@ export function renderPlanPanel(props: PlanPanelProps): TemplateResult | typeof 
     return nothing;
   }
   const actions = props.actions ?? {};
-  const pending = plan.status === "pending_approval";
   const progress = formatPlanProgress(props.checklist?.steps ?? []);
   return html`
     <section
@@ -110,28 +107,6 @@ export function renderPlanPanel(props: PlanPanelProps): TemplateResult | typeof 
             >
               ${icons.fileText} ${t("plan.viewDocument")}
             </button>
-          `
-        : nothing}
-      ${pending
-        ? html`
-            <div class="plan-panel__actions" role="group" aria-label=${t("plan.decision")}>
-              <button
-                class="plan-panel__approve"
-                type="button"
-                data-plan-approve="true"
-                @click=${() => actions.onApprove?.()}
-              >
-                ${icons.check} ${t("plan.approve")}
-              </button>
-              <button
-                class="plan-panel__reject"
-                type="button"
-                data-plan-reject="true"
-                @click=${() => actions.onReject?.()}
-              >
-                ${icons.x} ${t("plan.keepPlanning")}
-              </button>
-            </div>
           `
         : nothing}
     </section>
