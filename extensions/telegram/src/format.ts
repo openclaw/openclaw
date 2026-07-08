@@ -731,6 +731,108 @@ export function wrapFileReferencesInHtml(html: string): string {
   return result;
 }
 
+// A bare `http(s)` URL run inside already-escaped Telegram HTML. `&` appears as
+// `&amp;` (a legitimate part of the run), while a literal `<`, `>`, or `"` can
+// never occur in a URL, so they bound the match; escaped angle brackets
+// (`&lt;`/`&gt;`) are trimmed separately below.
+const TELEGRAM_BARE_URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
+// HTML entities that cannot be part of a URL and therefore terminate a bare-URL run.
+const TELEGRAM_URL_TERMINATING_ENTITY_PATTERN = /&(?:lt|gt|quot|#\d+|#x[0-9a-fA-F]+);/;
+
+function wrapBareUrlInTelegramAnchor(rawUrl: string): string {
+  // Stop the link at the first escaped `<`/`>`/`"`; keep the remainder as text.
+  const terminating = TELEGRAM_URL_TERMINATING_ENTITY_PATTERN.exec(rawUrl);
+  let url = terminating ? rawUrl.slice(0, terminating.index) : rawUrl;
+  const rest = terminating ? rawUrl.slice(terminating.index) : "";
+  // Keep trailing sentence punctuation outside the link (mirrors markdown linkify).
+  let suffix = "";
+  const trailing = /[.,!?]+$/.exec(url);
+  if (trailing) {
+    suffix = trailing[0];
+    url = url.slice(0, url.length - suffix.length);
+  }
+  if (!/^https?:\/\/\S/i.test(url)) {
+    return rawUrl;
+  }
+  // `url` is already HTML-escaped, so `&amp;` is valid both as the href value
+  // (Telegram decodes it back to `&` when navigating) and as the visible label.
+  return `<a href="${url}">${url}</a>${suffix}${rest}`;
+}
+
+// Escaped (unsupported) HTML tags survive as `&lt;...&gt;` plain text; their
+// attribute URLs (e.g. an escaped `<img src="...">`) must not be linked.
+const TELEGRAM_ESCAPED_TAG_SPAN_PATTERN = /(&lt;\/?[a-zA-Z][^]*?&gt;)/;
+
+function wrapSegmentBareUrls(
+  text: string,
+  codeDepth: number,
+  preDepth: number,
+  anchorDepth: number,
+): string {
+  if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
+    return text;
+  }
+  return text
+    .split(TELEGRAM_ESCAPED_TAG_SPAN_PATTERN)
+    .map((piece, index) => {
+      // Odd indices are the captured escaped-tag spans; leave them untouched.
+      if (index % 2 === 1) {
+        return piece;
+      }
+      TELEGRAM_BARE_URL_PATTERN.lastIndex = 0;
+      return piece.replace(TELEGRAM_BARE_URL_PATTERN, wrapBareUrlInTelegramAnchor);
+    })
+    .join("");
+}
+
+/**
+ * Wraps bare `http(s)` URLs that reach the Telegram HTML text path unlinked
+ * (textMode: "html") in explicit `<a>` anchors. Without this, Telegram's client
+ * auto-links the visible text, and an escaped `&amp;` in a query string is
+ * navigated to literally — dropping later parameters and sending the tap to the
+ * wrong destination (#102162). URLs already inside <a>, <code>, or <pre> are
+ * left untouched, and href attributes live inside tag tokens, so they are never
+ * re-wrapped.
+ */
+export function linkifyBareTelegramHtmlUrls(html: string): string {
+  let codeDepth = 0;
+  let preDepth = 0;
+  let anchorDepth = 0;
+  let result = "";
+  let lastIndex = 0;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    const isClosing = match[1] === "</";
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+
+    result += wrapSegmentBareUrls(
+      html.slice(lastIndex, tagStart),
+      codeDepth,
+      preDepth,
+      anchorDepth,
+    );
+
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else if (tagName === "pre") {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    } else if (tagName === "a") {
+      anchorDepth = isClosing ? Math.max(0, anchorDepth - 1) : anchorDepth + 1;
+    }
+
+    result += html.slice(tagStart, tagEnd);
+    lastIndex = tagEnd;
+  }
+
+  result += wrapSegmentBareUrls(html.slice(lastIndex), codeDepth, preDepth, anchorDepth);
+
+  return result;
+}
+
 export function renderTelegramHtmlText(
   text: string,
   options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
@@ -749,15 +851,17 @@ export function normalizeTelegramOutboundRichHtml(
   const tableNormalized = normalizeTelegramRichHtmlTables(html);
   // This is the Bot API 10.1 rich-message wire contract. A second send-side
   // sanitizer would let raw tables or silent drops drift between send funnels.
-  const safeHtml = limitTelegramRichHtmlNesting(
-    materializeTelegramRichHtmlLineBreaks(
-      normalizeTelegramRichLiteralWhitespaceEscapes(
-        isolateTelegramRichMediaBlocks(
-          escapeUnsupportedTelegramHtml(tableNormalized.html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+  const safeHtml = linkifyBareTelegramHtmlUrls(
+    limitTelegramRichHtmlNesting(
+      materializeTelegramRichHtmlLineBreaks(
+        normalizeTelegramRichLiteralWhitespaceEscapes(
+          isolateTelegramRichMediaBlocks(
+            escapeUnsupportedTelegramHtml(tableNormalized.html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+          ),
         ),
       ),
+      TELEGRAM_RICH_NESTING_LIMIT,
     ),
-    TELEGRAM_RICH_NESTING_LIMIT,
   );
   return {
     html: safeHtml,
@@ -766,9 +870,11 @@ export function normalizeTelegramOutboundRichHtml(
 }
 
 function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
-  return escapeUnsupportedTelegramHtml(
-    normalizeTelegramLegacyHtmlTables(html),
-    TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  return linkifyBareTelegramHtmlUrls(
+    escapeUnsupportedTelegramHtml(
+      normalizeTelegramLegacyHtmlTables(html),
+      TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+    ),
   );
 }
 
