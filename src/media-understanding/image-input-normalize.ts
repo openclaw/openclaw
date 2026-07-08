@@ -88,26 +88,3 @@ export async function normalizeImageDescriptionInput(params: {
     mime: normalized.mime,
   });
 }
-
-/** Resolves user-configured image compression controls for media-understanding inputs. */
-export function resolveImageDescriptionCompressionPolicy(cfg?: {
-  agents?: { defaults?: { imageMaxDimensionPx?: number; imageQuality?: string } };
-}): ImageCompressionPolicy | undefined {
-  const maxSidePx = cfg?.agents?.defaults?.imageMaxDimensionPx;
-  const quality = cfg?.agents?.defaults?.imageQuality;
-  const modelPolicy =
-    typeof maxSidePx === "number" && Number.isFinite(maxSidePx) && maxSidePx > 0
-      ? { maxSidePx: Math.floor(maxSidePx) }
-      : undefined;
-  const normalizedQuality =
-    quality === "auto" || quality === "efficient" || quality === "balanced" || quality === "high"
-      ? quality
-      : undefined;
-  if (!modelPolicy && !normalizedQuality) {
-    return undefined;
-  }
-  return {
-    ...(normalizedQuality ? { quality: normalizedQuality } : {}),
-    ...(modelPolicy ? { models: [modelPolicy] } : {}),
-  };
-}

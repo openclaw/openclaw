@@ -73,8 +73,9 @@ export type PreparedImageDescriptionInput = {
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
-  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
->;
+  "filePath" | "mediaUrl" | "mime" | "cfg" | "agentDir" | "workspaceDir" | "timeoutMs"
+> &
+  Partial<Pick<DescribeImageFileWithModelParams, "provider" | "model">>;
 
 export type DescribePreparedImageWithModelParams = Omit<
   DescribeImageFileWithModelParams,

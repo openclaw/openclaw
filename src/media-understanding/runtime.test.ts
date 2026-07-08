@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => {
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    resolveImageDescriptionCompressionPolicy: vi.fn<() => Promise<unknown>>(
+      async () => undefined,
+    ),
     optimizeImageBufferForWebMedia: vi.fn(async ({ buffer, contentType, fileName }) => ({
       buffer,
       contentType,
@@ -70,6 +73,10 @@ vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
 }));
 
+vi.mock("./image-compression-policy.js", () => ({
+  resolveImageDescriptionCompressionPolicy: mocks.resolveImageDescriptionCompressionPolicy,
+}));
+
 vi.mock("../media/web-media.js", () => ({
   optimizeImageBufferForWebMedia: mocks.optimizeImageBufferForWebMedia,
 }));
@@ -102,6 +109,8 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
+    mocks.resolveImageDescriptionCompressionPolicy.mockReset();
+    mocks.resolveImageDescriptionCompressionPolicy.mockResolvedValue(undefined);
     mocks.optimizeImageBufferForWebMedia.mockReset();
     mocks.optimizeImageBufferForWebMedia.mockImplementation(
       async ({ buffer, contentType, fileName }) => ({
@@ -564,8 +573,13 @@ describe("media-understanding runtime", () => {
     );
   });
 
-  it("applies configured image compression before explicit image provider execution", async () => {
+  it("applies resolved image compression before explicit image provider execution", async () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("oversized-jpeg") });
+    mocks.resolveImageDescriptionCompressionPolicy.mockResolvedValue({
+      quality: "balanced",
+      models: [{ maxSidePx: 1568 }, { maxSidePx: 2576, preferredSidePx: 2576 }],
+      imageCount: 1,
+    });
     mocks.optimizeImageBufferForWebMedia.mockResolvedValue({
       buffer: Buffer.from("compressed-jpeg"),
       contentType: "image/jpeg",
@@ -590,6 +604,20 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
     });
 
+    expect(mocks.resolveImageDescriptionCompressionPolicy).toHaveBeenCalledWith({
+      cfg: {
+        agents: {
+          defaults: {
+            imageMaxDimensionPx: 1568.9,
+            imageQuality: "balanced",
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      agentDir: "/tmp/agent",
+      workspaceDir: undefined,
+    });
     expect(mocks.optimizeImageBufferForWebMedia).toHaveBeenCalledWith({
       buffer: Buffer.from("oversized-jpeg"),
       contentType: "image/jpeg",
@@ -597,7 +625,8 @@ describe("media-understanding runtime", () => {
       maxBytes: 10 * 1024 * 1024,
       imageCompression: {
         quality: "balanced",
-        models: [{ maxSidePx: 1568 }],
+        models: [{ maxSidePx: 1568 }, { maxSidePx: 2576, preferredSidePx: 2576 }],
+        imageCount: 1,
       },
     });
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
@@ -611,6 +640,7 @@ describe("media-understanding runtime", () => {
 
   it("infers GIF MIME before configured image compression", async () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("gif-bytes") });
+    mocks.resolveImageDescriptionCompressionPolicy.mockResolvedValue({ quality: "balanced" });
     mocks.optimizeImageBufferForWebMedia.mockResolvedValue({
       buffer: Buffer.from("gif-bytes"),
       contentType: "image/gif",
@@ -633,6 +663,19 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
     });
 
+    expect(mocks.resolveImageDescriptionCompressionPolicy).toHaveBeenCalledWith({
+      cfg: {
+        agents: {
+          defaults: {
+            imageQuality: "balanced",
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      agentDir: "/tmp/agent",
+      workspaceDir: undefined,
+    });
     expect(mocks.optimizeImageBufferForWebMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from("gif-bytes"),

@@ -1093,12 +1093,15 @@ async function runImageDescribe(params: {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const preparedImage = activeModel
-        ? await prepareImageDescriptionInput({
-            filePath: resolvedPath,
-            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-            cfg,
-            timeoutMs: params.timeoutMs,
-          })
+          ? await prepareImageDescriptionInput({
+              filePath: resolvedPath,
+              ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+              cfg,
+              agentDir,
+              provider: activeModel.provider,
+              model: activeModel.model,
+              timeoutMs: params.timeoutMs,
+            })
         : undefined;
       const result =
         activeModel && preparedImage
