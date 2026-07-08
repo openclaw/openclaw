@@ -3,7 +3,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { fetchGraphAbsoluteUrl, fetchGraphJson, type GraphResponse } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -129,13 +129,25 @@ export async function fetchThreadReplies(
   messageId: string,
   limit = 50,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
   // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // For threads with >50 replies, only the oldest 50 are returned. The most recent
-  // replies (often the most relevant context) may be truncated.
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
-  return res.value ?? [];
+  // We fetch up to 50 at a time and paginate to collect all replies, then take the last `limit`.
+  let path: string | undefined =
+    `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=50&$select=id,from,body,createdDateTime`;
+  let isAbsoluteUrl = false;
+  const allReplies: GraphThreadMessage[] = [];
+
+  while (path && allReplies.length < 500) {
+    const res = isAbsoluteUrl
+      ? await fetchGraphAbsoluteUrl<GraphResponse<GraphThreadMessage>>({ token, url: path })
+      : await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
+    if (res.value) {
+      allReplies.push(...res.value);
+    }
+    path = res["@odata.nextLink"];
+    isAbsoluteUrl = true;
+  }
+
+  return allReplies.slice(-Math.max(limit, 1));
 }
 
 /**
