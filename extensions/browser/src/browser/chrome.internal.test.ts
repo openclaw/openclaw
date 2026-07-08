@@ -805,7 +805,7 @@ describe("chrome.ts internal", () => {
       }
     });
 
-    it("clears stale singleton locks and retries once after profile-in-use launch failure", async () => {
+    it("clears stale singleton locks even when the profile-in-use marker rolls out of the stderr tail", async () => {
       const configPath = path.join(tmpDir, "openclaw.json");
       await fsp.writeFile(
         configPath,
@@ -838,6 +838,7 @@ describe("chrome.ts internal", () => {
       let spawnCalls = 0;
       const firstProc = makeFakeProc();
       const secondProc = makeFakeProc();
+      const laterStderr = Buffer.alloc(70 * 1024, "x");
       mockExpiredLaunchPollingClock();
       spawnMock.mockImplementation(() => {
         spawnCalls += 1;
@@ -847,6 +848,7 @@ describe("chrome.ts internal", () => {
               "data",
               Buffer.from("The profile appears to be in use by another Chromium process"),
             );
+            firstProc.stderr.emit("data", laterStderr);
           });
           return firstProc;
         }
@@ -1123,7 +1125,7 @@ describe("chrome.ts internal", () => {
       }
     });
 
-    it("keeps only a bounded stderr tail when launch fails after large stderr", async () => {
+    it("keeps only a bounded UTF-8-safe newest stderr tail when launch fails after large stderr", async () => {
       const executablePath = path.join(tmpDir, "chrome");
       await fsp.writeFile(executablePath, "");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
@@ -1135,15 +1137,16 @@ describe("chrome.ts internal", () => {
       });
       const fakeProc = makeFakeProc();
       const oldMarker = "older-stderr-marker";
-      const recentMarker = "recent-stderr-marker";
-      const repeatedRecentTail = Array.from(
-        { length: 128 },
-        (_value, index) => `${recentMarker}-${index}\n${"x".repeat(1024)}\n`,
-      ).join("");
+      const newestMarker = "newest-stderr-marker";
+      const splitEmoji = Buffer.from("🦞");
+      const newestLine = Buffer.from(`\n${newestMarker}\n`);
+      const tailMaxBytes = 64 * 1024;
+      const filler = Buffer.alloc(tailMaxBytes + 2 - splitEmoji.length - newestLine.length, "x");
       spawnMock.mockImplementation(() => {
         void Promise.resolve().then(() => {
           fakeProc.stderr.emit("data", Buffer.from(`${oldMarker}\n`));
-          fakeProc.stderr.emit("data", Buffer.from(repeatedRecentTail));
+          fakeProc.stderr.emit("data", splitEmoji.subarray(0, 2));
+          fakeProc.stderr.emit("data", Buffer.concat([splitEmoji.subarray(2), filler, newestLine]));
         });
         return fakeProc;
       });
@@ -1169,9 +1172,54 @@ describe("chrome.ts internal", () => {
       expect(message).toContain("Chrome stderr:");
       const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
       expect(stderrHint).not.toContain(oldMarker);
-      expect(stderrHint).toContain(recentMarker);
+      expect(stderrHint).toContain(newestMarker);
+      expect(stderrHint).not.toContain("�");
       expect(stderrHint.length).toBeLessThanOrEqual(CHROME_STDERR_HINT_MAX_CHARS);
       expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+    });
+
+    it("keeps early missing-display diagnostics for launch hints after the stderr tail rolls", async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        const executablePath = path.join(tmpDir, "chrome");
+        await fsp.writeFile(executablePath, "");
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
+          return false;
+        });
+        const fakeProc = makeFakeProc();
+        spawnMock.mockImplementation(() => {
+          void Promise.resolve().then(() => {
+            fakeProc.stderr.emit("data", Buffer.from("Missing X server or $DISPLAY\n"));
+            fakeProc.stderr.emit("data", Buffer.alloc(70 * 1024, "x"));
+          });
+          return fakeProc;
+        });
+        mockExpiredLaunchPollingClock();
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+        const profile = { ...makeProfile(55558), executablePath } as ResolvedBrowserProfile;
+        let message = "";
+        try {
+          await launchOpenClawChrome(
+            makeResolved({ headless: false, localLaunchTimeoutMs: 1 }),
+            profile,
+          );
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+
+        expect(message).toContain("No DISPLAY/X server was detected");
+        const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+        expect(stderrHint).not.toContain("$DISPLAY");
+        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
     });
 
     it("uses the configured local launch timeout while waiting for CDP discovery", async () => {

@@ -90,6 +90,7 @@ const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
 const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
+const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -135,6 +136,19 @@ function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | nu
   return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
 }
 
+type ChromeLaunchStderrSignals = {
+  singletonInUse: boolean;
+  missingDisplay: boolean;
+};
+
+function utf8BoundaryStart(buffer: Buffer): number {
+  let start = 0;
+  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  return start;
+}
+
 function createBoundedBufferTail(maxBytes: number) {
   let chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -165,11 +179,50 @@ function createBoundedBufferTail(maxBytes: number) {
       trim();
     },
     toString() {
-      return Buffer.concat(chunks, totalBytes).toString("utf8");
+      const buffer = Buffer.concat(chunks, totalBytes);
+      return buffer.subarray(utf8BoundaryStart(buffer)).toString("utf8");
     },
     clear() {
       chunks = [];
       totalBytes = 0;
+    },
+  };
+}
+
+function createChromeLaunchStderrDiagnostics(maxBytes: number) {
+  const tail = createBoundedBufferTail(maxBytes);
+  const signals: ChromeLaunchStderrSignals = {
+    singletonInUse: false,
+    missingDisplay: false,
+  };
+  let markerScanTail = "";
+
+  const updateSignals = (chunkText: string) => {
+    const scanText = `${markerScanTail}${chunkText}`;
+    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
+  };
+
+  return {
+    append(chunk: Buffer | string) {
+      tail.append(chunk);
+      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (chunkText.length > 0) {
+        updateSignals(chunkText);
+      }
+    },
+    toString() {
+      return tail.toString();
+    },
+    signals(): ChromeLaunchStderrSignals {
+      return { ...signals };
+    },
+    clear() {
+      tail.clear();
+      signals.singletonInUse = false;
+      signals.missingDisplay = false;
+      markerScanTail = "";
     },
   };
 }
@@ -705,6 +758,7 @@ async function ensureManagedChromePortAvailable(
 
 function chromeLaunchHints(params: {
   stderrOutput: string;
+  stderrSignals?: ChromeLaunchStderrSignals;
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   launchOptions?: ManagedBrowserHeadlessOptions;
@@ -718,12 +772,18 @@ function chromeLaunchHints(params: {
     params.profile,
     params.launchOptions,
   );
-  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
+  const missingDisplay =
+    params.stderrSignals?.missingDisplay ??
+    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
+  if (missingDisplay && !headlessMode.headless) {
     hints.push(
       "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
     );
   }
-  if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
+  const singletonInUse =
+    params.stderrSignals?.singletonInUse ??
+    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
+  if (singletonInUse) {
     hints.push(
       `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
     );
@@ -1095,9 +1155,11 @@ export async function launchOpenClawChrome(
     // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
     // The listener is removed on success to avoid retaining output from a
     // long-lived Chrome process that emits periodic warnings.
-    const stderrTail = createBoundedBufferTail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
+    const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
+      CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
+    );
     const onStderr = (chunk: Buffer | string) => {
-      stderrTail.append(chunk);
+      stderrDiagnostics.append(chunk);
     };
     proc.stderr?.on("data", onStderr);
 
@@ -1138,11 +1200,12 @@ export async function launchOpenClawChrome(
         if (launchHttpReachable) {
           log.debug(diagnosticText);
         } else {
-          const stderrOutput = normalizeOptionalString(stderrTail.toString()) ?? "";
+          const stderrOutput = normalizeOptionalString(stderrDiagnostics.toString()) ?? "";
+          const stderrSignals = stderrDiagnostics.signals();
           const redactedStderrOutput = redactToolPayloadText(stderrOutput);
           if (
             allowSingletonRecovery &&
-            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            stderrSignals.singletonInUse &&
             clearStaleChromeSingletonLocks(userDataDir)
           ) {
             log.warn(
@@ -1152,9 +1215,15 @@ export async function launchOpenClawChrome(
             return await launchOnceAndWait(false);
           }
           const stderrHint = redactedStderrOutput
-            ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+            ? `\nChrome stderr:\n${redactedStderrOutput.slice(-CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
-          const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+          const launchHints = chromeLaunchHints({
+            stderrOutput,
+            stderrSignals,
+            resolved,
+            profile,
+            launchOptions,
+          });
           try {
             proc.kill("SIGKILL");
           } catch {
@@ -1185,7 +1254,7 @@ export async function launchOpenClawChrome(
       // Chrome started successfully or launch failed — detach the stderr listener
       // and release the bounded tail buffer.
       proc.stderr?.off("data", onStderr);
-      stderrTail.clear();
+      stderrDiagnostics.clear();
     }
   };
 
