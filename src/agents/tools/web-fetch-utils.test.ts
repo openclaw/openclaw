@@ -147,6 +147,10 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
       "[Read](https://example.com/path)",
     );
     expect(htmlToMarkdown(`<a href=/docs/path>Read</a>`).text).toBe("[Read](/docs/path)");
+    expect(htmlToMarkdown(`<a href=/docs/>Docs</a>`).text).toBe("[Docs](/docs/)");
+    expect(htmlToMarkdown(`<a href=https://example.com/>Docs</a>`).text).toBe(
+      "[Docs](https://example.com/)",
+    );
   });
 
   it("uses the title as fallback content when an HTML shell has no body text", async () => {

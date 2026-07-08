@@ -170,6 +170,23 @@ function findTagEnd(html: string, start: number): number {
   return -1;
 }
 
+function isSelfClosingTagRaw(raw: string): boolean {
+  const trimmed = raw.trimEnd();
+  if (!trimmed.endsWith("/")) {
+    return false;
+  }
+  const beforeSlash = trimmed[trimmed.length - 2];
+  const tagBody = trimmed.slice(0, -1);
+  let hasAttributeSeparator = false;
+  for (let i = 0; i < tagBody.length; i += 1) {
+    if (isAsciiWhitespace(tagBody[i])) {
+      hasAttributeSeparator = true;
+      break;
+    }
+  }
+  return !beforeSlash || isAsciiWhitespace(beforeSlash) || !hasAttributeSeparator;
+}
+
 function readTagToken(html: string, start: number): ReadTagResult | null {
   if (html.startsWith("<!--", start)) {
     const commentEnd = html.indexOf("-->", start + 4);
@@ -229,7 +246,7 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
       closing,
       name: html.slice(nameStart, pos).toLowerCase(),
       raw,
-      selfClosing: raw.trimEnd().endsWith("/"),
+      selfClosing: isSelfClosingTagRaw(raw),
     },
     next: end + 1,
   };
