@@ -2954,6 +2954,29 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("blocked tool execution span omits CLIENT kind — no outgoing request was made", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.blocked",
+      runId: "run-1",
+      toolName: "browser",
+      toolSource: "mcp",
+      toolOwner: "browser-tools",
+      deniedReason: "tools.deny",
+      reason: "matched browser",
+      paramsSummary: { kind: "object" },
+    });
+    await flushDiagnosticEvents();
+
+    const blockedOptions = startedSpanOptions("openclaw.tool.execution");
+    expect(blockedOptions).toBeDefined();
+    expect(Object.hasOwn(blockedOptions ?? {}, "kind")).toBe(false);
+    await service.stop?.(ctx);
+  });
+
   test("drops session-shaped queue lanes from model failover spans", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });

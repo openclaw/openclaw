@@ -3758,7 +3758,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         addRunAttrs(spanAttrs, evt);
         assignOtelToolIdentityAttributes(spanAttrs, evt);
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
-          kind: SpanKind.CLIENT,
           parentContext: activeTrustedParentContext(evt, metadata),
           endTimeMs: evt.ts,
         });
