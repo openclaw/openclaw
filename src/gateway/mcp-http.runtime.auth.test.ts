@@ -11,7 +11,7 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
 );
 
 vi.mock("./tool-resolution.js", () => ({
-  resolveGatewayScopedTools: (...args: unknown[]) => resolveGatewayScopedToolsMock(...args),
+  resolveGatewayScopedTools: resolveGatewayScopedToolsMock,
 }));
 
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
