@@ -1605,29 +1605,32 @@ describe("gateway send mirroring", () => {
       }),
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "whatsapp",
-      action: "react",
-      params: {
-        chatJid: "+15551234567",
-        messageId: "wamid.1",
-        emoji: "✅",
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterAccountId: "default",
+        requesterSenderId: "trusted-user",
+        inboundTurnKind: "room_event",
+        toolContext: {
+          currentMessagingTarget: "user:15551234567",
+          currentGraphChannelId: "graph:team/chan",
+          currentChannelProvider: "whatsapp",
+          currentMessageId: "wamid.1",
+          replyToMode: "first",
+          hasRepliedRef: { value: true },
+          sameChannelThreadRequired: true,
+          skipCrossContextDecoration: true,
+        },
+        idempotencyKey: "idem-message-action",
       },
-      requesterAccountId: "default",
-      requesterSenderId: "trusted-user",
-      inboundTurnKind: "room_event",
-      toolContext: {
-        currentMessagingTarget: "user:15551234567",
-        currentGraphChannelId: "graph:team/chan",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "wamid.1",
-        replyToMode: "first",
-        hasRepliedRef: { value: true },
-        sameChannelThreadRequired: true,
-        skipCrossContextDecoration: true,
-      },
-      idempotencyKey: "idem-message-action",
-    });
+      { connect: { scopes: ["operator.admin"] } },
+    );
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -1651,6 +1654,64 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         inboundEventKind: "room_event",
         requesterAccountId: "default",
+        requesterSenderId: "trusted-user",
+      }),
+    );
+  });
+
+  it("drops caller-supplied requester identity from operator.write message actions", async () => {
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-message-action-untrusted-requester",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterAccountId: "default",
+        requesterSenderId: "spoofed-admin-user",
+        senderIsOwner: true,
+        idempotencyKey: "idem-message-action-untrusted-requester",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(lastDispatchChannelMessageActionCall()).toEqual(
+      expect.objectContaining({
+        requesterAccountId: undefined,
+        requesterSenderId: undefined,
+        senderIsOwner: false,
+        gatewayClientScopes: ["operator.write"],
       }),
     );
   });

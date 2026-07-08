@@ -525,17 +525,22 @@ export const sendHandlers: GatewayRequestHandlers = {
           });
         }
         const gatewayClientScopes = client?.connect?.scopes ?? [];
+        // Requester provenance is trusted channel context, not public RPC input.
+        // Only full-scope callers may bridge server-injected sender identity.
+        const canSupplyTrustedRequester = gatewayClientScopes.includes(ADMIN_SCOPE);
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
           accountId,
-          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
-          requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
-            ? request.senderIsOwner === true
-            : false,
+          requesterAccountId: canSupplyTrustedRequester
+            ? (normalizeOptionalString(request.requesterAccountId) ?? undefined)
+            : undefined,
+          requesterSenderId: canSupplyTrustedRequester
+            ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
+            : undefined,
+          senderIsOwner: canSupplyTrustedRequester ? request.senderIsOwner === true : false,
           sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
