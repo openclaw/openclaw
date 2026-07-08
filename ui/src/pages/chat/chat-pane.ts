@@ -9,6 +9,8 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import type { ApplicationOverlaySnapshot } from "../../app/overlays.ts";
+import type { QuestionCardEntry } from "../../app/question-card.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -124,6 +126,16 @@ class ChatPane extends LitElement {
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
+  // Pending ask_user_question state, mirrored from the global QuestionManager so a
+  // question for this pane's session renders inline in the composer (Codex swap-in).
+  private questionOverlay: {
+    queue: readonly QuestionCardEntry[];
+    busy: boolean;
+    error: string | null;
+  } = { queue: [], busy: false, error: null };
+  // Questions dismissed locally (ESC/Dismiss) stay pending on the gateway and remain
+  // answerable via /answer; we just stop showing the inline card for them.
+  private readonly dismissedQuestionIds = new Set<string>();
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
@@ -464,7 +476,38 @@ class ChatPane extends LitElement {
         this.applySessionsState(state);
       }),
     );
+    this.applyOverlaySnapshot(this.context.overlays.snapshot);
+    chatState.addCleanup(
+      this.context.overlays.subscribe((snapshot) => {
+        this.applyOverlaySnapshot(snapshot);
+      }),
+    );
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
+  }
+
+  private applyOverlaySnapshot(snapshot: ApplicationOverlaySnapshot) {
+    this.questionOverlay = {
+      queue: snapshot.questionQueue,
+      busy: snapshot.questionBusy,
+      error: snapshot.questionError,
+    };
+    // Drop dismissals for questions the gateway has since resolved/expired.
+    for (const id of this.dismissedQuestionIds) {
+      if (!snapshot.questionQueue.some((entry) => entry.id === id)) {
+        this.dismissedQuestionIds.delete(id);
+      }
+    }
+    this.state?.requestUpdate?.();
+  }
+
+  private selectInlineQuestion(sessionKey: string): QuestionCardEntry | null {
+    return (
+      this.questionOverlay.queue.find(
+        (entry) =>
+          !this.dismissedQuestionIds.has(entry.id) &&
+          (entry.sessionKey === sessionKey || entry.sessionKey === null),
+      ) ?? null
+    );
   }
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
@@ -927,6 +970,22 @@ class ChatPane extends LitElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      questionInline: (() => {
+        const entry = this.selectInlineQuestion(state.sessionKey);
+        if (!entry) {
+          return null;
+        }
+        return {
+          entry,
+          busy: this.questionOverlay.busy,
+          error: this.questionOverlay.error,
+          onSubmit: (id, answers) => void this.context.overlays.submitQuestionAnswers(id, answers),
+          onDismiss: () => {
+            this.dismissedQuestionIds.add(entry.id);
+            state.requestUpdate?.();
+          },
+        };
+      })(),
       onDismissSideResult: () => {
         state.chatSideResult = null;
         state.requestUpdate?.();

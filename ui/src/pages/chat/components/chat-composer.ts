@@ -6,7 +6,9 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
+import type { InlineQuestionProps } from "../../../components/inline-question-card.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/inline-question-card.ts";
 import {
   renderProviderQuotaPill,
   type ProviderQuotaPillProps,
@@ -114,6 +116,8 @@ type ChatComposerProps = {
   onScrollToBottom?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
+  /** Pending ask_user_question for this session, rendered inline in the status-stack. */
+  questionInline?: InlineQuestionProps | null;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -2236,6 +2240,11 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
+          ${props.questionInline
+            ? html`<openclaw-inline-question
+                .props=${props.questionInline}
+              ></openclaw-inline-question>`
+            : nothing}
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {

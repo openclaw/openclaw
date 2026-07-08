@@ -8,12 +8,12 @@
     "question.submit",
     "question.title"
   ],
-  "generatedAt": "2026-07-08T11:34:45.953Z",
+  "generatedAt": "2026-07-08T15:19:18.832Z",
   "locale": "tr",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "00834a7ec6add7e09d5c4774983fedd853bfc87759f33f5ec4064b3c24f76efa",
-  "totalKeys": 1708,
-  "translatedKeys": 1701,
+  "sourceHash": "f885b17245291c97f3f755c02785851046a9f8171b123353995dd69aee96bd1d",
+  "totalKeys": 1713,
+  "translatedKeys": 1706,
   "workflow": 1
 }

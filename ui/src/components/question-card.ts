@@ -9,7 +9,8 @@ import type {
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
 
-const OTHER_VALUE = "__other__";
+/** Sentinel radio value for the free-text "Other" choice. */
+export const OTHER_VALUE = "__other__";
 
 type QuestionCardProps = {
   queue: readonly QuestionCardEntry[];
@@ -19,13 +20,14 @@ type QuestionCardProps = {
 };
 
 /** A per-question selection: an option index, or the free-text "Other" choice. */
-type Selection = { choice: string; otherText: string };
+export type Selection = { choice: string; otherText: string };
 
-function defaultSelection(): Selection {
+export function defaultSelection(): Selection {
   return { choice: "", otherText: "" };
 }
 
-function resolveAnswerText(question: QuestionCardQuestion, selection: Selection): string {
+/** Resolves the submitted answer text for a question + selection (shared by the inline card). */
+export function resolveAnswerText(question: QuestionCardQuestion, selection: Selection): string {
   if (selection.choice === OTHER_VALUE) {
     return selection.otherText.trim();
   }

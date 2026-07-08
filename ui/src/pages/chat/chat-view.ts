@@ -5,6 +5,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
+import type { InlineQuestionProps } from "../../components/inline-question-card.ts";
 import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -119,6 +120,7 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
+  questionInline?: InlineQuestionProps | null;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -243,6 +245,7 @@ export function renderChat(props: ChatProps) {
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
+    questionInline: props.questionInline,
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,

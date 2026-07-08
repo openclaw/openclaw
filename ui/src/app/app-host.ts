@@ -838,17 +838,23 @@ class OpenClawShell extends LitElement {
               context.overlays.decideApproval(decision),
           }}
         ></openclaw-exec-approval>
-        <openclaw-question-card
-          .props=${{
-            queue: this.overlaySnapshot.questionQueue,
-            busy: this.overlaySnapshot.questionBusy,
-            error: this.overlaySnapshot.questionError,
-            onSubmit: (
-              id: Parameters<typeof context.overlays.submitQuestionAnswers>[0],
-              answers: Parameters<typeof context.overlays.submitQuestionAnswers>[1],
-            ) => context.overlays.submitQuestionAnswers(id, answers),
-          }}
-        ></openclaw-question-card>
+        ${
+          // The chat composer renders pending questions inline (Codex swap-in); the
+          // app-level modal stays only as a fallback for non-chat surfaces.
+          this.routeState.routeId === "chat"
+            ? nothing
+            : html`<openclaw-question-card
+                .props=${{
+                  queue: this.overlaySnapshot.questionQueue,
+                  busy: this.overlaySnapshot.questionBusy,
+                  error: this.overlaySnapshot.questionError,
+                  onSubmit: (
+                    id: Parameters<typeof context.overlays.submitQuestionAnswers>[0],
+                    answers: Parameters<typeof context.overlays.submitQuestionAnswers>[1],
+                  ) => context.overlays.submitQuestionAnswers(id, answers),
+                }}
+              ></openclaw-question-card>`
+        }
         <openclaw-goal-chip
           .props=${{
             goal: this.overlaySnapshot.goalChip,

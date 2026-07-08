@@ -3900,6 +3900,82 @@ td.data-table-key-col {
   gap: 8px;
 }
 
+/* Composer-inline question card (Codex swap-in) — matches the plan-panel inline look. */
+.inline-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
+  border-radius: var(--radius-lg);
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.inline-question__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inline-question__icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.inline-question__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inline-question__paging {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.inline-question__page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inline-question__page-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.inline-question__page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.inline-question__page-btn--prev {
+  transform: scaleX(-1);
+}
+
+.inline-question__page-indicator {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.inline-question__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* ===========================================
    Agents
    =========================================== */
