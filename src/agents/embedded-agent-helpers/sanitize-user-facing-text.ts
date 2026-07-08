@@ -110,7 +110,10 @@ const TRUNCATION_SENTINEL_CORE = [
   "(?:\\.{3}|\\u2026)\\[additional startup memory truncated\\](?:\\.{3}|\\u2026)",
   "(?:\\.{3}|\\u2026)\\[truncated\\](?:\\.{3}|\\u2026)",
   "\\u2026\\[truncated\\]",
-  "\\[(?:\\.{3}|\\u2026) \\d+ more characters truncated\\]",
+  // formatContextLimitTruncationNotice() emits the "; rerun with narrower args
+  // if needed" hint; older bare "[... N more characters truncated]" payloads
+  // can still be replayed from stored sessions, so the hint stays optional.
+  "\\[(?:\\.{3}|\\u2026) \\d+ more characters truncated(?:; rerun with narrower args if needed)?\\]",
 ].join("|");
 // Sentinel trailing at the very end of the reply. No leading `[ \t]*` here: an
 // unanchored leading whitespace star would let the engine rescan long whitespace

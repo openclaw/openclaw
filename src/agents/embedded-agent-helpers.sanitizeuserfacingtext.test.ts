@@ -12,6 +12,7 @@ import {
   sanitizeUserFacingText,
   stripThoughtSignatures,
 } from "./embedded-agent-helpers.js";
+import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   formatAgentInternalEventsForPrompt,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -57,6 +58,17 @@ describe("sanitizeUserFacingText", () => {
       sanitizeUserFacingText("Recent memory.\n...[additional startup memory truncated]..."),
     ).toBe("Recent memory.");
     expect(sanitizeUserFacingText("data \u2026[truncated]")).toBe("data");
+  });
+
+  it("strips the live context-limit notice with the rerun hint (#82121)", () => {
+    // The real producer output, not a hand-typed copy — catches format drift.
+    expect(sanitizeUserFacingText(formatContextLimitTruncationNotice(5000))).toBe("");
+    expect(
+      sanitizeUserFacingText(`Here is the result.\n${formatContextLimitTruncationNotice(1234)}`),
+    ).toBe("Here is the result.");
+    // A differently-phrased hint is not the internal sentinel and must survive.
+    const differentHint = "[... 7 more characters truncated; see the log for details]";
+    expect(sanitizeUserFacingText(differentHint)).toBe(differentHint);
   });
 
   it("strips parenthesized truncation sentinels from final replies (#82121)", () => {
