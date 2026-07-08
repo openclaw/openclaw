@@ -1,6 +1,8 @@
 // Verifies models.json writes and repairs use private file permissions.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafePython } from "@openclaw/fs-safe/config";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -11,6 +13,7 @@ import {
 const tempDirs = new Set<string>();
 
 afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
   cleanupTempDirs(tempDirs);
 });
 
@@ -40,5 +43,33 @@ describe("models-config file mode", () => {
 
     const stat = await fs.stat(modelsPath);
     expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("retries when fs-safe detects a replaced generated catalog directory", async () => {
+    configureFsSafePython({ mode: "off" });
+    const dir = makeTempDir(tempDirs, "models-json-write-boundary-");
+    const catalogPath = path.join(dir, "plugins", "zai", "catalog.json");
+    const contents = '{"providers":{"zai":{"models":[{"id":"glm-5.1"}]}}}\n';
+    let replacementCount = 0;
+
+    __setFsSafeTestHooksForTest({
+      afterPinnedWriteFallbackRename: async (targetPath) => {
+        const isTargetCatalog =
+          path.basename(targetPath) === "catalog.json" &&
+          path.basename(path.dirname(targetPath)) === "zai";
+        if (!isTargetCatalog || replacementCount > 0) {
+          return;
+        }
+        replacementCount += 1;
+        const catalogDir = path.dirname(targetPath);
+        await fs.rename(catalogDir, `${catalogDir}.replaced`);
+        await fs.mkdir(catalogDir, { recursive: true, mode: 0o700 });
+      },
+    });
+
+    await writeModelsFileAtomicForModelsJson(catalogPath, contents);
+
+    expect(replacementCount).toBe(1);
+    await expect(fs.readFile(catalogPath, "utf8")).resolves.toBe(contents);
   });
 });

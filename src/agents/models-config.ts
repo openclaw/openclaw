@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
@@ -28,6 +29,7 @@ import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
   type ModelsJsonReadyState,
+  withModelCatalogFileIoLock,
 } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import {
@@ -152,7 +154,26 @@ export async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
 ): Promise<void> {
-  await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
+  const rootDir = path.dirname(targetPath);
+  const relativePath = path.basename(targetPath);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.mkdir(rootDir, { recursive: true, mode: 0o700 });
+      await privateFileStore(rootDir).writeText(relativePath, contents);
+      return;
+    } catch (error) {
+      // A guarded private-store directory can be replaced during the atomic
+      // write. Retry only that transient boundary shape after re-opening it.
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const shouldRetry =
+        error instanceof FsSafeError
+          ? error.code === "path-mismatch"
+          : code === "ENOENT" || code === "ENOTDIR";
+      if (!shouldRetry || attempt > 0) {
+        throw error;
+      }
+    }
+  }
 }
 
 async function isGeneratedPluginCatalogFile(targetPath: string): Promise<boolean> {
@@ -340,7 +361,7 @@ export async function buildModelsJsonSourceFingerprint(
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
+  return await withModelCatalogFileIoLock(path.dirname(targetPath), run);
 }
 
 /** Ensures models.json and plugin catalog sidecars are current for an agent. */

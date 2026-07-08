@@ -41,6 +41,7 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
+import { withModelCatalogFileIoLock } from "./models-config-state.js";
 import {
   buildModelsJsonSourceFingerprint,
   prepareOpenClawModelsJsonSource,
@@ -434,7 +435,9 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins ??= getMetadataSnapshot().plugins;
     return manifestPlugins;
   };
-  const providers = await loadReadOnlyPersistedProviderRows(agentDir, getMetadataSnapshot);
+  const providers = await withModelCatalogFileIoLock(agentDir, () =>
+    loadReadOnlyPersistedProviderRows(agentDir, getMetadataSnapshot),
+  );
   for (const [providerRaw, providerConfig] of Object.entries(providers)) {
     if (!Array.isArray(providerConfig?.models)) {
       continue;
