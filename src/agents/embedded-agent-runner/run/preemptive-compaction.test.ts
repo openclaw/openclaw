@@ -266,13 +266,13 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
+      contextTokenBudget: 64_000,
       reserveTokens: 20_000,
     });
 
@@ -301,8 +301,8 @@ describe("preemptive-compaction", () => {
   });
 
   it("prechecks a regression-sized synthetic tool-heavy transcript as over budget", () => {
-    const toolResultCharsPerMessage = Math.ceil(427_000 / 120);
-    const generalCharsPerMessage = Math.ceil((503_000 - 427_000) / 121);
+    const toolResultCharsPerMessage = Math.ceil(560_000 / 120);
+    const generalCharsPerMessage = Math.ceil((700_000 - 560_000) / 121);
     const messages: AgentMessage[] = [];
     for (let index = 0; index < 241; index += 1) {
       if (index % 2 === 0) {

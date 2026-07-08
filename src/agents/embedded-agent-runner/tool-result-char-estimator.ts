@@ -4,7 +4,7 @@
 import type { AgentMessage } from "../runtime/index.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
+export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
