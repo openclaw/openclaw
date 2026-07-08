@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 const {
   postJsonRequestMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -114,6 +115,7 @@ describe("qwen video generation provider", () => {
       allowPrivateNetwork: true,
       headers: { "X-DashScope-Route": "qwen-policy" },
     };
+    const dispatcherPolicy = { mode: "env-proxy" as const };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
       const headers = new Headers(params.defaultHeaders);
       for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
@@ -123,7 +125,7 @@ describe("qwen video generation provider", () => {
         baseUrl: params.baseUrl ?? params.defaultBaseUrl,
         allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
         headers,
-        dispatcherPolicy: undefined,
+        dispatcherPolicy,
       };
     });
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
@@ -137,6 +139,8 @@ describe("qwen video generation provider", () => {
         models: {
           providers: {
             qwen: {
+              baseUrl: "https://dashscope-intl.aliyuncs.com",
+              models: [],
               request: requestPolicy,
             },
           },
@@ -156,12 +160,39 @@ describe("qwen video generation provider", () => {
     const request = postJsonRequestMock.mock.calls[0]?.[0] as
       | {
           allowPrivateNetwork?: unknown;
+          dispatcherPolicy?: unknown;
           headers?: Headers;
         }
       | undefined;
     expect(request?.allowPrivateNetwork).toBe(true);
+    expect(request?.dispatcherPolicy).toBe(dispatcherPolicy);
     expect(request?.headers).toBeInstanceOf(Headers);
     expect(request?.headers?.get("x-dashscope-route")).toBe("qwen-policy");
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      1,
+      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.any(Headers),
+      }),
+      120_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/out.mp4",
+      { method: "GET" },
+      120_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
   });
 
   it("rejects DashScope video downloads that exceed the configured media cap", async () => {
