@@ -306,6 +306,8 @@ type CronCommandPayloadPatch = {
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
+  /** Startup overflow catch-up slot that must survive maintenance and restarts. */
+  pendingCatchupDeferral?: boolean;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */

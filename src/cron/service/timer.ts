@@ -1169,8 +1169,8 @@ function applyOutcomeToStoredJob(
       endedAt: result.endedAt,
       triggerEval: result.triggerEval,
     });
-    state.pendingCatchupDeferralJobIds.delete(job.id);
-    return undefined;
+    job.state.pendingCatchupDeferral = undefined;
+    return;
   }
 
   const shouldDelete = applyJobResult(state, job, {
@@ -1184,7 +1184,7 @@ function applyOutcomeToStoredJob(
     endedAt: result.endedAt,
   });
   applyTriggerRunResult(job, result);
-  state.pendingCatchupDeferralJobIds.delete(job.id);
+  job.state.pendingCatchupDeferral = undefined;
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -2023,12 +2023,12 @@ async function applyStartupCatchupOutcomes(
           }
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
-            state.pendingCatchupDeferralJobIds.add(jobId);
+            job.state.pendingCatchupDeferral = true;
             offset += staggerMs;
             continue;
           }
           job.state.nextRunAtMs = baseNow + offset;
-          state.pendingCatchupDeferralJobIds.add(jobId);
+          job.state.pendingCatchupDeferral = true;
           offset += staggerMs;
         }
       }
