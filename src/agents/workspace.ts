@@ -55,6 +55,7 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
 const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
 const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
+const WORKSPACE_SETUP_STATE_ACCESS_DENIED_CODES = new Set(["EACCES", "EPERM"]);
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
@@ -451,6 +452,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   bootstrapPath: string;
   statePath: string;
   state: WorkspaceSetupState;
+  canPersistState: boolean;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
@@ -462,6 +464,9 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   }
 
   if (params.state.bootstrapSeededAt && !bootstrapExists) {
+    if (!params.canPersistState) {
+      return { repaired: false, bootstrapExists: false, state: params.state };
+    }
     const completedState: WorkspaceSetupState = {
       ...params.state,
       setupCompletedAt: new Date().toISOString(),
@@ -485,6 +490,9 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
     setupCompletedAt: now,
   };
+  if (!params.canPersistState) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
   await writeWorkspaceSetupState(params.statePath, repairedState);
   try {
     await fs.rm(params.bootstrapPath, { force: true });
@@ -719,6 +727,13 @@ function needsWorkspaceSetupStateRewrite(raw: string, state: WorkspaceSetupState
   );
 }
 
+function isWorkspaceSetupStateAccessDeniedError(err: unknown): boolean {
+  const anyErr = err as { code?: string };
+  return (
+    typeof anyErr.code === "string" && WORKSPACE_SETUP_STATE_ACCESS_DENIED_CODES.has(anyErr.code)
+  );
+}
+
 async function readWorkspaceSetupStateFile(statePath: string): Promise<{
   raw: string;
   state: WorkspaceSetupState;
@@ -738,11 +753,22 @@ async function readWorkspaceSetupStateFile(statePath: string): Promise<{
 
 async function readWorkspaceSetupStateForDir(
   dir: string,
-  opts?: { persistLegacyMigration?: boolean },
+  opts?: { onCanonicalStateInaccessible?: () => void; persistLegacyMigration?: boolean },
 ): Promise<WorkspaceSetupState> {
   const resolvedDir = resolveUserPath(dir);
   const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const canonical = await readWorkspaceSetupStateFile(statePath);
+  let canonicalStateInaccessible = false;
+  let canonical: Awaited<ReturnType<typeof readWorkspaceSetupStateFile>>;
+  try {
+    canonical = await readWorkspaceSetupStateFile(statePath);
+  } catch (err) {
+    if (!isWorkspaceSetupStateAccessDeniedError(err)) {
+      throw err;
+    }
+    canonicalStateInaccessible = true;
+    opts?.onCanonicalStateInaccessible?.();
+    canonical = null;
+  }
   if (canonical) {
     if (
       opts?.persistLegacyMigration &&
@@ -766,7 +792,9 @@ async function readWorkspaceSetupStateForDir(
     return { version: WORKSPACE_STATE_VERSION };
   }
   if (opts?.persistLegacyMigration && hasWorkspaceSetupStateMarker(legacy.state)) {
-    await writeWorkspaceSetupState(statePath, legacy.state);
+    if (!canonicalStateInaccessible) {
+      await writeWorkspaceSetupState(statePath, legacy.state);
+    }
   }
   return legacy.state;
 }
@@ -907,6 +935,10 @@ export async function ensureAgentWorkspace(params?: {
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
+  let canonicalSetupStateInaccessible = false;
+  const markCanonicalSetupStateInaccessible = () => {
+    canonicalSetupStateInaccessible = true;
+  };
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
@@ -936,6 +968,7 @@ export async function ensureAgentWorkspace(params?: {
   if (recentAttestationPath && !isBrandNewWorkspace) {
     const bootstrapExists = await pathExists(bootstrapPath);
     const state = await readWorkspaceSetupStateForDir(dir, {
+      onCanonicalStateInaccessible: markCanonicalSetupStateInaccessible,
       persistLegacyMigration: true,
     });
     const hasSetupState = hasWorkspaceSetupStateMarker(state);
@@ -993,6 +1026,7 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   let state = await readWorkspaceSetupStateForDir(dir, {
+    onCanonicalStateInaccessible: markCanonicalSetupStateInaccessible,
     persistLegacyMigration: true,
   });
   let stateDirty = false;
@@ -1011,6 +1045,7 @@ export async function ensureAgentWorkspace(params?: {
     const repair = await reconcileWorkspaceBootstrapCompletionState({
       dir,
       bootstrapPath,
+      canPersistState: !canonicalSetupStateInaccessible,
       statePath,
       state,
       bootstrapExists,
@@ -1054,7 +1089,9 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    await writeWorkspaceSetupState(statePath, state);
+    if (!canonicalSetupStateInaccessible) {
+      await writeWorkspaceSetupState(statePath, state);
+    }
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
   await maybeWriteWorkspaceAttestation(attestationPath, dir);

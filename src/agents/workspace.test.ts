@@ -176,6 +176,57 @@ describe("ensureAgentWorkspace", () => {
     expect(legacyStateStat.isDirectory()).toBe(true);
   });
 
+  it("continues setup without writing state when canonical setup state is inaccessible", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "configured identity\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_USER_FILENAME,
+      content: "configured user\n",
+    });
+
+    const statePath = path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS);
+    const originalReadFile = fs.readFile.bind(fs);
+    const originalOpen = fs.open.bind(fs);
+    const originalRename = fs.rename.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+      if (filePath === statePath) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, open '${statePath}'`), {
+          code: "EPERM",
+        });
+      }
+      return await originalReadFile(filePath, options as never);
+    }) as typeof fs.readFile);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation((async (filePath, flags, mode) => {
+      if (filePath === statePath) {
+        throw new Error(`unexpected write to inaccessible setup state: ${statePath}`);
+      }
+      return await originalOpen(filePath, flags as never, mode as never);
+    }) as typeof fs.open);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation((async (oldPath, newPath) => {
+      if (newPath === statePath) {
+        throw new Error(`unexpected replacement of inaccessible setup state: ${statePath}`);
+      }
+      return await originalRename(oldPath, newPath);
+    }) as typeof fs.rename);
+
+    try {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+      expect(readSpy).toHaveBeenCalledWith(statePath, "utf-8");
+      expect(openSpy).not.toHaveBeenCalledWith(statePath, expect.anything(), expect.anything());
+      expect(renameSpy).not.toHaveBeenCalledWith(expect.anything(), statePath);
+    } finally {
+      readSpy.mockRestore();
+      openSpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+  });
+
   it("refuses to re-seed a recently attested workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
