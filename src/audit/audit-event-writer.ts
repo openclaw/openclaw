@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { AuditEventInput } from "./audit-event-types.js";
@@ -38,13 +38,10 @@ function resolveAuditEventWriterUrl(currentModuleUrl = import.meta.url): URL {
   return new URL(`./audit-event-writer.worker${extension}`, currentModuleUrl);
 }
 
-function createSourceWorkerBootstrapUrl(workerUrl: URL): URL {
+function resolveSourceWorkerExecArgv(): string[] {
   const require = createRequire(import.meta.url);
-  const tsxApiUrl = pathToFileURL(require.resolve("tsx/esm/api")).href;
-  const bootstrap = `import { tsImport } from ${JSON.stringify(tsxApiUrl)};\nawait tsImport(${JSON.stringify(
-    workerUrl.href,
-  )}, ${JSON.stringify(import.meta.url)});\n`;
-  return new URL(`data:text/javascript,${encodeURIComponent(bootstrap)}`);
+  const tsxLoaderUrl = pathToFileURL(require.resolve("tsx")).href;
+  return [...process.execArgv, "--import", tsxLoaderUrl];
 }
 
 /** Start one bounded worker queue. SQLite contention never blocks the agent-event callback. */
@@ -57,15 +54,16 @@ export function createAuditEventWriter(
   } = {},
 ): AuditEventWriter {
   const workerUrl = options.workerUrl ?? resolveAuditEventWriterUrl();
-  const effectiveWorkerUrl = workerUrl.pathname.endsWith(".ts")
-    ? createSourceWorkerBootstrapUrl(workerUrl)
-    : workerUrl;
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   let worker: Worker;
   try {
-    worker = new Worker(effectiveWorkerUrl, {
+    const workerOptions: WorkerOptions = {
       workerData: { stateDir: options.stateDir ?? resolveStateDir(process.env) },
-    });
+    };
+    if (workerUrl.pathname.endsWith(".ts")) {
+      workerOptions.execArgv = resolveSourceWorkerExecArgv();
+    }
+    worker = new Worker(workerUrl, workerOptions);
   } catch (error) {
     options.onError?.(error instanceof Error ? error.message : String(error));
     return {

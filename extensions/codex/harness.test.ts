@@ -58,6 +58,7 @@ describe("Codex agent harness supports()", () => {
   it("supports legacy exact provider ids when explicitly configured", () => {
     const legacyHarness = createCodexAppServerAgentHarness({
       providerIds: ["codex", "openai", "openai-codex"],
+      bindingStore: testCodexAppServerBindingStore,
     });
 
     expect(legacyHarness.supports({ provider: "openai-codex", requestedRuntime: "codex" })).toEqual(

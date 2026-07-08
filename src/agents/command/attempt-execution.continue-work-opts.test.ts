@@ -492,6 +492,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       return {
         payloads: [{ text: "Agent could not complete the turn.", isError: true }],
         meta: {
+          durationMs: 1,
           replayInvalid: true,
           error: {
             kind: "incomplete_turn",
