@@ -565,7 +565,7 @@ function resolveSegmentAllowlistMatch(params: {
     ? (powerShellFileScriptArgv ??
       resolveShellWrapperScriptArgv({
         shellScriptCandidatePath,
-        effectiveArgv,
+        effectiveArgv: matchArgv,
         cwd: params.context.cwd,
       }))
     : null;
@@ -1288,7 +1288,7 @@ function collectAllowAlwaysPatterns(params: {
     if (scriptPath) {
       const scriptTrustPath = resolveCandidateTrustPath(scriptPath) ?? scriptPath;
       const argPattern = buildScriptArgPatternFromArgv(
-        powerShellFileScriptArgv ?? params.segment.argv,
+        powerShellFileScriptArgv ?? segment.argv,
         scriptPath,
         params.cwd,
         params.platform,

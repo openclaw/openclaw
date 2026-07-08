@@ -1148,6 +1148,62 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("matches package-manager shell-script arg patterns against inner argv", () => {
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "bash");
+    const platform = "win32";
+    const analysis = analyzeArgvCommand({
+      argv: ["pnpm", "exec", "bash", script, "allowed"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(entries).toEqual([{ pattern: script, argPattern: "^allowed\x00$" }]);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const extraArgAnalysis = analyzeArgvCommand({
+      argv: ["pnpm", "exec", "bash", script, "allowed", "extra"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    const denied = evaluateExecAllowlist({
+      analysis: extraArgAnalysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: denied.analysisOk,
+        allowlistSatisfied: denied.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("matches package-manager exec allow-always entries by inner executable", async () => {
     if (process.platform === "win32") {
       return;
