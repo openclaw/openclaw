@@ -180,7 +180,7 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
     const logCalls = logger.info.mock.calls
       .concat(logger.warn.mock.calls)
       .concat(logger.error.mock.calls)
-      .map((c) => c.map(String).join(" "));
+      .map((c) => c.map((item) => `${item}`).join(" "));
     for (const msg of logCalls) {
       expect(hasLoneSurrogate(msg), `log has lone surrogate: ${msg.slice(0, 80)}`).toBe(false);
     }
