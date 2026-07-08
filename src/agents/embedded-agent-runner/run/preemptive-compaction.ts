@@ -24,7 +24,10 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
-const TOOL_RESULT_CHARS_PER_TOKEN = 2;
+// Tool results (JSON, code output) average ~4-5 chars/token in practice.
+// The old 2 chars/token under-estimates density, causing ~2-2.6× over-count
+// vs billed usage that triggers mid-turn precheck too early.
+const TOOL_RESULT_CHARS_PER_TOKEN = 3;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;

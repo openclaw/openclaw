@@ -266,14 +266,14 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    expect(estimatedPromptTokens).toBeGreaterThan(50_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
-      reserveTokens: 20_000,
+      contextTokenBudget: 70_000,
+      reserveTokens: 10_000,
     });
 
     expect(result.route).not.toBe("fits");
@@ -530,8 +530,8 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
-    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
+    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.1);
+    expect(toolResultTokens).toBeLessThan(assistantTokens * 1.8);
   });
 
   it("applies the CJK-aware ratio to JSON tool-result payloads", () => {

@@ -28,7 +28,7 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(malformed, cache);
-    expect(chars).toBe(30);
+    expect(chars).toBe(20);
   });
 
   it("estimates text content when toolResult content includes null entries", () => {
@@ -41,7 +41,7 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(malformed, cache);
-    expect(chars).toBe(12);
+    expect(chars).toBe(8);
   });
 
   it("getToolResultText skips malformed text blocks", () => {
@@ -65,7 +65,7 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBe(22);
+    expect(chars).toBe(15);
   });
 
   it("estimates a large bashExecution near its rendered size", () => {

@@ -251,7 +251,7 @@ describe("installToolResultContextGuard", () => {
   it("drops oversized tool-result details when truncating once", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
-      makeToolResultWithDetails("call_big", "x".repeat(900), "d".repeat(8_000)),
+      makeToolResultWithDetails("call_big", "x".repeat(2_000), "d".repeat(8_000)),
     ];
 
     const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
@@ -316,7 +316,7 @@ describe("installToolResultContextGuard", () => {
 
   it("supports model-window-specific truncation for large but otherwise valid tool results", async () => {
     const agent = makeGuardableAgent();
-    const contextForNextCall = [makeToolResult("call_big", "q".repeat(95_000))];
+    const contextForNextCall = [makeToolResult("call_big", "q".repeat(120_000))];
 
     const transformed = (await applyGuardToContext(
       agent,

@@ -11,7 +11,10 @@ import {
 } from "../runtime/index.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
+// Tool results (JSON, code output) average ~4-5 chars/token in practice.
+// The old value of 2 chars/token under-estimates density by ~2×, causing
+// ~2-2.6× token over-count that triggers mid-turn truncation too early.
+export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 3;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
