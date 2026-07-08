@@ -23,6 +23,7 @@ import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
   normalizePackageManagerExecToken,
+  PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
   PNPM_DLX_OPTIONS_WITH_VALUE,
   PNPM_FLAG_OPTIONS,
   PNPM_OPTIONS_WITH_VALUE,
@@ -803,8 +804,13 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
       }
       return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1), cwd);
     }
-    const flag = normalizeOptionFlag(token);
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -832,11 +838,16 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
     if (!token.startsWith("-")) {
       return pnpmDlxTailMayNeedStableBinding(argv.slice(idx), cwd);
     }
-    const flag = normalizeOptionFlag(token);
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (flag === "-c" || flag === "--shell-mode") {
       return false;
     }
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }

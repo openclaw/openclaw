@@ -35,8 +35,9 @@ export const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--stream",
   "--test-pattern",
   "--workspace-concurrency",
-  "-C",
 ]);
+
+export const PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE = new Set(["-C"]);
 
 export const PNPM_FLAG_OPTIONS = new Set([
   "--aggregate-output",
@@ -88,6 +89,46 @@ const YARN_FLAG_OPTIONS = new Set(["--immutable", "--silent", "-s"]);
 const YARN_DLX_OPTIONS_WITH_VALUE = new Set(["--package", "-p"]);
 const YARN_DLX_FLAG_OPTIONS = new Set(["--quiet", "-q"]);
 const YARN_EXEC_SUBCOMMANDS = new Set(["exec", "dlx"]);
+const YARN_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
+  "add",
+  "audit",
+  "autoclean",
+  "bin",
+  "cache",
+  "check",
+  "config",
+  "create",
+  "dedupe",
+  "generate-lock-entry",
+  "global",
+  "help",
+  "import",
+  "info",
+  "init",
+  "install",
+  "licenses",
+  "link",
+  "list",
+  "login",
+  "logout",
+  "outdated",
+  "owner",
+  "pack",
+  "policies",
+  "prune",
+  "publish",
+  "remove",
+  "self-update",
+  "tag",
+  "team",
+  "unlink",
+  "upgrade",
+  "upgrade-interactive",
+  "version",
+  "versions",
+  "why",
+  "workspace",
+]);
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
@@ -183,8 +224,13 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       }
       return null;
     }
-    const flag = normalizeOptionFlag(token);
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -212,11 +258,16 @@ function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(idx);
     }
-    const flag = normalizeOptionFlag(token);
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (flag === "-c" || flag === "--shell-mode") {
       return null;
     }
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -398,6 +449,7 @@ export function resolveKnownPackageManagerExecInvocation(
       }
       const firstSubcommand = firstSubcommandAfterOptions(argv, {
         optionsWithValue: new Set([...PNPM_OPTIONS_WITH_VALUE, ...PNPM_DLX_OPTIONS_WITH_VALUE]),
+        caseSensitiveOptionsWithValue: PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
         flagOptions: PNPM_FLAG_OPTIONS,
       });
       const detectedKnownExec = PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "");
@@ -420,8 +472,13 @@ export function resolveKnownPackageManagerExecInvocation(
         optionsWithValue: new Set([...YARN_OPTIONS_WITH_VALUE, ...YARN_DLX_OPTIONS_WITH_VALUE]),
         flagOptions: new Set([...YARN_FLAG_OPTIONS, ...YARN_DLX_FLAG_OPTIONS]),
       });
-      return YARN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "") ||
-        (firstSubcommand === null && containsSubcommandToken(argv.slice(1), YARN_EXEC_SUBCOMMANDS))
+      const detectedKnownExec = YARN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "");
+      const hiddenKnownExec =
+        firstSubcommand === null && containsSubcommandToken(argv.slice(1), YARN_EXEC_SUBCOMMANDS);
+      const implicitRunOrBin =
+        firstSubcommand !== null &&
+        (firstSubcommand === "run" || !YARN_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand));
+      return detectedKnownExec || hiddenKnownExec || implicitRunOrBin
         ? { kind: "unsafe-exec" }
         : { kind: "not-exec" };
     }

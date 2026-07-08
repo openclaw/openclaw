@@ -61,6 +61,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it("persists pnpm cwd exec approvals against the inner executable", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "pnpm -C ./package exec -- tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
   it.each(["env --", "nice"])(
     "persists dispatch-wrapped package-manager exec approvals against the inner executable: %s",
     async (wrapper) => {
@@ -321,31 +345,32 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("keeps yarn run as a script-runner command instead of delegated exec", async () => {
-    const dir = makeTempDir();
-    const yarnPath = makeExecutable(dir, "yarn");
-    for (const executable of ["sh", "echo"]) {
-      makeExecutable(dir, executable);
-    }
-    const env = makePathEnv(dir);
-    const command = "yarn run sh -c 'echo warmup-ok'";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
+  it.each(["yarn run sh -c 'echo warmup-ok'", "yarn sh -c 'echo warmup-ok'"])(
+    "keeps yarn script or bin fallback carriers one-shot: %s",
+    async (command) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "yarn");
+      for (const executable of ["sh", "echo"]) {
+        makeExecutable(dir, executable);
+      }
+      const env = makePathEnv(dir);
+      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+      const decision = resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        cwd: dir,
+        env,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
 
-    expect(decision).toEqual({
-      kind: "patterns",
-      commandText: command,
-      patterns: [expect.objectContaining({ pattern: yarnPath })],
-    });
-  });
+      expect(decision).toEqual({
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      });
+    },
+  );
 
   it.each(["env --", "nice"])(
     "keeps dispatch-wrapped package-manager shell carriers one-shot: %s",
