@@ -1,6 +1,7 @@
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  clampText,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
@@ -11,6 +12,7 @@ import {
   formatUnknownText,
   parseSessionKeyParts,
   setUiTimeFormatPreference,
+  truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
@@ -269,5 +271,84 @@ describe("formatTokens", () => {
     expect(formatTokens(12_345)).toBe("12k");
     expect(formatTokens(5_500)).toBe("5.5k");
     expect(formatTokens(null)).toBe("0");
+  });
+});
+
+describe("clampText surrogate-safe truncation", () => {
+  it("does not split an emoji across the truncation boundary", () => {
+    // 121 UTF-16 units: 119 'a's then an emoji (surrogate pair at 119-120).
+    // With max = 120, naive slice(0, 119) keeps only the emoji's high surrogate.
+    const value = `${"a".repeat(119)}\u{1F600}`;
+    expect(value.length).toBe(121);
+
+    const result = clampText(value, 120);
+
+    // The emoji should be entirely dropped, leaving the 119 'a's + "…"
+    expect(result).toBe(`${"a".repeat(119)}…`);
+    // No dangling surrogates
+    for (let i = 0; i < result.length; i++) {
+      const cu = result.charCodeAt(i);
+      if (cu >= 0xd800 && cu <= 0xdbff) {
+        expect(result.charCodeAt(i + 1) >= 0xdc00 && result.charCodeAt(i + 1) <= 0xdfff).toBe(true);
+      }
+      if (cu >= 0xdc00 && cu <= 0xdfff) {
+        expect(
+          i > 0 && result.charCodeAt(i - 1) >= 0xd800 && result.charCodeAt(i - 1) <= 0xdbff,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("leaves short text unchanged", () => {
+    expect(clampText("hello", 120)).toBe("hello");
+  });
+
+  it("appends ellipsis when truncated", () => {
+    expect(clampText("x".repeat(200), 120)).toMatch(/…$/);
+  });
+});
+
+describe("truncateText surrogate-safe truncation", () => {
+  it("does not split an emoji across the truncation boundary", () => {
+    // 121 UTF-16 units: 120 'a's then an emoji at index 120.
+    const value = `${"a".repeat(120)}\u{1F600}`;
+    expect(value.length).toBe(122);
+
+    const result = truncateText(value, 121);
+
+    expect(result.truncated).toBe(true);
+    // The emoji should be dropped entirely
+    expect(result.text).not.toContain("\u{1F600}");
+    // No dangling surrogates
+    for (let i = 0; i < result.text.length; i++) {
+      const cu = result.text.charCodeAt(i);
+      if (cu >= 0xd800 && cu <= 0xdbff) {
+        expect(
+          result.text.charCodeAt(i + 1) >= 0xdc00 && result.text.charCodeAt(i + 1) <= 0xdfff,
+        ).toBe(true);
+      }
+      if (cu >= 0xdc00 && cu <= 0xdfff) {
+        expect(
+          i > 0 &&
+            result.text.charCodeAt(i - 1) >= 0xd800 &&
+            result.text.charCodeAt(i - 1) <= 0xdbff,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("returns truncated: false for short text", () => {
+    expect(truncateText("hello", 120)).toEqual({
+      text: "hello",
+      truncated: false,
+      total: 5,
+    });
+  });
+
+  it("reports correct total for truncated text", () => {
+    const result = truncateText("x".repeat(200), 120);
+    expect(result.truncated).toBe(true);
+    expect(result.total).toBe(200);
+    expect(result.text.length).toBeLessThan(200);
   });
 });
