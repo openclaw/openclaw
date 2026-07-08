@@ -160,6 +160,14 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<a href="/next"></a>`).text).toBe("/next");
   });
 
+  it("keeps bare less-than text from swallowing later closing tags", () => {
+    expect(htmlToMarkdown(`<a href="/x">my <3 story</a> rest`).text).toBe("[my <3 story](/x) rest");
+    expect(htmlToMarkdown(`<title>2 < 3</title><p>Body</p>`)).toEqual({
+      text: "Body",
+      title: "2 < 3",
+    });
+  });
+
   it("uses the title as fallback content when an HTML shell has no body text", async () => {
     await expect(
       extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),

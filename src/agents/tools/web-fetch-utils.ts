@@ -436,6 +436,12 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       continue;
     }
 
+    if (!startsLikeHtmlTag(html, i)) {
+      appendText(stack, "<");
+      i += 1;
+      continue;
+    }
+
     const read = readTagToken(html, i);
     if (!read) {
       const rawTextStart = findRawTextOpenTagStart(html, i + 1, html.length);
