@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -38,9 +39,14 @@ type GoogleOauthTokenResponsePayload = {
   error_description?: unknown;
 };
 
+type GoogleVertexAuthorizedUserHeadersOptions = {
+  tokenRefreshTimeoutMs?: number;
+};
+
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 // Hold tokens slightly less long than reported expiry (Google's recommendation
 // is a 60s buffer) so we don't ship a request that's already revoked when it
 // leaves the gateway.
@@ -218,6 +224,7 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   credentialsPath: string;
   credentials: GoogleAuthorizedUserCredentials;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }): Promise<string> {
   const clientId = normalizeOptionalString(params.credentials.client_id);
   const clientSecret = normalizeOptionalString(params.credentials.client_secret);
@@ -243,11 +250,22 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     refresh_token: refreshToken,
     grant_type: "refresh_token",
   });
-  const response = await (params.fetchImpl ?? fetch)(GOOGLE_OAUTH_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: params.timeoutMs ?? GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
+    operation: "google-vertex-adc-token-refresh",
+    url: GOOGLE_OAUTH_TOKEN_URL,
   });
+  let response: Response;
+  try {
+    response = await (params.fetchImpl ?? fetch)(GOOGLE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal,
+    });
+  } finally {
+    cleanup();
+  }
   const payload = await readGoogleOauthTokenResponsePayload(response);
   if (!response.ok) {
     const description = normalizeOptionalString(payload?.error_description);
@@ -395,6 +413,7 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
  */
 export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
+  options: GoogleVertexAuthorizedUserHeadersOptions = {},
 ): Promise<Record<string, string>> {
   const credentialsPath = resolveGoogleApplicationCredentialsPath();
   if (credentialsPath) {
@@ -404,6 +423,7 @@ export async function resolveGoogleVertexAuthorizedUserHeaders(
         credentialsPath,
         credentials,
         fetchImpl,
+        timeoutMs: options.tokenRefreshTimeoutMs,
       });
       return { Authorization: `Bearer ${token}` };
     }
