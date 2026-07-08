@@ -74,6 +74,13 @@ describe("resetReplyRunSession", () => {
       fallbackNoticeSelectedModel: "anthropic/claude",
       fallbackNoticeActiveModel: "openai/gpt",
       fallbackNoticeReason: "rate limit",
+      compactionCount: 5,
+      memoryFlushAt: 123,
+      memoryFlushCompactionCount: 4,
+      memoryFlushContextHash: "stale-context",
+      memoryFlushFailureCount: 3,
+      memoryFlushLastFailedAt: 456,
+      memoryFlushLastFailureError: "provider crashed",
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -119,6 +126,13 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.fallbackNoticeSelectedModel).toBeUndefined();
     expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
     expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
+    expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
@@ -134,6 +148,10 @@ describe("resetReplyRunSession", () => {
     expect(persisted.main.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted.main.contextBudgetStatus).toBeUndefined();
     expect(persisted.main.fallbackNoticeReason).toBeUndefined();
+    expect(persisted.main.compactionCount).toBe(0);
+    expect(persisted.main.memoryFlushFailureCount).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("cleans up the old transcript when requested", async () => {
@@ -165,5 +183,42 @@ describe("resetReplyRunSession", () => {
     });
 
     await expectPathMissing(oldTranscriptPath);
+  });
+
+  it("preserves the old transcript while still rotating when cleanup is disabled", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
+    await fs.writeFile(oldTranscriptPath, "old", "utf8");
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: 1,
+      sessionFile: oldTranscriptPath,
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    let rotatedSessionId: string | undefined;
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        cleanupTranscripts: false,
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey: "main",
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: (entry) => {
+        rotatedSessionId = entry.sessionId;
+      },
+      onNewSession: () => {},
+    });
+
+    // Rotation still happens, but the old transcript stays available for recovery.
+    expect(rotatedSessionId).toBeDefined();
+    expect(rotatedSessionId).not.toBe("old-session");
+    await fs.access(oldTranscriptPath);
   });
 });

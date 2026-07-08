@@ -17,6 +17,21 @@ struct NodePairingApprovalPrompterTests {
         #expect(!options.contains("StrictHostKeyChecking=accept-new"))
     }
 
+    @Test func `own node is automatically approved only for a local gateway`() {
+        #expect(NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .local,
+            requestNodeId: "node-1",
+            localNodeId: "node-1"))
+        #expect(!NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .remote,
+            requestNodeId: "node-1",
+            localNodeId: "node-1"))
+        #expect(!NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .local,
+            requestNodeId: "node-2",
+            localNodeId: "node-1"))
+    }
+
     @Test func `node pairing approval prompter exercises`() async {
         await NodePairingApprovalPrompter.exerciseForTesting()
     }
@@ -75,5 +90,38 @@ struct NodePairingApprovalPrompterTests {
         let accessory = DevicePairingApprovalPrompter.buildAccessoryView(for: request)
         #expect(accessory.frame.width >= 380)
         #expect(accessory.frame.height > 80)
+    }
+
+    @Test func `a newer device pairing request supersedes queued requests for the same device`() {
+        func request(_ requestId: String, deviceId: String, ts: Double) -> DevicePairingApprovalPrompter
+            .PendingRequest
+        {
+            DevicePairingApprovalPrompter.PendingRequest(
+                requestId: requestId,
+                deviceId: deviceId,
+                publicKey: "pub",
+                displayName: nil,
+                platform: "MacIntel",
+                clientId: nil,
+                clientMode: nil,
+                role: "node",
+                scopes: nil,
+                remoteIp: nil,
+                silent: nil,
+                isRepair: true,
+                ts: ts)
+        }
+
+        let stale1 = request("req-1", deviceId: "device-a", ts: 1)
+        let stale2 = request("req-2", deviceId: "device-a", ts: 2)
+        let other = request("req-3", deviceId: "device-b", ts: 3)
+        let fresh = request("req-4", deviceId: "device-a", ts: 4)
+
+        // Stale requests for the same device collapse; other devices are untouched.
+        let coalesced = DevicePairingApprovalPrompter.coalescedQueue([stale1, stale2, other], adding: fresh)
+        #expect(coalesced?.map(\.requestId) == ["req-3", "req-4"])
+
+        // Re-delivery of an already queued requestId is a no-op.
+        #expect(DevicePairingApprovalPrompter.coalescedQueue([stale1, other], adding: stale1) == nil)
     }
 }

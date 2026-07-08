@@ -68,7 +68,10 @@ vi.mock("./agent-runner-execution.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
+  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    sessionEntry,
+    outcome: "skipped",
+  }),
   runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));

@@ -76,7 +76,7 @@ type CallGatewayBaseOptions = {
   method: string;
   params?: unknown;
   expectFinal?: boolean;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   signal?: AbortSignal;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
@@ -484,31 +484,33 @@ function isLoopbackGatewayUrl(rawUrl: string): boolean {
 function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
   url: string;
+  authMode: ReturnType<typeof resolveGatewayAuth>["mode"];
   token?: string;
   password?: string;
   allowAuthNone?: boolean;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasDirectLocalBackendAuth =
-    Boolean(params.token || params.password) || params.allowAuthNone === true;
-  return (
+  // Inactive ambient credentials must not turn an auth-none CLI call device-less.
+  // Omit identity only when the Gateway will actually authenticate the supplied secret.
+  const hasSharedSecretAuth =
+    (params.authMode === "token" && Boolean(params.token)) ||
+    (params.authMode === "password" && Boolean(params.password));
+  const isLoopback = isLoopbackGatewayUrl(params.url);
+  const isLocalBackendSharedAuth =
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    hasDirectLocalBackendAuth &&
-    isLoopbackGatewayUrl(params.url)
-  );
+    (hasSharedSecretAuth || params.allowAuthNone === true) &&
+    isLoopback;
+  const isLocalCliSharedAuth =
+    mode === GATEWAY_CLIENT_MODES.CLI &&
+    clientName === GATEWAY_CLIENT_NAMES.CLI &&
+    hasSharedSecretAuth &&
+    isLoopback;
+  return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(params: {
-  opts: CallGatewayBaseOptions;
-  url: string;
-  token?: string;
-  password?: string;
-}): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
-  if (shouldOmitDeviceIdentityForGatewayCall(params)) {
-    return null;
-  }
+function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
   try {
     return gatewayCallDeps.loadOrCreateDeviceIdentity();
   } catch {
@@ -614,9 +616,16 @@ export function ensureExplicitGatewayAuth(params: {
   if (params.urlOverrideSource === "env" && hasResolvedAuth) {
     return;
   }
+  const sourceHint =
+    params.urlOverrideSource === "env"
+      ? "Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD alongside OPENCLAW_GATEWAY_URL; config credentials are intentionally not reused."
+      : params.urlOverrideSource === "cli"
+        ? "For the default local or SSH-tunneled Gateway, remove --url to use the configured target."
+        : undefined;
   const message = [
     "gateway url override requires explicit credentials",
     params.errorHint,
+    sourceHint,
     params.configPath ? `Config: ${params.configPath}` : undefined,
   ]
     .filter(Boolean)
@@ -653,7 +662,8 @@ function resolveGatewayCallTimeout(
   timeoutValue: unknown,
   configuredHandshakeTimeoutMs?: number | null,
 ): {
-  timeoutMs: number;
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
   const hasConfiguredHandshakeTimeout =
@@ -667,14 +677,16 @@ function resolveGatewayCallTimeout(
     hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
       ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
       : undefined;
-  const timeoutMs =
-    typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
-      ? timeoutValue
-      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
-        ? resolvedHandshakeTimeoutMs
-        : 10_000;
-  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
-  return { timeoutMs, safeTimerTimeoutMs };
+  const defaultTimeoutMs =
+    typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+      ? resolvedHandshakeTimeoutMs
+      : 10_000;
+  const explicitTimeoutMs =
+    typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : undefined;
+  const startupTimeoutMs = explicitTimeoutMs ?? defaultTimeoutMs;
+  const timeoutMs = timeoutValue === null ? null : (explicitTimeoutMs ?? defaultTimeoutMs);
+  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs ?? startupTimeoutMs);
+  return { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs };
 }
 
 async function resolveGatewayCallContext(
@@ -807,9 +819,10 @@ function formatGatewayCloseError(
   if (code === 1006) {
     message +=
       "\n\nPossible causes:" +
+      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
       "\n- Gateway not yet ready to accept connections (retry after a moment)" +
       "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway crashed or was terminated unexpectedly" +
+      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
       "\nRun `openclaw doctor` for diagnostics.";
   }
   return message;
@@ -896,7 +909,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
   password?: string;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
-  timeoutMs: number;
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
@@ -911,6 +925,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     tlsFingerprint,
     preauthHandshakeTimeoutMs,
     timeoutMs,
+    startupTimeoutMs,
     safeTimerTimeoutMs,
     deviceIdentity,
     surfaceGatewayClientRequestErrors,
@@ -922,6 +937,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     }
     let settled = false;
     let ignoreClose = false;
+    let timer: NodeJS.Timeout | undefined;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
     let suppressedPreHelloCleanCloses = 0;
@@ -1004,6 +1020,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        if (timeoutMs === null && timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({
@@ -1068,11 +1088,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
+    const wrapperTimeoutMs = timeoutMs ?? startupTimeoutMs;
+    timer = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
-          timeoutMs,
+          timeoutMs: wrapperTimeoutMs,
           connectionDetails: params.connectionDetails,
         }),
       );
@@ -1089,7 +1110,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         ignoreClose = true;
         stop(
           createGatewayTimeoutTransportError({
-            timeoutMs,
+            timeoutMs: startupTimeoutMs,
             connectionDetails: params.connectionDetails,
           }),
         );
@@ -1109,7 +1130,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   scopes: OperatorScope[] | undefined,
 ): Promise<T> {
   const context = await resolveGatewayCallContext(opts);
-  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+  const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,
   );
@@ -1136,7 +1157,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlOverrideSource: context.urlOverrideSource,
     explicitAuth: context.explicitAuth,
     resolvedAuth: resolvedCredentials,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+    errorHint: "Fix: pass --token or --password with --url (or gatewayToken in tools).",
     configPath: context.configPath,
   });
   ensureRemoteModeUrlConfigured(context);
@@ -1152,12 +1173,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
+  const authMode = resolveGatewayCallAuth(context.config).mode;
+  const allowAuthNone = opts.requireLocalBackendSharedAuth === true && authMode === "none";
   const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
     opts,
     url,
+    authMode,
     token,
     password,
     allowAuthNone,
@@ -1171,7 +1192,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+        : resolveDeviceIdentityForGatewayCall()
       : opts.deviceIdentity;
   if (useStoredDeviceAuth) {
     const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
@@ -1210,6 +1231,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     tlsFingerprint,
     preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,
+    startupTimeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
     deviceIdentity,

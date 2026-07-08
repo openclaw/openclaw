@@ -192,6 +192,16 @@ describe("hydrateViewer", () => {
   });
 });
 
+describe("resolveViewerLanguagePackAvailability", () => {
+  it("resolves defined and undefined build flags", async () => {
+    const { resolveViewerLanguagePackAvailability } = await import("./viewer-client.js");
+
+    expect(resolveViewerLanguagePackAvailability(true)).toBe(true);
+    expect(resolveViewerLanguagePackAvailability(false)).toBe(false);
+    expect(resolveViewerLanguagePackAvailability(undefined)).toBe(false);
+  });
+});
+
 describe("viewerState initialization", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
@@ -387,6 +397,63 @@ describe("toolbar button toggles", () => {
       fileDiffSetOptionsMock.mock.calls.length - 1
     ]?.[0] as Record<string, unknown>;
     expect(lastOpts.disableBackground).toBe(true);
+  });
+});
+
+describe("header metadata", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    delete document.body.dataset.theme;
+    vi.clearAllMocks();
+  });
+
+  type HeaderMetadataCallback = () => HTMLElement | null;
+
+  async function hydrateAndGetHeaderCallback(): Promise<HeaderMetadataCallback> {
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    return opts.renderHeaderMetadata as HeaderMetadataCallback;
+  }
+
+  it("renders the toolbar in viewer render mode", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<main class="oc-frame" data-render-mode="viewer"></main>',
+    );
+    renderCard();
+    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+
+    const header = renderHeaderMetadata();
+
+    expect(header).not.toBeNull();
+    expect(header?.querySelectorAll("button")).toHaveLength(4);
+  });
+
+  it("drops the interactive toolbar in image render mode", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<main class="oc-frame" data-render-mode="image"></main>',
+    );
+    renderCard();
+    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+
+    expect(renderHeaderMetadata()).toBeNull();
+  });
+
+  it("skips summary nav cards during hydration", async () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
+    );
+    renderCard();
+    const { controllers, hydrateViewer } = await import("./viewer-client.js");
+    controllers.splice(0);
+
+    await hydrateViewer();
+
+    expect(controllers).toHaveLength(1);
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
   });
 });
 

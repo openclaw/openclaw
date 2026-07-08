@@ -22,7 +22,7 @@ type ClawHubDispatchTarget = {
   inputs: ClawHubDispatchInputs;
 };
 
-export type OpenClawReleaseClawHubPlanArgs = {
+type OpenClawReleaseClawHubPlanArgs = {
   releaseTag: string;
   releasePublishBranch: string;
   releasePublishRunId: string;
@@ -30,7 +30,7 @@ export type OpenClawReleaseClawHubPlanArgs = {
   plugins: string[];
 };
 
-export type OpenClawReleaseClawHubPlan = {
+type OpenClawReleaseClawHubPlan = {
   clawHubWorkflowRef: string;
   releasePublishBranch: string;
   normal: ClawHubDispatchTarget;
@@ -48,7 +48,7 @@ export type OpenClawReleaseClawHubPlan = {
   };
 };
 
-export type OpenClawReleaseClawHubRuntimeStateArgs = {
+type OpenClawReleaseClawHubRuntimeStateArgs = {
   repository: string;
   waitForClawHub: boolean;
   forceSkipClawHub: boolean;
@@ -57,7 +57,7 @@ export type OpenClawReleaseClawHubRuntimeStateArgs = {
   bootstrapCompleted: boolean;
 };
 
-export type OpenClawReleaseClawHubRuntimeState = {
+type OpenClawReleaseClawHubRuntimeState = {
   verifierArgs: string[];
   proofLines: {
     normal: string;

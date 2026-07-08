@@ -14,6 +14,7 @@ import {
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
+  tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 
@@ -102,6 +103,37 @@ describe("bash process registry", () => {
     expect(drained.stdout).toBe("a".repeat(4) + "b".repeat(6));
     expect(drained.stderr).toBe("c".repeat(10));
     expect(session.truncated).toBe(true);
+  });
+
+  it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 3,
+      pendingMaxOutputChars: 3,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a🎉bc");
+
+    expect(session.aggregated).toBe("bc");
+    expect(session.pendingStdoutChars).toBe(2);
+    expect(drainSession(session).stdout).toBe("bc");
+    expect(tail("a🎉bc", 3)).toBe("bc");
+  });
+
+  it("keeps multi-chunk pending output on a UTF-16 boundary", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 3,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a🎉");
+    appendOutput(session, "stdout", "bc");
+
+    expect(session.pendingStdoutChars).toBe(2);
+    expect(drainSession(session).stdout).toBe("bc");
   });
 
   it("only persists finished sessions when backgrounded", () => {

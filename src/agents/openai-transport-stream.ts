@@ -4,9 +4,51 @@
  * Handles Chat Completions, Responses, Azure variants, tool-call replay, reasoning events, and
  * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import {
+  clampOpenAIPromptCacheKey,
+  convertMessages,
+  findOpenAIStrictToolProjectionDiagnostics,
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
+  isResponsesTextContentPartType,
+  isResponsesTextDeltaEventType,
+  mapOpenAIStopReason,
+  normalizeOpenAIReasoningEffort,
+  normalizeOpenAIStrictToolParameters,
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  reconcileOpenAIResponsesToolChoice,
+  resolveAzureDeploymentNameFromMap,
+  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIReasoningEffortForModel,
+  resolveResponsesMessageSnapshotCollapse,
+  type OpenAIApiReasoningEffort,
+  type OpenAICompletionsToolChoice,
+  type OpenAIReasoningEffort,
+  type OpenAIToolProjection,
+} from "@openclaw/ai/internal/openai";
+import {
+  applyProviderReportedUsageCost,
+  calculateCost,
+  createFirstStreamEventAbortController,
+  createReasoningTagTextPartitioner,
+  getEnvApiKey,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  parseStreamingJson,
+  withFirstStreamEventTimeout,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -21,31 +63,19 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
-import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
-import { convertMessages } from "../llm/providers/openai-completions.js";
-import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
-import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
+import type { Api, Context, Model, Usage } from "../llm/types.js";
+import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../plugin-sdk/provider-stream-shared.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import {
-  isResponsesTextContentPartType,
-  isResponsesTextDeltaEventType,
-  resolveResponsesMessageSnapshotCollapse,
-} from "../shared/openai-responses-stream-compat.js";
-import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -65,31 +95,11 @@ import {
 } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIApiReasoningEffort,
-  type OpenAIReasoningEffort,
-} from "./openai-reasoning-effort.js";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
-  reconcileOpenAIResponsesToolChoice,
-  type OpenAICompletionsToolChoice,
-  type OpenAIToolProjection,
-} from "./openai-tool-projection.js";
-import {
-  findOpenAIStrictToolProjectionDiagnostics,
-  normalizeOpenAIStrictToolParameters,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -98,13 +108,6 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  withFirstStreamEventTimeout,
-} from "./stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
@@ -251,7 +254,7 @@ type MutableAssistantOutput = {
     cacheWrite: number;
     reasoningTokens?: number;
     totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: Usage["cost"];
   };
   stopReason: string;
   timestamp: number;
@@ -460,7 +463,7 @@ function stringifyRedactedPayload(value: unknown): string {
       return "<empty>";
     }
     const redacted = redactSensitiveText(encoded, { mode: "tools" });
-    return redacted.length > 8000 ? `${redacted.slice(0, 8000)}…<truncated>` : redacted;
+    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";
   }
@@ -468,7 +471,7 @@ function stringifyRedactedPayload(value: unknown): string {
 
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = {
@@ -1023,7 +1026,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return sha256HexPrefix(value, 16);
 }
 
 function normalizeResponsesReplayItemId(
@@ -1385,20 +1388,18 @@ function buildOpenAIStrictToolDowngradeDiagnosticKey(
   diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        transport: context.transport,
-        provider: context.model.provider ?? null,
-        model: context.model.id ?? null,
-        diagnostics: diagnostics.map((entry) => ({
-          toolIndex: entry.toolIndex,
-          toolName: entry.toolName ?? null,
-          violations: entry.violations,
-        })),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      transport: context.transport,
+      provider: context.model.provider ?? null,
+      model: context.model.id ?? null,
+      diagnostics: diagnostics.map((entry) => ({
+        toolIndex: entry.toolIndex,
+        toolName: entry.toolName ?? null,
+        violations: entry.violations,
+      })),
+    }),
+  );
 }
 
 function shouldLogOpenAIStrictToolDowngradeDiagnostic(
@@ -1887,6 +1888,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1909,7 +1911,20 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  return headers ?? {};
+  const resolvedHeaders = headers ?? {};
+  // This header routes ChatGPT Responses session affinity; without it requests land
+  // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
+  // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
+  if (
+    sessionId &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
+    ) &&
+    usesNativeOpenAICodexResponsesBackend(model)
+  ) {
+    resolvedHeaders.session_id = sessionId;
+  }
+  return resolvedHeaders;
 }
 
 function resolveProviderTransportTurnState(
@@ -1977,12 +1992,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -2026,6 +2042,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -3978,7 +3995,7 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return model.id.toLowerCase().includes("gemini-3");
+  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
@@ -4454,15 +4471,15 @@ export function buildOpenAICompletionsParams(
 }
 
 export function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
   model: Model,
-) {
+): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  const usage = {
+  const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
@@ -4474,6 +4491,7 @@ export function parseTransportChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 
@@ -4512,5 +4530,7 @@ export const testing = {
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  stringifyRedactedEvent,
+  stringifyRedactedPayload,
 };
 export { testing as __testing };

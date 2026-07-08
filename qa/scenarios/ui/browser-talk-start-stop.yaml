@@ -18,9 +18,10 @@ scenario:
     - docs/web/control-ui.md
     - docs/help/testing.md
   codeRefs:
-    - ui/src/ui/e2e/browser-talk-start-stop.e2e.test.ts
+    - ui/src/e2e/browser-talk-start-stop.e2e.test.ts
     - ui/src/test-helpers/control-ui-e2e.ts
+    - ui/src/pages/chat/realtime-talk-google-live.test.ts
   execution:
     kind: playwright
-    path: ui/src/ui/e2e/browser-talk-start-stop.e2e.test.ts
+    path: ui/src/e2e/browser-talk-start-stop.e2e.test.ts
     summary: Playwright coverage for browser realtime Talk start and stop through the Control UI.

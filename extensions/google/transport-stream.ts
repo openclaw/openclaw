@@ -16,6 +16,7 @@ import {
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
+  resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -160,7 +161,7 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -487,7 +488,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
@@ -779,15 +780,23 @@ function buildGoogleHeaders(
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
+    resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: normalizeGoogleTransportRouteApi(model.api),
+      baseUrl: model.baseUrl,
+      capability: "llm",
+      transport: "stream",
+      defaultHeaders: mergeTransportHeaders(
+        {
+          "Content-Type": "application/json",
+          accept: "text/event-stream",
+        },
+        authHeaders,
+        model.headers,
+      ),
+      callerHeaders: optionHeaders,
+      precedence: "caller-wins",
+    }) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }

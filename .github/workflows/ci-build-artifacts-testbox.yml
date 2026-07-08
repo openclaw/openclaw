@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
     name: "build-artifacts"
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 35
     steps:
       - name: Begin Testbox
@@ -156,7 +156,7 @@ jobs:
       - name: Build dist on cache miss
         if: steps.dist-cache.outputs.cache-hit != 'true'
         env:
-          NODE_OPTIONS: --max-old-space-size=12288
+          NODE_OPTIONS: --max-old-space-size=16384
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI on cache miss

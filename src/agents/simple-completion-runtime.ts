@@ -1,3 +1,5 @@
+import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
@@ -10,14 +12,20 @@ import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
   Model,
+  ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
+} from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
+  applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModel,
@@ -29,9 +37,12 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
@@ -86,14 +97,21 @@ export type PreparedSimpleCompletionModelForAgent =
 export function resolveSimpleCompletionSelectionForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  agentDir?: string;
   modelRef?: string;
+  useUtilityModel?: boolean;
 }): AgentSimpleCompletionSelection | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
   });
   const modelRef =
-    params.modelRef?.trim() || resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    params.modelRef?.trim() ||
+    (params.useUtilityModel
+      ? resolveAgentConfig(params.cfg, params.agentId)?.utilityModel?.trim() ||
+        params.cfg.agents?.defaults?.utilityModel?.trim()
+      : undefined) ||
+    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -121,7 +139,7 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
       modelId,
     }),
     profileId: split?.profile || undefined,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
   };
 }
 
@@ -155,30 +173,49 @@ async function setRuntimeApiKeyForCompletion(params: {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
-      githubToken: params.apiKey,
+      githubToken: unwrapSecretSentinelsForProviderEgress(
+        params.apiKey,
+        "GitHub Copilot runtime auth exchange",
+      ),
     });
-    params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
+    const protectedAuth = protectPreparedProviderRuntimeAuth({
+      sourceApiKey: params.apiKey,
+      provider: params.model.provider,
+      preparedAuth: {
+        apiKey: copilotToken.token,
+        baseUrl: copilotToken.baseUrl,
+      },
+    });
+    const runtimeApiKey = protectedAuth?.apiKey ?? copilotToken.token;
+    params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
     return {
-      apiKey: copilotToken.token,
+      apiKey: runtimeApiKey,
       model: { ...params.model, baseUrl: copilotToken.baseUrl },
     };
   }
-  const preparedAuth = await prepareProviderRuntimeAuth({
+  const preparedAuth = protectPreparedProviderRuntimeAuth({
+    sourceApiKey: params.apiKey,
     provider: params.model.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    context: {
+    preparedAuth: await prepareProviderRuntimeAuth({
+      provider: params.model.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: process.env,
-      provider: params.model.provider,
-      modelId: params.model.id,
-      model: params.model,
-      apiKey: params.apiKey,
-      authMode: params.authMode,
-      profileId: params.profileId,
-    },
+      context: {
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: params.model.provider,
+        modelId: params.model.id,
+        model: params.model,
+        apiKey: unwrapSecretSentinelsForProviderEgress(
+          params.apiKey,
+          "provider runtime auth exchange",
+        ),
+        authMode: params.authMode,
+        profileId: params.profileId,
+      },
+    }),
   });
   const runtimeApiKey = preparedAuth?.apiKey?.trim() || params.apiKey;
   params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
@@ -242,6 +279,7 @@ export async function prepareSimpleCompletionModel(params: {
       agentDir: params.agentDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
+      secretSentinels: true,
     });
   } catch (err) {
     return {
@@ -284,7 +322,10 @@ export async function prepareSimpleCompletionModel(params: {
   };
 
   return {
-    model: applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    model: applySecretRefHeaderSentinels(
+      applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+      params.cfg,
+    ),
     auth: resolvedAuth,
   };
 }
@@ -292,7 +333,9 @@ export async function prepareSimpleCompletionModel(params: {
 export async function prepareSimpleCompletionModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  agentDir?: string;
   modelRef?: string;
+  useUtilityModel?: boolean;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
@@ -303,7 +346,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    agentDir: params.agentDir,
     modelRef: params.modelRef,
+    useUtilityModel: params.useUtilityModel,
   });
   if (!selection) {
     return {
@@ -358,11 +403,12 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 function normalizeSimpleCompletionReasoning(
   reasoning: SimpleCompletionModelOptions["reasoning"],
   model: Model,
-): SimpleCompletionThinkingLevel | undefined {
+): ModelThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
-    case "off":
       return undefined;
+    case "off":
+      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
     case "max":

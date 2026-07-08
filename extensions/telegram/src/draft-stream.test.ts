@@ -884,7 +884,9 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
-      rich_message: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+      rich_message: {
+        html: "<h2>Plan</h2><table bordered striped><thead><tr><th>A</th></tr></thead></table>",
+      },
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
 
@@ -897,9 +899,37 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).toHaveBeenCalledWith({
       chat_id: 123,
       message_id: 17,
-      rich_message: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+      rich_message: {
+        html: "<h2>Plan updated</h2><table bordered striped><thead><tr><th>B</th></tr></thead></table>",
+      },
     });
     expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("uses table-aware plain text when rich preview fallback sends", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { richMessages: true, warn });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: {
+        html: "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>",
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      123,
+      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
+      {},
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+    );
   });
 
   it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {

@@ -1105,7 +1105,7 @@ describe("mattermostPlugin", () => {
         }),
       );
 
-      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins");
+      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins: `/codex`");
       expect(options.buttons).toBeUndefined();
     });
 

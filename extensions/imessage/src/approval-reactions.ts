@@ -1,7 +1,9 @@
 // Imessage plugin module implements approval reactions behavior.
 import {
+  addApprovalReactionHintToText,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  hasApprovalReactionHintText,
   listApprovalReactionBindings,
   resolveApprovalReactionTarget,
   type ApprovalReactionDecisionBinding,
@@ -25,13 +27,13 @@ const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
+type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type IMessageApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
-export type IMessageApprovalReactionHandleResult =
+type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
   | { handled: true; stopPolling: false }
   | {
@@ -231,7 +233,7 @@ const imessageApprovalReactionTargets =
     readPersistedTarget,
   });
 
-export function listIMessageApprovalReactionBindings(
+function listIMessageApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): IMessageApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });
@@ -243,38 +245,15 @@ export function buildIMessageApprovalReactionHint(
   return buildApprovalReactionHint({ allowedDecisions });
 }
 
-function insertIMessageApprovalReactionHintNearHeader(params: {
-  text: string;
-  hint: string;
-}): string {
-  const lines = params.text.split(/\r?\n/);
-  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
-  if (idLineIndex >= 0) {
-    const before = lines.slice(0, idLineIndex + 1).join("\n");
-    const after = lines
-      .slice(idLineIndex + 1)
-      .join("\n")
-      .replace(/^\n+/, "");
-    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
-  }
-  return `${params.hint}\n\n${params.text}`;
-}
-
 export function addIMessageApprovalReactionHintToText(params: {
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(params.text)) {
-    return params.text;
-  }
-  const hint = buildIMessageApprovalReactionHint(params.allowedDecisions);
-  return hint
-    ? insertIMessageApprovalReactionHintNearHeader({ text: params.text, hint })
-    : params.text;
+  return addApprovalReactionHintToText(params);
 }
 
 export function appendIMessageApprovalReactionHintForOutboundMessage(text: string): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(text)) {
+  if (hasApprovalReactionHintText(text)) {
     return text;
   }
   const binding = extractIMessageApprovalPromptBinding(text);

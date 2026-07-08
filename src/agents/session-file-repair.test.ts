@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import { repairSessionFileIfNeeded } from "./session-file-repair.js";
 
 const BLANK_USER_FALLBACK_TEXT = "(continue)";
@@ -832,7 +833,7 @@ describe("repairSessionFileIfNeeded", () => {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        api: "openai-responses",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         content: [{ type: "text", text: "Process: `wild-wharf`" }],
         stopReason: "stop",
       },
@@ -892,7 +893,7 @@ describe("repairSessionFileIfNeeded", () => {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        api: "openai-responses",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         content: [{ type: "text", text: "visible reply" }],
         stopReason: "stop",
       },

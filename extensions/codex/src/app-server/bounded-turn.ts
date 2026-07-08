@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { readModelListResult } from "./models.js";
@@ -27,6 +26,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
@@ -120,7 +120,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     : appServer.start;
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(startOptions, params.profile, agentDir, params.config, {
+    ? await params.options.clientFactory({
+        startOptions,
+        authProfileId: params.profile,
+        agentDir,
+        config: params.config,
         timeoutMs,
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
@@ -168,7 +172,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
-          persistExtendedHistory: false,
           ephemeral: true,
         } satisfies CodexThreadStartParams,
         { timeoutMs, signal: abortController.signal },

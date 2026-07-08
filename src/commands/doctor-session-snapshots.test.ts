@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { __testing as openClawRootTesting } from "../infra/openclaw-root.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -17,6 +19,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 import {
   detectSessionSnapshotHealthIssues,
   noteSessionSnapshotHealth,
+  resolveSessionSnapshotBundledSkillsDir,
   scanSessionStoreForStaleRuntimeSnapshotPaths,
   sessionSnapshotIssueToHealthFinding,
   sessionSnapshotIssueToRepairEffect,
@@ -99,6 +102,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
   });
 
   afterEach(async () => {
+    openClawRootTesting.clearOpenClawPackageRootCaches();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -231,6 +235,95 @@ describe("doctor session snapshot stale runtime metadata", () => {
         expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
       },
     ]);
+  });
+
+  it("repairs stale imsg bundled paths to the generated plugin skill path", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "imsg",
+      "SKILL.md",
+    );
+    const stateDir = path.join(root, "state");
+    const pluginSkillPath = path.join(stateDir, "plugin-skills", "imsg", "SKILL.md");
+    await fs.mkdir(path.dirname(pluginSkillPath), { recursive: true });
+    await fs.writeFile(pluginSkillPath, "# imsg\n");
+
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      bundledSkillsDir,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      store: {
+        "agent:imsg": sessionEntry({
+          skillsSnapshot: {
+            prompt: skillPrompt(stalePath),
+            skills: [{ name: "imsg" }],
+          },
+        }),
+      },
+    });
+
+    expect(findings).toEqual([
+      {
+        sessionKey: "agent:imsg",
+        field: "skillsSnapshot.prompt",
+        cachedPath: stalePath,
+        expectedPath: pluginSkillPath,
+      },
+    ]);
+  });
+
+  it("repairs retired imsg paths even when cached under the current package skills root", async () => {
+    const packageSkillsDir = path.join(root, "node_modules", "openclaw", "skills");
+    const stalePath = path.join(packageSkillsDir, "imsg", "SKILL.md");
+    const stateDir = path.join(root, "state");
+    const pluginSkillPath = path.join(stateDir, "plugin-skills", "imsg", "SKILL.md");
+    await fs.mkdir(path.dirname(pluginSkillPath), { recursive: true });
+    await fs.writeFile(pluginSkillPath, "# imsg\n");
+
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      bundledSkillsDir: packageSkillsDir,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      store: {
+        "agent:imsg": sessionEntry({
+          skillsSnapshot: {
+            prompt: skillPrompt(stalePath),
+            skills: [{ name: "imsg" }],
+          },
+        }),
+      },
+    });
+
+    expect(findings).toEqual([
+      {
+        sessionKey: "agent:imsg",
+        field: "skillsSnapshot.prompt",
+        cachedPath: stalePath,
+        expectedPath: pluginSkillPath,
+      },
+    ]);
+  });
+
+  it("resolves the retired package skills root for moved-skill snapshot repairs", async () => {
+    const packageRoot = path.join(root, "package");
+    const distDir = path.join(packageRoot, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
+    );
+    const modulePath = path.join(distDir, "doctor-session-snapshots.js");
+    await fs.writeFile(modulePath, "// stub\n");
+
+    expect(
+      resolveSessionSnapshotBundledSkillsDir({
+        moduleUrl: pathToFileURL(modulePath).href,
+        argv1: path.join(packageRoot, "bin", "openclaw"),
+        cwd: distDir,
+      }),
+    ).toBe(path.join(packageRoot, "skills"));
   });
 
   it("ignores current bundled locations and unrelated workspace skill locations", () => {

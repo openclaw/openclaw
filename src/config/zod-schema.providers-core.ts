@@ -921,6 +921,8 @@ export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    ignoreOtherMentions: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
@@ -940,11 +942,18 @@ export const SlackThreadSchema = z
   })
   .strict();
 
-const SlackReplyToModeByChatTypeSchema = z
+const ReplyToModeByChatTypeSchema = z
   .object({
     direct: ReplyToModeSchema.optional(),
     group: ReplyToModeSchema.optional(),
     channel: ReplyToModeSchema.optional(),
+  })
+  .strict();
+
+const DirectGroupReplyToModeByChatTypeSchema = z
+  .object({
+    direct: ReplyToModeSchema.optional(),
+    group: ReplyToModeSchema.optional(),
   })
   .strict();
 
@@ -1009,7 +1018,7 @@ export const SlackAccountSchema = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    replyToModeByChatType: SlackReplyToModeByChatTypeSchema.optional(),
+    replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
     actions: z
       .object({
@@ -1207,6 +1216,8 @@ export const SignalAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: z

@@ -36,7 +36,26 @@ export * from "../infra/heartbeat-events.ts";
 export * from "../infra/heartbeat-summary.ts";
 export * from "../infra/heartbeat-visibility.ts";
 export * from "../infra/home-dir.js";
-export * from "../infra/http-body.js";
+// Keep this deprecated barrel pinned to its shipped request-body surface; new
+// response readers belong only to the focused response-limit/media entrypoints.
+export {
+  __test__,
+  DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
+  DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  installRequestBodyLimitGuard,
+  isRequestBodyLimitError,
+  readJsonBodyWithLimit,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+  RequestBodyLimitError,
+  testApi,
+  type ReadJsonBodyOptions,
+  type ReadJsonBodyResult,
+  type ReadRequestBodyOptions,
+  type RequestBodyLimitErrorCode,
+  type RequestBodyLimitGuard,
+  type RequestBodyLimitGuardOptions,
+} from "../infra/http-body.js";
 export * from "../infra/json-files.js";
 export * from "../infra/local-file-access.js";
 export * from "../infra/map-size.js";

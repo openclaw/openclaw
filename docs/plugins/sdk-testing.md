@@ -19,40 +19,9 @@ plugins.
 
 ## Test utilities
 
-These test-helper subpaths are repo-local source entrypoints for OpenClaw's own
-bundled plugin tests. They are not package exports for third-party plugins, and
-they may import Vitest or other repo-only test dependencies.
-
-**Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
-
-**Agent runtime contract import:** `openclaw/plugin-sdk/agent-runtime-test-contracts`
-
-**Channel contract import:** `openclaw/plugin-sdk/channel-contract-testing`
-
-**Channel test helper import:** `openclaw/plugin-sdk/channel-test-helpers`
-
-**Channel target test import:** `openclaw/plugin-sdk/channel-target-testing`
-
-**Plugin contract import:** `openclaw/plugin-sdk/plugin-test-contracts`
-
-**Plugin runtime test import:** `openclaw/plugin-sdk/plugin-test-runtime`
-
-**Provider contract import:** `openclaw/plugin-sdk/provider-test-contracts`
-
-**Provider HTTP mock import:** `openclaw/plugin-sdk/provider-http-test-mocks`
-
-**Environment/network test import:** `openclaw/plugin-sdk/test-env`
-
-**Generic fixture import:** `openclaw/plugin-sdk/test-fixtures`
-
-**Node builtin mock import:** `openclaw/plugin-sdk/test-node-mocks`
-
-Inside the OpenClaw repo, prefer the focused subpaths below for new bundled
-plugin tests. The broad
-`openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
-Repo guardrails reject new real imports from `plugin-sdk/testing` and
-`plugin-sdk/test-utils`; those names remain only as deprecated compatibility
-surfaces for compatibility-record tests.
+These subpaths are repo-local source entrypoints for OpenClaw's own bundled
+plugin tests. They are not published `package.json` exports for third-party
+plugins, and they may import Vitest or other repo-only test dependencies.
 
 ```typescript
 import {
@@ -76,6 +45,13 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 ```
+
+Prefer these focused subpaths for new bundled plugin tests. The broad
+`openclaw/plugin-sdk/testing` barrel and `openclaw/plugin-sdk/test-utils` alias
+are legacy compatibility only: `pnpm run lint:plugins:no-extension-test-core-imports`
+(`scripts/check-no-extension-test-core-imports.ts`) rejects new imports of
+either from extension test files, and both remain solely for
+compatibility-record tests.
 
 ### Available exports
 
@@ -104,6 +80,13 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `createRuntimeEnv`                                   | Build a mocked CLI/plugin runtime environment. Import from `plugin-sdk/plugin-test-runtime`                                              |
 | `createPluginRuntimeMock`                            | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                      |
 | `createPluginSetupWizardStatus`                      | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                             |
+| `createTestWizardPrompter`                           | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                       |
+| `createRuntimeTaskFlow`                              | Create isolated runtime task-flow state. Import from `plugin-sdk/plugin-test-runtime`                                                    |
+| `runProviderCatalog`                                 | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                     |
+| `resolveProviderWizardOptions`                       | Resolve provider setup wizard choices in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                    |
+| `resolveProviderModelPickerEntries`                  | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                    |
+| `buildProviderPluginMethodChoice`                    | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                            |
+| `setProviderWizardProvidersResolverForTest`          | Inject provider wizard providers for isolated tests. Import from `plugin-sdk/plugin-test-runtime`                                        |
 | `describeOpenAIProviderRuntimeContract`              | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`                                        |
 | `expectPassthroughReplayPolicy`                      | Assert provider replay policies pass through provider-owned tools and metadata. Import from `plugin-sdk/provider-test-contracts`         |
 | `runRealtimeSttLiveTest`                             | Run a live realtime STT provider test with shared audio fixtures. Import from `plugin-sdk/provider-test-contracts`                       |
@@ -126,6 +109,8 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `withEnv` / `withEnvAsync`                           | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                                               |
 | `createTempHomeEnv` / `withTempHome` / `withTempDir` | Create isolated filesystem test fixtures. Import from `plugin-sdk/test-env`                                                              |
 | `createMockServerResponse`                           | Create a minimal HTTP server response mock. Import from `plugin-sdk/test-env`                                                            |
+| `createProviderUsageFetch`                           | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                   |
+| `useFrozenTime` / `useRealTime`                      | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                    |
 | `createCliRuntimeCapture`                            | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                              |
 | `importFreshModule`                                  | Import an ESM module with a fresh query token to bypass module cache. Import from `plugin-sdk/test-fixtures`                             |
 | `bundledPluginRoot` / `bundledPluginFile`            | Resolve bundled plugin source or dist fixture paths. Import from `plugin-sdk/test-fixtures`                                              |
@@ -136,28 +121,12 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `peekSystemEvents` / `resetSystemEventsForTest`      | Inspect and reset system event fixtures. Import from `plugin-sdk/test-fixtures`                                                          |
 | `sanitizeTerminalText`                               | Sanitize terminal output for assertions. Import from `plugin-sdk/test-fixtures`                                                          |
 | `countLines` / `hasBalancedFences`                   | Assert chunking output shape. Import from `plugin-sdk/test-fixtures`                                                                     |
-| `runProviderCatalog`                                 | Execute a provider catalog hook with test dependencies                                                                                   |
-| `resolveProviderWizardOptions`                       | Resolve provider setup wizard choices in contract tests                                                                                  |
-| `resolveProviderModelPickerEntries`                  | Resolve provider model-picker entries in contract tests                                                                                  |
-| `buildProviderPluginMethodChoice`                    | Build provider wizard choice ids for assertions                                                                                          |
-| `setProviderWizardProvidersResolverForTest`          | Inject provider wizard providers for isolated tests                                                                                      |
-| `createProviderUsageFetch`                           | Build provider usage fetch fixtures                                                                                                      |
-| `useFrozenTime` / `useRealTime`                      | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                    |
-| `createTestWizardPrompter`                           | Build a mocked setup wizard prompter                                                                                                     |
-| `createRuntimeTaskFlow`                              | Create isolated runtime task-flow state                                                                                                  |
 | `typedCases`                                         | Preserve literal types for table-driven tests. Import from `plugin-sdk/test-fixtures`                                                    |
 
-Bundled-plugin contract suites also use SDK testing subpaths for test-only
-registry, manifest, public-artifact, and runtime fixture helpers. Core-only
-suites that depend on bundled OpenClaw inventory stay under `src/plugins/contracts`.
-Keep new extension tests on a documented focused SDK subpath such as
-`plugin-sdk/plugin-test-api`, `plugin-sdk/channel-contract-testing`,
-`plugin-sdk/agent-runtime-test-contracts`, `plugin-sdk/channel-test-helpers`,
-`plugin-sdk/plugin-test-contracts`, `plugin-sdk/plugin-test-runtime`,
-`plugin-sdk/provider-test-contracts`, `plugin-sdk/provider-http-test-mocks`,
-`plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` rather than importing the
-broad `plugin-sdk/testing` compatibility barrel, repo `src/**` files, or repo
-`test/helpers/*` bridges directly.
+Bundled-plugin contract suites also use these SDK testing subpaths for
+test-only registry, manifest, public-artifact, and runtime fixture helpers.
+Core-only suites that depend on bundled OpenClaw inventory stay under
+`src/plugins/contracts` instead.
 
 ### Types
 
@@ -201,13 +170,13 @@ describe("my-channel target resolution", () => {
 
 ### Testing registration contracts
 
-Unit tests that pass a hand-written `api` mock to `register(api)` do not exercise
-OpenClaw's loader acceptance gates. Add at least one loader-backed smoke test
-for each registration surface your plugin depends on, especially hooks and
-exclusive capabilities such as memory.
+Unit tests that pass a hand-written `api` mock to `register(api)` do not
+exercise OpenClaw's loader acceptance gates. Add at least one loader-backed
+smoke test for each registration surface your plugin depends on, especially
+hooks and exclusive capabilities such as memory.
 
-The real loader fails plugin registration when required metadata is missing or a
-plugin calls a capability API it does not own. For example,
+The real loader fails plugin registration when required metadata is missing or
+a plugin calls a capability API it does not own. For example,
 `api.registerHook(...)` requires a hook name, and
 `api.registerMemoryCapability(...)` requires the plugin manifest or exported
 entry to declare `kind: "memory"`.
@@ -215,9 +184,10 @@ entry to declare `kind: "memory"`.
 ### Testing runtime config access
 
 Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/plugin-test-runtime`.
-Its deprecated `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
-mocks throw by default so tests catch new usage of compatibility APIs. Override
-those mocks only when the test is explicitly covering legacy compatibility behavior.
+Its `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
+mocks throw by default so tests catch new usage of deprecated compatibility
+APIs. Override those mocks only when the test is explicitly covering legacy
+compatibility behavior.
 
 ### Unit testing a channel plugin
 
@@ -334,7 +304,7 @@ client.sendMessage = vi.fn().mockResolvedValue({ id: "msg-1" });
 Bundled plugins have contract tests that verify registration ownership:
 
 ```bash
-pnpm test -- src/plugins/contracts/
+pnpm test src/plugins/contracts/
 ```
 
 These tests assert:
@@ -349,41 +319,44 @@ These tests assert:
 For a specific plugin:
 
 ```bash
-pnpm test -- <bundled-plugin-root>/my-channel/
+pnpm test <bundled-plugin-root>/my-channel/
 ```
 
 For contract tests only:
 
 ```bash
-pnpm test -- src/plugins/contracts/shape.contract.test.ts
-pnpm test -- src/plugins/contracts/auth-choice.contract.test.ts
-pnpm test -- src/plugins/contracts/runtime-seams.contract.test.ts
+pnpm test src/plugins/contracts/shape.contract.test.ts
+pnpm test src/plugins/contracts/auth-choice.contract.test.ts
+pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 ```
 
 ## Lint enforcement (in-repo plugins)
 
-Three rules are enforced by `pnpm check` for in-repo plugins:
+`scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
+import-boundary checks in CI; each can also be run standalone locally:
 
-1. **No monolithic root imports** -- `openclaw/plugin-sdk` root barrel is rejected
-2. **No direct `src/` imports** -- plugins cannot import `../../src/` directly
-3. **No self-imports** -- plugins cannot import their own `plugin-sdk/<name>` subpath
+| Command                                                        | Enforces                                                                                                                    |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.                                             |
+| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`).                                 |
+| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `openclaw/plugin-sdk/testing`, `plugin-sdk/test-utils`, or other core-only test helpers. |
 
 External plugins are not subject to these lint rules, but following the same
 patterns is recommended.
 
 ## Test configuration
 
-OpenClaw uses Vitest with V8 coverage thresholds. For plugin tests:
+OpenClaw uses Vitest 4 with V8 coverage thresholds. For plugin tests:
 
 ```bash
 # Run all tests
 pnpm test
 
 # Run specific plugin tests
-pnpm test -- <bundled-plugin-root>/my-channel/src/channel.test.ts
+pnpm test <bundled-plugin-root>/my-channel/src/channel.test.ts
 
 # Run with a specific test name filter
-pnpm test -- <bundled-plugin-root>/my-channel/ -t "resolves account"
+pnpm test <bundled-plugin-root>/my-channel/ -t "resolves account"
 
 # Run with coverage
 pnpm test:coverage

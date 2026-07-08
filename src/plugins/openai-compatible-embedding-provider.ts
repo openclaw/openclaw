@@ -392,7 +392,7 @@ async function postEmbeddingRequest(params: {
 }
 
 /** Creates a normalized OpenAI-compatible embedding client from runtime config. */
-export async function createOpenAICompatibleEmbeddingClient(
+async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const configuredProvider = resolveConfiguredProvider(options);

@@ -5,6 +5,11 @@
  */
 import { createHmac, createHash } from "node:crypto";
 import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "@openclaw/ai/internal/shared";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -39,10 +44,6 @@ import type {
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
 import {
-  normalizePromptCapabilityIds,
-  normalizeStructuredPromptSection,
-} from "./prompt-cache-stability.js";
-import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
 } from "./prompt-surface.js";
@@ -51,7 +52,6 @@ import {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "./skill-workshop-prompt.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,

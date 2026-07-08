@@ -5,7 +5,7 @@ read_when:
 title: "Slack"
 ---
 
-Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported. Relay mode is intended for managed deployments where a trusted router owns Slack ingress.
+Slack support covers DMs and channels via Slack app integrations. Default transport is Socket Mode; HTTP Request URLs are also supported. Relay mode is for managed deployments where a trusted router owns Slack ingress.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -19,9 +19,9 @@ Production-ready for DMs and channels via Slack app integrations. Default mode i
   </Card>
 </CardGroup>
 
-## Choosing Socket Mode or HTTP Request URLs
+## Choosing a transport
 
-Both transports are production-ready and reach feature parity for messaging, slash commands, App Home, and interactivity. Pick by deployment shape, not features.
+Socket Mode and HTTP Request URLs reach feature parity for messaging, slash commands, App Home, and interactivity. Pick by deployment shape, not features.
 
 | Concern                      | Socket Mode (default)                                                                                                                                | HTTP Request URLs                                                                                              |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -41,12 +41,13 @@ Both transports are production-ready and reach feature parity for messaging, sla
 **Pick HTTP Request URLs** when running multiple Gateway replicas behind a load balancer, when outbound WSS is blocked but inbound HTTPS is allowed, or when you already terminate Slack webhooks at a reverse proxy.
 </Note>
 
+<Warning>
+  Slack can maintain multiple Socket Mode connections for one app and may deliver each payload to any connection. Separate OpenClaw gateways that share a Slack app therefore need equivalent routing and authorization configuration. Otherwise, use a separate Slack app per gateway, a single relay ingress, or HTTP Request URLs behind a load balancer. See [Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections).
+</Warning>
+
 ### Relay mode
 
-Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router owns the
-single Slack Socket Mode connection, chooses a destination gateway, and forwards a typed
-event over an authenticated websocket. The gateway continues to use its bot token for
-outbound Slack Web API calls.
+Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router owns the single Slack Socket Mode connection, chooses a destination gateway, and forwards a typed event over an authenticated websocket. The gateway still uses its own bot token for outbound Slack Web API calls.
 
 ```json5
 {
@@ -64,23 +65,15 @@ outbound Slack Web API calls.
 }
 ```
 
-The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and
-router route table as part of the Slack authorization boundary: routed events enter the
-normal Slack message handler as authorized activations. A router-provided `slack_identity`
-in the websocket `hello` frame can set the default outbound username and icon; an explicit
-identity supplied by the caller still wins. The relay connection reconnects with the same
-bounded backoff timing used by Socket Mode and clears the router-provided identity whenever
-it disconnects.
+The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and router route table as part of the Slack authorization boundary: routed events enter the normal Slack message handler as authorized activations. A router-provided `slack_identity` in the websocket `hello` frame can set the default outbound username and icon; an explicit identity supplied by the caller still wins. The relay connection reconnects with the same bounded backoff timing as Socket Mode and clears the router-provided identity whenever it disconnects.
 
 ## Install
-
-Install Slack before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/slack
 ```
 
-`plugins install` registers and enables the plugin. The plugin still does nothing until you configure the Slack app and channel settings below. See [Plugins](/tools/plugin) for general plugin behavior and install rules.
+`plugins install` registers and enables the plugin. It does nothing until you configure the Slack app and channel settings below. See [Plugins](/tools/plugin) for general plugin install rules.
 
 ## Quick setup
 
@@ -480,7 +473,7 @@ openclaw gateway
         </Note>
 
         <Info>
-          The three URL fields (`slash_commands[].url`, `event_subscriptions.request_url`, and `interactivity.request_url` / `message_menu_options_url`) all point at the same OpenClaw endpoint. Slack's manifest schema requires them named separately, but OpenClaw routes by payload type so a single `webhookPath` (default `/slack/events`) is enough. Slash commands without `slash_commands[].url` will silently no-op in HTTP mode.
+          The three URL fields (`slash_commands[].url`, `event_subscriptions.request_url`, and `interactivity.request_url` / `message_menu_options_url`) all point at the same OpenClaw endpoint. Slack's manifest schema requires them named separately, but OpenClaw routes by payload type so a single `webhookPath` (default `/slack/events`) is enough. Slash commands without `slash_commands[].url` silently no-op in HTTP mode.
         </Info>
 
         After Slack creates the app:
@@ -710,7 +703,7 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
     Multiple [native slash commands](#commands-and-slash-behavior) can be used instead of a single configured command with nuance:
 
     - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
-    - No more than 25 slash commands can be made available at once.
+    - No more than 25 slash commands can be registered on a Slack app at once (Slack platform limit).
 
     Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
 
@@ -898,8 +891,8 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
 - `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Config tokens override env fallback.
-- `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
-- `userToken` is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_USER_TOKEN` env fallback each apply only to the default account.
+- `userToken` defaults to read-only behavior (`userTokenReadOnly: true`).
 
 Status snapshot behavior:
 
@@ -1031,6 +1024,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `ignoreOtherMentions`
+    - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
     - `allowBots`
     - `skills`
@@ -1038,6 +1033,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
+
+    `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 
     `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
@@ -1061,6 +1058,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
 Reply threading controls:
 
+- `channels.slack.channels.<id>.replyToMode`: per-channel override for Slack channel/private-channel messages
 - `channels.slack.replyToMode`: `off|first|all|batched` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
@@ -1072,7 +1070,7 @@ Manual reply tags are supported:
 
 For explicit Slack thread replies from the `message` tool, set `replyBroadcast: true` with `action: "send"` and `threadId` or `replyTo` to ask Slack to also broadcast the thread reply to the parent channel. This maps to Slack's `chat.postMessage` `reply_broadcast` flag and is only supported for text or Block Kit sends, not media uploads.
 
-When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to `replyToMode`. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
+When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to the effective account, chat-type, or per-channel `replyToMode`. Automatic replies and same-channel `send` or `upload-file` calls use the same per-channel override. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
 
 <Note>
 `replyToMode="off"` disables outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. It does not flatten inbound Slack thread sessions: messages already posted inside a Slack thread still route to the `:thread:<threadTs>` session. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
@@ -1081,6 +1079,8 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 ## Ack reactions
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
+
+By default, the acknowledgement stays static while Slack's native assistant thread status shows progress with rotating loading messages. Set `messages.statusReactions.enabled: true` to opt into the queued/thinking/tool/done/error reaction lifecycle instead.
 
 ### Emoji (`ackReaction`)
 
@@ -1102,14 +1102,14 @@ The Slack provider reads scope from `messages.ackReactionScope` (default `"group
 
 Values:
 
-- `"all"`: react in DMs and groups.
+- `"all"`: react in DMs and groups, including ambient room events.
 - `"direct"`: react in DMs only.
-- `"group-all"`: react on every group message (no DMs).
+- `"group-all"`: react on every group message except ambient room events (no DMs).
 - `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
 - `"off"` / `"none"`: never react.
 
 <Note>
-The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs and quiet room events, set `messages.ackReactionScope` to `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
 </Note>
 
 ```json5
@@ -1198,7 +1198,7 @@ Legacy keys:
 
 - `channels.slack.streamMode` (`replace | status_final | append`) is a legacy runtime alias for `channels.slack.streaming.mode`.
 - boolean `channels.slack.streaming` is a legacy runtime alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
-- legacy `channels.slack.nativeStreaming` is a runtime alias for `channels.slack.streaming.nativeTransport`.
+- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy runtime aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
 - Run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
 
 ## Typing reaction fallback
@@ -1228,8 +1228,8 @@ Notes:
   </Accordion>
 
   <Accordion title="Outbound text and files">
-    - text chunks use `channels.slack.textChunkLimit` (default 4000)
-    - `channels.slack.chunkMode="newline"` enables paragraph-first splitting
+    - text chunks use `channels.slack.textChunkLimit` (default `8000`, capped at Slack's own message-length limit)
+    - `channels.slack.streaming.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
@@ -1267,12 +1267,12 @@ Native commands require [additional manifest settings](#additional-manifest-sett
 /help
 ```
 
-Native argument menus use an adaptive rendering strategy that shows a confirmation modal before dispatching a selected option value:
+Native argument menus render as one of the following, in priority order:
 
-- up to 5 options: button blocks
-- 6-100 options: static select menu
-- more than 100 options: external select with async option filtering when interactivity options handlers are available
-- exceeded Slack limits: encoded option values fall back to buttons
+- 3-5 short-enough options: an overflow ("...") menu
+- more than 100 options, with async option filtering available: external select
+- 1-2 options, or any option whose encoded value is too long for a select: button blocks
+- otherwise (6-100 options, or more than 100 without async filtering): static select menu, chunked at 100 options per menu
 
 ```txt
 /think
@@ -1460,7 +1460,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
+- delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
@@ -1599,6 +1599,7 @@ When a Slack message with file attachments arrives:
 When a message arrives in a thread (has a `thread_ts` parent):
 
 - If the reply itself has no direct media and the included root message has files, Slack can hydrate the root files as thread-starter context.
+- Root files are hydrated only while seeding a new or reset thread session. Later text-only replies reuse the existing session context and do not reattach root files as fresh media.
 - Direct reply attachments take precedence over root-message attachments.
 - A root message that has only files and no text is represented with an attachment placeholder so the fallback can still include its files.
 
@@ -1631,9 +1632,6 @@ When a single Slack message contains multiple file attachments:
 
 - [Media understanding pipeline](/nodes/media-understanding)
 - [PDF tool](/tools/pdf)
-- Epic: [#51349](https://github.com/openclaw/openclaw/issues/51349) — Slack attachment vision enablement
-- Regression tests: [#51353](https://github.com/openclaw/openclaw/issues/51353)
-- Live verification: [#51354](https://github.com/openclaw/openclaw/issues/51354)
 
 ## Related
 

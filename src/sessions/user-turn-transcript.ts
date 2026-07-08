@@ -24,6 +24,13 @@ export type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
+export {
+  attachRuntimeUserTurnTranscriptContext,
+  attachRuntimeUserTurnTranscriptRecorder,
+  takeRuntimeUserTurnTranscriptContext,
+  takeRuntimeUserTurnTranscriptRecorder,
+  type RuntimeUserTurnTranscriptContext,
+} from "./user-turn-transcript-runtime-context.js";
 
 type PersistedUserTurnMediaFields = {
   MediaPath?: string;
@@ -170,19 +177,20 @@ function resolveTranscriptMediaType(params: {
 }
 
 export function buildPersistedUserTurnMediaInputsFromFields(
-  fields: PersistedUserTurnMediaFieldSource | null | undefined,
+  fields: PersistedUserTurnMediaFieldSource | PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
   if (!fields) {
     return [];
   }
 
-  const paths = normalizeOptionalTextArray(fields.MediaPaths);
-  const urls = normalizeOptionalTextArray(fields.MediaUrls);
-  const types = normalizeOptionalTextArray(fields.MediaTypes);
-  const singlePath = normalizeOptionalText(fields.MediaPath);
-  const singleUrl = normalizeOptionalText(fields.MediaUrl);
-  const singleType = normalizeOptionalText(fields.MediaType);
-  const workspaceDir = normalizeOptionalText(fields.MediaWorkspaceDir);
+  const mediaFields = fields as PersistedUserTurnMediaFieldSource;
+  const paths = normalizeOptionalTextArray(mediaFields.MediaPaths);
+  const urls = normalizeOptionalTextArray(mediaFields.MediaUrls);
+  const types = normalizeOptionalTextArray(mediaFields.MediaTypes);
+  const singlePath = normalizeOptionalText(mediaFields.MediaPath);
+  const singleUrl = normalizeOptionalText(mediaFields.MediaUrl);
+  const singleType = normalizeOptionalText(mediaFields.MediaType);
+  const workspaceDir = normalizeOptionalText(mediaFields.MediaWorkspaceDir);
   const mediaCount = Math.max(paths.length, urls.length, singlePath || singleUrl ? 1 : 0);
   const media: PersistedUserTurnMediaInput[] = [];
 
@@ -227,7 +235,30 @@ function buildPersistedUserTurnMediaFields(
   };
 }
 
-function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
+function buildUserTurnSenderMeta(
+  sender: UserTurnInput["sender"],
+): Record<string, string> | undefined {
+  const senderId = normalizeOptionalText(sender?.id);
+  const senderName = normalizeOptionalText(sender?.name);
+  const senderUsername = normalizeOptionalText(sender?.username);
+  if (!senderId && !senderName && !senderUsername) {
+    return undefined;
+  }
+  return {
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+  };
+}
+
+function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
+  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : undefined;
+}
+
+export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
@@ -238,16 +269,18 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
-
+  const senderMeta = buildUserTurnSenderMeta(params.sender);
+  const openClawMeta = {
+    ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
+    ...senderMeta,
+  };
   const message = {
     role: "user",
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.senderIsOwner === undefined
-      ? {}
-      : { __openclaw: { senderIsOwner: params.senderIsOwner } }),
     ...mediaFields,
+    ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
 }
@@ -274,6 +307,19 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
+function userMessageHasImageContent(message: AgentMessage): boolean {
+  return (
+    isUserMessage(message) &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "image",
+    )
+  );
+}
+
 // Runtime messages may lack transcript metadata because channel adapters prepare
 // display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
@@ -287,9 +333,36 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
+  const runtimeMessage = params.runtimeMessage as unknown as Record<string, unknown>;
+  const preparedMessage = params.preparedMessage as unknown as Record<string, unknown>;
+  const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  return {
+    ...runtimeMessage,
+    ...preparedMessage,
+    ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
+    ...(userMessageHasImageContent(params.runtimeMessage)
+      ? { content: params.runtimeMessage.content }
+      : {}),
+  } as unknown as AgentMessage;
+}
+
+/** Restores only auth state that write hooks must not be able to forge or erase. */
+export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
+  runtimeMessage: AgentMessage;
+  preparedMessage?: PersistedUserTurnMessage;
+}): AgentMessage {
+  if (!params.preparedMessage || !isUserMessage(params.runtimeMessage)) {
+    return params.runtimeMessage;
+  }
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  const senderIsOwner = preparedMeta?.senderIsOwner;
+  if (typeof senderIsOwner !== "boolean") {
+    return params.runtimeMessage;
+  }
   return {
     ...(params.runtimeMessage as unknown as Record<string, unknown>),
-    ...(params.preparedMessage as unknown as Record<string, unknown>),
+    __openclaw: { ...readOpenClawMessageMeta(params.runtimeMessage), senderIsOwner },
   } as unknown as AgentMessage;
 }
 
@@ -310,6 +383,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
+  const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -321,24 +395,19 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  const originalOpenClaw = (message as unknown as { __openclaw?: unknown })["__openclaw"];
-  const senderIsOwner =
-    originalOpenClaw && typeof originalOpenClaw === "object"
-      ? (originalOpenClaw as { senderIsOwner?: unknown }).senderIsOwner
-      : undefined;
   if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
     return nextUserMessage;
   }
-  const nextRecord = nextUserMessage as unknown as Record<string, unknown>;
-  const nextOpenClaw =
-    nextRecord["__openclaw"] && typeof nextRecord["__openclaw"] === "object"
-      ? (nextRecord["__openclaw"] as Record<string, unknown>)
-      : {};
   return {
-    ...nextRecord,
+    ...(nextUserMessage as unknown as Record<string, unknown>),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(typeof senderIsOwner === "boolean"
-      ? { __openclaw: { ...nextOpenClaw, senderIsOwner } }
+      ? {
+          __openclaw: {
+            ...readOpenClawMessageMeta(nextUserMessage),
+            senderIsOwner,
+          },
+        }
       : {}),
   } as unknown as PersistedUserTurnMessage;
 }

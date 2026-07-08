@@ -48,7 +48,10 @@ import {
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import {
+  persistSessionEntry,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
@@ -230,7 +233,14 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    await persistSessionEntry(params);
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
   return {
     shouldContinue: false,
@@ -268,7 +278,9 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     } else {
       params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
     }
-    await persistSessionEntry(params);
+    if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
   const label =
     sendPolicyCommand.mode === "inherit"
@@ -357,7 +369,15 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
       delete targetSessionEntry.responseUsage;
       params.sessionStore[params.sessionKey] = targetSessionEntry;
-      await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+      if (
+        !(await persistSessionEntry({
+          ...params,
+          sessionEntry: targetSessionEntry,
+          touchedFields: ["responseUsage"],
+        }))
+      ) {
+        return sessionEntryPersistenceConflictReply();
+      }
     }
     return {
       shouldContinue: false,
@@ -377,7 +397,15 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        sessionEntry: targetSessionEntry,
+        touchedFields: ["responseUsage"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
 
   return {
@@ -437,7 +465,15 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     if (resetsToDefault) {
       if (targetSessionEntry && params.sessionStore && params.sessionKey) {
         delete targetSessionEntry.fastMode;
-        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+        if (
+          !(await persistSessionEntry({
+            ...params,
+            sessionEntry: targetSessionEntry,
+            touchedFields: ["fastMode"],
+          }))
+        ) {
+          return sessionEntryPersistenceConflictReply();
+        }
       }
       return {
         shouldContinue: false,
@@ -452,7 +488,15 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     targetSessionEntry.fastMode = nextMode;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        sessionEntry: targetSessionEntry,
+        touchedFields: ["fastMode"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
 
   return {

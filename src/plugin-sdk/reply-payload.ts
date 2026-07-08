@@ -226,6 +226,8 @@ export async function sendPayloadWithChunkedTextAndMedia<
   sendMedia: (ctx: TContext & { text: string; mediaUrl: string }) => Promise<TResult>;
   /** Result returned when payload has neither text nor media. */
   emptyResult: TResult;
+  /** Host callback that persists each completed sub-send before the next one starts. */
+  onResult?: (result: TResult) => Promise<void> | void;
 }): Promise<TResult> {
   const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
   const text = payload.text ?? "";
@@ -241,12 +243,14 @@ export async function sendPayloadWithChunkedTextAndMedia<
       text,
       mediaUrl: urls[0],
     });
+    await params.onResult?.(lastResult);
     for (let i = 1; i < urls.length; i++) {
       lastResult = await params.sendMedia({
         ...params.ctx,
         text: "",
         mediaUrl: urls[i],
       });
+      await params.onResult?.(lastResult);
     }
     return lastResult;
   }
@@ -255,6 +259,7 @@ export async function sendPayloadWithChunkedTextAndMedia<
   let lastResult: TResult;
   for (const chunk of chunks) {
     lastResult = await params.sendText({ ...params.ctx, text: chunk });
+    await params.onResult?.(lastResult);
   }
   return lastResult!;
 }
@@ -275,6 +280,8 @@ export async function sendPayloadMediaSequence<TResult>(params: {
     /** Whether this is the first media entry in the original sequence. */
     isFirst: boolean;
   }) => Promise<TResult>;
+  /** Called after each successful media send and before the next send starts. */
+  onResult?: (result: TResult) => Promise<void> | void;
 }): Promise<TResult | undefined> {
   let lastResult: TResult | undefined;
   for (let i = 0; i < params.mediaUrls.length; i += 1) {
@@ -288,6 +295,7 @@ export async function sendPayloadMediaSequence<TResult>(params: {
       index: i,
       isFirst: i === 0,
     });
+    await params.onResult?.(lastResult);
   }
   return lastResult;
 }
@@ -304,6 +312,7 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
     index: number;
     isFirst: boolean;
   }) => Promise<TResult>;
+  onResult?: (result: TResult) => Promise<void> | void;
   /** Result returned when no media result is available. */
   fallbackResult: TResult;
   /** Optional callback used instead of `fallbackResult` when there are no media URLs. */
@@ -327,6 +336,7 @@ export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>
     index: number;
     isFirst: boolean;
   }) => Promise<TMediaResult>;
+  onResult?: (result: TMediaResult) => Promise<void> | void;
   /** Final callback whose result is returned after optional media sends. */
   finalize: () => Promise<TResult>;
 }): Promise<TResult> {
@@ -358,14 +368,24 @@ export async function sendTextMediaPayload(params: {
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
-      send: async ({ text: textLocal, mediaUrl }) =>
-        await params.adapter.sendMedia!({
+      send: async ({ text: textLocal, mediaUrl }) => {
+        let childReported = false;
+        const result = await params.adapter.sendMedia!({
           ...params.ctx,
           text: textLocal,
           mediaUrl,
           ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           replyToId: nextReplyToId(),
-        }),
+          onDeliveryResult: async (deliveryResult) => {
+            childReported = true;
+            await params.ctx.onDeliveryResult?.(deliveryResult);
+          },
+        });
+        if (!childReported) {
+          await params.ctx.onDeliveryResult?.(result);
+        }
+        return result;
+      },
     });
     return lastResult ?? { channel: params.channel, messageId: "" };
   }
@@ -376,11 +396,19 @@ export async function sendTextMediaPayload(params: {
       : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
+    let childReported = false;
     lastResult = await params.adapter.sendText!({
       ...params.ctx,
       text: chunk,
       replyToId: nextReplyToId(),
+      onDeliveryResult: async (deliveryResult) => {
+        childReported = true;
+        await params.ctx.onDeliveryResult?.(deliveryResult);
+      },
     });
+    if (!childReported) {
+      await params.ctx.onDeliveryResult?.(lastResult);
+    }
   }
   return lastResult!;
 }

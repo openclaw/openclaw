@@ -35,6 +35,8 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -51,6 +53,7 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -211,6 +214,33 @@ const commandOwnerCheck: HealthCheck = {
         path: "commands.ownerAllowFrom",
         fixHint:
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
+      },
+    ];
+  },
+};
+
+const skillWorkshopToolPolicyCheck: HealthCheck = {
+  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+  kind: "core",
+  description: "Autonomous Skill Workshop capture has a callable review tool.",
+  source: "doctor",
+  async detect(ctx) {
+    const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+      config: ctx.cfg,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+    });
+    if (!diagnostic) {
+      return [];
+    }
+    return [
+      {
+        checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+        severity: "warning",
+        message: diagnostic.detail,
+        path: diagnostic.source,
+        target: diagnostic.agentId,
+        requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
+        fixHint: diagnostic.fix,
       },
     ];
   },
@@ -434,18 +464,20 @@ const bootstrapSizeCheck: HealthCheck = {
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
+      agentId: defaultAgentId,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles,
         injectedFiles: contextFiles,
       }),
-      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg),
+      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
@@ -454,7 +486,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars/TotalMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -466,7 +499,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -475,7 +509,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: analysis.hasTruncation ? "warning" : "info",
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
-        fixHint: "Reduce bootstrap file sizes or tune agents.defaults.bootstrapTotalMaxChars.",
+        fixHint:
+          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
@@ -656,11 +691,12 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
-const legacyWhatsAppCrontabCheck: HealthCheck = {
+const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
   source: "doctor",
+  defaultEnabled: false,
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
       await import("../commands/doctor/cron/index.js");
@@ -1050,12 +1086,15 @@ const uiProtocolFreshnessCheck: HealthCheck = {
   },
 };
 
-function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createWorkspaceSuggestionsCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/workspace-suggestions",
     kind: "core",
     description:
       "Workspace backup and memory-system suggestions are captured as structured findings.",
+    defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
@@ -1096,6 +1135,7 @@ function createConvertedWorkflowChecks(
     createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
+    skillWorkshopToolPolicyCheck,
   ];
 }
 

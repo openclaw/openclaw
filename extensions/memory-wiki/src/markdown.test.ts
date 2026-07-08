@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
   parseWikiMarkdown,
+  extractWikiLinks,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
@@ -502,5 +503,137 @@ describe("toWikiPageSummary", () => {
     expect(summary.id).toBe("synthesis.healthy");
     expect(summary.sourceIds).toEqual(["source.alpha"]);
     expect(summary.pageType).toBe("synthesis");
+  });
+});
+
+describe("extractWikiLinks", () => {
+  it("extracts real wikilinks from prose", () => {
+    const links = extractWikiLinks("See [[Alpha]] and [[Beta]] for details.", "entities/test.md");
+    expect(links).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("does not extract [[…]] inside fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Test Page",
+      "",
+      "Real link: [[RealPage]]",
+      "",
+      "```bash",
+      'if [[ "$x" == "y" ]]; then echo "ok"; fi',
+      "```",
+      "",
+      "```scala",
+      "val x: Future[Option[User]] = handle(req)",
+      "```",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    // Only the real wikilink — none from fenced code blocks.
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it("does not extract [[…]] inside inline code spans (#97945)", () => {
+    const links = extractWikiLinks(
+      'See [[RealPage]].  Never `[[ -z "$str" ]]` extract this.',
+      "entities/test.md",
+    );
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it("does not extract [[…]] inside tilde-fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Tilde Fence",
+      "",
+      "~~~scala",
+      "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???",
+      "~~~",
+      "",
+      "Actual link: [[ActualPage]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["ActualPage"]);
+  });
+
+  it("does not extract [[…]] inside 6-backtick fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Long Fence",
+      "",
+      "``````csharp",
+      "var result = await client.GetAsync<Response<Item>>(url, cancellationToken);",
+      "``````",
+      "",
+      "Valid: [[ValidTarget]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["ValidTarget"]);
+  });
+
+  it("accepts a closing fence longer than the opening fence (#97945)", () => {
+    // CommonMark allows the closing fence to be the same or longer than the
+    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
+    // strip the block so the Scala generic inside is not extracted.
+    const markdown = [
+      "# Longer Close",
+      "",
+      "```scala",
+      "def handle(req: Request[A]): Future[Option[User]] = ???",
+      "````",
+      "",
+      "Prose: [[RealTarget]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["RealTarget"]);
+  });
+
+  it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
+    // A 6-backtick block containing a shorter 3-backtick line before the real
+    // 6-backtick close must not cause the scanner to exit early.
+    const markdown = [
+      "# Long Fence With Shorter Inner Line",
+      "",
+      "``````bash",
+      "some code",
+      "```",
+      "[[not-a-link]]",
+      "``````",
+      "",
+      "After fence: [[RealPage]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it.each([
+    {
+      name: "an invalid backtick info string",
+      markdown: "```lang`oops\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "an unmatched backtick run",
+      markdown: "```foo``\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a blockquote",
+      markdown: "> ```bash\n> [[not-a-link]]\n> ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a list",
+      markdown: "- ```bash\n  [[not-a-link]]\n  ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a multiline code span",
+      markdown: "``\n[[not-a-link]]\n`` and [[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "separate multi-backtick code spans",
+      markdown: "``code`` [[RealPage]] ``more``",
+      expected: ["RealPage"],
+    },
+  ])("handles $name without hiding prose links", ({ markdown, expected }) => {
+    expect(extractWikiLinks(markdown, "entities/test.md")).toEqual(expected);
   });
 });

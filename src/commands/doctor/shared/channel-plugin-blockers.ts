@@ -41,29 +41,36 @@ export type ChannelPluginBlockerHit = {
     | "not in allowlist";
 };
 
+type ScanConfiguredChannelPluginBlockerOptions = {
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
 /** Find configured channel ids whose backing plugins cannot activate. */
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
   activationSourceConfig: OpenClawConfig = cfg,
+  options: ScanConfiguredChannelPluginBlockerOptions = {},
 ): ChannelPluginBlockerHit[] {
   const explicitChannelIds = listExplicitConfiguredChannelIdsForConfig(cfg)
     .map((channelId) => normalizeOptionalLowercaseString(channelId))
     .filter((channelId): channelId is string => Boolean(channelId));
   const sourcePluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
   const effectivePluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: cfg,
-    env,
-    includeDisabled: true,
-  });
-  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(registry.plugins, env);
+  const manifestRecords =
+    options.manifestRecords ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: cfg,
+      env,
+      includeDisabled: true,
+    }).plugins;
+  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(manifestRecords, env);
   const policyEntries = resolveConfiguredChannelPresencePolicy({
     config: cfg,
     activationSourceConfig,
     env,
     includePersistedAuthState: false,
-    manifestRecords: registry.plugins,
+    manifestRecords,
   });
   // A manifest env match identifies one owner. Do not widen the same ambient env signal to
   // sibling owners that cannot consume that credential.
@@ -122,7 +129,7 @@ export function scanConfiguredChannelPluginBlockers(
   };
 
   for (const channelId of genericChannelIds) {
-    const owners = registry.plugins.filter((plugin) =>
+    const owners = manifestRecords.filter((plugin) =>
       plugin.channels.some(
         (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
       ),
@@ -144,7 +151,7 @@ export function scanConfiguredChannelPluginBlockers(
   }
 
   for (const [channelId, triggers] of manifestEnvTriggers) {
-    const channelOwnerStates = registry.plugins
+    const channelOwnerStates = manifestRecords
       .filter((plugin) =>
         plugin.channels.some(
           (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,

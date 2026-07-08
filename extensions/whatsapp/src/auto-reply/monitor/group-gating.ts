@@ -187,7 +187,13 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const mentionMsg: AdmittedWebInboundMessage =
     params.mentionText !== undefined
       ? { ...params.msg, payload: { ...params.msg.payload, body: params.mentionText } }
-      : params.msg;
+      : {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: params.msg.payload.commandBody ?? params.msg.payload.body,
+          },
+        };
   const commandBody = stripMentionsForCommand(
     mentionMsg.payload.body,
     mentionConfig.mentionRegexes,

@@ -470,6 +470,7 @@ function collectConfiguredAgentModelProviderIds(
 
   const defaults = config.agents?.defaults;
   addModelProviderRefs(defaults?.model);
+  addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
   const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
@@ -478,6 +479,7 @@ function collectConfiguredAgentModelProviderIds(
       continue;
     }
     addModelProviderRefs(agent.model);
+    addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
 

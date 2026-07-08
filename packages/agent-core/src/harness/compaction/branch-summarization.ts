@@ -32,8 +32,6 @@ export interface BranchSummaryDetails {
   modifiedFiles: string[];
 }
 
-export type { FileOperations } from "./utils.js";
-
 /** Prepared branch content for summarization. */
 export interface BranchPreparation {
   /** Messages selected for the branch summary. */
@@ -69,7 +67,7 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
 }
 
 /** Options for generating a branch summary. */
-export interface GenerateBranchSummaryOptions {
+interface GenerateBranchSummaryOptions {
   /** Model used for summarization. */
   model: Model;
   /** API key forwarded to the provider. */

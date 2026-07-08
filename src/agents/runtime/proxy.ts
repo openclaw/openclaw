@@ -3,8 +3,13 @@
  * The server manages auth and proxies requests to LLM providers.
  */
 
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import {
+  createSseByteGuard,
+  parseStreamingJson,
+  type SseByteGuard,
+} from "@openclaw/ai/internal/runtime";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 // Internal import for JSON parsing utility
 import type {
   AssistantMessage,
@@ -16,8 +21,6 @@ import type {
   ToolCall,
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
-import { parseStreamingJson } from "../../llm/utils/json-parse.js";
-import { createSseByteGuard, type SseByteGuard } from "../streaming-byte-guard.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;

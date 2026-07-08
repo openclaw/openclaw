@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
@@ -49,7 +50,7 @@ const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: 60_000,
 };
-const skillWorkshopProcessLocks = new Map<string, Promise<void>>();
+const skillWorkshopProcessLocks = new KeyedAsyncQueue();
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -363,24 +364,10 @@ async function withSkillProposalManifestLock<T>(
 
 async function withSkillWorkshopLock<T>(lockFile: string, fn: () => Promise<T>): Promise<T> {
   const lockKey = path.resolve(lockFile);
-  const previous = skillWorkshopProcessLocks.get(lockKey) ?? Promise.resolve();
-  let releaseQueued!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseQueued = resolve;
-  });
-  const previousDone = previous.catch(() => undefined);
-  const queued = previousDone.then(() => current);
-  skillWorkshopProcessLocks.set(lockKey, queued);
-  await previousDone;
-  await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  try {
+  return await skillWorkshopProcessLocks.enqueue(lockKey, async () => {
+    await fs.mkdir(path.dirname(lockFile), { recursive: true });
     return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
-  } finally {
-    releaseQueued();
-    if (skillWorkshopProcessLocks.get(lockKey) === queued) {
-      skillWorkshopProcessLocks.delete(lockKey);
-    }
-  }
+  });
 }
 
 export async function readProposalSupportFiles(

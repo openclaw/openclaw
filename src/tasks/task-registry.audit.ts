@@ -187,10 +187,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   return findings.toSorted(compareFindings);
 }
 
-export function isRetainedLostTaskAuditFinding(
-  finding: TaskAuditFinding,
-  now = Date.now(),
-): boolean {
+function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.now()): boolean {
   const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
   return (
     finding.code === "lost" &&

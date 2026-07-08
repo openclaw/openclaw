@@ -1437,7 +1437,17 @@ describe("readSessionMessages", () => {
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
-      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
     ]);
 
     const aggregate = await readRecentSessionUsageFromTranscriptAsync(
@@ -1455,8 +1465,89 @@ describe("readSessionMessages", () => {
       2048,
     );
 
+    expectUsageFields(aggregate, {
+      inputTokens: 120,
+      outputTokens: 14,
+      contextUsage: { state: "unavailable" },
+    });
+    expect(aggregate).not.toHaveProperty("totalTokens");
+    expect(aggregate).not.toHaveProperty("totalTokensFresh");
+    expectUsageFields(latest, {
+      inputTokens: 70,
+      outputTokens: 9,
+      contextUsage: { state: "unavailable" },
+      trailingBytes: 0,
+    });
+  });
+
+  test("counts transcript bytes appended after the latest usage snapshot", async () => {
+    const sessionId = "test-session-latest-usage-trailing-bytes";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: {
+              state: "available",
+              promptTokens: 70,
+              totalTokens: 79,
+            },
+          },
+        },
+      },
+      { message: { role: "tool", content: "appended tool result" } },
+    ]);
+
+    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    expectUsageFields(latest, {
+      contextUsage: {
+        state: "available",
+        promptTokens: 70,
+        totalTokens: 79,
+      },
+    });
+    expect(latest?.trailingBytes).toBeGreaterThan(0);
+  });
+
+  test("clears an older context marker when aggregate usage has a newer plain snapshot", async () => {
+    const sessionId = "test-session-aggregate-clears-context-marker";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "older",
+          usage: {
+            input: 50,
+            output: 5,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
+      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+    ]);
+
+    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
     expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
-    expectUsageFields(latest, { inputTokens: 70, outputTokens: 9 });
+    expect(aggregate).not.toHaveProperty("contextUsage");
   });
 
   test("tails transcript lines for manual compaction without loading the whole file", () => {

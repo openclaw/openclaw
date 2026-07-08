@@ -43,6 +43,13 @@ export type {
   SessionAcpMeta,
 };
 
+export type CliSessionReseedReceipt = {
+  version: 1;
+  promptHash: string;
+  localSessionId: string;
+  userTurnDisposition: "persisted" | "omitted";
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -56,6 +63,8 @@ export type CliSessionBinding = {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
+  reseedReceipt?: CliSessionReseedReceipt;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -209,6 +218,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type PendingSkillSuggestion = {
+  skillName: string;
+  detectedAt: number;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -238,6 +252,23 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
+  /** Opaque owner revision used to reject stale lifecycle mutations. */
+  lifecycleRevision?: string;
+  // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
+  // threads.archived_at: the boolean is always derived from the timestamp and
+  // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
+  // these are epoch MS like every other session timestamp — convert at the
+  // codex plugin seam when exchanging thread metadata.
+  /** Timestamp (ms) when the session was archived from active session lists. */
+  archivedAt?: number;
+  /** Timestamp (ms) when the session was pinned for quick access. */
+  pinnedAt?: number;
+  /** Timestamp (ms) when an operator client last marked the session read. */
+  lastReadAt?: number;
+  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+  markedUnreadAt?: number;
+  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+  lastActivityAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -271,6 +302,10 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+  pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -403,6 +438,8 @@ export type SessionEntry = {
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
+  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+  category?: string;
   displayName?: string;
   channel?: string;
   groupId?: string;

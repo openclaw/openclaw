@@ -161,6 +161,31 @@ describe("line outbound sendPayload", () => {
     });
   });
 
+  it("reports each platform result for text and media payloads", async () => {
+    const { runtime } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const onDeliveryResult = vi.fn();
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:progress",
+      text: "Hello",
+      payload: {
+        text: "Hello",
+        mediaUrl: "https://example.com/image.jpg",
+      },
+      accountId: "default",
+      cfg,
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      "m-text",
+      "m-media",
+    ]);
+  });
+
   it("sends template message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

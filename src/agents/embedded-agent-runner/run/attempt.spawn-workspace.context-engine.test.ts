@@ -18,6 +18,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../subagent-registry.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -1594,6 +1595,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
     let seenPrompt: string | undefined;
+    let seenMessages: unknown[] | undefined;
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1627,6 +1629,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session, prompt) => {
         seenPrompt = prompt;
+        seenMessages = [...session.messages];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -1634,16 +1637,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("what does this mean?");
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
-    expect(seenPrompt).toContain('"sender_label": "Mike"');
-    expect(seenPrompt).toContain("WT daily plan - Sat May 2");
-    expect(seenPrompt).toContain("./quoted-secret.png");
-    expect(seenPrompt).toContain("media://inbound/quoted.png");
+    // The user prompt is kept BARE; current-turn inbound metadata is routed into
+    // the runtime-context carrier instead of being prepended to the user text.
+    expect(seenPrompt).toBe("what does this mean?");
+    expect(seenPrompt).not.toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
     expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     expect(seenPrompt).not.toContain("secret runtime context");
-    expect(seenPrompt?.trim().startsWith("Reply target of current user message")).toBe(true);
     expect(result.finalPromptText).toBe(seenPrompt);
+    const runtimeContext = findRecord(
+      requireRecords(seenMessages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(runtimeContext.content).toContain('"sender_label": "Mike"');
+    expect(runtimeContext.content).toContain("WT daily plan - Sat May 2");
+    expect(runtimeContext.content).toContain("./quoted-secret.png");
+    expect(runtimeContext.content).toContain("media://inbound/quoted.png");
+    expect(runtimeContext.content).toContain("secret runtime context");
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
@@ -1656,7 +1671,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
-    expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
+    expect(promptSubmitted?.data?.prompt).not.toContain("WT daily plan - Sat May 2");
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
   });
 
@@ -1905,6 +1920,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("submits suppressed room event context as the model prompt", async () => {
     let seenPrompt: string | undefined;
     let seenModelMessages: unknown[] | undefined;
+    let seenMessages: unknown[] | undefined;
     const runBeforePromptBuild = vi.fn(async () => ({
       prependContext: "dynamic hook context",
       appendContext: "dynamic hook tail",
@@ -1938,6 +1954,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session, prompt) => {
         seenPrompt = prompt;
+        seenMessages = [...session.messages];
         const transformContext = (
           session.agent as {
             transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
@@ -1953,14 +1970,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("[OpenClaw room event]");
-    expect(seenPrompt).toContain("inbound_event_kind: room_event");
-    expect(seenPrompt).toContain("visible_reply_contract: message_tool_only");
-    expect(seenPrompt).toContain("Current event:\n#2003 Bob: hey claw summarize the plan");
-    expect(seenPrompt?.trim().endsWith("[OpenClaw room event]")).toBe(true);
+    // The user prompt stays the bare room-event marker; the room context is
+    // routed into the runtime-context carrier instead of the user text.
+    expect(seenPrompt).toBe("[OpenClaw room event]");
+    expect(seenPrompt).not.toContain("inbound_event_kind: room_event");
     expect(seenPrompt).not.toBe("Continue the OpenClaw runtime event.");
     expect(seenPrompt).not.toContain("dynamic hook context");
     expect(seenPrompt).not.toContain("dynamic hook tail");
+    const roomRuntimeContext = findRecord(
+      requireRecords(seenMessages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(roomRuntimeContext.content).toContain("inbound_event_kind: room_event");
+    expect(roomRuntimeContext.content).toContain("visible_reply_contract: message_tool_only");
+    expect(roomRuntimeContext.content).toContain(
+      "Current event:\n#2003 Bob: hey claw summarize the plan",
+    );
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -1971,7 +1997,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
-    expect(contextCompiled?.data?.prompt).toContain("visible_reply_contract: message_tool_only");
+    // Room context now rides the runtime-context carrier, not the user prompt.
+    expect(contextCompiled?.data?.prompt).not.toContain(
+      "visible_reply_contract: message_tool_only",
+    );
     expect(contextCompiled?.data?.prompt).toContain("[OpenClaw room event]");
   });
 
@@ -3022,7 +3051,13 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     });
 
     expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only", source: "mid-turn" });
+    expect(result.preflightRecovery).toEqual({
+      route: "compact_only",
+      source: "mid-turn",
+      estimatedPromptTokens: 9000,
+      promptBudgetBeforeReserve: 7000,
+      overflowTokens: 2000,
+    });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
@@ -3063,6 +3098,34 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    hoisted.compactionReserveTokens = 20_000;
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 100_000,
+        prompt: "current prompt",
+        transcriptPrompt: "current prompt",
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    expect(assembleParams.tokenBudget).toBeLessThan(80_000);
+    expect(assembleParams.runtimeSettings).toMatchObject({
+      limits: {
+        maxOutputTokens: 20_000,
+      },
+    });
   });
 
   it("preserves the cacheable prefix while bounding current prompt results", async () => {
@@ -3160,5 +3223,96 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
+  });
+
+  it("routes aggregate prompt-history truncation to compact-then-truncate before prompt submission", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        ...makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: `aggregate_${index}`, name: "read", arguments: {} }],
+          timestamp: 2 + index * 2,
+        }),
+      });
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `aggregate_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"aggregate output ".repeat(900)}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    sessionMessages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "old turn done" }],
+        timestamp: 20,
+      }),
+    );
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+  });
+
+  it("routes protected trailing aggregate pressure to compact-then-truncate", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "seed", timestamp: 1 },
+      makeAgentAssistantMessage({
+        content: Array.from({ length: 5 }, (_, index) => ({
+          type: "toolCall",
+          id: `fresh_${index}`,
+          name: "read",
+          arguments: {},
+        })),
+        timestamp: 2,
+      }),
+    ];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `fresh_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"fresh output ".repeat(90)}` }],
+        isError: false,
+        timestamp: 3 + index,
+      } as AgentMessage);
+    }
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });

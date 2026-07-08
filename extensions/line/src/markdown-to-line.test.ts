@@ -277,6 +277,21 @@ describe("convertCodeBlockToFlexBubble", () => {
     expect(codeText.length).toBeLessThan(longCode.length);
     expect(codeText).toContain("...");
   });
+
+  it("does not split a surrogate pair at the truncation boundary", () => {
+    // The emoji's surrogate pair straddles the 2000-char cap; a raw slice
+    // would leave a lone high surrogate at the end of the code text.
+    const block = { code: `${"x".repeat(1999)}😀${"y".repeat(500)}` };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+
+    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
+    const codeText = body.contents[1].contents[0].text;
+    expect(codeText.endsWith("\n...")).toBe(true);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(codeText),
+    ).toBe(false);
+  });
 });
 
 describe("processLineMessage", () => {

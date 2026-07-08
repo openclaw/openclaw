@@ -637,6 +637,23 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(call.timeoutMs).toBe(5000);
   });
 
+  it("truncates auditContext without leaving a lone surrogate at the max boundary", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    const prefix = "a".repeat(79);
+    await fetchWithTimeoutGuarded("https://example.com", {}, 5000, fetch, {
+      auditContext: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
+    });
+
+    const call = getFirstGuardedFetchCall();
+    expect(call.auditContext).toBe(prefix);
+    expect(call.auditContext).not.toContain(String.fromCharCode(0xd83d));
+  });
+
   it("passes configured explicit proxy policy through the SSRF guard", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),

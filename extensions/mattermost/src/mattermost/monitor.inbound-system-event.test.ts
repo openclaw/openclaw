@@ -45,7 +45,9 @@ class FakeWebSocket {
 
   close(): void {}
 
-  terminate(): void {}
+  terminate(): void {
+    this.emitClose(1000);
+  }
 
   get openListenerCount(): number {
     return this.openListeners.length;
@@ -107,7 +109,8 @@ vi.mock("./draft-stream.js", () => ({
   createMattermostDraftStream: mockState.createMattermostDraftStream,
 }));
 
-vi.mock("./monitor-resources.js", () => ({
+vi.mock("./monitor-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-resources.js")>()),
   createMattermostMonitorResources: () => ({
     resolveMattermostMedia: mockState.resolveMattermostMedia,
     sendTypingIndicator: vi.fn(async () => {}),
@@ -419,7 +422,7 @@ describe("mattermost inbound user posts", () => {
         channel_display_name: "Town Square",
         sender_name: "alice",
         post: JSON.stringify({
-          id: "post-1",
+          id: "post-inbound-system-event-regular",
           channel_id: "chan-1",
           user_id: "user-1",
           message: "hello from mattermost",
@@ -439,7 +442,7 @@ describe("mattermost inbound user posts", () => {
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
-    expect(ctx?.MessageSid).toBe("post-1");
+    expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
   });

@@ -1,4 +1,3 @@
-// Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -50,6 +49,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+// Status text helpers render runtime status summaries for CLI output.
+import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
   shouldUseCodexSyntheticUsageForRuntime,
@@ -68,7 +69,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
-function resolveStatusChannelFeatureLine(params: {
+export function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
   statusChannel: string;
   statusAccountId?: string;
@@ -152,23 +153,6 @@ function shouldLoadUsageSummary(params: {
     auth?.startsWith("oauth") ||
     auth?.startsWith("token"),
   );
-}
-
-function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
-  const auth = normalizeOptionalLowercaseString(authLabel);
-  if (!auth) {
-    return undefined;
-  }
-  if (auth.startsWith("oauth")) {
-    return "oauth";
-  }
-  if (auth.startsWith("token")) {
-    return "token";
-  }
-  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
-    return "api_key";
-  }
-  return undefined;
 }
 
 function resolveCodexSyntheticUsageAuthProfileId(params: {
@@ -290,7 +274,7 @@ function buildStatusUptimeLine(): string {
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
-async function resolveRuntimePluginHealthLine(): Promise<string> {
+async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
     return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
@@ -492,7 +476,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       if (
         usageEntry &&
         !usageEntry.error &&
-        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+        (usageEntry.windows.length > 0 ||
+          Boolean(usageEntry.billing?.length) ||
+          Boolean(usageEntry.summary?.trim()))
       ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
