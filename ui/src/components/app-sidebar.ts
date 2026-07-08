@@ -70,6 +70,7 @@ type SidebarRecentSession = {
   meta: string;
   href: string;
   active: boolean;
+  visuallyActive: boolean;
   hasActiveRun: boolean;
   kind?: string;
   pinned: boolean;
@@ -94,7 +95,6 @@ type SidebarSessionSortMode = "created" | "updated";
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 
-// Command palette shortcut hint (see command-palette.ts keydown handling).
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
@@ -112,6 +112,14 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   mode: SidebarSessionSortMode;
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
+
+function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
+  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
+  if (value === "just now") {
+    return "now";
+  }
+  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+}
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
@@ -142,6 +150,7 @@ class AppSidebar extends LitElement {
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -278,6 +287,38 @@ class AppSidebar extends LitElement {
     this.gatewayClient = client;
   }
 
+  private renderBrand() {
+    const collapseLabel = this.collapsed ? t("nav.expand") : t("nav.collapse");
+    const collapseTooltip = `${collapseLabel} (⌘B)`;
+    return html`
+      <div class="sidebar-brand">
+        <div class="sidebar-brand__identity">
+          <img
+            class="sidebar-brand__logo"
+            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+            alt=""
+            aria-hidden="true"
+          />
+          ${this.collapsed ? nothing : html`<span class="sidebar-brand__title">OpenClaw</span>`}
+        </div>
+        <div class="sidebar-brand__actions">
+          ${this.renderSearch()}
+          <openclaw-tooltip .content=${collapseTooltip}>
+            <button
+              class="sidebar-brand__icon"
+              type="button"
+              @click=${() => this.onToggleSidebar?.()}
+              aria-label=${collapseLabel}
+              aria-expanded=${String(!this.collapsed)}
+            >
+              ${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
   private getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
@@ -321,12 +362,14 @@ class AppSidebar extends LitElement {
       hello: context?.gateway.snapshot.hello,
       compareSessions: this.compareSidebarSessionRows,
     });
+    const highlightCurrentSession = this.activeRouteId === "chat";
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
-      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
+      meta: formatSidebarTimestamp(row.updatedAt),
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.activeRowKey,
+      visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
@@ -1211,7 +1254,7 @@ class AppSidebar extends LitElement {
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
-      session.active ? "sidebar-recent-session--active" : "",
+      session.visuallyActive ? "sidebar-recent-session--active" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
@@ -1454,7 +1497,7 @@ class AppSidebar extends LitElement {
                           @click=${(event: MouseEvent) => {
                             const trigger = event.currentTarget as HTMLElement;
                             const rect = trigger.getBoundingClientRect();
-                            this.openSessionSortMenu(rect.right - 180, rect.bottom + 4, trigger);
+                            this.openSessionSortMenu(rect.right, rect.bottom + 4, trigger);
                           }}
                         >
                           ${icons.listFilter}
@@ -1525,26 +1568,20 @@ class AppSidebar extends LitElement {
 
   /** Command palette entry point; the palette itself is owned by the shell. */
   private renderSearch() {
-    const row = html`
-      <button
-        type="button"
-        class="sidebar-search"
-        ?disabled=${!this.onOpenPalette}
-        aria-label=${t("chat.openCommandPalette")}
-        @click=${() => this.onOpenPalette?.()}
-      >
-        <span class="sidebar-search__icon" aria-hidden="true">${icons.search}</span>
-        ${this.collapsed
-          ? nothing
-          : html`
-              <span class="sidebar-search__label">${t("common.search")}</span>
-              <kbd class="sidebar-search__kbd">${PALETTE_SHORTCUT}</kbd>
-            `}
-      </button>
+    const tooltip = `${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`;
+    return html`
+      <openclaw-tooltip .content=${tooltip}>
+        <button
+          type="button"
+          class="sidebar-brand__icon sidebar-search"
+          ?disabled=${!this.onOpenPalette}
+          aria-label=${t("chat.openCommandPalette")}
+          @click=${() => this.onOpenPalette?.()}
+        >
+          ${icons.search}
+        </button>
+      </openclaw-tooltip>
     `;
-    return this.collapsed
-      ? html`<openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>${row}</openclaw-tooltip>`
-      : row;
   }
 
   private renderMoreSection() {
@@ -1621,8 +1658,8 @@ class AppSidebar extends LitElement {
           alt="OpenClaw"
         />
         <div class="sidebar-shell">
+          ${this.renderBrand()}
           <div class="sidebar-shell__body">
-            ${this.renderSearch()}
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.collapsed ? this.renderRoute("chat") : nothing}
               <div class="nav-section__items">
