@@ -35,8 +35,10 @@ export type { QueueMode } from "./types.js";
  * Errors carrying this sentinel are control-flow signals (not user-facing
  * failures). HandleRunFailure skips error-event forwarding for them so the
  * caller's dedicated recovery path can run without a visible error flash.
+ *
+ * Not exported — callers access it via Symbol.for("agent-core.controlFlowError").
  */
-export const CONTROL_FLOW_ERROR = Symbol.for("agent-core.controlFlowError");
+const CONTROL_FLOW_ERROR = Symbol.for("agent-core.controlFlowError");
 
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
   return messages.filter(
