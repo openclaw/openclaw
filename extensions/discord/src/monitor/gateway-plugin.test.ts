@@ -102,6 +102,25 @@ describe("createDiscordGatewayPlugin", () => {
     });
   }
 
+  function containsLoneSurrogate(value: string): boolean {
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          return true;
+        }
+      }
+      if (code >= 0xdc00 && code <= 0xdfff) {
+        const previous = value.charCodeAt(index - 1);
+        if (!(previous >= 0xd800 && previous <= 0xdbff)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   it("omits GuildVoiceStates by default for text-only Discord configs", () => {
     expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(0);
   });
@@ -354,5 +373,36 @@ describe("createDiscordGatewayPlugin", () => {
     expect(logs).toContain("reason=policy violation");
     expect(logs).toContain("lastErrorCode=WS_ERR_TOO_MANY_BUFFERED_PARTS");
     expect(logs).toContain("hint=possible ws receiver buffered-parts limit");
+  });
+
+  it("keeps gateway close reason logs UTF-16 safe", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const plugin = createPlugin(
+      {
+        webSocketCtor: function WebSocketCtor() {
+          return socket;
+        } as unknown as NonNullable<
+          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+        >["webSocketCtor"],
+      },
+      {},
+      runtime,
+    );
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+    ).createWebSocket("wss://gateway.discord.gg");
+
+    createdSocket.emit("close", 1008, Buffer.from(`${"A".repeat(239)}🧪 tail`));
+
+    const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(logs).toContain("discord: gateway websocket closed");
+    expect(logs).toContain("code=1008");
+    expect(containsLoneSurrogate(logs)).toBe(false);
+    expect(logs).not.toContain("�");
   });
 });
