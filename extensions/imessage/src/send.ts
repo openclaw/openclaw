@@ -90,7 +90,7 @@ type IMessageSendOpts = {
   }) => Promise<string | null> | string | null;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   /**
    * Generic identifier returned by the bridge. May be a GUID string, a
    * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders

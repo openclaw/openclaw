@@ -1,10 +1,10 @@
 // Slack plugin module implements prepare thread context root behavior.
-export type SlackBotAuthorIdentity = {
+type SlackBotAuthorIdentity = {
   botUserId?: string;
   botId?: string;
 };
 
-export type SlackThreadAuthorTuple = {
+type SlackThreadAuthorTuple = {
   userId?: string;
   botId?: string;
 };
@@ -14,11 +14,11 @@ export type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
   ts?: string;
 };
 
-export type SlackThreadHistoryFilterPolicy = {
+type SlackThreadHistoryFilterPolicy = {
   retainCurrentBotRootTs?: string;
 };
 
-export type SlackThreadHistoryFilterResult<T> = {
+type SlackThreadHistoryFilterResult<T> = {
   kept: T[];
   omittedCurrentBot: number;
 };

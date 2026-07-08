@@ -310,6 +310,7 @@ export type LogsTailResult = SchemaType<"LogsTailResult">;
 export type ExecApprovalsGetParams = SchemaType<"ExecApprovalsGetParams">;
 export type ExecApprovalsSetParams = SchemaType<"ExecApprovalsSetParams">;
 export type ExecApprovalsNodeGetParams = SchemaType<"ExecApprovalsNodeGetParams">;
+export type ExecApprovalsNodeSnapshot = SchemaType<"ExecApprovalsNodeSnapshot">;
 export type ExecApprovalsNodeSetParams = SchemaType<"ExecApprovalsNodeSetParams">;
 export type ExecApprovalsSnapshot = SchemaType<"ExecApprovalsSnapshot">;
 export type ExecApprovalGetParams = SchemaType<"ExecApprovalGetParams">;

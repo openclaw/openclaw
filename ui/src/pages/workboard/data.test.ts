@@ -3528,6 +3528,30 @@ describe("workboard controller", () => {
     expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
   });
 
+  it("keeps bounded task session labels on a UTF-16 boundary", async () => {
+    const host = {};
+    const title = `${"a".repeat(499)}🚀tail`;
+    const client = createClient({
+      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.update": { card: { ...sampleCard, title, status: "running" } },
+    });
+
+    await startWorkboardCard({
+      host,
+      client: client as never,
+      card: { ...sampleCard, title },
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({
+        label: `${"a".repeat(499)}... (card-1)`,
+      }),
+    );
+  });
+
   it("starts reassigned cards with the current task session key", async () => {
     const host = {};
     const expectedSessionKey = "agent:codex-main:subagent:workboard-default-card-1";

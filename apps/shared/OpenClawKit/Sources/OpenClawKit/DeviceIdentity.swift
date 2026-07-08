@@ -151,17 +151,22 @@ enum DeviceIdentityPaths {
         self.appGroupMigrationSource(
             appGroupStateDirURL: self.appGroupStateDirURL(),
             appGroupStateDirAvailable: self.appGroupStateDirAvailable,
+            stateDirOverridden: self.stateDirOverrideURL() != nil,
             profile: profile)
     }
 
     /// Non-nil only for unentitled builds whose store selection fell back to legacy storage;
     /// entitled builds keep using the App Group container and must never migrate out of it.
+    /// An explicit OPENCLAW_STATE_DIR override selects a caller-chosen store, not the legacy
+    /// fallback; importing container identity/tokens there would leak the machine's real
+    /// pairing into unrelated stores (test dirs, relocated installs).
     static func appGroupMigrationSource(
         appGroupStateDirURL: URL?,
         appGroupStateDirAvailable: Bool,
+        stateDirOverridden: Bool,
         profile: GatewayDeviceIdentityProfile) -> AppGroupMigrationSource?
     {
-        guard !appGroupStateDirAvailable, let appGroupStateDirURL else {
+        guard !stateDirOverridden, !appGroupStateDirAvailable, let appGroupStateDirURL else {
             return nil
         }
         let identityDirURL = appGroupStateDirURL.appendingPathComponent("identity", isDirectory: true)

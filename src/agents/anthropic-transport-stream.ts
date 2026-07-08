@@ -658,7 +658,7 @@ function tagPendingCommentaryText(content: TransportContentBlock[]): void {
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
-export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+function resolveAnthropicBaseUrl(baseUrl?: string): string {
   return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
 }
 

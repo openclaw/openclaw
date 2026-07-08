@@ -39,6 +39,7 @@ import {
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
+  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -173,7 +174,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
 ]);
 
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
-export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
   if (!normalized) {
     return html;
@@ -185,6 +186,15 @@ export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath
     next = next.split(rootHref).join(baseHref);
   }
   return next;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&#39;");
 }
 
 type ControlUiAvatarResolution =
@@ -788,12 +798,16 @@ function serveResolvedIndexHtml(
   basePath?: string,
   allowWasm?: boolean,
 ) {
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  const normalizedBasePath = normalizeControlUiBasePath(basePath);
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
+  const basePathAttribute = normalizedBasePath
+    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
+    : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the

@@ -98,7 +98,7 @@ export function createBoundedMistralFetcher(
  */
 type MistralReasoningEffort = "none" | "high";
 
-export interface MistralOptions extends StreamOptions {
+interface MistralOptions extends StreamOptions {
   toolChoice?:
     | "auto"
     | "none"

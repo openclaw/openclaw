@@ -149,12 +149,12 @@ const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
-export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
   "openclaw/plugin-sdk/core",
   "openclaw/plugin-sdk/provider-entry",
   "openclaw/plugin-sdk/runtime",
 ] as const;
-export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
+const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],

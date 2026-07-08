@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
 - **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
 - **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.
 - **Direct poll delivery:** route direct and hybrid channel polls through the owning outbound adapter while preserving gateway-mode routing and channel option checks. (#99950) Thanks @NianJiuZst.
@@ -50,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - **Feishu mention forwarding:** fail closed when the bot Open ID is unavailable so group messages cannot be misclassified as explicit bot mentions. (#100891) Thanks @zhangguiping-xydt.
 - **Cron edit delivery:** preserve each job's implicit delivery mode when applying partial delivery updates, so disabling best-effort delivery no longer turns detached job announcements off. (#100846) Thanks @machine3at.
 - **Control UI session creation:** keep newly created sessions at the front of the stable sidebar order after selecting another session. Thanks @shakkernerd.
+- **Control UI file previews:** keep large Skill Workshop files responsive with cached, offscreen-contained text chunks while preserving wrapped content, stable file switching, full-file copy, and clean focus behavior. (#101319) Thanks @xianshishan and @shakkernerd.
 - **FTS-only memory startup:** skip plugin capability discovery when `memorySearch.provider` is explicitly `none`, avoiding an unnecessary cold-start scan.
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
