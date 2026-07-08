@@ -66,6 +66,7 @@ export async function executeBashWithOperations(
     const tempFile = createPrivateTempWriteStream("openclaw-bash");
     tempFilePath = tempFile.path;
     tempFileStream = tempFile.stream;
+    tempFileStream.on("error", () => {});
     for (const chunk of outputChunks) {
       tempFileStream.write(chunk);
     }

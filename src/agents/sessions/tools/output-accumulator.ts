@@ -221,6 +221,7 @@ export class OutputAccumulator {
     const tempFile = createPrivateTempWriteStream(this.tempFilePrefix);
     this.tempFilePath = tempFile.path;
     this.tempFileStream = tempFile.stream;
+    this.tempFileStream.on("error", () => {});
     for (const chunk of this.rawChunks) {
       this.tempFileStream.write(chunk);
     }
