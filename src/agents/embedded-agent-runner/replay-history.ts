@@ -18,6 +18,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { parseAssistantTextSignature } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -30,6 +31,13 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import {
+  escapeInternalRuntimeContextDelimiters,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../internal-runtime-context.js";
 import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -85,6 +93,15 @@ type ProviderReplayHookParams = {
   model?: ProviderRuntimeModel;
   sessionId?: string;
 };
+
+const REPLAY_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
   const context = {
@@ -222,9 +239,47 @@ function normalizeAssistantReplayTextContent(message: AgentMessage, replayConten
   } as AgentMessage;
 }
 
+function hasReplayToolCallBlock(replayContent: readonly unknown[]): boolean {
+  return replayContent.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && REPLAY_TOOL_CALL_BLOCK_TYPES.has(type);
+  });
+}
+
+function isCommentaryTextBlock(block: object): boolean {
+  const record = block as { textSignature?: unknown };
+  return parseAssistantTextSignature(record.textSignature)?.phase === "commentary";
+}
+
+function preserveReplayTextSignatureId(value: unknown): string | undefined {
+  const id = parseAssistantTextSignature(value)?.id;
+  return id ? JSON.stringify({ v: 1, id }) : undefined;
+}
+
+function formatUndeliveredCommentaryReplayContext(text: string): string {
+  return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    "",
+    "A previous assistant text block before a tool call was classified as commentary and was not delivered to the user/channel.",
+    "Do not assume the user saw or answered it. If it matters, ask or send it again in a user-visible final reply after the tool result.",
+    "",
+    "Undelivered assistant commentary:",
+    escapeInternalRuntimeContextDelimiters(text),
+    INTERNAL_RUNTIME_CONTEXT_END,
+  ].join("\n");
+}
+
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
   const sanitizedContent: unknown[] = [];
+  const markUndeliveredCommentary =
+    (message as { stopReason?: unknown }).stopReason === "toolUse" &&
+    hasReplayToolCallBlock(replayContent);
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
       sanitizedContent.push(block);
@@ -236,6 +291,22 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
       continue;
     }
     const strippedText = stripInternalMetadataForDisplay(text);
+    if (markUndeliveredCommentary && isCommentaryTextBlock(block)) {
+      touched = true;
+      const trimmed = strippedText.trim();
+      if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+        const { textSignature: _droppedTextSignature, ...rest } = block as {
+          textSignature?: unknown;
+        };
+        const textSignature = preserveReplayTextSignatureId(_droppedTextSignature);
+        sanitizedContent.push({
+          ...rest,
+          text: formatUndeliveredCommentaryReplayContext(trimmed),
+          ...(textSignature ? { textSignature } : {}),
+        });
+      }
+      continue;
+    }
     if (strippedText === text) {
       if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
         sanitizedContent.push(block);

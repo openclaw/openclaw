@@ -316,6 +316,51 @@ describe("normalizeAssistantReplayContent", () => {
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
+  it("marks commentary text before tool calls as undelivered in provider replay", () => {
+    const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          {
+            type: "text",
+            text: "Please confirm the payment details before I continue.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "commentary-0",
+              phase: "commentary",
+            }),
+          },
+          toolCall,
+        ],
+        "toolUse",
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+      userMessage("yes"),
+    ];
+
+    const out = normalizeAssistantReplayContent(messages);
+
+    expect(out).not.toBe(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    const replayText = (normalized.content[0] as { text?: string }).text ?? "";
+    expect(replayText).toContain("was not delivered to the user/channel");
+    expect(replayText).toContain("Do not assume the user saw or answered it");
+    expect(replayText).toContain("Please confirm the payment details");
+    expect(normalized.content[0]).toHaveProperty(
+      "textSignature",
+      JSON.stringify({ v: 1, id: "commentary-0" }),
+    );
+    expect(normalized.content[1]).toBe(toolCall);
+    expect(out[2]).toBe(messages[2]);
+  });
+
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {
     // Gateway mirror entries are transcript artifacts, not model-authored
     // assistant turns, so they must not be sent back to providers.
