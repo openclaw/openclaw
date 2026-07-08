@@ -4,6 +4,11 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { parseDotPath, toDotPath } from "../../../src/secrets/shared.js";
+import {
+  resolveConfigSecretTargetByPath,
+  resolvePlanTargetAgainstRegistry,
+} from "../../../src/secrets/target-registry.js";
 
 type CommandLike = {
   command(name: string): CommandLike;
@@ -24,10 +29,12 @@ type SecretRef = {
 };
 
 type SecretsPlanTarget = {
-  type: "models.providers.apiKey";
+  type: string;
   path: string;
   pathSegments: string[];
-  providerId: string;
+  agentId?: string;
+  providerId?: string;
+  accountId?: string;
   ref: SecretRef;
 };
 
@@ -41,6 +48,12 @@ type VaultExecProviderConfig = {
 
 type ProviderSecretMapping = {
   providerId: string;
+  secretId: string;
+};
+
+type ConfigTargetSecretMapping = {
+  path: string;
+  agentId?: string;
   secretId: string;
 };
 
@@ -69,6 +82,7 @@ type SetupOptions = {
   anthropicId?: string;
   openrouterId?: string;
   providerKey?: string[];
+  target?: string[];
 };
 
 type ProviderStatus = {
@@ -85,6 +99,8 @@ const VAULT_PROVIDER_ALIAS = "vault";
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
+const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+const AUTH_PROFILE_TARGET_TYPES = ["auth-profiles.api_key.key", "auth-profiles.token.token"];
 
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -207,6 +223,68 @@ function createModelApiKeyTarget(params: {
   };
 }
 
+function parseTargetSpecifier(value: string): {
+  path: string;
+  agentId?: string;
+} {
+  if (value.startsWith("auth-profiles:")) {
+    const [, agentId, targetPath] = value.split(":");
+    if (!agentId || !targetPath) {
+      throw new Error(`Invalid --target auth-profiles target: ${value}`);
+    }
+    return { agentId, path: targetPath };
+  }
+  return {
+    path: value.startsWith("openclaw:") ? value.slice("openclaw:".length) : value,
+  };
+}
+
+function resolveAuthProfileSecretTargetByPath(pathSegments: string[]) {
+  for (const type of AUTH_PROFILE_TARGET_TYPES) {
+    const resolved = resolvePlanTargetAgainstRegistry({ type, pathSegments });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+function createConfigSecretTarget(params: {
+  providerAlias: string;
+  path: string;
+  agentId?: string;
+  secretId: string;
+}): SecretsPlanTarget {
+  const pathSegments = parseDotPath(params.path);
+  const normalizedPath = toDotPath(pathSegments);
+  if (
+    pathSegments.length === 0 ||
+    normalizedPath !== params.path ||
+    pathSegments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment))
+  ) {
+    throw new Error(`Invalid --target config path: ${params.path}`);
+  }
+  const resolved = params.agentId
+    ? resolveAuthProfileSecretTargetByPath(pathSegments)
+    : resolveConfigSecretTargetByPath(pathSegments);
+  if (!resolved) {
+    throw new Error(`Unknown or unsupported Vault setup target path: ${params.path}`);
+  }
+  return {
+    type: resolved.entry.targetType,
+    path: normalizedPath,
+    pathSegments,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
+    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+    ref: {
+      source: "exec",
+      provider: params.providerAlias,
+      id: params.secretId,
+    },
+  };
+}
+
 function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretMapping[] {
   return (values ?? []).map((value) => {
     const separator = value.indexOf("=");
@@ -220,6 +298,24 @@ function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretM
     assertValidModelProviderId("--provider-key", providerId);
     assertValidVaultSecretId(`--provider-key ${providerId}`, secretId);
     return { providerId, secretId };
+  });
+}
+
+function parseConfigTargetMappings(values: string[] | undefined): ConfigTargetSecretMapping[] {
+  return (values ?? []).map((value) => {
+    const separator = value.indexOf("=");
+    if (separator <= 0 || separator === value.length - 1) {
+      throw new Error(
+        `Invalid --target value "${value}". Use <openclaw-config-path>=<vault-secret-id>.`,
+      );
+    }
+    const target = parseTargetSpecifier(value.slice(0, separator).trim());
+    const secretId = value.slice(separator + 1).trim();
+    assertValidVaultSecretId(`--target ${target.path}`, secretId);
+    return Object.assign(
+      { path: target.path, secretId },
+      target.agentId ? { agentId: target.agentId } : {},
+    );
   });
 }
 
@@ -252,11 +348,43 @@ function collectProviderSecrets(options: {
   return providerSecrets;
 }
 
+function assertNoDuplicatePlanTargets(targets: SecretsPlanTarget[]): void {
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const key = target.agentId
+      ? `auth-profiles:${target.agentId}:${target.path}`
+      : `openclaw:${target.path}`;
+    if (seen.has(key)) {
+      throw new Error(`Duplicate secret target path in Vault setup: ${target.path}`);
+    }
+    seen.add(key);
+  }
+}
+
 function buildPlan(params: {
   providerAlias: string;
   providerConfig: VaultExecProviderConfig;
   providerSecrets: ProviderSecretMapping[];
+  configTargetSecrets?: ConfigTargetSecretMapping[];
 }): SecretsApplyPlan {
+  const targets = [
+    ...params.providerSecrets.map((entry) =>
+      createModelApiKeyTarget({
+        providerAlias: params.providerAlias,
+        providerId: entry.providerId,
+        secretId: entry.secretId,
+      }),
+    ),
+    ...(params.configTargetSecrets ?? []).map((entry) =>
+      createConfigSecretTarget({
+        providerAlias: params.providerAlias,
+        path: entry.path,
+        ...(entry.agentId ? { agentId: entry.agentId } : {}),
+        secretId: entry.secretId,
+      }),
+    ),
+  ];
+  assertNoDuplicatePlanTargets(targets);
   return {
     version: 1,
     protocolVersion: 1,
@@ -265,13 +393,7 @@ function buildPlan(params: {
     providerUpserts: {
       [params.providerAlias]: params.providerConfig,
     },
-    targets: params.providerSecrets.map((entry) =>
-      createModelApiKeyTarget({
-        providerAlias: params.providerAlias,
-        providerId: entry.providerId,
-        secretId: entry.secretId,
-      }),
-    ),
+    targets,
   };
 }
 
@@ -366,6 +488,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     providerAlias,
     providerConfig: buildProviderConfig(),
     providerSecrets,
+    configTargetSecrets: parseConfigTargetMappings(options.target),
   });
   const planPath =
     normalizeOptionalString(options.planOut) ??
@@ -402,6 +525,12 @@ export function registerVaultCommands(params: RegisterVaultCommandsParams): void
       (value: string, previous: string[] = []) => [...previous, value],
       [],
     )
+    .option(
+      "--target <path=id>",
+      "Vault secret id for any known SecretRef target path",
+      (value: string, previous: string[] = []) => [...previous, value],
+      [],
+    )
     .action((options: SetupOptions) => runSetup(options));
 }
 
@@ -409,7 +538,9 @@ export const testing = {
   buildPlan,
   buildProviderConfig,
   collectProviderSecrets,
+  createConfigSecretTarget,
   createModelApiKeyTarget,
+  parseConfigTargetMappings,
   parseProviderKeyMappings,
   resolveResolverScriptPath,
   resolverScriptPathCandidates,

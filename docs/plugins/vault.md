@@ -198,6 +198,21 @@ Each `--provider-key <provider=id>` writes a SecretRef to
 `models.providers.<provider>.apiKey`. For custom providers, it does not create
 the provider's `baseUrl`, `api`, or `models` settings; configure those first.
 
+Use `--target <path=id>` for any known SecretRef target path:
+
+```bash
+openclaw vault setup \
+  --target channels.telegram.botToken=channels/telegram/botToken \
+  --target models.providers.openai.headers.x-api-key=providers/openai/proxyKey \
+  --target auth-profiles:main:profiles.openai.key=providers/openai/apiKey
+```
+
+Bare target paths apply to `openclaw.json`. Use
+`auth-profiles:<agentId>:<path>` for existing `auth-profiles.json` targets.
+The target path must be a registered OpenClaw SecretRef target. The setup
+command does not create arbitrary named secrets in OpenClaw; Vault remains the
+secret store, and OpenClaw stores SecretRefs only on supported config fields.
+
 ## SecretRef id format
 
 Vault SecretRef ids use this convention:

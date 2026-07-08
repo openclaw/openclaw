@@ -62,6 +62,73 @@ describe("vault CLI setup plan", () => {
     ]);
   });
 
+  it("generates targets for arbitrary known openclaw secret targets", () => {
+    const plan = testing.buildPlan({
+      providerAlias: "vault",
+      providerConfig: testing.buildProviderConfig(),
+      providerSecrets: [],
+      configTargetSecrets: testing.parseConfigTargetMappings([
+        "channels.telegram.botToken=channels/telegram/botToken",
+        "models.providers.openai.headers.x-api-key=providers/openai/proxyKey",
+        "auth-profiles:main:profiles.openai.key=providers/openai/apiKey",
+      ]),
+    });
+
+    expect(plan.targets).toEqual([
+      {
+        type: "channels.telegram.botToken",
+        path: "channels.telegram.botToken",
+        pathSegments: ["channels", "telegram", "botToken"],
+        ref: {
+          source: "exec",
+          provider: "vault",
+          id: "channels/telegram/botToken",
+        },
+      },
+      {
+        type: "models.providers.headers",
+        path: "models.providers.openai.headers.x-api-key",
+        pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
+        providerId: "openai",
+        ref: {
+          source: "exec",
+          provider: "vault",
+          id: "providers/openai/proxyKey",
+        },
+      },
+      {
+        type: "auth-profiles.api_key.key",
+        path: "profiles.openai.key",
+        pathSegments: ["profiles", "openai", "key"],
+        agentId: "main",
+        ref: {
+          source: "exec",
+          provider: "vault",
+          id: "providers/openai/apiKey",
+        },
+      },
+    ]);
+  });
+
+  it("parses config target mappings", () => {
+    expect(
+      testing.parseConfigTargetMappings([
+        "channels.telegram.botToken=channels/telegram/botToken",
+        "auth-profiles:main:profiles.openai.key=providers/openai/apiKey",
+      ]),
+    ).toEqual([
+      {
+        path: "channels.telegram.botToken",
+        secretId: "channels/telegram/botToken",
+      },
+      {
+        path: "profiles.openai.key",
+        agentId: "main",
+        secretId: "providers/openai/apiKey",
+      },
+    ]);
+  });
+
   it("rejects duplicate model provider targets", () => {
     expect(() =>
       testing.collectProviderSecrets({
@@ -75,6 +142,37 @@ describe("vault CLI setup plan", () => {
     expect(() => testing.parseProviderKeyMappings(["openai=providers/../openai/apiKey"])).toThrow(
       "Invalid --provider-key openai Vault secret id",
     );
+  });
+
+  it("rejects unsupported config target paths", () => {
+    expect(() =>
+      testing.createConfigSecretTarget({
+        providerAlias: "vault",
+        path: "secrets.github_pat",
+        secretId: "github/pat",
+      }),
+    ).toThrow("Unknown or unsupported Vault setup target path: secrets.github_pat");
+  });
+
+  it("rejects duplicate config target paths", () => {
+    expect(() =>
+      testing.buildPlan({
+        providerAlias: "vault",
+        providerConfig: testing.buildProviderConfig(),
+        providerSecrets: [
+          {
+            providerId: "openai",
+            secretId: "providers/openai/apiKey",
+          },
+        ],
+        configTargetSecrets: [
+          {
+            path: "models.providers.openai.apiKey",
+            secretId: "providers/openai/other",
+          },
+        ],
+      }),
+    ).toThrow("Duplicate secret target path in Vault setup: models.providers.openai.apiKey");
   });
 
   it("reports the packaged resolver path when the CLI is bundled", async () => {
