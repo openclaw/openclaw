@@ -176,6 +176,16 @@ export {
   normalizeAgentHarnessUserInputAnswer,
 } from "../agents/harness/user-input-bridge.js";
 export {
+  registerAgentHarnessQuestion,
+  type AgentHarnessQuestionRegistration,
+} from "../agents/harness/question-bridge.js";
+export {
+  getGlobalQuestionManager,
+  resetGlobalQuestionManagerForTest,
+  type QuestionAnswers,
+  type QuestionRecord,
+} from "../gateway/question-manager.js";
+export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
