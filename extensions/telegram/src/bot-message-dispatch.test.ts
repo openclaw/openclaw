@@ -2888,6 +2888,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not fallback or retry after durable final delivery already showed partial output", async () => {
+    const durableError = new Error("telegram second chunk failed");
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "failed",
+      error: durableError,
+      sentBeforeError: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      try {
+        await dispatcherOptions.deliver({ text: "visible final text" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError?.(err, { kind: "final" });
+      }
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      streamMode: "off",
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+    expect(durableError).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps tool progress visible after a partial-streamed intermediate block", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

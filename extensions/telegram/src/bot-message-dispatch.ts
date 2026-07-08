@@ -164,6 +164,30 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+function isVisibleDurableReplyFailure(error: unknown, sentBeforeError?: true): boolean {
+  return (
+    sentBeforeError === true ||
+    (typeof error === "object" &&
+      error !== null &&
+      !Array.isArray(error) &&
+      ((error as { sentBeforeError?: unknown }).sentBeforeError === true ||
+        (error as { visibleReplySent?: unknown }).visibleReplySent === true))
+  );
+}
+
+function markVisibleDurableReplyFailure(error: unknown): unknown {
+  // Partial durable final sends are visible to users; preserve that marker so
+  // dispatch state suppresses duplicate fallback/retry while still surfacing failure.
+  if (typeof error === "object" && error !== null && Object.isExtensible(error)) {
+    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+    return error;
+  }
+
+  const visibleError = new Error("visible durable reply delivery failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
+}
+
 type DraftPartialTextUpdate = {
   text: string;
   delta?: string;
@@ -1786,6 +1810,11 @@ export const dispatchTelegramMessage = async ({
           }),
         });
         if (durable.status === "failed") {
+          if (isVisibleDurableReplyFailure(durable.error, durable.sentBeforeError)) {
+            deliveryState.markDelivered();
+            markProgressFinalDelivered();
+            throw markVisibleDurableReplyFailure(durable.error);
+          }
           throw durable.error;
         }
         if (durable.status === "handled_visible") {
