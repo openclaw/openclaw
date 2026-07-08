@@ -2899,7 +2899,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "visible final text" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        await dispatcherOptions.onError?.(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2925,7 +2925,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "undelivered final text" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        await dispatcherOptions.onError?.(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
