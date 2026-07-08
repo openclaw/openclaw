@@ -28,7 +28,7 @@ Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness sessio
 | Let an external MCP client read/send OpenClaw channel conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes Gateway-backed conversations over stdio.                                 |
 | Save third-party MCP servers for OpenClaw-managed agent runs        | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
 | Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
-| Edit MCP config from a browser                                      | Control UI `/mcp`                                                    | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
+| Edit MCP config from a browser                                      | Control UI `/settings/mcp` (`/mcp` alias)                            | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
 | Give Codex app-server a scoped native MCP server                    | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
 | Run ACP-hosted harness sessions                                     | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
 
@@ -792,7 +792,7 @@ Registry commands do not start the channel bridge. Only `probe` and `doctor --pr
 
 ## Control UI
 
-The browser Control UI includes a dedicated MCP settings page at `/mcp`. It shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
+The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 

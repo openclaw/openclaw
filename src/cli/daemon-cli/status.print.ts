@@ -305,6 +305,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
+      if (status.port?.status === "busy" && status.lastError) {
+        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+      }
     }
     const capability = formatCapabilityLabel(rpc.capability);
     if (capability) {

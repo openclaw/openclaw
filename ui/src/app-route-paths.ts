@@ -1,21 +1,21 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 
-export const APP_ROUTE_DEFINITIONS = {
+const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   overview: { path: "/overview" },
   activity: { path: "/activity" },
   agents: { path: "/agents" },
-  channels: { path: "/channels" },
-  config: { path: "/config" },
-  communications: { path: "/communications" },
-  appearance: { path: "/appearance" },
-  automation: { path: "/automation" },
-  mcp: { path: "/mcp" },
-  infrastructure: { path: "/infrastructure" },
-  "ai-agents": { path: "/ai-agents" },
+  channels: { path: "/settings/channels", aliases: ["/channels"] },
+  config: { path: "/settings/general", aliases: ["/config"] },
+  communications: { path: "/settings/communications", aliases: ["/communications"] },
+  appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  automation: { path: "/settings/automation", aliases: ["/automation"] },
+  mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
+  "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
   workboard: { path: "/workboard" },
-  worktrees: { path: "/worktrees" },
+  worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
   instances: { path: "/instances" },
   sessions: { path: "/sessions" },
   usage: { path: "/usage" },

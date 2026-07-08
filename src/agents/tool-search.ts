@@ -11,11 +11,13 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook,
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -711,6 +713,29 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return true;
 }
 
+/**
+ * Register a catalog owned only by an explicit ref (no session keys), for
+ * headless callers like cron trigger evaluation. Registration internals stay
+ * module-private; this is the single public seam for ref-only catalogs.
+ */
+export function registerHeadlessToolSearchCatalog(params: {
+  catalogRef: ToolSearchCatalogRef;
+  tools: readonly AnyAgentTool[];
+  hookContext?: HookContext;
+}): void {
+  const { catalogRef, tools, hookContext } = params;
+  const entries = tools
+    .filter((tool) => shouldCatalogTool(tool))
+    .map((tool) => {
+      const scopedTool =
+        hookContext && isToolWrappedWithBeforeToolCallHook(tool)
+          ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
+          : tool;
+      return toCatalogEntry(scopedTool, undefined, hookContext);
+    });
+  registerToolSearchCatalog({ catalogRef, entries });
+}
+
 export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
   const nameCounts = new Map<string, number>();
   for (const tool of tools) {
@@ -897,6 +922,7 @@ export function applyToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
 }): {
   tools: AnyAgentTool[];
   compacted: boolean;
@@ -1022,7 +1048,7 @@ export function addClientToolsToToolSearchCatalog(params: {
 }
 
 /** Register catalog entries under run/session keys and optional direct refs. */
-export function registerToolSearchCatalog(params: {
+function registerToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -1131,7 +1157,7 @@ function compactDirectoryDescription(description: string): string {
   if (normalized.length <= 180) {
     return normalized;
   }
-  return `${normalized.slice(0, 177).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, 177).trimEnd()}...`;
 }
 
 function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {

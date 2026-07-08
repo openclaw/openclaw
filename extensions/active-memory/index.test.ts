@@ -61,6 +61,16 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  it("keeps previous-message query context UTF-16 well-formed", () => {
+    const query = testing.buildSearchQuery({
+      latestUserMessage: "why?",
+      recentTurns: [{ role: "user", text: `${"x".repeat(119)}🚀tail` }],
+    });
+
+    expect(query).toBe(`${"x".repeat(119)} why?`);
+    expect(query).not.toContain("\uD83D");
+  });
+
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};

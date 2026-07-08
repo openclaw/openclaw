@@ -182,7 +182,7 @@ const qaEvidenceResultSchema = z
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
 
-export const qaEvidenceSummaryEntrySchema = z
+const qaEvidenceSummaryEntrySchema = z
   .object({
     test: qaEvidenceTestSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
@@ -194,7 +194,7 @@ export const qaEvidenceSummaryEntrySchema = z
   })
   .strict();
 
-export const qaEvidenceSummarySchema = z
+const qaEvidenceSummarySchema = z
   .object({
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
@@ -206,7 +206,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
+type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;

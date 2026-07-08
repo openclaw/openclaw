@@ -67,6 +67,18 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  it("keeps bounded directory descriptions UTF-16 well-formed", () => {
+    const sessionId = "session-utf16-directory";
+    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const target = pluginTool("fake_utf16", `${"x".repeat(176)}🚀tail`);
+    applyToolSchemaDirectoryCatalog({ tools: [searchTool, target], config, sessionId });
+
+    const directory = buildToolSchemaDirectoryPrompt({ sessionId, config });
+
+    expect(directory).toContain(`${"x".repeat(176)}...`);
+    expect(directory).not.toContain("\uD83D");
+  });
   afterEach(() => {
     testing.setToolSearchCodeModeSupportedForTest(undefined);
     testing.setToolSearchMinCodeTimeoutMsForTest(undefined);

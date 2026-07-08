@@ -239,6 +239,27 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("keeps webhook persona usernames on a UTF-16 boundary", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "hello from persona",
+      accountId: "default",
+      threadId: "thread-1",
+      identity: { name: `${"a".repeat(79)}🚀tail` },
+    });
+
+    const options = mockObjectArg(
+      hoisted.sendWebhookMessageDiscordMock,
+      "sendWebhookMessageDiscord",
+      0,
+      1,
+    );
+    expect(options.username).toBe("a".repeat(79));
+  });
+
   it("falls back to bot send for silent delivery on bound threads", async () => {
     mockDiscordBoundThreadManager(hoisted);
 

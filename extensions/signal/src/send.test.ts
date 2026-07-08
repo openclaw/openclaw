@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({ path: "/tmp/image.png", contentType: "image/png" })),
+  vi.fn(async (..._args: unknown[]) => ({
+    path: "/tmp/image.png",
+    contentType: "image/png",
+  })),
 );
 
 vi.mock("./client-adapter.js", () => ({
@@ -16,8 +19,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    resolveOutboundAttachmentFromUrl: (params: unknown) =>
-      resolveOutboundAttachmentFromUrlMock(params),
+    resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>
+      resolveOutboundAttachmentFromUrlMock(...args),
   };
 });
 
@@ -86,14 +89,25 @@ describe("sendMessageSignal receipts", () => {
 
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
+    const maxBytes = 12 * 1024 * 1024;
 
     const result = await sendMessageSignal("group:group-1", "", {
       cfg: SIGNAL_TEST_CFG,
       mediaUrl: "/tmp/image.png",
       mediaLocalRoots: ["/tmp"],
+      maxBytes,
     });
 
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalled();
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
+      "/tmp/image.png",
+      maxBytes,
+      expect.objectContaining({ localRoots: ["/tmp"] }),
+    );
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ maxAttachmentBytes: maxBytes }),
+    );
     expect(result.messageId).toBe("1234567891");
     expect(result.timestamp).toBe(1234567891);
     expect(result.receipt.primaryPlatformMessageId).toBe("1234567891");

@@ -199,10 +199,14 @@ function resolveSignalOutboundSessionRoute(params: {
   target: string;
   resolvedTarget?: { to: string };
 }) {
-  const resolved = resolveSignalOutboundTarget(params.resolvedTarget?.to ?? params.target);
+  const target = params.resolvedTarget?.to ?? params.target;
+  const resolved = resolveSignalOutboundTarget(target);
   if (!resolved) {
     return null;
   }
+  const normalizedTarget = target.replace(/^signal:/i, "").trim();
+  const recipientSessionExact: true | "direct-alias" =
+    resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
   const baseSessionKey = buildSignalBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -212,6 +216,7 @@ function resolveSignalOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact,
     ...resolved,
   };
 }

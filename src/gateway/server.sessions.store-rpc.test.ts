@@ -742,6 +742,31 @@ test("write-scoped operators manage chat organization but not admin session sett
       "agent:main:topic-b",
     ]);
 
+    const unflaggedDeleteDenied = await rpcReq(ws, "sessions.delete", {
+      key: "agent:main:topic-b",
+    });
+    expect(unflaggedDeleteDenied.ok).toBe(false);
+    expect(unflaggedDeleteDenied.error?.message).toContain("missing scope: operator.admin");
+
+    const activeDeleteDenied = await rpcReq(ws, "sessions.delete", {
+      key: "agent:main:topic-a",
+      archivedOnly: true,
+    });
+    expect(activeDeleteDenied.ok).toBe(false);
+    expect(activeDeleteDenied.error?.message).toContain("Archive it first");
+
+    const archivedDeleted = await rpcReq<{ ok: true }>(ws, "sessions.delete", {
+      key: "agent:main:topic-b",
+      archivedOnly: true,
+    });
+    expect(archivedDeleted.ok).toBe(true);
+    const archivedAfterDelete = await rpcReq<{ sessions: Array<{ key: string }> }>(
+      ws,
+      "sessions.list",
+      { archived: true },
+    );
+    expect(archivedAfterDelete.payload?.sessions).toEqual([]);
+
     const adminFieldDenied = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:topic-a",
       sendPolicy: "deny",

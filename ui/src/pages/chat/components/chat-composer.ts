@@ -40,11 +40,9 @@ import {
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderRealtimeTalkInputPicker } from "./chat-realtime-controls.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -66,7 +64,7 @@ const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
-export type ChatComposerProps = {
+type ChatComposerProps = {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -94,11 +92,6 @@ export type ChatComposerProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkInputOpen?: boolean;
-  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
-  realtimeTalkInputDeviceId?: string;
-  realtimeTalkInputLoading?: boolean;
-  realtimeTalkInputError?: string | null;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -108,8 +101,6 @@ export type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkInput?: () => void;
-  onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -904,7 +895,7 @@ function renderSlashMenu(
   `;
 }
 
-export type ChatAttachmentControlsProps = {
+type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
 };
@@ -1753,7 +1744,7 @@ export type ChatRunControlsProps = {
   showSecondary?: boolean;
 };
 
-export function renderChatPrimaryActions(props: ChatRunControlsProps) {
+function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
@@ -2183,7 +2174,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
   const slashMenuListboxId = paneDomId(props.paneId, "slash-menu-listbox");
   const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
-  const talkInputMenuId = paneDomId(props.paneId, "talk-input");
 
   return html`
     ${renderChatQueue({
@@ -2438,27 +2428,6 @@ export function renderChatComposer(props: ChatComposerProps) {
             >
           </div>
           <div class="agent-chat__composer-actions">
-            ${props.onToggleRealtimeTalkInput
-              ? html`
-                  <div class="agent-chat__talk-input-picker">
-                    <openclaw-tooltip .content=${t("chat.composer.microphoneInput")}>
-                      <button
-                        class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkInputOpen
-                          ? "agent-chat__input-btn--open"
-                          : ""}"
-                        @click=${props.onToggleRealtimeTalkInput}
-                        aria-label=${t("chat.composer.microphoneInput")}
-                        aria-controls=${talkInputMenuId}
-                        aria-expanded=${props.realtimeTalkInputOpen ? "true" : "false"}
-                        ?disabled=${!canCompose || props.realtimeTalkActive}
-                      >
-                        ${icons.chevronDown}
-                      </button>
-                    </openclaw-tooltip>
-                    ${renderRealtimeTalkInputPicker(props, talkInputMenuId)}
-                  </div>
-                `
-              : nothing}
             ${renderChatPrimaryActions(runControlsProps)}
           </div>
         </div>

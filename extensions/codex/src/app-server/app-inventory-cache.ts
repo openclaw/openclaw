@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
 /** Default app inventory cache freshness window. */
@@ -360,7 +361,7 @@ function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
     return redacted;
   }
   if (typeof value === "string" && value.length > 500) {
-    return `${value.slice(0, 500)}...`;
+    return `${truncateUtf16Safe(value, 500)}...`;
   }
   if (typeof value === "string") {
     return value;

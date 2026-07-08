@@ -13,39 +13,12 @@ import androidx.room.withTransaction
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import java.io.File
 import java.util.UUID
 
 /** Upper bound of cached session rows per gateway; oldest list positions are evicted on write. */
 internal const val MAX_CACHED_SESSIONS = 50
 
 internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
-
-/**
- * Deletes the cache database and every SQLite-owned companion file. Only safe while no
- * [RoomChatTranscriptCache] is open in this process; used before the node runtime exists.
- */
-internal fun deleteChatTranscriptCacheDatabase(context: Context): Boolean = deleteDatabaseFiles(context, CHAT_TRANSCRIPT_CACHE_DB_NAME)
-
-internal fun deleteDatabaseFiles(
-  context: Context,
-  databaseName: String,
-): Boolean {
-  val databasePath = context.getDatabasePath(databaseName)
-  context.deleteDatabase(databaseName)
-  val fixedFiles =
-    listOf(
-      databasePath,
-      File(databasePath.path + "-journal"),
-      File(databasePath.path + "-shm"),
-      File(databasePath.path + "-wal"),
-    )
-  if (fixedFiles.any(File::exists)) return false
-  val parent = databasePath.parentFile ?: return true
-  val siblings = parent.listFiles() ?: return !parent.exists()
-  val masterJournalPrefix = databasePath.name + "-mj"
-  return siblings.none { file -> file.name.startsWith(masterJournalPrefix) }
-}
 
 /** Upper bound of cached transcript rows per session; only the newest messages are kept. */
 internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
@@ -85,9 +58,6 @@ interface ChatTranscriptCache {
 
   /** Removes every cached transcript row owned by one gateway identity. */
   suspend fun clearGateway(gatewayId: String)
-
-  /** Purges every cached row for all gateways; used when pairing/auth state is reset. */
-  suspend fun clearAll()
 }
 
 @Entity(tableName = "cached_sessions", primaryKeys = ["gatewayId", "sessionKey"])
@@ -146,12 +116,6 @@ internal interface ChatCacheDao {
 
   @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId")
   suspend fun deleteMessages(gatewayId: String)
-
-  @Query("DELETE FROM cached_sessions")
-  suspend fun deleteAllSessions()
-
-  @Query("DELETE FROM cached_messages")
-  suspend fun deleteAllMessages()
 
   @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
   suspend fun deleteSessionRow(
@@ -340,14 +304,6 @@ class RoomChatTranscriptCache internal constructor(
       )
       dao.evictSessionsBeyondKeeping(gateway, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
       dao.evictOrphanedTranscripts(gateway)
-    }
-  }
-
-  override suspend fun clearAll() {
-    val dao = database.dao()
-    database.withTransaction {
-      dao.deleteAllSessions()
-      dao.deleteAllMessages()
     }
   }
 

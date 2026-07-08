@@ -85,6 +85,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
     expect(defaultHeaders["X-Test"]).toBe("model-header");
     expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+    expect(clientOptions.fetch).toEqual(expect.any(Function));
 
     expectFirstStreamCall(deps, model, context);
     const streamOptions = firstStreamOptions(deps);
@@ -211,6 +212,26 @@ describe("createMantleAnthropicStreamFn", () => {
     const streamOptions = firstStreamOptions(deps);
     expect(streamOptions.thinkingEnabled).toBe(true);
     expect(streamOptions.effort).toBe("low");
+  });
+
+  it("disables legacy thinking when the adjusted budget is below 1024", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(
+      model,
+      { messages: [] },
+      { apiKey: "bedrock-bearer-token", reasoning: "low" },
+    );
+
+    expect(firstStreamOptions(deps)).toMatchObject({ maxTokens: 1500, thinkingEnabled: false });
+    expect(firstStreamOptions(deps)).not.toHaveProperty("thinkingBudgetTokens");
   });
 
   it.each([

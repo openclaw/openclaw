@@ -339,6 +339,7 @@ export async function sendMessageSignal(
     baseUrl,
     timeoutMs: opts.timeoutMs,
     apiMode,
+    maxAttachmentBytes: maxBytes,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: { timestamp?: number } | undefined;

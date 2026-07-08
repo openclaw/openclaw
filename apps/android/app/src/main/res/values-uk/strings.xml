@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Підключення до шлюзу</string>
-    <string name="connect_gateway">Підключити шлюз</string>
-    <string name="disconnect">Відключити</string>
     <string name="trust_this_gateway">Довіряти цьому шлюзу?</string>
     <string name="trust_and_continue">Довіряти й продовжити</string>
     <string name="cancel">Скасувати</string>
     <string name="new_chat_in_worktree">Новий чат у worktree</string>
-    <string name="endpoint">Кінцева точка</string>
-    <string name="status">Стан</string>
-    <string name="connected_gateway_ready">Ваш шлюз активний і готовий.</string>
-    <string name="connect_gateway_get_started">Підключіться до свого шлюзу, щоб почати.</string>
-    <string name="copy_report_for_claw">Скопіювати звіт для Claw</string>
-    <string name="advanced_controls">Розширені елементи керування</string>
-    <string name="connection_method">Спосіб підключення</string>
-    <string name="setup_code">Код налаштування</string>
-    <string name="manual">Вручну</string>
-    <string name="paste_setup_code">Вставте код налаштування</string>
-    <string name="host">Хост</string>
-    <string name="use_tls">Використовувати TLS</string>
-    <string name="token_optional">Токен (необов’язково)</string>
-    <string name="password">Пароль</string>
-    <string name="custom_headers_optional">Користувацькі заголовки (необов’язково)</string>
-    <string name="custom_headers_explainer">Надсилається з кожним підключенням до цього gateway, наприклад заголовки токена сервісу Cloudflare Access. Зберігається в зашифрованому вигляді та застосовується під час наступного повторного підключення.</string>
-    <string name="custom_header_value">Значення заголовка</string>
-    <string name="custom_header_reserved">Цей заголовок керується підключенням і не може бути перевизначений.</string>
-    <string name="add_custom_header">Додати заголовок</string>
-    <string name="remove_custom_header">Видалити %1$s</string>
-    <string name="run_onboarding_again">Запустити адаптацію знову</string>
-    <string name="resolved_endpoint">Визначена кінцева точка</string>
     <string name="gateway_trust_first_seen">Перевірте відбиток сертифіката, перш ніж довіряти цьому шлюзу.\n\n%1$s</string>
     <string name="gateway_trust_changed">Сертифікат шлюзу змінився. Продовжуйте, лише якщо ви очікували цю зміну.\n\nСтарий SHA-256:\n%1$s\n\nНовий SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Перемкнути gateway</string>
-    <string name="select_gateway">Виберіть gateway</string>
-    <string name="active_gateway">Активний gateway</string>
 </resources>
