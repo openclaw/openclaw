@@ -349,10 +349,13 @@ class AppSidebar extends LitElement {
     };
   }
 
-  private readonly selectSession = (sessionKey: string) => {
+  private readonly selectSession = (
+    sessionKey: string,
+    options: { focusComposer?: boolean } = {},
+  ) => {
     this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.("chat", {
-      search: searchForSession(sessionKey),
+      search: searchForSession(sessionKey, options),
     });
   };
 
@@ -404,7 +407,7 @@ class AppSidebar extends LitElement {
       ...(worktree ? { worktree: true } : {}),
     });
     if (nextSessionKey) {
-      this.selectSession(nextSessionKey);
+      this.selectSession(nextSessionKey, { focusComposer: true });
     }
   };
 
