@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_pr
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   ensureMatrixCryptoRuntime,
   ensureMatrixSdkInstalled,
@@ -12,6 +12,8 @@ import {
 } from "./deps.js";
 
 const logStub = vi.fn();
+
+type ChildKill = (signal?: NodeJS.Signals | number) => boolean;
 
 async function importDepsWithSpawnMock(
   spawnMock: ReturnType<typeof vi.fn>,
@@ -256,10 +258,10 @@ describe("runFixedCommandWithTimeout", () => {
 
     for (const streamName of ["stdout", "stderr"] as const) {
       let proc: ChildProcessWithoutNullStreams | undefined;
-      let killSpy: ReturnType<typeof vi.spyOn> | undefined;
+      let killSpy: MockInstance<ChildKill> | undefined;
       try {
         const spawnMock = vi.fn(
-          (command: string, args: string[] | undefined, options: SpawnOptions | undefined) => {
+          (command: string, args: string[] | undefined, options: SpawnOptions) => {
             proc = actual.spawn(command, args ?? [], options) as ChildProcessWithoutNullStreams;
             return proc;
           },
