@@ -198,12 +198,21 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = await readProviderJsonResponse<{ owner?: unknown }>(
-              resp,
-              "thread-ownership forwarder conflict",
-              { maxBytes: FORWARDER_CONFLICT_JSON_MAX_BYTES },
-            );
-            const owner = typeof body.owner === "string" ? body.owner : undefined;
+            let owner = "unknown";
+            try {
+              const body = await readProviderJsonResponse<{ owner?: unknown }>(
+                resp,
+                "thread-ownership forwarder conflict",
+                { maxBytes: FORWARDER_CONFLICT_JSON_MAX_BYTES },
+              );
+              if (typeof body.owner === "string" && body.owner) {
+                owner = body.owner;
+              }
+            } catch (err) {
+              api.logger.warn?.(
+                `thread-ownership: conflict body unreadable (${String(err)}), cancelling send`,
+              );
+            }
             api.logger.info?.(
               `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
             );
