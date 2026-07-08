@@ -180,6 +180,24 @@ describe("lobster plugin tool", () => {
     expect(details.status).toBe("ok");
   });
 
+  it("rejects resume with a non-default flow revision but no flowId", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-revision-without-flow-id", {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+        flowExpectedRevision: 1,
+      }),
+    ).rejects.toThrow(/flowId required when using managed TaskFlow resume mode/);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
   it("normalizes numeric string run limits before invoking the runner", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
