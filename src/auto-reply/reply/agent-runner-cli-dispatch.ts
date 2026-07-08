@@ -412,6 +412,13 @@ type RunCliAgentWithLifecycleParams = {
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
+  /**
+   * Stamped before every delivered CLI progress event (assistant, reasoning,
+   * tool, commentary, fast-mode). Callers wire this to the reply operation's
+   * activity evidence; per-callback stamps at call sites drift and a missed
+   * stamp lets stale-takeover reclaim a healthy run.
+   */
+  onActivity?: () => void;
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
@@ -463,10 +470,13 @@ async function runCliAgentWithLifecycleInternal(
       ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
     });
     try {
-      await params.onFastModeAutoProgress?.({
-        text: summary,
-        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
-      });
+      if (params.onFastModeAutoProgress) {
+        params.onActivity?.();
+        await params.onFastModeAutoProgress({
+          text: summary,
+          channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+        });
+      }
     } catch {
       // Progress hints are best-effort; a channel failure must not fail the agent turn.
     }
@@ -518,34 +528,46 @@ async function runCliAgentWithLifecycleInternal(
       },
     });
   }
+  // One activity seam for every delivered CLI event: stamping per-callback at
+  // call sites drifted (a queued-followup callback missed one), which lets
+  // stale-takeover reclaim a run that is visibly producing output.
+  const withActivity = <T>(
+    deliver: ((payload: T) => Promise<void>) | undefined,
+  ): ((payload: T) => Promise<void>) | undefined =>
+    deliver && params.onActivity
+      ? async (payload: T) => {
+          params.onActivity?.();
+          await deliver(payload);
+        }
+      : deliver;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onAssistantText,
+    deliver: withActivity(params.onAssistantText),
   });
   let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: async (payload) => {
+    deliver: withActivity(async (payload: ReasoningTextPayload) => {
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
-    },
+    }),
   });
   const reasoningProgressBridge = createReasoningProgressBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onReasoningProgress,
+    deliver: withActivity(params.onReasoningProgress),
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onToolEvent,
+    deliver: withActivity(params.onToolEvent),
   });
   const commentaryBridge = createCommentaryEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onCommentaryText,
+    deliver: withActivity(params.onCommentaryText),
   });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,

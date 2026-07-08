@@ -2429,8 +2429,8 @@ async function runAgentTurnWithFallbackInternal(
                   emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
+                  onActivity: () => params.replyOperation?.recordActivity(),
                   onAssistantText: async (text) => {
-                    params.replyOperation?.recordActivity();
                     const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
                       return;
@@ -2439,11 +2439,9 @@ async function runAgentTurnWithFallbackInternal(
                   },
                   onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
-                    params.replyOperation?.recordActivity();
                     await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    params.replyOperation?.recordActivity();
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
                       return;
@@ -2462,7 +2460,6 @@ async function runAgentTurnWithFallbackInternal(
                   onCommentaryText:
                     params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
                       ? async (payload) => {
-                          params.replyOperation?.recordActivity();
                           await params.opts?.onItemEvent?.({
                             itemId: payload.itemId,
                             kind: "preamble",
@@ -2471,7 +2468,6 @@ async function runAgentTurnWithFallbackInternal(
                         }
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
-                    params.replyOperation?.recordActivity();
                     await params.opts?.onToolResult?.(payload);
                   },
                   onErrorBeforeLifecycle: async () => {
