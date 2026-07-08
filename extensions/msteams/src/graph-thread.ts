@@ -1,4 +1,5 @@
 // Msteams plugin module implements graph thread behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -18,6 +19,7 @@ export type GraphThreadMessage = {
 // TTL cache for team ID -> group GUID mapping.
 const teamGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const TEAM_GROUP_ID_CACHE_MAX_ENTRIES = 500;
 
 function resolveTeamGroupIdCacheExpiresAt(nowRaw = Date.now()): number | undefined {
   const now = asDateTimestampMs(nowRaw);
@@ -84,6 +86,7 @@ export async function resolveTeamGroupId(
         groupId,
         expiresAt,
       });
+      pruneMapToMaxSize(teamGroupIdCache, TEAM_GROUP_ID_CACHE_MAX_ENTRIES);
     }
 
     return groupId;
