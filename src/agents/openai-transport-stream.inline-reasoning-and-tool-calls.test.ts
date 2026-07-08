@@ -56,6 +56,46 @@ describe("openai transport stream", () => {
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });
 
+  it("recovers same-chunk reasoning content that closes an inline code span", async () => {
+    const model = makeCompletionsModel({
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      provider: "minimax",
+      baseUrl: "https://api.minimax.test/v1",
+    });
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({
+          content: "Visible `",
+          reasoning_content: "code` then ",
+        }),
+        makeCompletionsChunk({
+          content: "<think>private</think>done",
+          reasoning_content: "private",
+        }),
+        makeCompletionsChunk({}, "stop" as const),
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    const visibleText = output.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    const thinkingText = output.content
+      .filter((block): block is { type: "thinking"; thinking: string } => block.type === "thinking")
+      .map((block) => block.thinking)
+      .join("");
+
+    expect(visibleText).toBe("Visible `code` then done");
+    expect(visibleText).not.toContain("private");
+    expect(thinkingText).toBe("private");
+  });
+
   it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",

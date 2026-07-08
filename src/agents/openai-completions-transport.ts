@@ -477,7 +477,9 @@ async function processOpenAICompletionsStream(
       reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() &&
       !reasoningTagTextPartitioner.isInsideReasoning()
     ) {
-      appendTextDelta(reasoningDelta.text);
+      for (const routedDelta of reasoningTagTextPartitioner.pushVisible(reasoningDelta.text)) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
       return;
     }
     appendThinkingDeltaInternal(reasoningDelta);
