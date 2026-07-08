@@ -110,8 +110,11 @@ pickers.
 | `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     |
 | `nvidia/qwen/qwen3.5-397b-a17b`            | Qwen3.5 397B A17B     | 262,144   | 16,384     |
 
-`nvidia/minimaxai/minimax-m2.7` remains available by exact reference for
-existing configurations. New setups should use `nvidia/minimaxai/minimax-m3`.
+The full compatibility catalog also retains these shipped refs for existing
+configurations: `nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`,
+`nvidia/minimaxai/minimax-m2.5`, `nvidia/z-ai/glm5`, and
+`nvidia/minimaxai/minimax-m2.7`. They remain available by exact reference but
+never appear in onboarding or model pickers.
 
 ## Advanced configuration
 

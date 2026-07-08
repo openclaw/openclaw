@@ -50,14 +50,37 @@ const EXPECTED_FEATURED_MODELS = [
   },
 ] as const;
 
-const EXPECTED_BUNDLED_MODELS = [
-  ...EXPECTED_FEATURED_MODELS,
+const EXPECTED_DEPRECATED_MODELS = [
+  {
+    id: "moonshotai/kimi-k2.5",
+    name: "Kimi K2.5",
+    contextWindow: 262_144,
+    maxTokens: 8_192,
+  },
+  {
+    id: "z-ai/glm-5.1",
+    name: "GLM 5.1",
+    contextWindow: 202_752,
+    maxTokens: 8_192,
+  },
+  {
+    id: "minimaxai/minimax-m2.5",
+    name: "MiniMax M2.5",
+    contextWindow: 196_608,
+    maxTokens: 8_192,
+  },
+  { id: "z-ai/glm5", name: "GLM-5", contextWindow: 202_752, maxTokens: 8_192 },
   {
     id: "minimaxai/minimax-m2.7",
     name: "Minimax M2.7",
     contextWindow: 196_608,
     maxTokens: 8_192,
   },
+] as const;
+
+const EXPECTED_BUNDLED_MODELS = [
+  ...EXPECTED_FEATURED_MODELS,
+  ...EXPECTED_DEPRECATED_MODELS,
 ] as const;
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
@@ -118,11 +141,17 @@ describe("nvidia provider catalog", () => {
       id: "nvidia/nemotron-3-super-120b-a12b",
       contextWindow: 1_000_000,
     });
-    expect(manifest.modelCatalog.providers.nvidia.models.at(-1)).toMatchObject({
-      id: "minimaxai/minimax-m2.7",
-      status: "deprecated",
-      replacedBy: "minimaxai/minimax-m3",
-    });
+    expect(
+      manifest.modelCatalog.providers.nvidia.models
+        .filter((model) => "status" in model && model.status === "deprecated")
+        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+    ).toEqual([
+      { id: "moonshotai/kimi-k2.5", replacedBy: "moonshotai/kimi-k2.6" },
+      { id: "z-ai/glm-5.1", replacedBy: "z-ai/glm-5.2" },
+      { id: "minimaxai/minimax-m2.5", replacedBy: "minimaxai/minimax-m3" },
+      { id: "z-ai/glm5", replacedBy: "z-ai/glm-5.2" },
+      { id: "minimaxai/minimax-m2.7", replacedBy: "minimaxai/minimax-m3" },
+    ]);
   });
 
   it("keeps deprecated exact-reference rows out of the selectable catalog", () => {
@@ -137,8 +166,8 @@ describe("nvidia provider catalog", () => {
     const release = mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.1",
-          "model-name": "GLM 5.1",
+          model: "z-ai/glm-5.2",
+          "model-name": "GLM 5.2",
           context: 202752,
           "max-output": 8192,
         },
@@ -154,11 +183,11 @@ describe("nvidia provider catalog", () => {
     const provider = await buildLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
-      "z-ai/glm-5.1",
+      "z-ai/glm-5.2",
       "nvidia/nemotron-3-super-120b-a12b",
     ]);
     expect(provider.models[0]).toMatchObject({
-      name: "GLM 5.1",
+      name: "GLM 5.2",
       contextWindow: 202752,
       maxTokens: 8192,
       compat: { requiresStringContent: true },
@@ -190,8 +219,8 @@ describe("nvidia provider catalog", () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.1",
-          "model-name": "GLM 5.1",
+          model: "z-ai/glm-5.2",
+          "model-name": "GLM 5.2",
           context: 202752,
           "max-output": 8192,
         },
@@ -207,9 +236,34 @@ describe("nvidia provider catalog", () => {
     const provider = await buildSelectableLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
-      "z-ai/glm-5.1",
+      "z-ai/glm-5.2",
       "nvidia/nemotron-3-super-120b-a12b",
     ]);
+  });
+
+  it("keeps every deprecated exact-reference row out of live catalogs", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "minimaxai/minimax-m3",
+          "model-name": "Minimax M3",
+          context: 196608,
+          "max-output": 8192,
+        },
+        ...EXPECTED_DEPRECATED_MODELS.map((model) => ({
+          model: model.id,
+          "model-name": model.name,
+          context: model.contextWindow,
+          "max-output": model.maxTokens,
+        })),
+      ],
+    });
+
+    const live = await buildLiveNvidiaProvider();
+    const selectableLive = await buildSelectableLiveNvidiaProvider();
+
+    expect(live.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
   });
 
   it("maps current featured feed metadata for MiniMax, DeepSeek, and Qwen", async () => {
@@ -321,8 +375,8 @@ describe("nvidia provider catalog", () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.1",
-          "model-name": "GLM 5.1",
+          model: "z-ai/glm-5.2",
+          "model-name": "GLM 5.2",
           context: 202752,
           "max-output": 8192,
         },
@@ -333,7 +387,7 @@ describe("nvidia provider catalog", () => {
     const second = await buildLiveNvidiaProvider();
 
     expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
+    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.2"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 
@@ -351,8 +405,8 @@ describe("nvidia provider catalog", () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.1",
-          "model-name": "GLM 5.1",
+          model: "z-ai/glm-5.2",
+          "model-name": "GLM 5.2",
           context: 202752,
           "max-output": 8192,
         },
@@ -365,7 +419,7 @@ describe("nvidia provider catalog", () => {
     expect(first.models.map((model) => model.id)).toEqual(
       EXPECTED_FEATURED_MODELS.map((model) => model.id),
     );
-    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
+    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.2"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 

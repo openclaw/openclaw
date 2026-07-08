@@ -139,6 +139,82 @@
             }
           },
           {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "Kimi K2.5",
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use moonshotai/kimi-k2.6 for new NVIDIA setups.",
+            "replacedBy": "moonshotai/kimi-k2.6"
+          },
+          {
+            "id": "z-ai/glm-5.1",
+            "name": "GLM 5.1",
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use z-ai/glm-5.2 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.2"
+          },
+          {
+            "id": "minimaxai/minimax-m2.5",
+            "name": "MiniMax M2.5",
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use minimaxai/minimax-m3 for new NVIDIA setups.",
+            "replacedBy": "minimaxai/minimax-m3"
+          },
+          {
+            "id": "z-ai/glm5",
+            "name": "GLM-5",
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use z-ai/glm-5.2 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.2"
+          },
+          {
             "id": "minimaxai/minimax-m2.7",
             "name": "Minimax M2.7",
             "input": ["text"],
