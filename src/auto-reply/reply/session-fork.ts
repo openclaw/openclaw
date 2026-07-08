@@ -5,7 +5,7 @@ import {
   type ParentForkedSessionTranscript,
   type SessionParentForkDecision,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
@@ -15,6 +15,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
  * See #26905.
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+const PARENT_FORK_TOKEN_COUNT_TIMEOUT_MS = 1_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
 export type ParentForkDecision = SessionParentForkDecision;
@@ -108,10 +109,12 @@ export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = await resolveParentForkTokenCount({
-    parentEntry: params.parentEntry,
-    storePath: resolveParentForkStorePath(params),
-  });
+  const parentTokens =
+    resolveFreshSessionTotalTokens(params.parentEntry) ??
+    (await resolveParentForkTokenCountWithTimeout({
+      parentEntry: params.parentEntry,
+      storePath: resolveParentForkStorePath(params),
+    }));
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -201,4 +204,22 @@ async function resolveParentForkTokenCount(params: {
 }): Promise<number | undefined> {
   const runtime = await loadSessionForkRuntime();
   return runtime.resolveParentForkTokenCountRuntime(params);
+}
+
+async function resolveParentForkTokenCountWithTimeout(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<number | undefined> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timeoutId = setTimeout(resolve, PARENT_FORK_TOKEN_COUNT_TIMEOUT_MS);
+  });
+  try {
+    // Availability wins over exact sizing when transcript probing stalls.
+    return await Promise.race([resolveParentForkTokenCount(params), timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }

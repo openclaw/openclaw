@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { forkSessionEntryFromParent } from "./session-fork.js";
+import { forkSessionEntryFromParent, resolveParentForkDecision } from "./session-fork.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   resolveParentForkTokenCountRuntime: vi.fn(),
@@ -13,6 +13,8 @@ const runtimeMocks = vi.hoisted(() => ({
 vi.mock("./session-fork.runtime.js", () => runtimeMocks);
 
 const roots: string[] = [];
+const parentTooLargeMessage =
+  "Parent context is too large to fork (170000/100000 tokens); starting with isolated context instead.";
 
 async function makeRoot(prefix: string): Promise<string> {
   // realpath first: macOS tmpdir is a /var -> /private/var symlink and the
@@ -23,8 +25,68 @@ async function makeRoot(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   runtimeMocks.resolveParentForkTokenCountRuntime.mockReset();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+describe("resolveParentForkDecision", () => {
+  it("uses fresh parent token counts without transcript probing", async () => {
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockReturnValue(new Promise(() => {}));
+
+    await expect(
+      resolveParentForkDecision({
+        parentEntry: {
+          sessionId: "parent-session",
+          updatedAt: 1,
+          totalTokens: 170_000,
+          totalTokensFresh: true,
+        },
+        storePath: path.join(os.tmpdir(), "sessions.json"),
+      }),
+    ).resolves.toEqual({
+      status: "skip",
+      reason: "parent-too-large",
+      maxTokens: 100_000,
+      parentTokens: 170_000,
+      message: parentTooLargeMessage,
+    });
+    expect(runtimeMocks.resolveParentForkTokenCountRuntime).not.toHaveBeenCalled();
+  });
+
+  it("continues with a fork decision when parent token probing stalls", async () => {
+    vi.useFakeTimers();
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockReturnValue(new Promise(() => {}));
+
+    const decision = resolveParentForkDecision({
+      parentEntry: { sessionId: "parent-session", updatedAt: 1 },
+      storePath: path.join(os.tmpdir(), "sessions.json"),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(decision).resolves.toEqual({
+      status: "fork",
+      maxTokens: 100_000,
+    });
+  });
+
+  it("still skips quickly resolved oversized parent sessions", async () => {
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockResolvedValue(170_000);
+
+    await expect(
+      resolveParentForkDecision({
+        parentEntry: { sessionId: "parent-session", updatedAt: 1 },
+        storePath: path.join(os.tmpdir(), "sessions.json"),
+      }),
+    ).resolves.toEqual({
+      status: "skip",
+      reason: "parent-too-large",
+      maxTokens: 100_000,
+      parentTokens: 170_000,
+      message: parentTooLargeMessage,
+    });
+  });
 });
 
 describe("forkSessionEntryFromParent", () => {
