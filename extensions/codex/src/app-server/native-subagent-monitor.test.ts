@@ -157,13 +157,14 @@ async function notifyChildStarted(
   parentThreadId = "parent-thread",
   childThreadId = "child-thread",
   agentPath = childThreadId,
+  options: { directParentField?: boolean } = {},
 ): Promise<CodexServerNotification> {
   const notification: CodexServerNotification = {
     method: "thread/started",
     params: {
       thread: {
         id: childThreadId,
-        parentThreadId,
+        ...(options.directParentField === false ? {} : { parentThreadId }),
         preview: "inspect the repo",
         source: {
           subAgent: {
@@ -253,6 +254,7 @@ function threadRead(
     resultPhase?: "commentary" | "final_answer";
     trailingCommentary?: string;
     threadStatus?: "active" | "idle" | "notLoaded" | "systemError";
+    directParentField?: boolean;
   } = {},
 ): CodexThreadReadResponse {
   const childThreadId = params.childThreadId ?? "child-thread";
@@ -283,7 +285,7 @@ function threadRead(
   return {
     thread: {
       id: childThreadId,
-      parentThreadId,
+      ...(params.directParentField === false ? {} : { parentThreadId }),
       source: {
         subAgent: {
           thread_spawn: { parent_thread_id: parentThreadId, depth: 1 },
@@ -1164,7 +1166,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     registerParent(monitor);
-    await notifyChildStarted(client, "parent-thread", "child-thread", "1.2");
+    await notifyChildStarted(client, "parent-thread", "child-thread", "1.2", {
+      directParentField: false,
+    });
 
     await client.notify(nativeCompletionNotification({ agentPath: "1.2" }));
 
@@ -1417,7 +1421,11 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     client.setThreadRead(
       "owned-child",
-      threadRead({ childThreadId: "owned-child", result: "owned result" }),
+      threadRead({
+        childThreadId: "owned-child",
+        result: "owned result",
+        directParentField: false,
+      }),
     );
     client.setThreadRead(
       "foreign-child",
