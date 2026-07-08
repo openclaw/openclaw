@@ -219,10 +219,12 @@ async function callGatewayMessageAction<T>(params: {
   const isTrustedBackendBridge =
     gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
     gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const requesterAccountId = normalizeOptionalString(params.actionParams.requesterAccountId);
+  const requesterSenderId = normalizeOptionalString(params.actionParams.requesterSenderId);
   const carriesTrustedRequester =
     isTrustedBackendBridge &&
-    (params.actionParams.requesterAccountId !== undefined ||
-      params.actionParams.requesterSenderId !== undefined ||
+    (requesterAccountId !== undefined ||
+      requesterSenderId !== undefined ||
       params.actionParams.senderIsOwner !== undefined);
   if (!carriesTrustedRequester) {
     return await callGatewayLeastPrivilege<T>(callParams);

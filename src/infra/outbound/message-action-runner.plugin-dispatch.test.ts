@@ -674,6 +674,71 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("keeps blank backend requester provenance least-privileged", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat blank requester test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterSenderId: "   ",
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      expectRecordFields(
+        gatewayCall,
+        {
+          method: "message.action",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        "gateway call",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
+    });
+
     it("keeps CLI gateway-executed actions least-privileged when they carry sender ownership", async () => {
       const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
