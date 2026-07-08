@@ -1055,6 +1055,10 @@ export async function launchOpenClawChrome(
       stderrChunks.push(chunk);
     };
     proc.stderr?.on("data", onStderr);
+    // Suppress unhandled stream errors so a broken stderr pipe during Chrome
+    // launch does not crash the runtime.  The process exit / CDP readiness
+    // paths already report the real launch outcome.
+    proc.stderr?.on("error", () => {});
 
     try {
       const readyDeadline =
