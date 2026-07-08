@@ -12,6 +12,7 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { NON_DELIVERABLE_TERMINAL_TURN_REASON } from "../../agents/embedded-agent-runner/run/attempt-trajectory-status.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -1500,10 +1501,21 @@ export function createFollowupRunner(params: {
       }
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        // Allow non-deliverable terminal turn fallback to reach the channel
+        // even in message_tool_only mode — this is an error notification, not
+        // automatic source delivery. See: https://github.com/openclaw/openclaw/issues/102113
+        const isNonDeliverableTerminalError =
+          runResult.meta?.terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON &&
+          deliveryPayloads.some((p) => p.isError === true);
+        if (!isNonDeliverableTerminalError) {
+          logVerbose(
+            "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
+          );
+          return;
+        }
         logVerbose(
-          "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
+          "followup queue: allowing non-deliverable terminal turn fallback delivery in message_tool_only mode",
         );
-        return;
       }
 
       await sendFollowupPayloads(
