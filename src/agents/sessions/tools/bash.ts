@@ -82,6 +82,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // Stream stdout and stderr.
         child.stdout?.on("data", onData);
         child.stderr?.on("data", onData);
+        // Stream read errors on stdout/stderr are non-fatal; the child process
+        // error/exit/close handlers in waitForChildProcess report the real outcome.
+        child.stdout?.on("error", () => {});
+        child.stderr?.on("error", () => {});
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
