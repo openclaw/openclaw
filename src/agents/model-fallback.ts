@@ -713,14 +713,6 @@ function isLiveSessionModelSwitchTargetInCandidates(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
 }): boolean {
-  // Auth-profile-only switches must reach the outer retry loop so
-  // err.authProfileId and err.authProfileIdSource are applied via
-  // applyLiveModelSwitchToRun / normalizeAgentCommandModelRef.
-  // Treating them as an in-chain stale switch would wrap them as
-  // FailoverError and discard the credential change.
-  if (params.error.authProfileId || params.error.authProfileIdSource) {
-    return false;
-  }
   const targetKey = modelKey(params.error.provider, params.error.model);
   return params.candidates.some(
     (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
@@ -1838,6 +1830,15 @@ async function runWithModelFallbackInternal<T>(
       // known failover so the fallback chain can advance to configured
       // fallback candidates rather than retrying a conflicting model.
       if (err instanceof LiveSessionModelSwitchError) {
+        // Auth-profile changes (set, change, or clear) must always reach
+        // the outer retry loop so err.authProfileId / authProfileIdSource
+        // are applied by applyLiveModelSwitchToRun.  This check runs before
+        // the redirect/candidate checks because a later-candidate match
+        // should not suppress a credential change.
+        if (err.authProfileId || err.authProfileIdSource) {
+          throw err;
+        }
+
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
           candidates,
