@@ -389,6 +389,12 @@ export const icons = {
       <path d="M15 3h6v6M10 14L21 3" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  arrowUpRight: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M7 7h10v10" />
+      <path d="M7 17 17 7" />
+    </svg>
+  `,
   send: html`
     <svg viewBox="0 0 24 24">
       <path d="m22 2-7 20-4-9-9-4Z" />

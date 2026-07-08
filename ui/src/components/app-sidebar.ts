@@ -23,7 +23,6 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -93,6 +92,9 @@ type SidebarSessionGroupMenuState = {
 type SidebarSessionSortMode = "created" | "updated";
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_FOOTER_MENU_WIDTH = 232;
+const SIDEBAR_FOOTER_MENU_MAX_HEIGHT = 140;
+const SIDEBAR_FOOTER_MENU_VERTICAL_OFFSET = 116;
 
 // Command palette shortcut hint (see command-palette.ts keydown handling).
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
@@ -111,6 +113,16 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+}>;
+
+const SIDEBAR_FOOTER_THEME_OPTIONS = [
+  { mode: "system", labelKey: "common.system", icon: "monitor" },
+  { mode: "light", labelKey: "common.light", icon: "sun" },
+  { mode: "dark", labelKey: "common.dark", icon: "moon" },
+] as const satisfies ReadonlyArray<{
+  mode: ThemeMode;
+  labelKey: "common.system" | "common.light" | "common.dark";
+  icon: IconName;
 }>;
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -159,6 +171,7 @@ class AppSidebar extends LitElement {
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
+  @state() private footerMoreMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
@@ -172,6 +185,7 @@ class AppSidebar extends LitElement {
   private sessionMenuTrigger: HTMLElement | null = null;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
+  private footerMoreMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -191,6 +205,7 @@ class AppSidebar extends LitElement {
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeFooterMoreMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
     this.stopSessionCreatedSubscription?.();
@@ -514,6 +529,7 @@ class AppSidebar extends LitElement {
     this.closeCustomizeMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeFooterMoreMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionGroupSubmenuOpen = false;
     const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
@@ -548,6 +564,7 @@ class AppSidebar extends LitElement {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionSortMenu();
+    this.closeFooterMoreMenu();
     this.sessionGroupMenuTrigger = trigger;
     this.sessionGroupMenu = {
       group,
@@ -580,6 +597,7 @@ class AppSidebar extends LitElement {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
+    this.closeFooterMoreMenu();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -596,6 +614,34 @@ class AppSidebar extends LitElement {
     const trigger = this.sessionSortMenuTrigger;
     this.sessionSortMenuTrigger = null;
     this.sessionSortMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private openFooterMoreMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.footerMoreMenuTrigger = trigger;
+    this.footerMoreMenuPosition = {
+      x: Math.max(8, Math.min(x, window.innerWidth - SIDEBAR_FOOTER_MENU_WIDTH - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - SIDEBAR_FOOTER_MENU_MAX_HEIGHT - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-footer-menu__item")?.focus();
+    });
+  }
+
+  private closeFooterMoreMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.footerMoreMenuTrigger;
+    this.footerMoreMenuTrigger = null;
+    this.footerMoreMenuPosition = null;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -725,15 +771,19 @@ class AppSidebar extends LitElement {
   private readonly handleDocumentPointerDown = (event: PointerEvent) => {
     const path = event.composedPath();
     const menu = this.querySelector(
-      ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu, .sidebar-footer-menu",
     );
     if (menu && path.includes(menu)) {
+      return;
+    }
+    if (this.footerMoreMenuTrigger && path.includes(this.footerMoreMenuTrigger)) {
       return;
     }
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeFooterMoreMenu();
   };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -743,6 +793,7 @@ class AppSidebar extends LitElement {
       this.closeSessionMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      this.closeFooterMoreMenu({ restoreFocus: true });
     }
   };
 
@@ -801,6 +852,73 @@ class AppSidebar extends LitElement {
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </button>
+      </div>
+    `;
+  }
+
+  private renderFooterMoreMenu() {
+    const position = this.footerMoreMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-session-menu sidebar-footer-menu"
+        role="group"
+        aria-label=${t("nav.more")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        <div class="sidebar-footer-menu__row">
+          <span class="sidebar-footer-menu__label">${t("common.theme")}</span>
+          <div class="sidebar-footer-theme-toggle" role="group" aria-label=${t("common.colorMode")}>
+            ${SIDEBAR_FOOTER_THEME_OPTIONS.map((option) => {
+              const label = t(option.labelKey);
+              const active = option.mode === this.themeMode;
+              const tooltip = t("common.colorModeOption", { mode: label });
+              return html`
+                <openclaw-tooltip .content=${tooltip}>
+                  <button
+                    type="button"
+                    class="sidebar-footer-theme-toggle__button ${active
+                      ? "sidebar-footer-theme-toggle__button--active"
+                      : ""}"
+                    aria-label=${tooltip}
+                    aria-pressed=${String(active)}
+                    @click=${(event: Event) => {
+                      if (active) {
+                        return;
+                      }
+                      this.dispatchEvent(
+                        new CustomEvent("theme-change", {
+                          detail: {
+                            mode: option.mode,
+                            element: event.currentTarget as HTMLElement,
+                          },
+                          bubbles: true,
+                          composed: true,
+                        }),
+                      );
+                    }}
+                  >
+                    ${icons[option.icon]}
+                  </button>
+                </openclaw-tooltip>
+              `;
+            })}
+          </div>
+        </div>
+        <a
+          class="sidebar-session-menu__item sidebar-footer-menu__item sidebar-footer-menu__link"
+          href="https://docs.openclaw.ai"
+          target=${EXTERNAL_LINK_TARGET}
+          rel=${buildExternalLinkRel()}
+          @click=${() => this.closeFooterMoreMenu()}
+        >
+          <span class="sidebar-footer-menu__label">${t("common.docs")}</span>
+          <span class="sidebar-footer-menu__action-icon" aria-hidden="true">
+            ${icons.arrowUpRight}
+          </span>
+        </a>
       </div>
     `;
   }
@@ -1648,6 +1766,29 @@ class AppSidebar extends LitElement {
                 ></span>
               </openclaw-tooltip>
               <span class="sidebar-footer-bar__spacer"></span>
+              <openclaw-tooltip .content=${t("nav.more")}>
+                <button
+                  class="sidebar-footer-icon sidebar-footer-more"
+                  type="button"
+                  aria-label=${t("nav.more")}
+                  aria-expanded=${String(this.footerMoreMenuPosition !== null)}
+                  @click=${(event: MouseEvent) => {
+                    const trigger = event.currentTarget as HTMLElement;
+                    if (this.footerMoreMenuPosition) {
+                      this.closeFooterMoreMenu({ restoreFocus: true });
+                      return;
+                    }
+                    const rect = trigger.getBoundingClientRect();
+                    this.openFooterMoreMenu(
+                      rect.right - SIDEBAR_FOOTER_MENU_WIDTH,
+                      rect.top - SIDEBAR_FOOTER_MENU_VERTICAL_OFFSET,
+                      trigger,
+                    );
+                  }}
+                >
+                  ${icons.moreHorizontal}
+                </button>
+              </openclaw-tooltip>
               <openclaw-tooltip .content=${titleForRoute("config")}>
                 <a
                   href=${pathForRoute("config", this.basePath)}
@@ -1671,19 +1812,6 @@ class AppSidebar extends LitElement {
                 </a>
               </openclaw-tooltip>
               <openclaw-tooltip
-                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
-                <a
-                  class="sidebar-footer-icon"
-                  href="https://docs.openclaw.ai"
-                  target=${EXTERNAL_LINK_TARGET}
-                  rel=${buildExternalLinkRel()}
-                  aria-label=${t("common.docs")}
-                >
-                  ${icons.book}
-                </a>
-              </openclaw-tooltip>
-              <openclaw-tooltip
                 .content=${this.canPairDevice
                   ? t("nodes.pairing.button")
                   : t("nodes.pairing.adminRequired")}
@@ -1698,14 +1826,11 @@ class AppSidebar extends LitElement {
                   ${icons.smartphone}
                 </button>
               </openclaw-tooltip>
-              <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-              </span>
             </div>
           </div>
         </div>
         ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
-        ${this.renderSessionSortMenu()}
+        ${this.renderSessionSortMenu()} ${this.renderFooterMoreMenu()}
       </aside>
     `;
   }
