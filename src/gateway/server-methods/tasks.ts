@@ -13,7 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { getTaskById, selectTaskRecords } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -171,7 +171,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    const filtered = listTaskRecords().filter((task) => {
+    const filtered = selectTaskRecords((task) => {
       if (statusFilter && !statusFilter.has(task.status)) {
         return false;
       }

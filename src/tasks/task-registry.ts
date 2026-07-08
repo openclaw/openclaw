@@ -2211,6 +2211,27 @@ export function listTaskRecords(): TaskRecord[] {
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
+/**
+ * Predicate-first task listing that applies the filter before cloning and
+ * sorting. For gateway RPC handlers that query a subset of tasks (status,
+ * agent, session), this avoids the O(n log n) cost of materializing every
+ * record when only a few match.
+ *
+ * The sort order and return shape are identical to listTaskRecords().
+ */
+export function selectTaskRecords(predicate: (task: TaskRecord) => boolean): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const matched: Array<TaskRecord & { insertionIndex: number }> = [];
+  let insertionIndex = 0;
+  for (const task of tasks.values()) {
+    if (predicate(task)) {
+      matched.push(Object.assign({}, cloneTaskRecord(task), { insertionIndex }));
+    }
+    insertionIndex++;
+  }
+  return matched.toSorted(compareTasksNewestFirst).map(({ insertionIndex: _, ...task }) => task);
+}
+
 export function hasActiveTaskForChildSessionKey(params: {
   sessionKey: string;
   excludeTaskId?: string;

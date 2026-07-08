@@ -23,6 +23,7 @@ export {
   resetTaskRegistryDeliveryRuntimeForTests,
   resolveTaskForLookupToken,
   resetTaskRegistryForTests,
+  selectTaskRecords,
   isParentFlowLinkError,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
