@@ -996,9 +996,12 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
-      await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      await notifyTerminalCompaction("skipped");
+      logVerbose(
+        `preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason} — ` +
+          `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
+      );
+      return entry ?? params.sessionEntry;
     }
 
     if (!result.compacted) {
@@ -1008,9 +1011,12 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
-      await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      await notifyTerminalCompaction("skipped");
+      logVerbose(
+        `preflightCompaction incomplete: sessionKey=${params.sessionKey} reason=${reason} — ` +
+          `degrading gracefully, compaction is a guardrail not a hard dependency (#100778)`,
+      );
+      return entry ?? params.sessionEntry;
     }
 
     await deps.incrementCompactionCount({
