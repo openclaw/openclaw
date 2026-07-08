@@ -158,7 +158,9 @@ function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
   const texts = [...params.texts];
   return {
     confirm: vi.fn(async () => confirms.shift() ?? true),
-    text: vi.fn(async () => texts.shift() ?? ""),
+    text: vi.fn<(textParams: { sensitive?: boolean }) => Promise<string>>(
+      async () => texts.shift() ?? "",
+    ),
   };
 }
 
