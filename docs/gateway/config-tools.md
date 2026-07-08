@@ -455,21 +455,28 @@ Controls inline attachment support for `sessions_spawn`.
 
 ### `tools.experimental`
 
-Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
+Experimental built-in tool flags. Keep these off by default and enable only when intentionally testing a preview surface — the exception is `planTool`, which is default-on (a kill-switch).
 
 ```json5
 {
   tools: {
     experimental: {
-      planTool: true, // enable experimental update_plan
+      planTool: true, // default-on kill-switch for update_plan; set false to remove
+      goalDriver: {
+        enabled: false, // autonomous goal continuation (default off)
+      },
     },
   },
 }
 ```
 
-- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
-- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- `planTool`: kill-switch for the structured `update_plan` tool. Default-on for all models (Codex-parity plan mode); set `false` to remove it, or `true` to force-enable where a policy would otherwise drop it.
+- `goalDriver`: autonomous goal continuation driver. When enabled, a session carrying an active goal is pursued unattended — the driver starts a fresh turn whenever the session goes idle, until the goal is completed, blocked, paused, or a budget/no-progress ceiling is reached. It only enqueues a steering prompt and wakes a turn; it never bypasses exec or approval gates. Experimental; default off.
+  - `goalDriver.enabled`: enable the driver (default: `false`).
+  - `goalDriver.debounceMs`: idle debounce in milliseconds after a turn completes before a continuation may fire (default: `20000`). Bounds the minimum spacing between autonomous continuations.
+  - `goalDriver.jitterMs`: extra random delay in `[0, jitterMs)` milliseconds added to each arm so many idle sessions do not all fire on the same tick (default: `5000`).
+  - `goalDriver.maxNoProgressContinuations`: consecutive driver-fired continuations with no intervening real turn before the goal auto-pauses as stuck (default: `3`). A real inbound turn resets the counter.
+- When `planTool` is enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
 ### `agents.defaults.subagents`
 
