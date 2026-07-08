@@ -1285,6 +1285,34 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  it("does not bypass terminal delivery backoff when the parent registers again", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion
+        .mockResolvedValueOnce({ delivered: false, path: "direct", error: "pending" })
+        .mockResolvedValueOnce({ delivered: true, path: "direct" });
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+      });
+      registerParent(monitor);
+      await notifyChildStarted(client);
+      await client.notify(nativeCompletionNotification());
+
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+      registerParent(monitor);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps one terminal delivery owner across physical client replacement", async () => {
     vi.useFakeTimers();
     try {
