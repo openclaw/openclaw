@@ -2772,7 +2772,7 @@ export function renderWorkboard(props: WorkboardProps) {
             ${boardOptions.length > 1
               ? renderWorkboardSelect({
                   value: state.boardFilter,
-                  options: boardOptions.map((o) => ({ ...o, value: o.value })),
+                  options: boardOptions as WorkboardSelectOption[],
                   label: t("workboard.boardFilter"),
                   onChange: (value) => {
                     state.boardFilter = value;
