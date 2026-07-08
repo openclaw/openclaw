@@ -2,6 +2,7 @@
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
 import { CHECK_IDS } from "../metadata.js";
+import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
 export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
@@ -15,6 +16,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(
         await evaluatePolicy(ctx),
+        CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+      );
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
         CHECK_IDS.policyAgentsWorkspaceAccessDenied,
       );
     },
@@ -39,6 +47,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsProfileUnapproved);
     },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsProfileUnapproved,
+      );
+    },
   };
   const policyToolsFsWorkspaceOnlyRequiredCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
@@ -48,6 +63,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(
         await evaluatePolicy(ctx),
+        CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
+      );
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
         CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
       );
     },
@@ -63,6 +85,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
         CHECK_IDS.policyToolsExecSecurityUnapproved,
       );
     },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsExecSecurityUnapproved,
+      );
+    },
   };
   const policyToolsExecAskUnapprovedCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsExecAskUnapproved,
@@ -72,6 +101,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsExecAskUnapproved);
     },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsExecAskUnapproved,
+      );
+    },
   };
   const policyToolsExecHostUnapprovedCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsExecHostUnapproved,
@@ -80,6 +116,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsExecHostUnapproved);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsExecHostUnapproved,
+      );
     },
   };
   const policyToolsElevatedEnabledCheck: HealthCheck = {
@@ -102,6 +145,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowMissing);
     },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsAlsoAllowMissing,
+      );
+    },
   };
   const policyToolsAlsoAllowUnexpectedCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsAlsoAllowUnexpected,
@@ -110,6 +160,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowUnexpected);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsAlsoAllowUnexpected,
+      );
     },
   };
   const policyToolsRequiredDenyMissingCheck: HealthCheck = {

@@ -975,6 +975,20 @@ more than the scoped policy target. Gateway HTTP URL-fetch allowlist findings
 remain manual because automatic repair cannot choose the correct endpoint URL
 allowlist values.
 
+Gateway bind and node-command findings stay review-required. When
+`policy/gateway-non-loopback-bind` or `policy/gateway-node-command-denied`
+can be mapped to a config path, `doctor --fix` reports the proposed
+`gateway.bind` or `gateway.nodes.denyCommands` change as skipped preview
+guidance. It does not apply the change, and the finding does not count as
+repaired until an operator reviews and updates config or policy.
+
+`tools.alsoAllow` findings also stay review-required. For
+`policy/tools-also-allow-missing` and
+`policy/tools-also-allow-unexpected`, `doctor --fix` can preview the exact
+global or agent-scoped `tools.alsoAllow` entry it would add or remove after
+review. It leaves config unchanged because `alsoAllow` changes can widen or
+remove explicit tool permissions.
+
 ```jsonc
 {
   "plugins": {
