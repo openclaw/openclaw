@@ -1326,6 +1326,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleAgentEvent,
     handleBtwEvent,
     handleSessionsChangedEvent,
+    handleSessionMessageEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
@@ -1562,6 +1563,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     if (evt.event === "sessions.changed") {
       handleSessionsChangedEvent(evt.payload);
+    }
+    if (evt.event === "session.message") {
+      handleSessionMessageEvent(evt.payload);
     }
   };
 

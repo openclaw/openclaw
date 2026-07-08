@@ -7,6 +7,7 @@ import type {
   BtwEvent,
   ChatEvent,
   SessionChangedEvent,
+  SessionMessageEvent,
   TuiHistoryLoadResult,
   TuiStateAccess,
 } from "./tui-types.js";
@@ -1076,6 +1077,189 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.currentSessionId).not.toBe("session-other-agent");
     expect(loadHistory).not.toHaveBeenCalled();
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("reloads history when the current session receives a session.message event", () => {
+    const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        currentSessionId: "session-before",
+        sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+      },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      sessionId: "session-after",
+      updatedAt: 200,
+    } satisfies SessionMessageEvent);
+
+    expect(state.currentSessionId).toBe("session-after");
+    expect(state.sessionInfo.updatedAt).toBe(200);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces overlapping session.message history reloads", async () => {
+    let resolveFirstHistory!: (result: TuiHistoryLoadResult) => void;
+    const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+      },
+    });
+    const firstHistory = new Promise<TuiHistoryLoadResult>((resolve) => {
+      resolveFirstHistory = resolve;
+    });
+    let historyCalls = 0;
+    loadHistory.mockImplementation(() => {
+      historyCalls += 1;
+      return historyCalls === 1
+        ? firstHistory
+        : Promise.resolve({ loaded: true, inFlightRunId: null });
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      updatedAt: 200,
+    } satisfies SessionMessageEvent);
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      updatedAt: 300,
+    } satisfies SessionMessageEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    resolveFirstHistory({ loaded: true, inFlightRunId: null });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads history for selected global messages from the selected agent", () => {
+    const { loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        activeChatRunId: null,
+        currentAgentId: "work",
+        currentSessionKey: "global",
+        sessionScope: "global",
+      },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: "global",
+      agentId: "work",
+    } satisfies SessionMessageEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores selected global messages from other agents", () => {
+    const { loadHistory, tui, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+        sessionScope: "global",
+      },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: "global",
+      agentId: "main",
+    } satisfies SessionMessageEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores messages for another selected session", () => {
+    const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        currentAgentId: "work",
+        currentSessionId: "session-before",
+        currentSessionKey: "agent:work:main",
+        sessionScope: "per-sender",
+        sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+      },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: "agent:work:other",
+      agentId: "work",
+      sessionId: "other-session",
+      updatedAt: 200,
+    } satisfies SessionMessageEvent);
+
+    expect(state.currentSessionId).toBe("session-before");
+    expect(state.sessionInfo.updatedAt).toBe(100);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("waits for terminal persistence before refreshing after a local final", () => {
+    const {
+      state,
+      chatLog,
+      loadHistory,
+      handleChatEvent,
+      handleSessionsChangedEvent,
+      handleSessionMessageEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: "run-active" },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+    } satisfies SessionMessageEvent);
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-active");
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      runId: "run-active",
+      phase: "end",
+    } satisfies SessionChangedEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes after a local final when persistence arrived first", () => {
+    const {
+      state,
+      chatLog,
+      loadHistory,
+      handleChatEvent,
+      handleSessionsChangedEvent,
+      handleSessionMessageEvent,
+    } = createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+    } satisfies SessionMessageEvent);
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      runId: "run-active",
+      phase: "end",
+    } satisfies SessionChangedEvent);
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-active");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it("accepts tool events after chat final for the same run", () => {
@@ -2267,7 +2451,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
-    const loadHistory = vi.fn();
+    const loadHistory = vi.fn(async () => ({ loaded: true as const, inFlightRunId: null }));
     const localRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
       localRunIds.add(runId);
