@@ -14,6 +14,7 @@ import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 type PdfInput = {
@@ -43,9 +44,16 @@ type NativePdfJsonRequest = {
 };
 
 async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
+  const headers = new Headers(params.headers);
+  for (const [name, value] of headers.entries()) {
+    headers.set(
+      name,
+      unwrapSecretSentinelsForProviderEgress(value, `${params.failureLabel} header handoff`),
+    );
+  }
   const { response, release } = await postJsonRequest({
     url: params.url,
-    headers: params.headers,
+    headers,
     body: params.body,
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
     fetchFn: fetch,

@@ -149,6 +149,7 @@ describe("renderWorkboard", () => {
     const request = vi.fn(async () => ({ card: state.cards[0] }));
     state.loaded = true;
     state.dispatching = true;
+    state.detailCardId = "card-1";
     state.cards = [
       {
         id: "card-1",
@@ -183,6 +184,15 @@ describe("renderWorkboard", () => {
     expect(buttonByLabel(container, "Delete card")?.disabled).toBe(true);
     expect(
       container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+    ).toBe(true);
+    const detailActions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(detailActions).not.toBeNull();
+    expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
+    expect(
+      detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
     ).toBe(true);
     expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
       "false",
@@ -1241,6 +1251,69 @@ describe("renderWorkboard", () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("mirrors compact card actions in the detail drawer", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:detail-parity";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Detail parity",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const container = document.createElement("div");
+    const onOpenSession = vi.fn();
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: sessionKey,
+            kind: "direct",
+            displayName: "Detail parity session",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+        onOpenSession,
+      }),
+      container,
+    );
+
+    const actions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(actions).not.toBeNull();
+    expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
+
+    const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Detail parity");
+    expect([...moveSelect!.options].map((option) => option.textContent?.trim())).toContain(
+      "Review",
+    );
+
+    buttonByLabel(actions!, "Edit card")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe("card-1");
   });
 
   it("keeps focus inside the card modal and restores focus on Escape", async () => {
