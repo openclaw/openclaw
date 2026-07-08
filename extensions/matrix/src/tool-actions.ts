@@ -318,23 +318,34 @@ export async function handleMatrixAction(
       throw new Error("Matrix pins are disabled.");
     }
     const roomId = readRoomId(params);
-    if (action === "pinMessage") {
-      const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await pinMatrixMessage(roomId, messageId, clientOpts);
-      return jsonResult({ ok: true, pinned: result.pinned });
-    }
-    if (action === "unpinMessage") {
-      const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await unpinMatrixMessage(roomId, messageId, clientOpts);
-      return jsonResult({ ok: true, pinned: result.pinned });
-    }
-    const result = await withReadTarget(roomId, async (target) => {
-      return await listMatrixPins(target.roomId, {
+    const request =
+      action === "pinMessage"
+        ? {
+            kind: "pin" as const,
+            messageId: readStringParam(params, "messageId", { required: true }),
+          }
+        : action === "unpinMessage"
+          ? {
+              kind: "unpin" as const,
+              messageId: readStringParam(params, "messageId", { required: true }),
+            }
+          : { kind: "list" as const };
+    return await withReadTarget(roomId, async (target) => {
+      const actionOpts = {
         ...clientOpts,
         client: target.client,
-      });
+      };
+      if (request.kind === "pin") {
+        const result = await pinMatrixMessage(target.roomId, request.messageId, actionOpts);
+        return jsonResult({ ok: true, pinned: result.pinned });
+      }
+      if (request.kind === "unpin") {
+        const result = await unpinMatrixMessage(target.roomId, request.messageId, actionOpts);
+        return jsonResult({ ok: true, pinned: result.pinned });
+      }
+      const result = await listMatrixPins(target.roomId, actionOpts);
+      return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
     });
-    return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
   }
 
   if (profileActions.has(action)) {

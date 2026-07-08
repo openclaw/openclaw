@@ -19,6 +19,7 @@ import { createMatrixRoomInfoResolver } from "./monitor/room-info.js";
 import { resolveMatrixRoomConfig } from "./monitor/rooms.js";
 import type { MatrixClient } from "./sdk.js";
 import { resolveMatrixRoomId } from "./send/targets.js";
+import { normalizeMatrixResolvableTarget } from "./target-ids.js";
 
 export type MatrixReadContext = {
   accountId?: string | null;
@@ -70,6 +71,37 @@ type MatrixRoomClassification =
   | { kind: "group" }
   | { kind: "unknown" };
 
+function resolveMatrixReadRoomPolicy(params: {
+  account: ReturnType<typeof resolveMatrixAccount>;
+  baseConfig: ReturnType<typeof resolveMatrixBaseConfig>;
+  roomId: string;
+  aliases: string[];
+}) {
+  const configuredRooms = params.account.config.groups ?? params.account.config.rooms;
+  const room = resolveMatrixRoomConfig({
+    rooms: configuredRooms,
+    roomId: params.roomId,
+    aliases: params.aliases,
+  });
+  const baseRoom = resolveMatrixRoomConfig({
+    rooms: params.baseConfig.groups ?? params.baseConfig.rooms,
+    roomId: params.roomId,
+    aliases: params.aliases,
+  });
+  const baseRoomAccount = baseRoom.config?.account;
+  const explicitlyScopedToAnotherAccount =
+    room.config === undefined &&
+    baseRoom.matchSource === "direct" &&
+    typeof baseRoomAccount === "string" &&
+    normalizeAccountId(baseRoomAccount) !== params.account.accountId;
+  const accountMatches = !room.config?.account || room.config.account === params.account.accountId;
+  const configuredRoomBlocked = room.config !== undefined && (!room.allowed || !accountMatches);
+  const blocked = explicitlyScopedToAnotherAccount || configuredRoomBlocked;
+  const blockedBeforeProviderAccess =
+    explicitlyScopedToAnotherAccount || (room.matchSource === "direct" && configuredRoomBlocked);
+  return { blocked, blockedBeforeProviderAccess, room };
+}
+
 async function classifyMatrixReadRoom(params: {
   client: MatrixClient;
   roomId: string;
@@ -116,9 +148,19 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
   run: (target: { client: MatrixClient; roomId: string }) => Promise<T>;
 }): Promise<T> {
   const account = resolveMatrixAccount({ cfg: params.cfg, accountId: params.accountId });
+  const baseConfig = resolveMatrixBaseConfig(params.cfg);
+  const preliminaryRoomId = normalizeMatrixResolvableTarget(params.roomId);
+  const preliminaryPolicy = resolveMatrixReadRoomPolicy({
+    account,
+    baseConfig,
+    roomId: preliminaryRoomId,
+    aliases: [],
+  });
+  if (preliminaryPolicy.blockedBeforeProviderAccess) {
+    throw new ToolAuthorizationError("Matrix read target is not allowed.");
+  }
   return await withResolvedActionClient(params.opts, async (client) => {
     const roomId = await resolveMatrixRoomId(client, params.roomId);
-    const configuredRooms = account.config.groups ?? account.config.rooms;
     const inputAlias = params.roomId.trim().startsWith("#") ? params.roomId.trim() : undefined;
     const { getRoomInfo } = createMatrixRoomInfoResolver(client);
     const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -130,23 +172,13 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
       ...roomInfo.altAliases,
       mutableRoomName,
     ].filter((value): value is string => Boolean(value));
-    const room = resolveMatrixRoomConfig({
-      rooms: configuredRooms,
+    const finalPolicy = resolveMatrixReadRoomPolicy({
+      account,
+      baseConfig,
       roomId,
       aliases,
     });
-    const baseConfig = resolveMatrixBaseConfig(params.cfg);
-    const baseRoom = resolveMatrixRoomConfig({
-      rooms: baseConfig.groups ?? baseConfig.rooms,
-      roomId,
-      aliases,
-    });
-    const baseRoomAccount = baseRoom.config?.account;
-    const explicitlyScopedToAnotherAccount =
-      room.config === undefined &&
-      baseRoom.matchSource === "direct" &&
-      typeof baseRoomAccount === "string" &&
-      normalizeAccountId(baseRoomAccount) !== account.accountId;
+    const room = finalPolicy.room;
     const current = isCurrentRoom({
       accountId: account.accountId,
       context: params.context,
@@ -181,12 +213,8 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         ? "disabled"
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
-    const accountMatches = !room.config?.account || room.config.account === account.accountId;
-    const blockedByRoomConfig =
-      explicitlyScopedToAnotherAccount ||
-      (room.config !== undefined && (!room.allowed || !accountMatches));
     const directOperator = params.context?.conversationReadOrigin === "direct-operator";
-    const allowed = blockedByRoomConfig
+    const allowed = finalPolicy.blocked
       ? false
       : directOperator
         ? classification.kind === "direct"

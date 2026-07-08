@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
   sendMatrixMessage: vi.fn(),
+  pinMatrixMessage: vi.fn(),
+  unpinMatrixMessage: vi.fn(),
   listMatrixPins: vi.fn(),
   getMatrixMemberInfo: vi.fn(),
   getMatrixRoomInfo: vi.fn(),
@@ -26,6 +28,8 @@ vi.mock("./matrix/actions.js", () => {
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
+    pinMatrixMessage: mocks.pinMatrixMessage,
+    unpinMatrixMessage: mocks.unpinMatrixMessage,
     listMatrixPins: mocks.listMatrixPins,
     removeMatrixReactions: mocks.removeMatrixReactions,
     sendMatrixMessage: mocks.sendMatrixMessage,
@@ -66,6 +70,8 @@ describe("handleMatrixAction pollVote", () => {
     });
     mocks.listMatrixReactions.mockResolvedValue([{ key: "👍", count: 1, users: ["@u:example"] }]);
     mocks.listMatrixPins.mockResolvedValue({ pinned: ["$pin"], events: [] });
+    mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
+    mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
     mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
     mocks.sendMatrixMessage.mockResolvedValue({
       messageId: "$sent",
@@ -396,6 +402,65 @@ describe("handleMatrixAction pollVote", () => {
       client: mocks.matrixClient,
     });
   });
+
+  it.each([
+    {
+      action: "pinMessage",
+      expected: mocks.pinMatrixMessage,
+      expectedPinned: ["$existing", "$pin"],
+    },
+    {
+      action: "unpinMessage",
+      expected: mocks.unpinMatrixMessage,
+      expectedPinned: ["$existing"],
+    },
+  ])(
+    "authorizes $action before reading pinned state",
+    async ({ action, expected, expectedPinned }) => {
+      const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+      const result = await handleMatrixAction(
+        {
+          action,
+          accountId: "ops",
+          roomId: "room:!room:example",
+          messageId: "$pin",
+        },
+        cfg,
+      );
+
+      expect(expected).toHaveBeenCalledWith("!room:example", "$pin", {
+        cfg,
+        accountId: "ops",
+        client: mocks.matrixClient,
+      });
+      expect(result.details).toEqual({ ok: true, pinned: expectedPinned });
+    },
+  );
+
+  it.each(["pinMessage", "unpinMessage"])(
+    "rejects blocked %s before reading or mutating pinned state",
+    async (action) => {
+      mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
+        new Error("Matrix read target is not allowed."),
+      );
+      const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+
+      await expect(
+        handleMatrixAction(
+          {
+            action,
+            roomId: "!blocked:example",
+            messageId: "$pin",
+          },
+          cfg,
+        ),
+      ).rejects.toThrow("Matrix read target is not allowed.");
+
+      expect(mocks.pinMatrixMessage).not.toHaveBeenCalled();
+      expect(mocks.unpinMatrixMessage).not.toHaveBeenCalled();
+      expect(mocks.listMatrixPins).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes account-scoped opts to member and room info actions", async () => {
     const memberCfg = {
