@@ -6,7 +6,12 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildRunwayVideoGenerationProvider: typeof import("./video-generation-provider.js").buildRunwayVideoGenerationProvider;
 
@@ -25,7 +30,13 @@ function firstPostJsonRequest() {
   if (!request || typeof request !== "object") {
     throw new Error("expected Runway create request options");
   }
-  return request as { url?: string; body?: Record<string, unknown> };
+  return request as {
+    url?: string;
+    body?: Record<string, unknown>;
+    headers?: Headers;
+    allowPrivateNetwork?: boolean;
+    dispatcherPolicy?: unknown;
+  };
 }
 
 function firstFetchWithTimeoutCall() {
@@ -141,6 +152,77 @@ describe("runway video generation provider", () => {
     expect(metadata.taskId).toBe("task-1");
     expect(metadata.status).toBe("SUCCEEDED");
     expect(metadata.endpoint).toBe("/v1/text_to_video");
+  });
+
+  it("applies configured request policy to Runway video requests", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-Runway-Policy": "runway-policy" },
+    };
+    const dispatcherPolicy = { mode: "env-proxy" as const };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy,
+      } as never;
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-policy" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-policy",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {
+        models: {
+          providers: {
+            runway: {
+              baseUrl: "https://api.dev.runwayml.com",
+              models: [],
+              request: requestPolicy,
+            },
+          },
+        },
+      },
+      durationSeconds: 4,
+      aspectRatio: "16:9",
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "runway",
+        capability: "video",
+        transport: "http",
+        request: requestPolicy,
+      }),
+    );
+    const request = firstPostJsonRequest();
+    expect(request.allowPrivateNetwork).toBe(true);
+    expect(request.dispatcherPolicy).toBe(dispatcherPolicy);
+    expect(request.headers).toBeInstanceOf(Headers);
+    expect((request.headers as Headers).get("x-runway-policy")).toBe("runway-policy");
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
