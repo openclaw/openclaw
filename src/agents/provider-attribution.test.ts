@@ -33,6 +33,7 @@ const providerEndpointPlugins = vi.hoisted(() => [
       { endpointClass: "groq-native", hosts: ["api.groq.com"] },
       { endpointClass: "opencode-native", hostSuffixes: ["opencode.ai"] },
       { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
+      { endpointClass: "pioneer-native", hosts: ["api.pioneer.ai"] },
       { endpointClass: "zai-native", hosts: ["api.z.ai"] },
       { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
       {
@@ -568,6 +569,10 @@ describe("provider attribution", () => {
     expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {
       endpointClass: "xiaomi-native",
       hostname: "api.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://api.pioneer.ai/v1"), {
+      endpointClass: "pioneer-native",
+      hostname: "api.pioneer.ai",
     });
     expectRecordFields(resolveProviderEndpoint("https://token-plan-ams.xiaomimimo.com/v1"), {
       endpointClass: "xiaomi-native",

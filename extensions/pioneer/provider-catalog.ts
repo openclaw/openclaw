@@ -355,7 +355,7 @@ export async function buildLivePioneerProvider(params: {
 
 /** Builds catalog entries for the augmentModelCatalog hook, doing live discovery when authed. */
 export async function buildPioneerAugmentedCatalogEntries(params: {
-  config: unknown;
+  config?: ProviderCatalogContext["config"];
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
 }): Promise<ConfiguredProviderCatalogEntry[]> {

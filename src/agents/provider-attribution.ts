@@ -68,6 +68,7 @@ export type ProviderEndpointClass =
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
+  | "pioneer-native"
   | "xai-native"
   | "xiaomi-native"
   | "zai-native"
@@ -171,6 +172,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "opencode-native",
   "azure-openai",
   "openrouter",
+  "pioneer-native",
   "xai-native",
   "xiaomi-native",
   "zai-native",
@@ -736,6 +738,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "opencode-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
+    endpointClass === "pioneer-native" ||
     endpointClass === "xai-native" ||
     endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||

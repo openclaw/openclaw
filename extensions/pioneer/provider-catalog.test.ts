@@ -30,6 +30,7 @@ function buildCatalogContext(params: {
             providers: {
               pioneer: {
                 baseUrl: params.baseUrl,
+                models: [],
               },
             },
           },
