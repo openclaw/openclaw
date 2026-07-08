@@ -2215,6 +2215,7 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
+    let trajectoryTerminalError: string | undefined;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     let cleanupYieldAborted = false;
     let repairedRejectedThinkingReplay = false;
@@ -5839,6 +5840,7 @@ export async function runEmbeddedAttempt(
         lastAssistantStopReason: lastAssistant?.stopReason,
         hasTerminalOutput,
       });
+      trajectoryTerminalError = attemptTrajectoryTerminal.terminalError;
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
         externalAbort,
@@ -5886,19 +5888,9 @@ export async function runEmbeddedAttempt(
           lastToolError,
         }),
       );
-      trajectoryRecorder?.recordEvent("session.ended", {
-        status: attemptTrajectoryTerminal.status,
-        aborted,
-        externalAbort,
-        timedOut,
-        idleTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-        timedOutByRunBudget,
-        promptError: promptError ? formatErrorMessage(promptError) : undefined,
-        terminalError: attemptTrajectoryTerminal.terminalError,
-      });
-      trajectoryEndRecorded = true;
+      // Defer session.ended to the finally block so its timestamp reflects
+      // the actual session end (after flush + cleanup), not model.completed.
+      // See: https://github.com/openclaw/openclaw/issues/102014
 
       return {
         replayMetadata,
@@ -5958,6 +5950,12 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
+      await flushEmbeddedAttemptTrajectoryRecorder({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        log,
+        trajectoryRecorder,
+      });
       if (trajectoryRecorder && !trajectoryEndRecorded) {
         trajectoryRecorder.recordEvent("session.ended", {
           status: promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup",
@@ -5969,14 +5967,10 @@ export async function runEmbeddedAttempt(
           timedOutDuringToolExecution,
           timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
+          terminalError: trajectoryTerminalError,
         });
+        trajectoryEndRecorded = true;
       }
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
-      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
