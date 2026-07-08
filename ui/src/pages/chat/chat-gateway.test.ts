@@ -1246,7 +1246,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it("does not append an identical assistant final already present in the current turn", () => {
+  it("does not append an identical transcript assistant final already present in the current turn", () => {
     const user = {
       role: "user",
       content: [{ type: "text", text: "repeat" }],
@@ -1256,6 +1256,7 @@ describe("handleChatEvent", () => {
       role: "assistant",
       content: [{ type: "text", text: "Already persisted" }],
       timestamp: 2,
+      __openclaw: { seq: 2 },
     };
     const finalAssistant = {
       role: "assistant",
@@ -1276,6 +1277,38 @@ describe("handleChatEvent", () => {
 
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([user, finalAssistant]);
+  });
+
+  it("keeps same-turn repeated assistant text without transcript provenance", () => {
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "repeat" }],
+      timestamp: 1,
+    };
+    const firstAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Repeated text" }],
+      timestamp: 2,
+    };
+    const secondAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Repeated text" }],
+      timestamp: 3,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user, firstAssistant],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: secondAssistant,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([user, firstAssistant, secondAssistant]);
   });
 
   it("does not append a final whose visible text is already present from refreshed history", () => {

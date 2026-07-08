@@ -289,6 +289,9 @@ function assistantMessageContentSignature(message: unknown): string | null {
 }
 
 function terminalMessageDuplicatesExisting(message: unknown, existing: unknown): boolean {
+  if (!hasTranscriptMeta(existing)) {
+    return false;
+  }
   const terminalSignature = assistantMessageContentSignature(message);
   return Boolean(
     terminalSignature && terminalSignature === assistantMessageContentSignature(existing),
