@@ -7,15 +7,12 @@ import {
 } from "../shared/live-transport-cli.js";
 import { MATRIX_QA_ALL_SCENARIO_IDS } from "./profiles.js";
 
-type MatrixQaCliRuntime = typeof import("./cli.runtime.js");
-type MatrixQaAdapterRuntime = typeof import("./adapter.runtime.js");
-
-const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<MatrixQaCliRuntime>(
+const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<typeof import("./cli.runtime.js")>(
   () => import("./cli.runtime.js"),
 );
-const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<MatrixQaAdapterRuntime>(
-  () => import("./adapter.runtime.js"),
-);
+const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<
+  typeof import("./adapter.runtime.js")
+>(() => import("./adapter.runtime.js"));
 
 async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
   await (await loadMatrixQaCliRuntime()).runQaMatrixCommand(opts);

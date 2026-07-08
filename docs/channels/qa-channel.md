@@ -78,7 +78,7 @@ Full repo-backed scenario suite:
 pnpm openclaw qa suite
 ```
 
-Runs scenarios in parallel against the QA gateway lane. See [QA overview](/concepts/qa-e2e-automation) for scenarios, profiles, and provider modes.
+Runs scenarios in parallel against the QA gateway lane.
 
 Docker-backed QA site (gateway + QA Lab debugger UI in one stack):
 
@@ -90,8 +90,7 @@ Builds the QA site, starts the Docker-backed gateway + QA Lab stack, and prints 
 
 ## Related
 
-- [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, scenario authoring
-- [QA overview](/concepts/qa-e2e-automation#matrix-smoke-lanes) - Matrix live adapter and focused profiles that drive a real channel through the shared suite host
+- [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, scenario authoring, and Matrix live profiles
 - [Pairing](/channels/pairing)
 - [Groups](/channels/groups)
 - [Channels overview](/channels)

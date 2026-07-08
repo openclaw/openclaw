@@ -5,33 +5,16 @@ scenario:
   coverage:
     primary:
       - channels.threads
-  objective: Verify Matrix nested-thread reply fallback metadata targets the original root.
-  successCriteria:
-    - The driver mentions OpenClaw from a nested thread event.
-    - The outbound thread and fallback reply both normalize to the original root.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
-    - extensions/matrix/src/matrix/monitor/threads.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix nested threaded replies keep fallback replies on the root event
     timeoutMs: 60000
     retryCount: 0
     config:
       requiredChannelDriver: live
 
 flow:
-  steps:
-    - name: Matrix nested thread reply shape
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runThreadNestedReplyShapeScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runThreadNestedReplyShapeScenario
+  args:
+    - expr: "scenarioContext"

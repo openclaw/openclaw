@@ -447,6 +447,7 @@ function createScenarioFlowApi(
 function createScenarioStepRunner(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  vars: Record<string, unknown>,
 ): typeof runScenario {
   const prepareFlow = env.transport.prepareFlow;
   const execution = scenario.execution;
@@ -458,12 +459,15 @@ function createScenarioStepRunner(
       {
         name: `Prepare ${env.transport.label}`,
         run: async () => {
-          await prepareFlow({
+          const prepared = await prepareFlow({
             config: execution.config ?? {},
             gateway: env.gateway,
             outputDir: env.outputDir,
             timeoutMs: execution.timeoutMs ?? liveTurnTimeoutMs(env, 60_000),
           });
+          if (prepared) {
+            Object.assign(vars, prepared);
+          }
         },
       },
       ...steps,
@@ -477,7 +481,8 @@ async function runScenarioDefinition(
   if (scenario.execution.kind !== "flow") {
     throw new Error(`scenario is not a flow: ${scenario.id}`);
   }
-  const api = createScenarioFlowApi(env, scenario, createScenarioStepRunner(env, scenario));
+  const vars: Record<string, unknown> = {};
+  const api = createScenarioFlowApi(env, scenario, createScenarioStepRunner(env, scenario, vars));
   if (!scenario.execution.flow) {
     throw new Error(`scenario missing flow: ${scenario.id}`);
   }
@@ -485,6 +490,7 @@ async function runScenarioDefinition(
     api,
     flow: scenario.execution.flow,
     scenarioTitle: scenario.title,
+    vars,
   });
 }
 

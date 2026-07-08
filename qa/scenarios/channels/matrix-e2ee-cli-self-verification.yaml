@@ -5,20 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.access-and-identity
-  objective: "Preserve the retired qa-matrix behavior: Matrix E2EE CLI interactive self-verification
-    establishes identity trust."
-  successCriteria:
-    - The QA Lab flow completes matrix-e2ee-cli-self-verification through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix E2EE CLI interactive self-verification establishes identity trust
     timeoutMs: 180000
     retryCount: 0
     config:
@@ -37,14 +26,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix E2EE CLI interactive self-verification establishes identity trust
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runMatrixQaE2eeCliSelfVerificationScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee.js
+  call: runMatrixQaE2eeCliSelfVerificationScenario
+  args:
+    - expr: "scenarioContext"

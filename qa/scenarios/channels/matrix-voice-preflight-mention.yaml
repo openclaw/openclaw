@@ -5,21 +5,10 @@ scenario:
   coverage:
     primary:
       - channels.media-rich-content
-  objective: "Preserve the retired qa-matrix behavior: Matrix voice notes can trigger mention gating
-    through transcription."
-  successCriteria:
-    - The QA Lab flow completes matrix-voice-preflight-mention through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
     providerMode: live-frontier
-    summary: Matrix voice notes can trigger mention gating through transcription
     timeoutMs: 180000
     retryCount: 0
     config:
@@ -43,14 +32,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix voice notes can trigger mention gating through transcription
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runVoicePreflightMentionScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runVoicePreflightMentionScenario
+  args:
+    - expr: "scenarioContext"

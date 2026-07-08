@@ -7,18 +7,9 @@ scenario:
       - channels.mention-gating
     secondary:
       - channels.attachments
-  objective: Verify an attachment-only group message cannot bypass Matrix mention gating.
-  successCriteria:
-    - The driver uploads an image without text or mention metadata.
-    - Matrix produces no outbound reply.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix attachment-only group media does not bypass mention gating
     timeoutMs: 8000
     retryCount: 0
     config:
@@ -37,14 +28,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix attachment-only mention gating
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runAttachmentOnlyIgnoredScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runAttachmentOnlyIgnoredScenario
+  args:
+    - expr: "scenarioContext"

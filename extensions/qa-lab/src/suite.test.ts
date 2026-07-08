@@ -83,7 +83,7 @@ describe("qa suite", () => {
       outputDir: "/tmp/qa-output",
       transport: { label: "Matrix live", prepareFlow },
     } as unknown as Parameters<typeof qaSuiteProgressTesting.createScenarioStepRunner>[0];
-    const run = qaSuiteProgressTesting.createScenarioStepRunner(env, scenario);
+    const run = qaSuiteProgressTesting.createScenarioStepRunner(env, scenario, {});
     const scenarioStep = vi.fn(async () => "not reached");
 
     await expect(

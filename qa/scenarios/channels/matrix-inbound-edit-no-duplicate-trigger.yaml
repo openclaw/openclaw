@@ -5,34 +5,16 @@ scenario:
   coverage:
     primary:
       - channels.message-actions
-  objective: "Preserve the retired qa-matrix behavior: Matrix inbound edits do not duplicate already
-    handled triggers."
-  successCriteria:
-    - The QA Lab flow completes matrix-inbound-edit-no-duplicate-trigger through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix inbound edits do not duplicate already handled triggers
     timeoutMs: 45000
     retryCount: 0
     config:
       requiredChannelDriver: live
 
 flow:
-  steps:
-    - name: Matrix inbound edits do not duplicate already handled triggers
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runInboundEditNoDuplicateTriggerScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-edit.js
+  call: runInboundEditNoDuplicateTriggerScenario
+  args:
+    - expr: "scenarioContext"

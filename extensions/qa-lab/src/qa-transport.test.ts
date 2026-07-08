@@ -23,7 +23,6 @@ describe("createQaStateBackedTransportAdapter", () => {
       accountId: "sut",
       requiredPluginIds: [],
       prepareFlow: vi.fn(),
-      fixtureApi: { probe: vi.fn() },
       supportedActions: [],
       resetTransport,
       sendInbound: async (input) => state.addInboundMessage(input),
@@ -43,7 +42,6 @@ describe("createQaStateBackedTransportAdapter", () => {
 
     expect(resetTransport).toHaveBeenCalledOnce();
     expect(adapter.prepareFlow).toBeTypeOf("function");
-    expect(adapter.fixtureApi).toEqual({ probe: expect.any(Function) });
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 });

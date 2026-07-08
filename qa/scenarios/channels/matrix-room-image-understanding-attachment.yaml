@@ -7,20 +7,11 @@ scenario:
       - media.image-understanding
     secondary:
       - channels.attachments
-  objective: Verify a Matrix image attachment reaches the model vision input path.
-  successCriteria:
-    - The Matrix adapter uploads and sends the image with the prompt.
-    - The mock provider records at least one image input for the unique prompt.
-    - The channel returns a visible image-description reply.
   docsRefs:
-    - docs/channels/matrix.md
     - docs/tools/media-overview.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix captioned image attachments reach the model vision path
     timeoutMs: 60000
     retryCount: 0
     config:
@@ -39,14 +30,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix image understanding attachment
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runImageUnderstandingAttachmentScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runImageUnderstandingAttachmentScenario
+  args:
+    - expr: "scenarioContext"

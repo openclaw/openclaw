@@ -4,15 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  execCommand,
-  fetchHealthUrl,
-  resolveComposeServiceUrl,
-  resolveHostPort,
-  waitForDockerServiceHealth,
-  waitForHealth,
-  type FetchLike,
-  type RunCommand,
-} from "../docker-runtime.js";
+  createQaDockerRuntime,
+  type QaDockerFetchLike,
+  type QaDockerRunCommand,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
 
 const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
@@ -21,6 +16,14 @@ const MATRIX_QA_DEFAULT_PORT = 28008;
 const MATRIX_QA_INTERNAL_PORT = 8008;
 const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
+const {
+  execCommand,
+  fetchHealthUrl,
+  resolveComposeServiceUrl,
+  resolveHostPort,
+  waitForDockerServiceHealth,
+  waitForHealth,
+} = createQaDockerRuntime({ auditContext: "qa-lab-matrix-docker-health-check" });
 
 type MatrixQaHarnessManifest = {
   image: string;
@@ -53,8 +56,8 @@ function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
 
-async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) {
-  let response: Awaited<ReturnType<FetchLike>> | undefined;
+async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: QaDockerFetchLike) {
+  let response: Awaited<ReturnType<QaDockerFetchLike>> | undefined;
   try {
     response = await fetchImpl(buildVersionsUrl(baseUrl));
     return response.ok;
@@ -92,7 +95,7 @@ async function withMatrixQaHarnessTimeout<T>(
 async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
-  fetchImpl: FetchLike;
+  fetchImpl: QaDockerFetchLike;
   hostBaseUrl: string;
   sleepImpl: (ms: number) => Promise<unknown>;
   timeoutMs?: number;
@@ -215,8 +218,8 @@ export async function startMatrixQaHarness(
     serverName?: string;
   },
   deps?: {
-    fetchImpl?: FetchLike;
-    runCommand?: RunCommand;
+    fetchImpl?: QaDockerFetchLike;
+    runCommand?: QaDockerRunCommand;
     sleepImpl?: (ms: number) => Promise<unknown>;
     resolveHostPortImpl?: typeof resolveHostPort;
     startRecordingProxyImpl?: typeof startMatrixQaRecordingProxy;

@@ -15,8 +15,7 @@ regressions for real-world provider/model bugs.
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
-- [QA overview](/concepts/qa-e2e-automation#matrix-smoke-lanes) - reference for `pnpm openclaw qa matrix`.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and `pnpm openclaw qa matrix`.
 - [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
@@ -400,7 +399,7 @@ gh workflow run package-acceptance.yml --ref main \
     through the live adapter against a disposable Docker-backed Tuwunel
     homeserver. Source-checkout only - packaged installs do not ship `qa-lab`.
   - CLI profiles, lifecycle ownership, and artifact layout:
-    [QA overview](/concepts/qa-e2e-automation#matrix-smoke-lanes).
+    [Matrix live QA](/concepts/qa-e2e-automation#matrix-smoke-lanes).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.
@@ -475,7 +474,7 @@ table through the Mantis GitHub App when `pr_number` is set.
 
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
-[QA overview - Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
+[Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
 `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)
@@ -581,7 +580,7 @@ for Slack rows.
 ### Adding a channel to QA
 
 The architecture and scenario-helper names for new channel adapters live in
-[QA overview - Adding a channel](/concepts/qa-e2e-automation#adding-a-channel).
+[Adding a QA channel](/concepts/qa-e2e-automation#adding-a-channel).
 The minimum bar: implement the transport runner on the shared `qa-lab` host
 seam, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
 plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under

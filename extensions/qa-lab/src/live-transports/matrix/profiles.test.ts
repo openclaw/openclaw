@@ -1,44 +1,35 @@
 import { describe, expect, it } from "vitest";
-import {
-  MATRIX_QA_ALL_SCENARIO_IDS,
-  MATRIX_QA_E2EE_CLI_SCENARIO_IDS,
-  MATRIX_QA_E2EE_DEEP_SCENARIO_IDS,
-  MATRIX_QA_E2EE_SMOKE_SCENARIO_IDS,
-  MATRIX_QA_FAST_SCENARIO_IDS,
-  MATRIX_QA_MEDIA_SCENARIO_IDS,
-  MATRIX_QA_RELEASE_SCENARIO_IDS,
-  MATRIX_QA_TRANSPORT_SCENARIO_IDS,
-  resolveMatrixQaScenarioIds,
-} from "./profiles.js";
+import { MATRIX_QA_ALL_SCENARIO_IDS, resolveMatrixQaScenarioIds } from "./profiles.js";
 
 describe("QA Lab Matrix profiles", () => {
   it("preserves the legacy profile sizes and default selection", () => {
     expect(MATRIX_QA_ALL_SCENARIO_IDS).toHaveLength(92);
-    expect(MATRIX_QA_FAST_SCENARIO_IDS).toHaveLength(11);
-    expect(MATRIX_QA_RELEASE_SCENARIO_IDS).toEqual([
+    expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toHaveLength(11);
+    expect(resolveMatrixQaScenarioIds({ profile: "release" })).toEqual([
       "channel-chat-baseline",
       "matrix-allowlist-hot-reload",
     ]);
-    expect(MATRIX_QA_TRANSPORT_SCENARIO_IDS).toHaveLength(50);
-    expect(MATRIX_QA_MEDIA_SCENARIO_IDS).toHaveLength(7);
-    expect(MATRIX_QA_E2EE_SMOKE_SCENARIO_IDS).toHaveLength(8);
-    expect(MATRIX_QA_E2EE_DEEP_SCENARIO_IDS).toHaveLength(18);
-    expect(MATRIX_QA_E2EE_CLI_SCENARIO_IDS).toHaveLength(9);
+    expect(resolveMatrixQaScenarioIds({ profile: "transport" })).toHaveLength(50);
+    expect(resolveMatrixQaScenarioIds({ profile: "media" })).toHaveLength(7);
+    expect(resolveMatrixQaScenarioIds({ profile: "e2ee-smoke" })).toHaveLength(8);
+    expect(resolveMatrixQaScenarioIds({ profile: "e2ee-deep" })).toHaveLength(18);
+    expect(resolveMatrixQaScenarioIds({ profile: "e2ee-cli" })).toHaveLength(9);
     expect(resolveMatrixQaScenarioIds({})).toEqual(MATRIX_QA_ALL_SCENARIO_IDS);
   });
 
   it("keeps profile ids unique and excludes the legacy explicit-only scenarios", () => {
     for (const profile of [
-      MATRIX_QA_ALL_SCENARIO_IDS,
-      MATRIX_QA_FAST_SCENARIO_IDS,
-      MATRIX_QA_RELEASE_SCENARIO_IDS,
-      MATRIX_QA_TRANSPORT_SCENARIO_IDS,
-      MATRIX_QA_MEDIA_SCENARIO_IDS,
-      MATRIX_QA_E2EE_SMOKE_SCENARIO_IDS,
-      MATRIX_QA_E2EE_DEEP_SCENARIO_IDS,
-      MATRIX_QA_E2EE_CLI_SCENARIO_IDS,
+      "all",
+      "fast",
+      "release",
+      "transport",
+      "media",
+      "e2ee-smoke",
+      "e2ee-deep",
+      "e2ee-cli",
     ]) {
-      expect(new Set(profile).size).toBe(profile.length);
+      const scenarioIds = resolveMatrixQaScenarioIds({ profile });
+      expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     }
     expect(MATRIX_QA_ALL_SCENARIO_IDS).not.toContain("matrix-room-block-streaming");
     expect(MATRIX_QA_ALL_SCENARIO_IDS).not.toContain("subagent-thread-spawn");

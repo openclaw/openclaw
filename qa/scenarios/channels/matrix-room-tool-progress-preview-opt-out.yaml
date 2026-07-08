@@ -5,19 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.streaming
-  objective: "Preserve the retired qa-matrix behavior: Matrix streaming can opt out of preview tool progress."
-  successCriteria:
-    - The QA Lab flow completes matrix-room-tool-progress-preview-opt-out through the Matrix adapter with the
-      original Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix streaming can opt out of preview tool progress
     timeoutMs: 60000
     retryCount: 0
     config:
@@ -30,14 +20,7 @@ scenario:
         toolProfile: coding
 
 flow:
-  steps:
-    - name: Matrix streaming can opt out of preview tool progress
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runToolProgressPreviewOptOutScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runToolProgressPreviewOptOutScenario
+  args:
+    - expr: "scenarioContext"

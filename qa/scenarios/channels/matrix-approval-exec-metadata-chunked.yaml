@@ -5,20 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.native-approval-prompts
-  objective: "Preserve the retired qa-matrix behavior: Matrix exec approval prompt fallback keeps
-    metadata on the first chunk."
-  successCriteria:
-    - The QA Lab flow completes matrix-approval-exec-metadata-chunked through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix exec approval prompt fallback keeps metadata on the first chunk
     timeoutMs: 90000
     retryCount: 0
     config:
@@ -35,14 +24,7 @@ scenario:
         textChunkLimit: 280
 
 flow:
-  steps:
-    - name: Matrix exec approval prompt fallback keeps metadata on the first chunk
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runApprovalExecMetadataChunkedScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  call: runApprovalExecMetadataChunkedScenario
+  args:
+    - expr: "scenarioContext"

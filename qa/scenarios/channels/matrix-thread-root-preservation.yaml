@@ -5,33 +5,16 @@ scenario:
   coverage:
     primary:
       - channels.threads
-  objective: Verify a reply to a nested Matrix thread event remains related to the original thread root.
-  successCriteria:
-    - The driver creates a root and nested thread event before mentioning OpenClaw.
-    - The reply carries the original root as its normalized thread id.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
-    - extensions/matrix/src/matrix/monitor/threads.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix threaded replies keep the original root event
     timeoutMs: 60000
     retryCount: 0
     config:
       requiredChannelDriver: live
 
 flow:
-  steps:
-    - name: Matrix thread root preservation
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runThreadRootPreservationScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runThreadRootPreservationScenario
+  args:
+    - expr: "scenarioContext"

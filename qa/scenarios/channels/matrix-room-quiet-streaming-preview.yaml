@@ -5,19 +5,11 @@ scenario:
   coverage:
     primary:
       - channels.streaming
-  objective: Verify Matrix quiet streaming emits a preview that settles into one final answer.
-  successCriteria:
-    - Matrix emits at least one quiet preview event.
-    - The preview sequence settles on the exact final marker.
   docsRefs:
-    - docs/channels/matrix.md
     - docs/concepts/streaming.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix quiet streaming emits notice previews before finalizing
     timeoutMs: 45000
     retryCount: 0
     config:
@@ -26,14 +18,7 @@ scenario:
         streaming: quiet
 
 flow:
-  steps:
-    - name: Matrix quiet streaming preview
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runQuietStreamingPreviewScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runQuietStreamingPreviewScenario
+  args:
+    - expr: "scenarioContext"

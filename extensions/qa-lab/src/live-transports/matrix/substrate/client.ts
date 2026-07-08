@@ -31,8 +31,6 @@ type MatrixQaRegisterResponse = {
   user_id?: string;
 };
 
-type MatrixQaLoginResponse = MatrixQaRegisterResponse;
-
 type MatrixQaRoomCreateResponse = {
   room_id?: string;
 };
@@ -554,7 +552,7 @@ export function createMatrixQaClient(params: {
       password: string;
       userId?: string;
     }) {
-      const result = await requestMatrixJson<MatrixQaLoginResponse>({
+      const result = await requestMatrixJson<MatrixQaRegisterResponse>({
         baseUrl: params.baseUrl,
         body: {
           type: "m.login.password",

@@ -7,18 +7,9 @@ scenario:
       - channels.attachments
     secondary:
       - runtime.delivery
-  objective: Verify an unsupported Matrix file does not prevent a captioned text reply.
-  successCriteria:
-    - The adapter uploads an unsupported binary file with a mentioned prompt.
-    - The agent safely returns the exact marker.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix unsupported media attachments do not block caption replies
     timeoutMs: 45000
     retryCount: 0
     config:
@@ -37,14 +28,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix unsupported media safety
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runUnsupportedMediaSafeScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runUnsupportedMediaSafeScenario
+  args:
+    - expr: "scenarioContext"

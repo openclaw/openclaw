@@ -5,20 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.access-and-identity
-  objective: "Preserve the retired qa-matrix behavior: Matrix E2EE CLI encryption setup accepts a
-    recovery key on a second device."
-  successCriteria:
-    - The QA Lab flow completes matrix-e2ee-cli-recovery-key-setup through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix E2EE CLI encryption setup accepts a recovery key on a second device
     timeoutMs: 120000
     retryCount: 0
     config:
@@ -40,14 +29,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix E2EE CLI encryption setup accepts a recovery key on a second device
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runMatrixQaE2eeCliRecoveryKeySetupScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee.js
+  call: runMatrixQaE2eeCliRecoveryKeySetupScenario
+  args:
+    - expr: "scenarioContext"

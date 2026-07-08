@@ -358,7 +358,6 @@ export function createQaStateBackedTransportAdapter(
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
-    ...(params.fixtureApi ? { fixtureApi: params.fixtureApi } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
   });
   return adapter;

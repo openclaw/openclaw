@@ -5,18 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.group-messages
-  objective: Verify a secondary Matrix room can disable mention gating without affecting routing.
-  successCriteria:
-    - The secondary room is patched to require no mention.
-    - An unmentioned turn receives the exact marker in that room.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix secondary room can opt out of mention gating
     timeoutMs: 45000
     retryCount: 0
     config:
@@ -39,14 +30,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix secondary room open trigger
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runSecondaryRoomOpenTriggerScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js
+  call: runSecondaryRoomOpenTriggerScenario
+  args:
+    - expr: "scenarioContext"

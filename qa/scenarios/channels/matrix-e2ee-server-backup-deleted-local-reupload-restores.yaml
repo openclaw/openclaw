@@ -5,20 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.access-and-identity
-  objective: "Preserve the retired qa-matrix behavior: Matrix E2EE local keys re-upload after server
-    backup deletion."
-  successCriteria:
-    - The QA Lab Matrix adapter completes matrix-e2ee-server-backup-deleted-local-reupload-restores
-      with the original Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix E2EE local keys re-upload after server backup deletion
     timeoutMs: 180000
     retryCount: 0
     config:
@@ -40,14 +29,7 @@ scenario:
             requireMention: true
 
 flow:
-  steps:
-    - name: Matrix E2EE local keys re-upload after server backup deletion
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario
+  args:
+    - expr: "scenarioContext"

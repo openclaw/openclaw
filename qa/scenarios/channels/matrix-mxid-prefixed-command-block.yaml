@@ -7,19 +7,9 @@ scenario:
       - channels.command-authorization
     secondary:
       - channels.group-messages
-  objective: Verify an MXID-prefixed Matrix control command from an unapproved sender cannot trigger a reply.
-  successCriteria:
-    - The observer sends an explicitly mentioned /new command.
-    - The Matrix account remains silent because the observer is not allowlisted.
-  docsRefs:
-    - docs/channels/matrix.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
-    - extensions/matrix/src/matrix/monitor/handler.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix MXID-prefixed control commands stay gated
     timeoutMs: 8000
     retryCount: 0
     config:
@@ -28,14 +18,7 @@ scenario:
         groupPolicy: open
 
 flow:
-  steps:
-    - name: Matrix MXID-prefixed control command gating
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runMxidPrefixedCommandBlockScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js
+  call: runMxidPrefixedCommandBlockScenario
+  args:
+    - expr: "scenarioContext"

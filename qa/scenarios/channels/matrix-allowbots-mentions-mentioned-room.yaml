@@ -5,20 +5,9 @@ scenario:
   coverage:
     primary:
       - channels.access-policy
-  objective: "Preserve the retired qa-matrix behavior: Matrix allowBots=mentions accepts mentioned
-    configured bot messages."
-  successCriteria:
-    - The QA Lab flow completes matrix-allowbots-mentions-mentioned-room through the Matrix adapter with the original
-      Matrix-specific assertions.
-  docsRefs:
-    - docs/channels/matrix.md
-    - docs/concepts/qa-e2e-automation.md
-  codeRefs:
-    - extensions/qa-lab/src/live-transports/matrix/scenarios/matrix-scenario.fixture.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Matrix allowBots=mentions accepts mentioned configured bot messages
     timeoutMs: 45000
     retryCount: 0
     config:
@@ -32,14 +21,7 @@ scenario:
           - observer
 
 flow:
-  steps:
-    - name: Matrix allowBots=mentions accepts mentioned configured bot messages
-      actions:
-        - set: matrixFixtures
-          value:
-            expr: "await qaImport('./matrix-scenario.fixture.js')"
-        - call: matrixFixtures.runAllowBotsMentionsMentionedRoomScenario
-          args:
-            - expr: "await transport.fixtureApi.getContext()"
-          saveAs: result
-      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsMentionsMentionedRoomScenario
+  args:
+    - expr: "scenarioContext"

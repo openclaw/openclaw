@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { isRecord as isMatrixQaPlainRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
@@ -38,7 +39,6 @@ import {
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
 import {
-  isMatrixQaPlainRecord,
   patchMatrixQaGatewayMatrixAccount,
   readMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount,

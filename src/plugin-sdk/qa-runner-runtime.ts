@@ -102,10 +102,9 @@ type QaRunnerTransportAdapterDefinition = {
     replyTo: string;
   };
   createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
-  prepareFlow?: (input: QaRunnerTransportFlowPreparationInput) => Promise<void>;
-  // Expose transport-specific primitives to QA Lab fixtures without moving
-  // scenario selection, sequencing, retries, or assertions into the adapter.
-  fixtureApi?: object;
+  prepareFlow?: (
+    input: QaRunnerTransportFlowPreparationInput,
+  ) => Promise<Record<string, unknown> | void>;
   handleAction: (params: {
     action: "delete" | "edit" | "react" | "thread-create";
     args: Record<string, unknown>;

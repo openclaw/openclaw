@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
-import { createMatrixQaFlowFixtureEnvironment } from "./scenarios/scenario-environment.js";
+import { createMatrixQaScenarioEnvironment } from "./scenarios/scenario-environment.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
 import type { MatrixQaObservedEvent } from "./substrate/events.js";
@@ -203,7 +203,7 @@ export async function createMatrixQaTransportAdapter(
   );
   const nativeEventIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
-  const flowFixtures = createMatrixQaFlowFixtureEnvironment({
+  const scenarioEnvironment = createMatrixQaScenarioEnvironment({
     accountId,
     harness,
     observedEvents,
@@ -367,8 +367,7 @@ export async function createMatrixQaTransportAdapter(
       OPENCLAW_QA_MATRIX_SECONDARY_ROOM_ID:
         provisioning.topology.rooms.find((room) => room.key === "secondary")?.roomId ?? "",
     }),
-    prepareFlow: flowFixtures.prepareFlow,
-    fixtureApi: flowFixtures.fixtureApi,
+    prepareFlow: scenarioEnvironment.prepareFlow,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) => {
       gatewayClient = gateway;
       await waitForMatrixChannelReady(gateway, accountId, timeoutMs, pollIntervalMs);
