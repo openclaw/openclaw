@@ -1,4 +1,5 @@
 // Prepares parent-context fork metadata for guarded reply session initialization.
+import path from "node:path";
 import type { SessionEntry } from "../../config/sessions.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 
@@ -40,9 +41,7 @@ export async function prepareReplySessionParentFork(params: {
   const fork = await forkSessionFromParent({
     parentEntry,
     agentId: params.agentId,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
+    targetSessionsDir: path.dirname(params.storePath),
   });
   if (!fork) {
     return params.sessionEntry;
