@@ -7,7 +7,9 @@ function hasLone(str) {
     const c = str.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
       const n = str.charCodeAt(i + 1);
-      if (Number.isNaN(n) || n < 0xdc00 || n > 0xdfff) return [true, i, "0x" + c.toString(16)];
+      if (Number.isNaN(n) || n < 0xdc00 || n > 0xdfff) {
+        return [true, i, "0x" + c.toString(16)];
+      }
       i++;
     } else if (c >= 0xdc00 && c <= 0xdfff) {
       return [true, i, "0x" + c.toString(16)];
@@ -26,7 +28,9 @@ function check(label, input, limit, fn) {
     `        input:  ${input.length} code units${truncated ? " (truncated)" : ""}, emoji at [${input.length - 2}-${input.length - 1}]`,
   );
   console.log(`        output: ${out.length} code units`);
-  if (bad) console.log(`        LONE SURROGATE at index ${pos}: ${code}`);
+  if (bad) {
+    console.log(`        LONE SURROGATE at index ${pos}: ${code}`);
+  }
 }
 
 console.log("=== Dreaming Snippet Truncation Proof: Emoji at Truncation Boundary ===");
