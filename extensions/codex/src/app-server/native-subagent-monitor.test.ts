@@ -906,27 +906,35 @@ describe("CodexNativeSubagentMonitor", () => {
   });
 
   it("does not replay stale history while a system-error child still has an active turn", async () => {
-    const client = createClient();
-    client.setThreadRead(
-      "child-thread",
-      threadRead({
-        threadStatus: "systemError",
-        status: "failed",
-        error: "stale persisted failure",
-      }),
-    );
-    client.setThreadTurns("child-thread", {
-      data: [{ id: "current-turn", status: "inProgress", items: [] }],
-    });
-    const runtime = createRuntime();
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    registerParent(monitor);
-    await notifyChildStarted(client);
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      client.setThreadRead(
+        "child-thread",
+        threadRead({
+          threadStatus: "systemError",
+          status: "failed",
+          error: "stale persisted failure",
+        }),
+      );
+      client.setThreadTurns("child-thread", {
+        data: [{ id: "current-turn", status: "inProgress", items: [] }],
+      });
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [10],
+      });
+      registerParent(monitor);
+      await notifyChildStarted(client);
 
-    await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
+      await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(30);
 
-    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-    client.close();
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not treat a stale completed turn as recovery from a system error", async () => {

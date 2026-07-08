@@ -803,6 +803,14 @@ export class CodexNativeSubagentMonitor {
     let completion: RecoveredCompletion | undefined;
     let fallbackCompletion: RecoveredCompletion | undefined;
     let resumable = false;
+    let threadState: ThreadRecovery["threadState"] =
+      threadStatus === "active"
+        ? "active"
+        : threadStatus === "systemerror"
+          ? "system_error"
+          : threadStatus
+            ? "other"
+            : "unavailable";
     if (threadStatus === "systemerror") {
       // The 0.142 protocol floor guarantees the paged history API, whose live
       // snapshot distinguishes the failed current turn from older persisted results.
@@ -812,11 +820,14 @@ export class CodexNativeSubagentMonitor {
       const data =
         isJsonObject(turnsResponse) && Array.isArray(turnsResponse.data) ? turnsResponse.data : [];
       const latestTurn = isJsonObject(data[0]) ? data[0] : undefined;
+      const latestTurnStatus = normalizeIdentifier(readString(latestTurn, "status"));
       completion =
-        latestTurn && normalizeIdentifier(readString(latestTurn, "status")) === "failed"
+        latestTurn && latestTurnStatus === "failed"
           ? readTurnCompletion(latestTurn, childThreadId)
           : undefined;
-      if (!completion) {
+      if (latestTurnStatus === "inprogress") {
+        threadState = "active";
+      } else if (!completion) {
         // A missing live snapshot must still settle: retry briefly, then report
         // the typed system error instead of pinning the physical client forever.
         fallbackCompletion = systemErrorFallbackCompletion(childThreadId);
@@ -831,14 +842,7 @@ export class CodexNativeSubagentMonitor {
       completion,
       fallbackCompletion,
       resumable,
-      threadState:
-        threadStatus === "active"
-          ? "active"
-          : threadStatus === "systemerror"
-            ? "system_error"
-            : threadStatus
-              ? "other"
-              : "unavailable",
+      threadState,
     };
   }
 
