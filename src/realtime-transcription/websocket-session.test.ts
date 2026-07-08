@@ -20,6 +20,7 @@ afterEach(async () => {
 
 async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
+  closeAfterInitialEventMs?: number;
   initialEvent?: unknown;
   initialText?: string;
   onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
@@ -41,6 +42,11 @@ async function createRealtimeServer(params?: {
       }
       if (params?.initialEvent) {
         ws.send(JSON.stringify(params.initialEvent));
+        if (params.closeAfterInitialEventMs !== undefined) {
+          setTimeout(() => {
+            ws.close(1011, "flap after ready");
+          }, params.closeAfterInitialEventMs);
+        }
       }
       if (params?.initialText) {
         ws.send(params.initialText);
@@ -402,5 +408,52 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const closeError = requireFirstMockArg(onError, "pre-ready close error");
     expect(closeError).toBeInstanceOf(Error);
     expect(closeError.message).toBe("test realtime transcription connection closed before ready");
+  });
+
+  it("backs off and stops reconnecting when ready websocket sessions keep flapping", async () => {
+    const openedAt: number[] = [];
+    const onError = vi.fn();
+    const server = await createRealtimeServer({
+      closeAfterInitialEventMs: 1,
+      initialEvent: { type: "session.updated" },
+      onUpgrade: () => {
+        openedAt.push(Date.now());
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      maxReconnectAttempts: 3,
+      reconnectDelayMs: 20,
+      reconnectLimitMessage: "test realtime transcription reconnect limit reached",
+      onMessage: (event, transport) => {
+        if (event.type === "session.updated") {
+          transport.markReady();
+        }
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(
+      () => {
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: "test realtime transcription reconnect limit reached",
+          }),
+        );
+      },
+      { timeout: 1000 },
+    );
+
+    expect(openedAt).toHaveLength(4);
+    const gaps = openedAt.slice(1).map((opened, index) => opened - openedAt[index]);
+    expect(gaps[0]).toBeGreaterThanOrEqual(15);
+    expect(gaps[1]).toBeGreaterThanOrEqual(35);
+    expect(gaps[2]).toBeGreaterThanOrEqual(70);
+    session.close();
   });
 });

@@ -259,7 +259,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         this.ws.on("open", () => {
           opened = true;
           this.connected = true;
-          this.reconnectAttempts = 0;
           this.captureLocalOpen();
           try {
             this.options.onOpen?.(this.transport);
