@@ -2061,20 +2061,11 @@ async function executeMainSessionCronJob(
     if (heartbeatResult.status === "ran") {
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
-    // Heartbeat was skipped (non-retryable reason) or errored — the system event
-    // was already enqueued above.  Keep it queued and request a background
-    // heartbeat so the event can still be delivered on the next heartbeat cycle
-    // or when the user interacts.  The non-ok status preserves job visibility
-    // and one-shot retry/backoff behavior so the job stays visible until
-    // delivery succeeds.
-    state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "immediate",
-      reason: `cron:${job.id}`,
-      agentId: job.agentId,
-      sessionKey: cronRunSessionKey,
-      heartbeat: { target: "last" },
-    });
+    // Heartbeat was skipped (non-retryable reason) or errored — the event was
+    // already enqueued above.  Remove it since the wake layer only retries
+    // busy skips; leaving it for non-retryable outcomes such as global-disable,
+    // quiet-hours, or no-tasks-due would strand delivery permanently.
+    removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
     return {
       status: heartbeatResult.status === "skipped" ? "skipped" : "error",
       error: heartbeatResult.reason,
