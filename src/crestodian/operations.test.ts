@@ -582,13 +582,25 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
-  it("passes approval as non-ClawHub acknowledgement for npm plugin installs", async () => {
+  it("includes non-ClawHub warning before approval acknowledges npm plugin installs", async () => {
     const tempDir = opTempDirs.make("crestodian-plugin-install-ack-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime } = createCrestodianTestRuntime();
     const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
       pluginRuntime.log(`installed ${spec}`);
     });
+
+    const plan = await executeCrestodianOperation(
+      { kind: "plugin-install", spec: "npm:@openclaw/demo" },
+      runtime,
+      { deps: { runPluginInstall } },
+    );
+    expectRecordFields(plan as unknown as Record<string, unknown>, {
+      applied: false,
+      message:
+        "WARNING - Installing plugin from npm registry: npm:@openclaw/demo\nThis source is outside ClawHub review and trust metadata. Only continue if you trust the publisher, package contents, and install source.\nPlan: install plugin npm:@openclaw/demo. Say yes to apply.",
+    });
+    expect(runPluginInstall).not.toHaveBeenCalled();
 
     const result = await executeCrestodianOperation(
       { kind: "plugin-install", spec: "npm:@openclaw/demo" },

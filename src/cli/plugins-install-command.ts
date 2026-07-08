@@ -48,6 +48,7 @@ import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import {
   confirmNonClawHubInstall,
+  type NonClawHubInstallAcknowledgementOptions,
   type NonClawHubInstallSourceClass,
 } from "./non-clawhub-install-acknowledgement.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -866,14 +867,14 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: InstallSafetyOverrides & {
-    acknowledgeClawHubRisk?: boolean;
-    acknowledgeNonClawHubInstall?: boolean;
-    force?: boolean;
-    link?: boolean;
-    pin?: boolean;
-    marketplace?: string;
-  };
+  opts: InstallSafetyOverrides &
+    NonClawHubInstallAcknowledgementOptions & {
+      acknowledgeClawHubRisk?: boolean;
+      force?: boolean;
+      link?: boolean;
+      pin?: boolean;
+      marketplace?: string;
+    };
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }) {

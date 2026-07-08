@@ -24,6 +24,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
+import type { NonClawHubInstallAcknowledgementOptions } from "./non-clawhub-install-acknowledgement.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
@@ -47,8 +48,7 @@ type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
-type HooksInstallOptions = {
-  acknowledgeNonClawHubInstall?: boolean;
+type HooksInstallOptions = NonClawHubInstallAcknowledgementOptions & {
   acknowledgeNonClawhubInstall?: boolean;
   link?: boolean;
   pin?: boolean;

@@ -1371,6 +1371,79 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_ACK_FLAG);
   });
 
+  it.each([
+    {
+      label: "npm-pack",
+      prepare: () => ({
+        args: ["plugins", "install", "npm-pack:/tmp/demo.tgz"],
+        expectNoInstallerSideEffects: () =>
+          expect(installPluginFromNpmPackArchive).not.toHaveBeenCalled(),
+      }),
+    },
+    {
+      label: "git",
+      prepare: () => ({
+        args: ["plugins", "install", "git:github.com/acme/demo@v1.2.3"],
+        expectNoInstallerSideEffects: () => expect(installPluginFromGitSpec).not.toHaveBeenCalled(),
+      }),
+    },
+    {
+      label: "marketplace",
+      prepare: () => ({
+        args: ["plugins", "install", "demo", "--marketplace", "local/repo"],
+        expectNoInstallerSideEffects: () =>
+          expect(installPluginFromMarketplace).not.toHaveBeenCalled(),
+      }),
+    },
+    {
+      label: "local path",
+      prepare: () => {
+        const localPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
+        return {
+          args: ["plugins", "install", localPath],
+          cleanup: () => fs.rmSync(localPath, { recursive: true, force: true }),
+          expectNoInstallerSideEffects: () => expect(installPluginFromPath).not.toHaveBeenCalled(),
+        };
+      },
+    },
+    {
+      label: "local archive",
+      prepare: () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
+        const archivePath = `${tempRoot}.tgz`;
+        fs.writeFileSync(archivePath, "archive");
+        return {
+          args: ["plugins", "install", archivePath],
+          cleanup: () => {
+            fs.rmSync(archivePath, { force: true });
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+          },
+          expectNoInstallerSideEffects: () => expect(installPluginFromPath).not.toHaveBeenCalled(),
+        };
+      },
+    },
+  ])(
+    "requires acknowledgement for noninteractive $label installs before installer side effects",
+    async ({ prepare }) => {
+      setTty(false);
+      const prepared: {
+        args: string[];
+        cleanup?: () => void;
+        expectNoInstallerSideEffects: () => void;
+      } = prepare();
+
+      try {
+        await expect(runPluginsCommand(prepared.args)).rejects.toThrow("__exit__:1");
+      } finally {
+        prepared.cleanup?.();
+      }
+
+      prepared.expectNoInstallerSideEffects();
+      expect(runtimeErrors.at(-1)).toContain("outside ClawHub review");
+      expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_ACK_FLAG);
+    },
+  );
+
   it("prompts interactive users before non-ClawHub plugin installs and cancels on no", async () => {
     setTty(true);
     promptYesNo.mockResolvedValueOnce(false);

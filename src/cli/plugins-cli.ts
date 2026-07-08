@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { NonClawHubInstallAcknowledgementOptions } from "./non-clawhub-install-acknowledgement.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
@@ -14,10 +15,12 @@ type PluginUpdateOptions = {
   dangerouslyForceUnsafeInstall?: boolean;
 };
 
-type CommanderInstallRiskOptions = Record<string, unknown> & {
-  acknowledgeClawhubRisk?: boolean;
-  acknowledgeNonClawhubInstall?: boolean;
-};
+type CommanderInstallRiskOptions = Record<string, unknown> &
+  NonClawHubInstallAcknowledgementOptions & {
+    acknowledgeClawHubRisk?: boolean;
+    acknowledgeClawhubRisk?: boolean;
+    acknowledgeNonClawhubInstall?: boolean;
+  };
 
 function normalizeCommanderClawHubRiskOption(opts: CommanderInstallRiskOptions): boolean {
   return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;

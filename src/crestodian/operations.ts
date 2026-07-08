@@ -1,5 +1,9 @@
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
+import {
+  formatNonClawHubInstallWarning,
+  type NonClawHubInstallAcknowledgementOptions,
+} from "../cli/non-clawhub-install-acknowledgement.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import {
   detectInferenceBackends,
@@ -81,9 +85,7 @@ export type CrestodianOperationResult = {
   followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
-export type CrestodianPluginInstallOptions = {
-  acknowledgeNonClawHubInstall?: boolean;
-};
+export type CrestodianPluginInstallOptions = NonClawHubInstallAcknowledgementOptions;
 
 /** Injectable command dependencies used by tests and alternate runners. */
 export type CrestodianCommandDeps = {
@@ -456,7 +458,21 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
 
 /** Format the standard approval plan text for a persistent operation. */
 export function formatCrestodianPersistentPlan(operation: CrestodianOperation): string {
-  return `Plan: ${describeCrestodianPersistentOperation(operation)}. Say yes to apply.`;
+  const plan = `Plan: ${describeCrestodianPersistentOperation(operation)}. Say yes to apply.`;
+  if (operation.kind !== "plugin-install" || isClawHubPluginInstallSpec(operation.spec)) {
+    return plan;
+  }
+  return [
+    formatNonClawHubInstallWarning({
+      sourceClass: "npm",
+      spec: operation.spec,
+    }),
+    plan,
+  ].join("\n");
+}
+
+function isClawHubPluginInstallSpec(spec: string): boolean {
+  return spec.trim().toLowerCase().startsWith("clawhub:");
 }
 
 function formatCreateAgentWorkspace(workspace: string | undefined): string {
