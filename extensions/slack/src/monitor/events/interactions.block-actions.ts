@@ -1,6 +1,7 @@
 // Slack plugin module implements interactions.block actions behavior.
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import { resolvePendingQuestionFromAnswerCommand } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
@@ -612,6 +613,42 @@ async function handleSlackExecApprovalInteraction(params: {
   return true;
 }
 
+async function handleSlackQuestionButtonInteraction(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+  auth: { channelType?: "im" | "mpim" | "channel" | "group" };
+  pluginInteractionData: string;
+  respond?: SlackBlockActionRespond;
+}): Promise<boolean> {
+  // Question option buttons carry `/answer <n>` as their callback value. Slack Block
+  // Kit buttons cannot run a text command, so resolve the session's pending question
+  // through the shared /answer resolution path instead of enqueuing a generic event
+  // (which never called question.resolve, leaving the asking tool parked forever).
+  const sessionKey = params.ctx.resolveSlackSystemEventSessionKey({
+    channelId: params.parsed.channelId,
+    channelType: params.auth.channelType,
+    senderId: params.parsed.userId,
+    threadTs: params.parsed.threadTs,
+  });
+  const outcome = resolvePendingQuestionFromAnswerCommand({
+    sessionKey,
+    command: params.pluginInteractionData,
+    resolvedBy: `slack:${params.parsed.userId}`,
+  });
+  if (outcome.status !== "resolved") {
+    // Not an /answer button, no pending question, or the free-text "Other" button
+    // (bare /answer needs a typed reply) — fall through to default handling.
+    return false;
+  }
+  // Replace the option row with a confirmation, mirroring a normal button selection.
+  await updateSlackLegacyBlockAction({
+    ctx: params.ctx,
+    parsed: params.parsed,
+    respond: params.respond,
+  });
+  return true;
+}
+
 async function dispatchSlackPluginInteraction(params: {
   ctx: SlackMonitorContext;
   parsed: ParsedSlackBlockAction;
@@ -952,6 +989,16 @@ async function handleSlackBlockAction(params: {
       respond,
     });
     if (handledBindingApproval) {
+      return;
+    }
+    const handledQuestion = await handleSlackQuestionButtonInteraction({
+      ctx: params.ctx,
+      parsed,
+      auth,
+      pluginInteractionData,
+      respond,
+    });
+    if (handledQuestion) {
       return;
     }
   } else if (pluginInteractionData) {

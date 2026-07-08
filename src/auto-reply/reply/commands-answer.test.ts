@@ -10,7 +10,11 @@ import {
   getGlobalQuestionManager,
   resetGlobalQuestionManagerForTest,
 } from "../../gateway/question-manager.js";
-import { handleAnswerCommand, parseAnswerCommand } from "./commands-answer.js";
+import {
+  handleAnswerCommand,
+  parseAnswerCommand,
+  resolvePendingQuestionFromAnswerCommand,
+} from "./commands-answer.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const SINGLE: readonly AgentHarnessUserInputQuestion[] = [
@@ -135,5 +139,52 @@ describe("/answer command", () => {
     );
     expect(unauth).toEqual({ shouldContinue: false });
     expect(manager.getSnapshot(record.id)?.status).toBe("pending");
+  });
+});
+
+describe("resolvePendingQuestionFromAnswerCommand (native option-button path)", () => {
+  afterEach(() => {
+    resetGlobalQuestionManagerForTest();
+  });
+
+  it("resolves a parked question with the chosen numbered option", async () => {
+    const manager = getGlobalQuestionManager();
+    const { record, wait } = manager.register({ sessionKey: "s1", questions: SINGLE });
+    const outcome = resolvePendingQuestionFromAnswerCommand({
+      sessionKey: "s1",
+      command: "/answer 2",
+      resolvedBy: "slack:U123",
+    });
+    expect(outcome.status).toBe("resolved");
+    await expect(wait).resolves.toEqual({ q1: { text: "No" } });
+    const snapshot = manager.getSnapshot(record.id);
+    expect(snapshot?.status).toBe("resolved");
+    expect(snapshot?.resolvedBy).toBe("slack:U123");
+  });
+
+  it("returns not-answer-command for a non-/answer callback value", () => {
+    const manager = getGlobalQuestionManager();
+    manager.register({ sessionKey: "s1", questions: SINGLE });
+    expect(
+      resolvePendingQuestionFromAnswerCommand({ sessionKey: "s1", command: "codex" }).status,
+    ).toBe("not-answer-command");
+  });
+
+  it("leaves a bare /answer (free-text Other) pending as needs-input", () => {
+    const manager = getGlobalQuestionManager();
+    const { record } = manager.register({ sessionKey: "s1", questions: SINGLE });
+    expect(
+      resolvePendingQuestionFromAnswerCommand({ sessionKey: "s1", command: "/answer" }).status,
+    ).toBe("needs-input");
+    expect(manager.getSnapshot(record.id)?.status).toBe("pending");
+  });
+
+  it("returns no-pending when the session has no matching question", () => {
+    const manager = getGlobalQuestionManager();
+    const other = manager.register({ sessionKey: "other", questions: SINGLE });
+    expect(
+      resolvePendingQuestionFromAnswerCommand({ sessionKey: "s1", command: "/answer 1" }).status,
+    ).toBe("no-pending");
+    expect(manager.getSnapshot(other.record.id)?.status).toBe("pending");
   });
 });

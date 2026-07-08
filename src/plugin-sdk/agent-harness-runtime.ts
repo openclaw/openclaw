@@ -186,6 +186,10 @@ export {
   type QuestionRecord,
 } from "../gateway/question-manager.js";
 export {
+  resolvePendingQuestionFromAnswerCommand,
+  type ResolvePendingQuestionOutcome,
+} from "../auto-reply/reply/commands-answer.js";
+export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";

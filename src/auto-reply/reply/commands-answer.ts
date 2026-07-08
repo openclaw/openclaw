@@ -82,3 +82,41 @@ export const handleAnswerCommand: CommandHandler = async (params, allowTextComma
   }
   return { shouldContinue: false, reply: { text: "✅ Answer submitted." } };
 };
+
+/** Outcome of resolving a pending question from an `/answer` command string. */
+export type ResolvePendingQuestionOutcome =
+  | { status: "resolved"; record: QuestionRecord }
+  | { status: "not-answer-command" }
+  | { status: "no-pending" }
+  | { status: "needs-input" }
+  | { status: "already-resolved" };
+
+/**
+ * Resolves a session's newest pending question from an `/answer <n|text>` string
+ * outside the text-command pipeline — e.g. a native option-button click whose
+ * callback value is `/answer <n>` (Slack Block Kit buttons cannot run text commands
+ * directly). Reuses the exact lookup + answer-mapping + resolve path as the /answer
+ * text handler so native buttons and typed answers converge on one resolution.
+ * `needs-input` (bare `/answer`, the free-text "Other" button) leaves the question
+ * pending so the caller can prompt for a typed answer.
+ */
+export function resolvePendingQuestionFromAnswerCommand(params: {
+  sessionKey: string;
+  command: string;
+  resolvedBy?: string | null;
+}): ResolvePendingQuestionOutcome {
+  const parsed = parseAnswerCommand(params.command);
+  if (!parsed) {
+    return { status: "not-answer-command" };
+  }
+  const record = findPendingQuestionForSession(params.sessionKey);
+  if (!record) {
+    return { status: "no-pending" };
+  }
+  if (!parsed.text) {
+    return { status: "needs-input" };
+  }
+  const answers = buildQuestionAnswersFromText(record, parsed.text);
+  const ok = getGlobalQuestionManager().resolve(record.id, answers, params.resolvedBy ?? null);
+  return ok ? { status: "resolved", record } : { status: "already-resolved" };
+}
