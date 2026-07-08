@@ -223,7 +223,13 @@ type InitSessionStateAttemptContext = {
 
 type InitSessionStateAttemptOutcome =
   | { kind: "complete"; result: SessionInitResult }
-  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string };
+  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string }
+  | {
+      kind: "conflict-self-heal";
+      sessionId: string;
+      sessionKey: string;
+      sessionFile: string | undefined;
+    };
 
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
@@ -333,23 +339,34 @@ async function initSessionStateAttempt(
   const attemptContext = resolveInitSessionStateAttemptContext(params);
   // Guarded revision checks only serialize correctly when the snapshot and
   // commit share the same writer lane.
-  const attempt = await runExclusiveSessionStoreWrite(
+  let pending = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
       await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
   );
-  if (attempt.kind === "complete") {
-    return attempt.result;
-  }
 
-  let rollover = attempt;
   while (true) {
-    const candidate = rollover;
+    if (pending.kind === "complete") {
+      return pending.result;
+    }
+    if (pending.kind === "conflict-self-heal") {
+      // The optimistic-concurrency commit lost twice. The recovery that unwedges
+      // it (dispose the session MCP runtime + run the harness reset hooks) reuses
+      // the SAME primitives the rollover teardown uses, so it must reuse the SAME
+      // safety fence: drain any foreign in-flight owner of this identity OUTSIDE
+      // the store-write lock before tearing anything down. That way a genuinely
+      // active concurrent turn (hot topic / rapid messages / rollover racing a
+      // fresh turn) is interrupted and drained rather than disposed mid-flight.
+      pending = await selfHealReplySessionInitConflict(params, attemptContext, pending);
+      continue;
+    }
+    // kind === "lifecycle-mutation": session rollover teardown.
+    const candidate = pending;
     const identities = [candidate.sessionKey, candidate.sessionId];
     let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
     // Drain foreign owners before the rollover takes the writer lane. Holding
     // that lane while waiting would deadlock owners that release after a write.
-    const outcome = await runExclusiveSessionLifecycleMutation({
+    pending = await runExclusiveSessionLifecycleMutation({
       scope: attemptContext.storePath,
       identities,
       signal: params.signal,
@@ -361,7 +378,7 @@ async function initSessionStateAttempt(
           async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
         );
         if (
-          revalidated.kind === "complete" ||
+          revalidated.kind !== "lifecycle-mutation" ||
           revalidated.sessionKey !== candidate.sessionKey ||
           revalidated.sessionId !== candidate.sessionId
         ) {
@@ -391,11 +408,83 @@ async function initSessionStateAttempt(
         );
       },
     });
-    if (outcome.kind === "complete") {
-      return outcome.result;
-    }
-    rollover = outcome;
   }
+}
+
+/**
+ * Fenced recovery for a repeated reply-session-init commit conflict.
+ *
+ * This reuses the rollover teardown primitives (`retireSessionMcpRuntime` +
+ * `resetRegisteredAgentHarnessSessions`), so it deliberately reuses the rollover
+ * SAFETY FENCE around them: a lifecycle mutation that drains any foreign in-flight
+ * turn on this identity (via `interruptSessionWorkAdmissions`) OUTSIDE the
+ * store-write lock, then disposes the wedged runtime and retries init exactly
+ * once under the fence. Without the drain, a genuinely active concurrent turn on
+ * the same sessionKey would be torn down mid-flight instead of a stuck one.
+ *
+ * The drain runs in `prepare` (not inside `runExclusiveSessionStoreWrite`) on
+ * purpose: an interrupted owner may need the store-write lock to finish/release,
+ * so draining while holding that lock could deadlock — the same reason the
+ * rollover path drains from the outer fence.
+ */
+async function selfHealReplySessionInitConflict(
+  params: InitSessionStateParams,
+  attemptContext: InitSessionStateAttemptContext,
+  candidate: Extract<InitSessionStateAttemptOutcome, { kind: "conflict-self-heal" }>,
+): Promise<InitSessionStateAttemptOutcome> {
+  const identities = [candidate.sessionKey, candidate.sessionId];
+  return await runExclusiveSessionLifecycleMutation({
+    scope: attemptContext.storePath,
+    identities,
+    signal: params.signal,
+    prepare: async () => {
+      // Interrupt and wait for any foreign in-flight turn on this identity to
+      // release. `interruptSessionWorkAdmissions` skips the current stack's own
+      // admission, so this drains competitors, not this initializing turn.
+      const drained = await interruptSessionWorkAdmissions({
+        scope: attemptContext.storePath,
+        identities,
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      });
+      if (!drained) {
+        throw new Error(
+          `timed out draining work before reply session init self-heal: ${candidate.sessionKey}`,
+        );
+      }
+    },
+    run: async () => {
+      // Fenced: foreign admissions are drained and, while the mutation is active,
+      // new ones are blocked. Now run the runtime-agnostic recovery — dispose the
+      // wedged session's MCP runtime and run the registered harness reset hooks
+      // (each runtime releases its lane and clears its stale native thread
+      // binding; the codex harness additionally lets its transcript mirror
+      // rebuild) — then retry init exactly once. `conflictRecoveryAttempted=true`
+      // bounds the recursion: a still-failing commit throws with clear context
+      // instead of self-healing again.
+      await retireSessionMcpRuntime({
+        sessionId: candidate.sessionId,
+        reason: "reply-session-init-conflict",
+        onError: (error, sessionIdLocal) => {
+          log.warn(
+            `failed to dispose bundle MCP runtime for conflicted session ${sessionIdLocal}`,
+            { error: String(error) },
+          );
+        },
+      });
+      await resetRegisteredAgentHarnessSessions({
+        agentId: attemptContext.agentId,
+        sessionId: candidate.sessionId,
+        sessionKey: candidate.sessionKey,
+        sessionFile: candidate.sessionFile,
+        reason: "reset",
+      });
+      return await runExclusiveSessionStoreWrite(
+        attemptContext.storePath,
+        async () =>
+          await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true),
+      );
+    },
+  });
 }
 
 async function initSessionStateAttemptLocked(
@@ -1043,40 +1132,39 @@ async function initSessionStateAttemptLocked(
     }
     if (conflictAction.kind === "self-heal-retry") {
       // The optimistic-concurrency commit keeps losing its race even after a
-      // fresh-snapshot retry. Left alone this wedges the session for ANY runtime
-      // (native Anthropic and the Codex harness alike): init never completes for
-      // this sessionKey, the store entry is never committed, and completed
-      // tool-results silently return empty. Reuse the same runtime-agnostic
-      // recovery the rollover/timeout paths use — dispose the session's MCP
-      // runtime and run the registered harness reset hooks (each runtime releases
-      // its lane and clears its stale native thread binding; the Codex harness
-      // additionally lets its transcript mirror rebuild) — then retry init
-      // exactly once so initialization can complete and unwedge the session.
+      // fresh-snapshot retry. Left alone this wedges the session for ANY runtime:
+      // init never completes for this sessionKey, the store entry is never
+      // committed, and completed tool-results silently return empty. The recovery
+      // is the runtime-agnostic teardown the rollover/timeout paths use (dispose
+      // the session's MCP runtime + run the registered harness reset hooks), then
+      // retry init once so it can complete and unwedge the session.
       const wedgedSessionId = entry?.sessionId;
+      if (!wedgedSessionId) {
+        // Nothing is bound to this sessionKey yet (no runtime to dispose and no
+        // identity to drain), so there is no live turn to protect. Retry init once
+        // in place; a still-failing commit then throws via conflictRecoveryAttempted.
+        log.warn(
+          `reply session initialization conflicted for ${sessionKey}; retrying init once (no bound runtime to self-heal)`,
+        );
+        return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true);
+      }
+      // A runtime IS bound. The teardown reuses the rollover primitives, so it must
+      // reuse the rollover SAFETY FENCE: hand the wedged identity back to
+      // initSessionStateAttempt, which drains any foreign in-flight owner OUTSIDE
+      // this store-write lock before disposing the runtime and retrying. Draining
+      // here (while holding the store-write lock) could deadlock an owner that must
+      // write to release — which is exactly why the rollover path drains from the
+      // outer fence rather than inline.
       log.warn(
-        `reply session initialization conflicted for ${sessionKey}; running harness self-heal before final retry`,
+        `reply session initialization conflicted for ${sessionKey}; requesting fenced harness self-heal before final retry`,
         { wedgedSessionId },
       );
-      if (wedgedSessionId) {
-        await retireSessionMcpRuntime({
-          sessionId: wedgedSessionId,
-          reason: "reply-session-init-conflict",
-          onError: (error, sessionIdLocal) => {
-            log.warn(
-              `failed to dispose bundle MCP runtime for conflicted session ${sessionIdLocal}`,
-              { error: String(error) },
-            );
-          },
-        });
-      }
-      await resetRegisteredAgentHarnessSessions({
-        agentId,
+      return {
+        kind: "conflict-self-heal",
         sessionId: wedgedSessionId,
         sessionKey,
         sessionFile: entry?.sessionFile,
-        reason: "reset",
-      });
-      return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true);
+      };
     }
     throw new Error(
       `reply session initialization conflicted for ${sessionKey} after harness self-heal retry`,

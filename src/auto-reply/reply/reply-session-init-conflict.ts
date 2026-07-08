@@ -3,14 +3,23 @@
  * concurrency commit loses its race (`commitReplySessionInitialization` returns
  * `ok: false`).
  *
- * Root cause (runtime-agnostic): the conflict branch used to allow exactly one
- * stale-snapshot retry and then throw. Because init never completed for that
- * sessionKey, the session wedged permanently for ANY runtime — the store entry
- * was never committed, so every following turn hit the same conflict/throw,
- * completed tool-results had no channel back to the model, and the reply
- * silently returned empty. It survived gateway restarts and only cleared on a
- * fresh session. This was observed on both the native (Anthropic) runtime and
- * the Codex app-server harness.
+ * Root cause (runtime-agnostic BY CONSTRUCTION): the conflict lives in the
+ * session-store optimistic-commit path (`commitReplySessionInitialization`),
+ * which sits ABOVE any model runtime — so the wedge cannot be runtime-specific.
+ * The conflict branch used to allow exactly one stale-snapshot retry and then
+ * throw. Because init never completed for that sessionKey, the session wedged
+ * permanently for ANY runtime — the store entry was never committed, so every
+ * following turn hit the same conflict/throw, completed tool-results had no
+ * channel back to the model, and the reply silently returned empty. It survived
+ * gateway restarts and only cleared on a fresh session. Every case we actually
+ * observed ran under the codex app-server harness (the agent runs codex even on
+ * Anthropic models); we did not independently observe it on the native runtime,
+ * but the store-level location means it is not codex-specific.
+ *
+ * This is the reply-session analogue of the ACP-harness init conflict fixed in
+ * #98931 (closed): that change established this same dispose-runtime + harness-
+ * reset recovery path for a session-store commit conflict, which this reuses for
+ * the reply-session initializer.
  *
  * The rollover/timeout paths already self-heal by disposing the session's MCP
  * runtime and running the registered harness `reset` hooks — a runtime-agnostic
