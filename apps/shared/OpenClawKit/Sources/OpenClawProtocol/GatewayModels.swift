@@ -8119,6 +8119,40 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     }
 }
 
+public struct QuestionAnswer: Codable, Sendable {
+    public let text: String
+
+    public init(
+        text: String)
+    {
+        self.text = text
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+    }
+}
+
+public struct QuestionListParams: Codable, Sendable {}
+
+public struct QuestionResolveParams: Codable, Sendable {
+    public let id: String
+    public let answers: [String: AnyCodable]
+
+    public init(
+        id: String,
+        answers: [String: AnyCodable])
+    {
+        self.id = id
+        self.answers = answers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case answers
+    }
+}
+
 public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?
     public let title: String
