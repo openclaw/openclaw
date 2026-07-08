@@ -9,9 +9,10 @@ import {
 
 export const memoryRuntime: MemoryPluginRuntime = {
   async getMemorySearchManager(params) {
-    const { manager, error } = await getMemorySearchManager(params);
+    const { manager, debug, error } = await getMemorySearchManager(params);
     return {
       manager,
+      debug,
       error,
     };
   },

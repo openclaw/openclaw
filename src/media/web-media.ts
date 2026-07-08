@@ -11,6 +11,7 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +34,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -282,6 +284,13 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   return (
     relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
+}
+
+function resolveLocalMediaFileName(filePath: string): string | undefined {
+  const fileName = basenameFromAnyPath(filePath) || undefined;
+  return fileName && isPathInsideRoot(filePath, getMediaDir())
+    ? extractOriginalFilename(fileName)
+    : fileName;
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
@@ -961,7 +970,7 @@ async function loadWebMediaInternal(
     };
   };
 
-  if (/^https?:\/\//i.test(mediaUrl)) {
+  if (hasHttpUrlPrefix(mediaUrl)) {
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
     const defaultFetchCap = maxBytesForKind("document");
@@ -1074,7 +1083,7 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
-  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  let fileName = resolveLocalMediaFileName(mediaUrl);
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

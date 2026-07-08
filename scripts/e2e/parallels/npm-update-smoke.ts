@@ -1163,6 +1163,7 @@ export class NpmUpdateSmoke {
   ): Promise<void> {
     await runWindowsBackgroundPowerShell({
       append: (chunk) => ctx.append(chunk),
+      beforeLaunchAttempt: () => ensureVmRunning(windowsVm),
       label: "Windows update",
       script,
       timeoutMs,

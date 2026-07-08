@@ -3,6 +3,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -80,6 +81,11 @@ type ActionTargetAliasSpec = {
   aliases: string[];
 };
 
+export type ActionDeliveryTargetAliasSpec = {
+  deliveryTargetAliases?: string[];
+  resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+};
+
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
   unsend: { aliases: ["messageId"] },
   edit: { aliases: ["messageId"] },
@@ -112,6 +118,33 @@ function listActionTargetAliasSpecs(
     specs.push(channelSpec);
   }
   return specs;
+}
+
+/** Resolves a plugin-declared delivery alias into the shared target contract. */
+export function resolveActionDeliveryTargetAlias(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: { channel?: string; aliasSpec?: ActionDeliveryTargetAliasSpec },
+): string | undefined {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return undefined;
+  }
+  const aliases =
+    options?.aliasSpec ??
+    getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
+  const resolved = aliases?.resolveDeliveryTarget?.({ args: params });
+  if (resolved !== undefined) {
+    return normalizeOptionalString(resolved);
+  }
+  const deliveryAliases = aliases?.deliveryTargetAliases ?? [];
+  const targets = deliveryAliases
+    .map((alias) => normalizeOptionalStringifiedId(params[alias]))
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    throw new Error(`Action ${action} received conflicting delivery target aliases.`);
+  }
+  return targets[0];
 }
 
 /**

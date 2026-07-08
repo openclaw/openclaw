@@ -104,10 +104,10 @@ class InvokeDispatcher(
           message = "INVALID_REQUEST: unknown command",
         )
     if (spec.requiresForeground && !isForeground()) {
-      // Canvas, camera, and screen-backed commands need an active Activity/WebView surface.
+      // Foreground-only commands need an active Activity surface before touching UI or capture APIs.
       return GatewaySession.InvokeResult.error(
         code = "NODE_BACKGROUND_UNAVAILABLE",
-        message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+        message = "NODE_BACKGROUND_UNAVAILABLE: command requires foreground",
       )
     }
     availabilityError(spec.availability)?.let { return it }

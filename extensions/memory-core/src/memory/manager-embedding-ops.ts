@@ -408,11 +408,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             items: batchTexts.length,
             timeoutMs,
           });
-          return await runEmbeddingOperationWithTimeout({
+          const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
             run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
           });
+          log.debug("memory embeddings: batch completed", {
+            provider: provider.id,
+            items: batchTexts.length,
+          });
+          return result;
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
@@ -428,6 +433,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
       });
     } catch (err) {
+      log.debug("memory embeddings: batch failed", {
+        provider: provider.id,
+        error: formatErrorMessage(err),
+      });
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
         operation: "batch",

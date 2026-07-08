@@ -5,6 +5,7 @@
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -77,6 +78,10 @@ export async function captureScreenshot(opts: {
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
+
+      // Background surface captures can stall until CDP times out; activate to force a frame.
+      // Ignore protocol rejection so browsers that already capture correctly still proceed.
+      await send("Page.bringToFront").catch(() => {});
 
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
@@ -243,7 +248,9 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy, {
+        source: candidateWsUrl === opts.cdpUrl ? "configured" : "discovered",
+      });
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
@@ -311,7 +318,7 @@ export type AriaSnapshotNode = {
 };
 
 /** Prefix assigned to generated accessibility-node refs. */
-export const AX_REF_PREFIX = "ax";
+const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
 /** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
@@ -430,7 +437,7 @@ export async function snapshotAria(opts: {
 }
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */
-export type CdpRoleRef = {
+type CdpRoleRef = {
   role: string;
   name?: string;
   nth?: number;
@@ -439,7 +446,7 @@ export type CdpRoleRef = {
 };
 
 /** Options for CDP role snapshot extraction and compaction. */
-export type CdpRoleSnapshotOptions = {
+type CdpRoleSnapshotOptions = {
   interactive?: boolean;
   compact?: boolean;
   maxDepth?: number;
@@ -620,7 +627,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -637,7 +644,10 @@ async function findCursorInteractiveElements(
     sessionId,
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[])
+    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 100);
+        return entry;
+      })
     : [];
   if (!entries.length) {
     return new Map();

@@ -15,11 +15,20 @@ import {
   openUrl,
   probeGatewayReachable,
   resolveBrowserOpenCommand,
+  resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
   summarizeExistingConfig,
+  testing,
   validateGatewayPasswordInput,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
+
+describe("onboard error summaries", () => {
+  it("keeps the bounded first line UTF-16 well-formed", () => {
+    expect(testing.summarizeError(`${"x".repeat(118)}🚀tail\nignored`)).toBe(`${"x".repeat(118)}…`);
+  });
+});
 
 const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
@@ -36,6 +45,7 @@ const mocks = vi.hoisted(() => ({
     killed: false,
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
+  resolveAdvertisedLanHost: vi.fn<() => Promise<string | null>>(async () => null),
   probeGateway: vi.fn(),
 }));
 
@@ -49,6 +59,10 @@ vi.mock("../process/exec.js", () => ({
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
+}));
+
+vi.mock("../infra/advertised-lan-host.js", () => ({
+  resolveAdvertisedLanHost: mocks.resolveAdvertisedLanHost,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -556,6 +570,29 @@ describe("resolveControlUiLinks", () => {
 
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("uses route-aware advertised LAN host for display links", async () => {
+    mocks.resolveAdvertisedLanHost.mockResolvedValueOnce("10.211.55.3");
+
+    const links = await resolveAdvertisedControlUiLinks({
+      port: 18789,
+      bind: "lan",
+    });
+
+    expect(links.httpUrl).toBe("http://10.211.55.3:18789/");
+    expect(links.wsUrl).toBe("ws://10.211.55.3:18789");
+  });
+
+  it("keeps co-located LAN probes on loopback", () => {
+    const links = resolveLocalControlUiProbeLinks({
+      port: 18789,
+      bind: "lan",
+    });
+
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(mocks.resolveAdvertisedLanHost).not.toHaveBeenCalled();
   });
 });
 

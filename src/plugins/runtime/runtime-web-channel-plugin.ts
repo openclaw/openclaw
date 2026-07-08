@@ -22,14 +22,6 @@ type WebChannelPluginRecord = {
   source: string;
 };
 
-type WebChannelConnectionWaitOptions =
-  | {
-      timeout: "none";
-    }
-  | {
-      timeoutMs: number;
-    };
-
 type WebChannelLightRuntimeModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
   getWebAuthAgeMs: (authDir?: string) => number | null;
@@ -62,7 +54,6 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
-  waitForWaConnection: (sock: unknown, options: WebChannelConnectionWaitOptions) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
   extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
@@ -294,13 +285,6 @@ export async function startWebLoginWithQr(
   ...args: Parameters<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]>
 ): ReturnType<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]> {
   return (await getHeavyExport("startWebLoginWithQr"))(...args);
-}
-
-/** Waits for web-channel socket connection through the heavy runtime API. */
-export async function waitForWebChannelConnection(
-  ...args: Parameters<WebChannelHeavyRuntimeModule["waitForWaConnection"]>
-): ReturnType<WebChannelHeavyRuntimeModule["waitForWaConnection"]> {
-  return (await getHeavyExport("waitForWaConnection"))(...args);
 }
 
 /** Waits for web-channel login through the heavy runtime API. */

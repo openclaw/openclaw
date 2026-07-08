@@ -2,7 +2,11 @@
 // for announce delivery give-up paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
-import { logAnnounceGiveUp, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
+import {
+  capFrozenResultText,
+  logAnnounceGiveUp,
+  reconcileOrphanedRun,
+} from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -19,6 +23,16 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     ...overrides,
   };
 }
+
+describe("capFrozenResultText", () => {
+  it("preserves a valid UTF-8 prefix within the frozen-result byte budget", () => {
+    const result = capFrozenResultText("😀".repeat(25_601));
+
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(100 * 1024);
+    expect(result).not.toContain("�");
+    expect(result).toContain("[truncated: frozen completion output exceeded 100KB");
+  });
+});
 
 describe("reconcileOrphanedRun", () => {
   afterEach(() => {
@@ -98,6 +112,23 @@ describe("logAnnounceGiveUp", () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('deliveryError="gateway timeout phase: routed dispatch failed"'),
     );
+    logSpy.mockRestore();
+  });
+
+  it("keeps bounded delivery errors UTF-16 well-formed", () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const entry = createRunEntry({
+      delivery: {
+        status: "failed",
+        lastError: `${"x".repeat(1_999)}🚀tail`,
+      },
+    });
+
+    logAnnounceGiveUp(entry, "expiry");
+
+    const line = String(logSpy.mock.calls[0]?.[0]);
+    expect(line).toContain(`${"x".repeat(1_999)}…`);
+    expect(line).not.toContain("\uD83D");
     logSpy.mockRestore();
   });
 });

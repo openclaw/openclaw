@@ -6,8 +6,8 @@ const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.reso
 const updateLastRouteMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: (args: unknown) => recordSessionMetaFromInboundMock(args),
-  updateLastRoute: (args: unknown) => updateLastRouteMock(args),
+  recordInboundSessionMeta: (args: unknown) => recordSessionMetaFromInboundMock(args),
+  updateSessionLastRoute: (args: unknown) => updateLastRouteMock(args),
 }));
 
 type SessionModule = typeof import("./session.js");

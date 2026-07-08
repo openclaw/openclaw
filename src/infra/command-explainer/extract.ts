@@ -946,9 +946,8 @@ function shellWrapperPayloadForParsing(
   return { command: payload, spanBase };
 }
 
-type InlineEvalHit = InterpreterInlineEvalHit;
 function recordInlineEvalRisk(
-  inlineEval: InlineEvalHit,
+  inlineEval: InterpreterInlineEvalHit,
   text: string,
   span: SourceSpan,
   output: MutableExplanation,

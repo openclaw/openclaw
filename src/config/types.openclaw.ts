@@ -6,7 +6,13 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type {
+  AuditConfig,
+  DiagnosticsConfig,
+  LoggingConfig,
+  SessionConfig,
+  WebConfig,
+} from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
@@ -15,6 +21,7 @@ import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
@@ -126,11 +133,15 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
+    securityAcknowledgedAt?: string;
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */
@@ -138,8 +149,8 @@ export type OpenClawConfig = {
   /** Crestodian rescue/maintenance integration settings. */
   crestodian?: CrestodianConfig;
   update?: {
-    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
-    channel?: "stable" | "beta" | "dev";
+    /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
+    channel?: "stable" | "extended-stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
@@ -176,6 +187,8 @@ export type OpenClawConfig = {
   };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
+  /** Marketplace feed and local package source profile configuration. */
+  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */
@@ -298,6 +311,7 @@ export type ConfigFileSnapshot = {
   /** @deprecated Prefer runtimeConfig. */
   config: RuntimeConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];

@@ -1,5 +1,8 @@
 // Normalizes provider model compatibility metadata from plugins.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  resolveUnsupportedToolSchemaKeywords,
+  shouldOmitEmptyArrayItems,
+} from "@openclaw/ai/internal/openai";
 import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
@@ -55,25 +58,9 @@ export function resolveToolCallArgumentsEncoding(
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
-export function resolveUnsupportedToolSchemaKeywords(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): ReadonlySet<string> {
-  const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
-  return new Set(
-    normalizeStringEntries(
-      keywords.filter((keyword): keyword is string => typeof keyword === "string"),
-    ),
-  );
-}
-
-export function shouldOmitEmptyArrayItems(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  const compat = extractModelCompat(modelOrCompat) as
-    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
-    | undefined;
-  return compat?.omitEmptyArrayItems === true;
-}
+// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
+// re-export so existing core/plugin callers keep one canonical import site.
+export { resolveUnsupportedToolSchemaKeywords, shouldOmitEmptyArrayItems };
 
 function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";

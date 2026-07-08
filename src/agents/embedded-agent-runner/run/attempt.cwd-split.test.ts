@@ -86,6 +86,21 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
   });
 
+  it("skips runtime tool construction when the selected model does not support tools", async () => {
+    hoisted.supportsModelToolsMock.mockReturnValueOnce(false);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+  });
+
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.

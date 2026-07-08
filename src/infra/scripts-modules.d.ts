@@ -18,19 +18,3 @@ declare module "../../scripts/watch-node.mjs" {
     lockDisabled?: boolean;
   }): Promise<number>;
 }
-
-declare module "../../scripts/ci-changed-scope.mjs" {
-  export function detectChangedScope(paths: string[]): {
-    runNode: boolean;
-    runMacos: boolean;
-    runAndroid: boolean;
-    runWindows: boolean;
-    runSkillsPython: boolean;
-    runChangedSmoke: boolean;
-    runControlUiI18n: boolean;
-  };
-  export function detectInstallSmokeScope(paths: string[]): {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-}

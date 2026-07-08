@@ -25,6 +25,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -94,6 +95,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
+  "dist/audit/audit-event-writer.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -147,12 +149,12 @@ const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
-export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
   "openclaw/plugin-sdk/core",
   "openclaw/plugin-sdk/provider-entry",
   "openclaw/plugin-sdk/runtime",
 ] as const;
-export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
+const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],
@@ -958,7 +960,7 @@ export function collectForbiddenPackContentPaths(
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
-  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
   return regex.exec(item)?.[1]?.trim() ?? null;
 }

@@ -1,5 +1,6 @@
-import { note as clackNote } from "@clack/prompts";
 // Terminal Core tests cover table behavior.
+import path from "node:path";
+import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
@@ -175,6 +176,30 @@ describe("renderTable", () => {
     const line2Index = lines.findIndex((line) => line.includes("line2"));
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
+  });
+
+  it("shortens only exact home paths and child paths in table cells", () => {
+    const home = path.resolve("test-home", "alice");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", "");
+    vi.stubEnv("OPENCLAW_HOME", "");
+
+    const out = renderTable({
+      border: "none",
+      columns: [{ key: "Path", header: "Path" }],
+      rows: [
+        { Path: home },
+        { Path: `${home}/project` },
+        { Path: `${home}2/project` },
+        { Path: `Workspace: ${home}/project` },
+      ],
+    });
+
+    expect(out).toContain("~\n");
+    expect(out).toContain("~/project");
+    expect(out).toContain(`${home}2/project`);
+    expect(out).toContain("Workspace: ~/project");
+    expect(out).not.toContain("~2/project");
   });
 
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
@@ -382,5 +407,17 @@ describe("wrapNoteMessage", () => {
     expect(wrapNoteMessage(12345, { maxWidth: 20, columns: 80 })).toBe("12345");
     expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
     expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
+  });
+
+  it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
+    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // so splitting by code-point count would emit lines up to 2x the budget.
+    const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
+    const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");
+
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+    }
+    expect(lines.join("")).toBe(input);
   });
 });

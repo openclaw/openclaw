@@ -6,6 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -17,12 +18,12 @@ const childProcessModule = nodeRequire("node:child_process") as {
 };
 
 /** Running Bonjour advertiser handle. */
-export type GatewayBonjourAdvertiser = {
+type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
 /** Input data used to publish OpenClaw gateway Bonjour records. */
-export type GatewayBonjourAdvertiseOpts = {
+type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
   sshPort?: number;
@@ -113,14 +114,10 @@ const defaultLogger = {
 
 const CIAO_MODULE_ID = "@homebridge/ciao";
 const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
-let ciaoModulePromise: Promise<CiaoModule> | null = null;
 let ciaoExecHidePatchDepth = 0;
 let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
-async function loadCiaoModule(): Promise<CiaoModule> {
-  ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
-  return ciaoModulePromise;
-}
+const loadCiaoModule = createLazyRuntimeModule(() => import(CIAO_MODULE_ID) as Promise<CiaoModule>);
 
 function readBonjourDisableOverride(): boolean | null {
   const raw = process.env.OPENCLAW_DISABLE_BONJOUR;

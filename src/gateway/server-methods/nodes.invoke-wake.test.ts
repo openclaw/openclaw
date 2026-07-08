@@ -46,6 +46,7 @@ vi.mock("../../config/io.js", () => ({
 }));
 
 vi.mock("../node-command-policy.js", () => ({
+  DEFAULT_DANGEROUS_NODE_COMMANDS: ["sms.send", "sms.search"],
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
   isForegroundRestrictedPluginNodeCommand: mocks.isForegroundRestrictedPluginNodeCommand,
@@ -326,6 +327,7 @@ async function invokeNode(params: {
       error?: { code?: string; message?: string } | null;
     }>;
   };
+  client?: unknown;
   requestParams?: Partial<Record<string, unknown>>;
 }) {
   const respond = vi.fn();
@@ -342,11 +344,30 @@ async function invokeNode(params: {
       logGateway,
       getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
-    client: null,
+    client: (params.client ?? null) as never,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
     isWebchatConnect: () => false,
   });
   return respond;
+}
+
+function createOperatorClient(params?: { scopes?: string[]; pluginRuntimeOwnerId?: string }) {
+  return {
+    connect: {
+      role: "operator" as const,
+      scopes: params?.scopes ?? ["operator.write"],
+      client: {
+        id: "operator-test",
+        mode: "backend" as const,
+        name: "operator-test",
+        platform: "node",
+        version: "test",
+      },
+    },
+    internal: params?.pluginRuntimeOwnerId
+      ? { pluginRuntimeOwnerId: params.pluginRuntimeOwnerId }
+      : {},
+  };
 }
 
 function createNodeClient(nodeId: string, commands?: string[]) {
@@ -555,6 +576,135 @@ describe("node.invoke APNs wake path", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("rejects browser.proxy for plugin runtime owners without admin scope", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "browser-node",
+        commands: ["browser.proxy"],
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({
+        scopes: ["operator.write"],
+        pluginRuntimeOwnerId: "third-party",
+      }),
+      requestParams: {
+        nodeId: "browser-node",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toContain("missing scope: operator.admin");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains the explicit opt-in required for dangerous commands", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "command not allowlisted",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-sms-node",
+        commands: ["sms.search"],
+        platform: "android",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "android-sms-node",
+        command: "sms.search",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes explicit command denials from missing opt-ins", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { denyCommands: ["sms.search"] } },
+    });
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "command not allowlisted",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-sms-node",
+        commands: ["sms.search"],
+        platform: "android",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "android-sms-node",
+        command: "sms.search",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "sms.search" is blocked by gateway.nodes.denyCommands',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("allows browser.proxy for admin-scoped plugin runtime callers", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "browser-node",
+        commands: ["browser.proxy"],
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({
+        scopes: ["operator.admin"],
+        pluginRuntimeOwnerId: "google-meet",
+      }),
+      requestParams: {
+        nodeId: "browser-node",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
+      nodeId: "browser-node",
+      command: "browser.proxy",
+      params: { method: "GET", path: "/profiles" },
+    });
   });
 
   it("keeps the existing not-connected response when wake path is unavailable", async () => {

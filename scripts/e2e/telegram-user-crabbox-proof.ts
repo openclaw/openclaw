@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -151,9 +152,9 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
-export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
-export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
-export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
+const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
+const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -576,12 +577,12 @@ function appendCommandText(current: string, chunk: Buffer): string {
   return current + chunk.toString("utf8");
 }
 
-export function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
   const next = appendCommandText(current, chunk);
   return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
-export function appendCommandStdout(
+function appendCommandStdout(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
@@ -593,7 +594,7 @@ export function appendCommandStdout(
   return { ok: true, value: next };
 }
 
-export function appendCommandStderrTail(
+function appendCommandStderrTail(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
@@ -993,12 +994,6 @@ function spawnDaemon(params: {
   child.unref();
   fs.closeSync(log);
   return child.pid;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function waitForChildExit(child: ChildProcess) {

@@ -27,6 +27,28 @@ function createStoredCredential(
   } as unknown as Parameters<typeof refreshChutesTokens>[0]["credential"];
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function expectRefreshedCredential(
   refreshed: Awaited<ReturnType<typeof refreshChutesTokens>>,
   now: number,
@@ -210,6 +232,62 @@ describe("chutes-oauth", () => {
     });
 
     expectRefreshedCredential(refreshed, now);
+  });
+
+  it("bounds token exchange error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"chutes exchange failure ".repeat(1024)}tail`, {
+      status: 401,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return tracked.response;
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      exchangeChutesCodeForTokens({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://127.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        code: "code_401",
+        codeVerifier: "verifier_401",
+        fetchFn,
+        now: 1_000_000,
+      }),
+    ).rejects.toThrow("Chutes token exchange failed: chutes exchange failure");
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("bounds token refresh error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"chutes refresh failure ".repeat(1024)}tail`, {
+      status: 401,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return tracked.response;
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      refreshChutesTokens({
+        credential: createStoredCredential(5_000_000),
+        fetchFn,
+        now: 5_000_000,
+      }),
+    ).rejects.toThrow("Chutes token refresh failed: chutes refresh failure");
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("rejects unsafe refresh token lifetimes", async () => {

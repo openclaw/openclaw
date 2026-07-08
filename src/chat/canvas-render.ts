@@ -1,4 +1,5 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
+import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
@@ -18,18 +19,6 @@ type CanvasPreview = {
   className?: string;
   style?: string;
 };
-
-function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return asOptionalRecord(parsed);
-  } catch {
-    return undefined;
-  }
-}
 
 function getRecordStringField(
   record: Record<string, unknown> | undefined,
@@ -184,7 +173,7 @@ export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = tryParseJsonRecord(outputText);
+  const parsed = outputText ? asOptionalRecord(safeParseJson(outputText)) : undefined;
   return coerceCanvasPreview(parsed);
 }
 

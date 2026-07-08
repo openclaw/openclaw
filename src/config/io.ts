@@ -167,6 +167,7 @@ type ShippedPluginInstallConfigReadMigration = {
 };
 
 const loggedInvalidConfigs = new Set<string>();
+const loggedConfigWarningFingerprints = new Map<string, string>();
 const warnedFutureTouchedVersions = new Set<string>();
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
@@ -308,6 +309,11 @@ function assertBaseSnapshotStillCurrent(
       currentHash: null,
       retryable: false,
     });
+  }
+  // Unreadable snapshots cannot be re-read for freshness; the write guard rejects
+  // them before commit unless the caller explicitly requests a destructive write.
+  if (snapshot.readError) {
+    return;
   }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
   let currentRaw: string | null = null;
@@ -503,7 +509,8 @@ function resolveConfigStatMetadata(
 
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
-  previousBytes: number | null;
+  unreadableBefore: boolean;
+  sizeBaselineBytes: number | null;
   nextBytes: number | null;
   hasMetaBefore: boolean;
   gatewayModeBefore: string | null;
@@ -513,13 +520,16 @@ function resolveConfigWriteSuspiciousReasons(params: {
   if (!params.existsBefore) {
     return reasons;
   }
+  if (params.unreadableBefore) {
+    reasons.push("unreadable-config-before-write");
+  }
   if (
-    typeof params.previousBytes === "number" &&
+    typeof params.sizeBaselineBytes === "number" &&
     typeof params.nextBytes === "number" &&
-    params.previousBytes >= 512 &&
-    params.nextBytes < Math.floor(params.previousBytes * 0.5)
+    params.sizeBaselineBytes >= 512 &&
+    params.nextBytes < Math.floor(params.sizeBaselineBytes * 0.5)
   ) {
-    reasons.push(`size-drop:${params.previousBytes}->${params.nextBytes}`);
+    reasons.push(`size-drop:${params.sizeBaselineBytes}->${params.nextBytes}`);
   }
   if (!params.hasMetaBefore) {
     reasons.push("missing-meta-before-write");
@@ -536,6 +546,7 @@ function resolveConfigWriteBlockingReasons(
 ): string[] {
   return suspicious.filter(
     (reason) =>
+      reason === "unreadable-config-before-write" ||
       (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
       reason === "gateway-mode-removed",
   );
@@ -951,8 +962,56 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
+function logConfigWarningsOnce(params: {
+  configPath: string;
+  warnings: Array<{ path: string; message: string }>;
+  logger: Pick<typeof console, "warn">;
+}): void {
+  if (params.warnings.length === 0) {
+    // A later recurrence should be visible after the config becomes clean.
+    loggedConfigWarningFingerprints.delete(params.configPath);
+    return;
+  }
+
+  const details = params.warnings
+    .map(
+      (warning) =>
+        `- ${sanitizeTerminalText(warning.path || "<root>")}: ${sanitizeTerminalText(warning.message)}`,
+    )
+    .join("\n");
+  const fingerprint = hashConfigRaw(details);
+  if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
+    return;
+  }
+  loggedConfigWarningFingerprints.set(params.configPath, fingerprint);
+  params.logger.warn(`Config warnings:\n${details}`);
+}
+
 function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
   return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
+}
+
+function resolveConfigSizeBaselineBytes(params: {
+  raw: string | null;
+  json5: { parse: (value: string) => unknown };
+  lastTouchedVersionOverride?: string;
+}): number | null {
+  if (params.raw === null) {
+    return null;
+  }
+  const rawBytes = Buffer.byteLength(params.raw, "utf-8");
+  const parsed = parseConfigJson5(params.raw, params.json5);
+  if (!parsed.ok || !isRecord(parsed.parsed)) {
+    return rawBytes;
+  }
+  const canonical = JSON.stringify(
+    stampConfigVersion(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    null,
+    2,
+  )
+    .trimEnd()
+    .concat("\n");
+  return Buffer.byteLength(canonical, "utf-8");
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -1054,6 +1113,18 @@ function findJsonRootSuffix(
   return null;
 }
 
+function warnOnConfigPermissionHardeningFailure(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  context: string;
+  error: unknown;
+}): void {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  params.deps.logger.warn(
+    `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`,
+  );
+}
+
 async function persistPrefixedConfigRecovery(params: {
   deps: Required<ConfigIoDeps>;
   configPath: string;
@@ -1071,7 +1142,14 @@ async function persistPrefixedConfigRecovery(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch((error: unknown) => {
+    warnOnConfigPermissionHardeningFailure({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "prefix recovery",
+      error,
+    });
+  });
   params.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${params.configPath}` +
       (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
@@ -1329,6 +1407,7 @@ function createConfigFileSnapshot(params: {
   valid: boolean;
   runtimeConfig: OpenClawConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigFileSnapshot["issues"];
   warnings: ConfigFileSnapshot["warnings"];
   legacyIssues: LegacyConfigIssue[];
@@ -1346,6 +1425,7 @@ function createConfigFileSnapshot(params: {
     runtimeConfig,
     config: runtimeConfig,
     hash: params.hash,
+    ...(params.readError ? { readError: params.readError } : {}),
     issues: params.issues,
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
@@ -1656,6 +1736,7 @@ export function createConfigIO(
       maybeLoadDotEnvForConfig(deps.env);
       const envBeforeRead = snapshotEnv(deps.env);
       if (!deps.fs.existsSync(configPath)) {
+        loggedConfigWarningFingerprints.delete(configPath);
         if (
           overrides.shellEnvFallback !== "defer" &&
           shouldEnableShellEnvFallback(deps.env) &&
@@ -1695,6 +1776,7 @@ export function createConfigIO(
       }
       warnOnConfigMiskeys(validationConfigRaw, deps.logger);
       if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
+        loggedConfigWarningFingerprints.delete(configPath);
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
             path: configPath,
@@ -1756,14 +1838,12 @@ export function createConfigIO(
           loggedConfigPaths: loggedInvalidConfigs,
         });
       }
-      if (validated.warnings.length > 0) {
-        const details = validated.warnings
-          .map(
-            (iss) =>
-              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
-          )
-          .join("\n");
-        deps.logger.warn(`Config warnings:\n${details}`);
+      if (overrides.pluginValidation !== "skip") {
+        logConfigWarningsOnce({
+          configPath,
+          warnings: validated.warnings,
+          logger: deps.logger,
+        });
       }
       if (!deps.suppressFutureVersionWarning) {
         warnIfConfigFromFuture(validated.config, deps.logger);
@@ -2121,6 +2201,7 @@ export function createConfigIO(
           valid: false,
           runtimeConfig: fallbackSourceConfig,
           hash: fallbackHash,
+          ...(fallbackRaw === null ? { readError: { code: nodeErr?.code ?? null } } : {}),
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
@@ -2364,12 +2445,7 @@ export function createConfigIO(
       const issueMessage = issue?.message ?? "invalid";
       throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
-    }
+    const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
 
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
@@ -2446,6 +2522,13 @@ export function createConfigIO(
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
+    // Formatting is not data. Keep malformed/non-object files on the raw-byte
+    // baseline, but compare parseable authored config in its canonical form.
+    const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
+      raw: snapshot.raw,
+      json5: deps.json5,
+      lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    });
     const nextBytes = Buffer.byteLength(json, "utf-8");
     const previousStat = snapshot.exists
       ? await deps.fs.promises.stat(configPath).catch(() => null)
@@ -2456,7 +2539,8 @@ export function createConfigIO(
     const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
-      previousBytes,
+      unreadableBefore: snapshot.readError != null,
+      sizeBaselineBytes,
       nextBytes,
       hasMetaBefore,
       gatewayModeBefore,
@@ -2635,13 +2719,27 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      if (!options.skipPluginValidation) {
+        // Only successful full-validation commits can advance warning state.
+        // The outer runtime refresh may still roll back this commit and state.
+        logConfigWarningsOnce({
+          configPath,
+          warnings: validated.warnings,
+          logger: deps.logger,
+        });
+      }
       return {
         persistedHash: nextHash,
         persistedConfig: stampedOutputConfig,
-        ...(pluginInstallConfigMigration.migrated
+        ...(pluginInstallConfigMigration.migrated || !options.skipPluginValidation
           ? {
               [configWritePostCommitRollback]: () => {
                 rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
+                if (previousWarningFingerprint === undefined) {
+                  loggedConfigWarningFingerprints.delete(configPath);
+                } else {
+                  loggedConfigWarningFingerprints.set(configPath, previousWarningFingerprint);
+                }
               },
             }
           : {}),

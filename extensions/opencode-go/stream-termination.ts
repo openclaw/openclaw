@@ -7,7 +7,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 
-export interface OpencodeGoStalledStreamWrapperOptions {
+interface OpencodeGoStalledStreamWrapperOptions {
   /**
    * Provider id this wrapper applies to. Calls whose model.provider does not
    * match are forwarded untouched so the wrapper stays provider-scoped.
@@ -55,7 +55,11 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
   return (
     event.type === "text_delta" ||
     event.type === "thinking_delta" ||
-    event.type === "toolcall_delta"
+    event.type === "toolcall_delta" ||
+    event.type === "text_end" ||
+    event.type === "thinking_end" ||
+    event.type === "toolcall_start" ||
+    event.type === "toolcall_end"
   );
 }
 
@@ -241,6 +245,10 @@ export function createOpencodeGoStalledStreamWrapper(
     ]);
     const wrappedOptions = {
       ...callOptions,
+      // This provider owns the raw SSE stall policy. Preserve that longer first
+      // event window when delegating to OpenAI-compatible streams so the generic
+      // embedded-runner default cannot shorten opencode-go prompt evaluation.
+      firstEventTimeoutMs,
       signal: combinedSignal.signal,
     };
     let idleTimer: ReturnType<typeof setTimeout> | undefined;

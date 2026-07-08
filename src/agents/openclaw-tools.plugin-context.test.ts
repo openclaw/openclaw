@@ -20,6 +20,17 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.requesterSenderId).toBe("trusted-sender");
   });
 
+  it("forwards the trusted owner bit", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        senderIsOwner: true,
+      },
+    });
+
+    expect(result.context.senderIsOwner).toBe(true);
+  });
+
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

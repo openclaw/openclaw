@@ -328,6 +328,7 @@ type SelectedConnectAuth = {
   authDeviceToken?: string;
   authPassword?: string;
   authApprovalRuntimeToken?: string;
+  authAgentRuntimeIdentityToken?: string;
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
@@ -343,6 +344,7 @@ type StoredDeviceAuth = {
 type AssembledConnect = {
   params: ConnectParams;
   authApprovalRuntimeToken: string | undefined;
+  authAgentRuntimeIdentityToken: string | undefined;
   resolvedDeviceToken: string | undefined;
   storedToken: string | undefined;
   usingStoredDeviceToken: boolean | undefined;
@@ -414,6 +416,7 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  origin?: string;
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
@@ -430,6 +433,7 @@ export type GatewayClientOptions = {
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
@@ -634,6 +638,7 @@ export class GatewayClient {
     this.deps.beforeConnect();
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -970,6 +975,24 @@ export class GatewayClient {
           return;
         }
         if (
+          this.shouldFailClosedForUnsupportedAgentRuntimeIdentity({
+            error: err,
+            authAgentRuntimeIdentityToken: assembled.authAgentRuntimeIdentityToken,
+          })
+        ) {
+          const unsupportedIdentityError = new Error(
+            "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+          );
+          this.notifyConnectError(unsupportedIdentityError);
+          this.logError(`gateway connect failed: ${unsupportedIdentityError.message}`);
+          // This identity scopes model-mediated cron calls. Retrying without it
+          // would turn an old/new mismatch into an unscoped operator call.
+          this.closed = true;
+          this.clearReconnectTimer();
+          this.ws?.close(1008, "connect failed");
+          return;
+        }
+        if (
           this.shouldRetryWithoutApprovalRuntimeToken({
             error: err,
             authApprovalRuntimeToken: assembled.authApprovalRuntimeToken,
@@ -1004,6 +1027,7 @@ export class GatewayClient {
       authDeviceToken,
       authPassword,
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       signatureToken,
       resolvedDeviceToken,
       storedToken,
@@ -1020,13 +1044,15 @@ export class GatewayClient {
       authBootstrapToken ||
       authPassword ||
       resolvedDeviceToken ||
-      authApprovalRuntimeToken
+      authApprovalRuntimeToken ||
+      authAgentRuntimeIdentityToken
         ? {
             token: authToken,
             bootstrapToken: authBootstrapToken,
             deviceToken: authDeviceToken ?? resolvedDeviceToken,
             password: authPassword,
             approvalRuntimeToken: authApprovalRuntimeToken,
+            agentRuntimeIdentityToken: authAgentRuntimeIdentityToken,
           }
         : undefined;
     const signedAtMs = Date.now();
@@ -1069,6 +1095,7 @@ export class GatewayClient {
         }),
       },
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       resolvedDeviceToken,
       storedToken,
       usingStoredDeviceToken,
@@ -1294,6 +1321,25 @@ export class GatewayClient {
     return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
   }
 
+  private shouldFailClosedForUnsupportedAgentRuntimeIdentity(params: {
+    error: unknown;
+    authAgentRuntimeIdentityToken?: string;
+  }): boolean {
+    if (!params.authAgentRuntimeIdentityToken) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    if (params.error.gatewayCode !== "INVALID_REQUEST") {
+      return false;
+    }
+    const message = normalizeLowercaseStringOrEmpty(params.error.message);
+    return (
+      message.includes("invalid connect params") && message.includes("agentruntimeidentitytoken")
+    );
+  }
+
   private isTrustedDeviceRetryEndpoint(): boolean {
     const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
     try {
@@ -1321,6 +1367,9 @@ export class GatewayClient {
     const authApprovalRuntimeToken = this.approvalRuntimeTokenCompatibilityDisabled
       ? undefined
       : normalizeOptionalString(this.opts.approvalRuntimeToken);
+    const authAgentRuntimeIdentityToken = normalizeOptionalString(
+      this.opts.agentRuntimeIdentityToken,
+    );
     const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
@@ -1354,6 +1403,7 @@ export class GatewayClient {
       authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
       authPassword,
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,

@@ -121,6 +121,115 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const brokenPath = path.join(rootDir, "syntheses", "broken.md");
+    const brokenPage = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.broken",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Broken",
+      "",
+      "Body that compile must not rewrite.",
+    ].join("\n");
+    await fs.writeFile(brokenPath, brokenPage, "utf8");
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.frontmatterErrors).toHaveLength(1);
+    expect(result.frontmatterErrors[0]).toMatchObject({
+      relativePath: "syntheses/broken.md",
+    });
+    expect(result.pageCounts.synthesis).toBe(1);
+    expect(result.pages.map((page) => page.relativePath)).not.toContain("syntheses/broken.md");
+    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.not.toContain(
+      "Broken",
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ).resolves.not.toContain("syntheses/broken.md");
+  });
+
+  it.each([
+    {
+      name: "root index with syntax-error frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "root index with sequence-root frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: ["- pageType: report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+    {
+      name: "directory index with syntax-error frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "directory index with scalar-root frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: ["report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects $name without changing its bytes",
+    async ({ relativePath, frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        rootDir: nextCaseRoot(),
+        initialize: true,
+        config: { render: { createDashboards: false } },
+      });
+      const targetPath = path.join(rootDir, relativePath);
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Existing Index",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
+
+      await expect(compileMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
+
   it("discovers pages in nested subdirectories during compile", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

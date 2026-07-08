@@ -1,4 +1,5 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -246,5 +247,5 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `${prefix}${type}: ${info.message}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }

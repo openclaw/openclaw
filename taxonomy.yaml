@@ -357,7 +357,7 @@ surfaces:
             description: '`health` and `status` RPCs.'
           - name: Identity and presence APIs
             coverageIds: [gateway.identity-and-presence-apis]
-            description: '`gateway.identity.get`, `system-presence`, `system-event`, and heartbeat RPCs.'
+            description: '`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs.'
           - name: Model APIs
             coverageIds: [gateway.model-apis]
             description: '`models.list` RPCs.'
@@ -1612,10 +1612,14 @@ surfaces:
           - name: Runtime Assembly
             coverageIds: [agents.openclaw-harness, models.codex-cli, workspace.planning]
             description: Covers Runtime Assembly across context-engine selection, registry, host compatibility, legacy fallback, assemble/ingest/after-turn/compact lifecycle, runtime context projection, and the boundary between OpenClaw context assembly and native harness history.
+          - name: Goal continuance
+            coverageIds: [goals.context-injection, goals.continuance]
+            description: Active session goals remain visible in current-turn context and drive concrete followthrough across later turns and compaction.
         docs:
           - docs/concepts/context.md
           - docs/concepts/context-engine.md
           - docs/plan/codex-context-engine-harness.md
+          - docs/tools/goal.md
         search_anchors:
           - Context Engine
           - Runtime Assembly
@@ -1870,10 +1874,10 @@ surfaces:
         id: inbound-access-and-identity-gates
         features:
           - name: DM pairing
-            coverageIds: [security.dm-pairing]
+            coverageIds: [security.dm-pairing, channels.pairing-gate]
             description: DM pairing and allowFrom sender controls
           - name: Group/channel allowlists
-            coverageIds: [channels.group-channel-allowlists]
+            coverageIds: [channels.access-policy, channels.allowlist-hot-reload, channels.group-channel-allowlists]
             description: Group/channel allowlists and sender allowlists
           - name: Access group expansion
             coverageIds: [channels.access-group-expansion]
@@ -1926,7 +1930,7 @@ surfaces:
         id: outbound-delivery-and-reply-pipeline
         features:
           - name: Automatic final reply delivery
-            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
+            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.restart-resume, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
             description: Automatic final reply delivery and strict message-tool-only visible delivery
           - name: Durable outbound send orchestration
             coverageIds: [channels.dedup, channels.reconnect, runtime.delivery]
@@ -5670,9 +5674,9 @@ surfaces:
   - id: android-app
     name: Android app
     family: platform-app
-    level: alpha
-    level_code: M2
-    rationale: Public Google Play path exists, but app docs still describe the rebuild as extremely alpha and call out release hardening work.
+    level: stable
+    level_code: M4
+    rationale: Official Google Play distribution exists, source build/run docs are maintained, and the Android app is documented as a normal companion node for users.
     completeness_instructions: references/completeness/android-app.md
     categories:
       - name: Media Capture
@@ -5800,9 +5804,9 @@ surfaces:
   - id: ios-app
     name: iOS app
     family: platform-app
-    level: experimental
-    level_code: M1
-    rationale: Internal preview / super-alpha. TestFlight and relay-backed push flows exist, but no public distribution yet.
+    level: stable
+    level_code: M4
+    rationale: Official App Store distribution exists, relay-backed push is documented, and the iOS app is documented as a normal companion node for users.
     completeness_instructions: references/completeness/ios-app.md
     categories:
       - name: Media and Sharing
@@ -5893,13 +5897,13 @@ surfaces:
       - name: Distribution
         id: distribution
         features:
-          - name: Internal preview status
+          - name: App distribution
             coverageIds: [ios.internal-preview-status]
-            description: Internal preview status, source/Xcode manual deploy, local signing, XcodeGen project generation, Fastlane TestFlight archive/upload, versioning/changelog/metadata, release artifacts, and official-vs-local build flags
+            description: App Store distribution, source/Xcode manual deploy, local signing, XcodeGen project generation, Fastlane App Store archive/upload, versioning/changelog/metadata, release artifacts, and official-vs-local build flags
         docs:
           - docs/platforms/ios.md
         search_anchors:
-          - TestFlight
+          - App Store
           - Xcode manual deploy
           - signing
         category_note: install-signing-and-testflight-distribution.md
@@ -6033,7 +6037,7 @@ surfaces:
             description: Watch app and WatchKit extension targets
           - name: Signing/profile variables
             coverageIds: [watchos.signing-profile-variables]
-            description: Signing/profile variables, bundle identifiers, icon assets, and iOS beta release flow
+            description: Signing/profile variables, bundle identifiers, icon assets, and iOS App Store release flow
           - name: Public/support status
             coverageIds: [watchos.public-support-status]
             description: Public/support status for the watch companion as distributed through the iOS app
@@ -6042,7 +6046,7 @@ surfaces:
             description: Changelog and repo-history evidence for watchOS companion maturity
           - name: Release metadata
             coverageIds: [watchos.release-metadata]
-            description: Release metadata and app-store/TestFlight preparation evidence
+            description: Release metadata and App Store preparation evidence
           - name: Historical bug/regression themes relevant to scoring
             coverageIds: [watchos.historical-bug-regression-themes-relevant-to-scoring]
             description: Historical bug/regression themes relevant to scoring current source quality

@@ -3,282 +3,241 @@ import SwiftUI
 
 struct RootTabsPhoneControlHub: View {
     @Environment(NodeAppModel.self) private var appModel
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var navigationPath: [RootTabs.SidebarDestination] = []
     @State private var didApplyInitialDestination = false
+    @State private var handledNavigationRequestID = 0
 
     let groups: [RootTabs.SidebarGroup]
     let initialDestination: RootTabs.SidebarDestination?
+    let navigationRequest: RootTabs.PhoneControlNavigationRequest?
     let openRootDestination: (RootTabs.SidebarDestination) -> Void
+    let openChatFromControlDetail: (RootTabs.SidebarDestination) -> Void
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: self.isCompactHeight ? 10 : 16) {
-                        self.headerCard
-                        ForEach(self.groups) { group in
-                            self.groupSection(group)
-                        }
-                        self.versionFooter
+            List {
+                Section {
+                    Button {
+                        self.openGatewayDetail()
+                    } label: {
+                        self.gatewayRow
                     }
-                    .padding(.vertical, self.isCompactHeight ? 10 : 16)
+                    .buttonStyle(.plain)
                 }
-                .safeAreaPadding(.bottom, self.bottomScrollInset)
+
+                ForEach(self.phoneGroups) { group in
+                    Section {
+                        ForEach(group.destinations) { destination in
+                            self.destinationRow(destination)
+                        }
+                    } header: {
+                        if let title = self.sectionTitle(for: group) {
+                            Text(title)
+                                .font(OpenClawType.captionSemiBold)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Control")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: RootTabs.SidebarDestination.self) { destination in
                 self.detail(for: destination)
-                    .navigationBarBackButtonHidden(true)
-                    .toolbar(.hidden, for: .navigationBar)
             }
             .onAppear {
                 self.applyInitialDestinationIfNeeded()
+                self.applyNavigationRequestIfNeeded()
+            }
+            .onChange(of: self.navigationRequest) { _, _ in
+                self.applyNavigationRequestIfNeeded()
             }
         }
     }
 
-    @ViewBuilder
-    private var headerCard: some View {
-        if self.isCompactHeight {
-            ProCard(padding: 8, radius: OpenClawProMetric.cardRadius) {
-                HStack(spacing: 12) {
-                    OpenClawProMark(size: 24, shadowRadius: 3)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(self.sidebarActiveAgentTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Text(self.gatewayDisplayLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    ProValuePill(value: self.gatewayStateText, color: self.gatewayStateColor)
-                }
+    private var gatewayRow: some View {
+        HStack(spacing: 12) {
+            ProIconBadge(
+                systemName: "antenna.radiowaves.left.and.right",
+                color: self.gatewayStateColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Gateway")
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.primary)
+                Text(self.sidebarActiveAgentTitle)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-        } else {
-            ProCard(radius: OpenClawProMetric.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 12) {
-                        OpenClawProMark(size: 32, shadowRadius: 4)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(self.sidebarActiveAgentTitle)
-                                .font(.headline)
-                                .lineLimit(1)
-                            Text(self.gatewayDisplayLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        Spacer(minLength: 8)
-                        ProValuePill(value: self.gatewayStateText, color: self.gatewayStateColor)
-                    }
-
-                    self.gatewayActionRow
-                }
-            }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-        }
-    }
-
-    private var gatewayActionRow: some View {
-        Button {
-            self.openRootDestination(.gateway)
-        } label: {
-            HStack(spacing: 10) {
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
                 ProStatusDot(color: self.gatewayStateColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(self.gatewayStateText)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(self.gatewayDisplayLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                Text(self.gatewayActionTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(OpenClawBrand.accent)
+                Text(self.gatewayStateText)
+                    .font(OpenClawType.footnoteSemiBold)
+                    .foregroundStyle(self.gatewayStateColor)
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
-            .padding(10)
-            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Gateway \(self.gatewayStateText)")
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Gateway \(self.gatewayStateText), \(self.sidebarActiveAgentTitle)")
         .accessibilityHint("Opens Settings / Gateway")
-    }
-
-    private func groupSection(_ group: RootTabs.SidebarGroup) -> some View {
-        VStack(alignment: .leading, spacing: self.isCompactHeight ? 6 : 8) {
-            ProSectionHeader(title: group.title.capitalized)
-            ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
-                VStack(spacing: 0) {
-                    ForEach(Array(group.destinations.enumerated()), id: \.element.id) { index, destination in
-                        if index > 0 {
-                            Divider().padding(.leading, 58)
-                        }
-                        self.destinationRow(destination)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     @ViewBuilder
     private func destinationRow(_ destination: RootTabs.SidebarDestination) -> some View {
         if self.opensRootTab(destination) {
             Button {
-                self.openRootDestination(destination)
+                self.openPhoneRootDestination(destination)
             } label: {
-                self.rowLabel(destination)
+                HStack(spacing: 12) {
+                    self.rowLabel(destination)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(OpenClawType.captionSemiBold)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         } else {
-            Button {
-                self.navigationPath.append(destination)
-            } label: {
+            NavigationLink(value: destination) {
                 self.rowLabel(destination)
             }
-            .buttonStyle(.plain)
         }
     }
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: self.color(for: destination))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(destination.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text(destination.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
+        Label {
+            Text(destination.title)
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(.primary)
+        } icon: {
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
         }
-        .padding(.vertical, self.isCompactHeight ? 8 : 10)
-        .padding(.horizontal, 14)
-        .contentShape(Rectangle())
-    }
-
-    private var versionFooter: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
-            HStack {
-                Spacer()
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     @ViewBuilder
     private func detail(for destination: RootTabs.SidebarDestination) -> some View {
         switch destination {
-        case .chat, .talk, .agents, .gateway:
+        case .chat, .talk, .agents:
             EmptyView()
+        case .gateway:
+            SettingsProTab(directRoute: .gateway)
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
+                usesNativeNavigationChrome: true,
                 headerTitle: "Overview",
-                headerLeadingAction: self.phoneDetailBackAction,
                 showsHeaderMark: false,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openChatFromControlDetail(.overview) },
+                openSettings: { self.openGatewayDetail() },
+                openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
-                headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                usesNativeNavigationChrome: true,
+                openChat: { self.openChatFromControlDetail(.activity) },
+                openSettings: { self.openGatewayDetail() })
         case .workboard:
             IPadWorkboardScreen(
-                headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                usesNativeNavigationChrome: true,
+                openChat: { self.openChatFromControlDetail(.workboard) },
+                openSettings: { self.openGatewayDetail() })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
-                headerLeadingAction: self.phoneDetailBackAction,
-                openSettings: { self.openRootDestination(.gateway) })
+                usesNativeNavigationChrome: true,
+                openSettings: { self.openGatewayDetail() })
         case .instances:
             AgentProTab(
                 directRoute: .instances,
-                headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Instances",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .sessions:
             CommandSessionsScreen(
-                headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) })
+                usesNativeNavigationChrome: true,
+                openChat: { self.openChatFromControlDetail(.sessions) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerTitle: "Files",
+                openSettings: { self.openGatewayDetail() })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
-                headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Dreaming",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .usage:
             AgentProTab(
                 directRoute: .usage,
-                headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Usage",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .cron:
             AgentProTab(
                 directRoute: .cron,
-                headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
+        case .terminal:
+            TerminalHubScreen(
+                usesNativeNavigationChrome: true,
+                gatewayAction: { self.openGatewayDetail() })
         case .docs:
             OpenClawDocsScreen(
-                headerLeadingAction: self.phoneDetailBackAction,
-                gatewayAction: { self.openRootDestination(.gateway) })
+                usesNativeNavigationChrome: true,
+                gatewayAction: { self.openGatewayDetail() })
         case .settings:
             EmptyView()
         }
     }
 
-    private var phoneDetailBackAction: OpenClawSidebarHeaderAction {
-        OpenClawSidebarHeaderAction(
-            systemName: "chevron.left",
-            accessibilityLabel: "Back to Control",
-            accessibilityIdentifier: "OpenClawPhoneDetailBackButton",
-            action: { self.popPhoneDetail() })
+    /// Gateway settings open as a pushed detail on this stack so Back returns
+    /// to the hub screen the user came from, not the canonical Settings tab.
+    private func openGatewayDetail() {
+        self.navigationPath.append(.gateway)
     }
 
-    private func popPhoneDetail() {
-        guard !self.navigationPath.isEmpty else { return }
-        self.navigationPath.removeLast()
+    private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination) {
+        self.navigationPath.removeAll()
+        self.openRootDestination(destination)
     }
 
     private func opensRootTab(_ destination: RootTabs.SidebarDestination) -> Bool {
         RootTabs.shouldOpenRootTabFromPhoneHub(destination)
     }
 
+    private var phoneGroups: [RootTabs.SidebarGroup] {
+        self.groups.compactMap { group in
+            let destinations = group.destinations.filter { !self.opensRootTab($0) }
+            guard !destinations.isEmpty else { return nil }
+            return RootTabs.SidebarGroup(title: group.title, destinations: destinations)
+        }
+    }
+
     private func applyInitialDestinationIfNeeded() {
         guard !self.didApplyInitialDestination else { return }
         self.didApplyInitialDestination = true
         guard let initialDestination, initialDestination != .overview else { return }
-        if self.opensRootTab(initialDestination) {
-            self.openRootDestination(initialDestination)
+        self.applyDestination(initialDestination)
+    }
+
+    private func applyNavigationRequestIfNeeded() {
+        guard let navigationRequest, navigationRequest.id != self.handledNavigationRequestID else { return }
+        self.handledNavigationRequestID = navigationRequest.id
+        switch navigationRequest.target {
+        case .root:
+            self.navigationPath.removeAll()
+        case let .detail(destination):
+            self.applyDestination(destination)
+        }
+    }
+
+    private func applyDestination(_ destination: RootTabs.SidebarDestination) {
+        if self.opensRootTab(destination) {
+            self.openPhoneRootDestination(destination)
         } else {
-            self.navigationPath = [initialDestination]
+            self.navigationPath = [destination]
         }
     }
 
@@ -288,12 +247,6 @@ struct RootTabsPhoneControlHub: View {
             return self.agentTitle(for: agent)
         }
         return self.normalized(self.appModel.activeAgentName) ?? "Default Agent"
-    }
-
-    private var gatewayDisplayLabel: String {
-        self.normalized(self.appModel.gatewayServerName)
-            ?? self.normalized(self.appModel.gatewayRemoteAddress)
-            ?? self.appModel.gatewayDisplayStatusText
     }
 
     private var gatewayStateText: String {
@@ -318,41 +271,11 @@ struct RootTabsPhoneControlHub: View {
         }
     }
 
-    private var gatewayActionTitle: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected:
-            "Manage"
-        case .connecting:
-            "Details"
-        case .error:
-            "Fix"
-        case .disconnected:
-            "Connect"
-        }
-    }
-
-    private var isCompactHeight: Bool {
-        self.verticalSizeClass == .compact
-    }
-
-    private var bottomScrollInset: CGFloat {
-        Self.bottomScrollInset(verticalSizeClass: self.verticalSizeClass)
-    }
-
-    static func bottomScrollInset(verticalSizeClass: UserInterfaceSizeClass?) -> CGFloat {
-        verticalSizeClass == .compact ? 72 : 112
-    }
-
-    private func color(for destination: RootTabs.SidebarDestination) -> Color {
-        switch destination {
-        case .chat, .talk, .overview, .gateway:
-            OpenClawBrand.accent
-        case .instances:
-            Color.secondary
-        case .activity, .usage, .docs:
-            OpenClawBrand.accentHot
-        case .agents, .workboard, .skillWorkshop, .sessions, .dreaming, .cron, .settings:
-            OpenClawBrand.ok
+    private func sectionTitle(for group: RootTabs.SidebarGroup) -> String? {
+        switch group.title.lowercased() {
+        case "chat": "Communication"
+        case "control": nil
+        default: group.title.capitalized
         }
     }
 
@@ -410,7 +333,9 @@ extension RootTabsPhoneControlHub {
         RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            navigationRequest: nil,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
     }
 }

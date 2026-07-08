@@ -885,6 +885,70 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 
+  type ReasoningWindowGateCase = {
+    label: string;
+    reasoningMode: "off" | "stream";
+    streamReasoningInNonStreamModes?: boolean;
+    expected: boolean;
+  };
+
+  it.each<ReasoningWindowGateCase>([
+    {
+      label: "absent opt-in with off reasoning",
+      reasoningMode: "off",
+      expected: false,
+    },
+    {
+      label: "false opt-in with off reasoning",
+      reasoningMode: "off",
+      streamReasoningInNonStreamModes: false,
+      expected: false,
+    },
+    {
+      label: "false opt-in with stream reasoning",
+      reasoningMode: "stream",
+      streamReasoningInNonStreamModes: false,
+      expected: true,
+    },
+    {
+      label: "true opt-in with off reasoning",
+      reasoningMode: "off",
+      streamReasoningInNonStreamModes: true,
+      expected: true,
+    },
+  ])("gates reasoning-window streaming for $label", (params) => {
+    const onReasoningStream = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: params.reasoningMode,
+      ...(params.streamReasoningInNonStreamModes === undefined
+        ? {}
+        : { streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes }),
+      onReasoningStream,
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Checking files",
+      },
+    });
+
+    if (params.expected) {
+      expect(onReasoningStream).toHaveBeenCalledWith({
+        text: "Checking files",
+        ...(params.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      });
+    } else {
+      expect(onReasoningStream).not.toHaveBeenCalled();
+    }
+  });
+
   it("extracts correct reasoning delta for incremental stream updates", () => {
     const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
     const { emit } = createSubscribedHarness({

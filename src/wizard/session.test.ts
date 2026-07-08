@@ -75,6 +75,49 @@ describe("WizardSession", () => {
     await session.answer(first.step.id, null);
   });
 
+  test("keeps a validated text step pending after an invalid answer", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({
+        message: "Port",
+        validate: (value) => (value === "18789" ? undefined : "Enter the expected port"),
+      });
+    });
+
+    const first = await session.next();
+    if (!first.step) {
+      throw new Error("expected text step");
+    }
+    await expect(session.answer(first.step.id, "banana")).resolves.toBe("Enter the expected port");
+    expect(session.getStatus()).toBe("running");
+    expect((await session.next()).step?.id).toBe(first.step.id);
+
+    await session.answer(first.step.id, "18789");
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test("rejects non-scalar text answers before validation and resolution", async () => {
+    let resolved: string | undefined;
+    const session = new WizardSession(async (prompter) => {
+      resolved = await prompter.text({
+        message: "Token",
+        validate: (value) => (value.length > 0 ? undefined : "Token is required"),
+      });
+    });
+
+    const first = await session.next();
+    if (!first.step) {
+      throw new Error("expected text step");
+    }
+    await expect(session.answer(first.step.id, ["token"])).resolves.toBe(
+      "wizard: text answer must be a scalar value",
+    );
+    expect((await session.next()).step?.id).toBe(first.step.id);
+
+    await session.answer(first.step.id, "token");
+    expect((await session.next()).status).toBe("done");
+    expect(resolved).toBe("token");
+  });
+
   test("cancel marks session and unblocks", async () => {
     const session = new WizardSession(async (prompter) => {
       await prompter.text({ message: "Name" });

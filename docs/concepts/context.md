@@ -34,7 +34,7 @@ Values vary by model, provider, tool policy, and what's in your workspace.
 
 ### `/context list`
 
-```
+```text
 🧠 Context breakdown
 Workspace: <workspaceDir>
 Bootstrap max/file: 12,000 chars
@@ -61,7 +61,7 @@ Session tokens (cached): 14,250 total / ctx=32,000
 
 ### `/context detail`
 
-```
+```text
 🧠 Context breakdown (detailed)
 …
 Top skills (prompt entry size):
@@ -146,7 +146,7 @@ Tools affect context in two ways:
 Slash commands are handled by the Gateway. There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
-- **Directives**: `/think`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/model`, `/queue` are stripped before the model sees the message.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
   - Inline directives in a normal message act as per-message hints.
 - **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
