@@ -138,8 +138,21 @@ describe("session suspension", () => {
     const patch = sessionStoreMocks.applySessionStoreEntryPatch.mock.calls[0]?.[0].patch as {
       quotaSuspension?: QuotaSuspension;
     };
-    expect(patch.quotaSuspension?.schemaVersion).toBe(1);
-    expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+    const expectedSuspension: QuotaSuspension = {
+      schemaVersion: 1,
+      suspendedAt: 1_000,
+      reason: "quota_exhausted",
+      failedProvider: "anthropic",
+      failedModel: "claude-opus-4-6",
+      laneId: CommandLane.Main,
+      expectedResumeBy: 1_000 + MAX_TIMER_TIMEOUT_MS,
+      state: "suspended",
+    };
+    expect(patch.quotaSuspension).toMatchObject(expectedSuspension);
+    expect(patch.quotaSuspension).toStrictEqual({
+      ...expectedSuspension,
+      summary: undefined,
+    });
   });
 
   it("defers session suspension only for the outer fallback candidate run", async () => {
