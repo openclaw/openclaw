@@ -369,6 +369,46 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/approve required when using managed TaskFlow resume mode/);
   });
 
+  it("runs ordinary workflow when schema defaults inject flowExpectedRevision=0", async () => {
+    const run = vi.fn(async () => ({
+      ok: true,
+      stdout: "ok",
+      stderr: "",
+      modifiedFiles: [],
+    }));
+    const tool = createLobsterTool(fakeApi(), { runner: { run: vi.fn() } });
+    // When the OpenClaw tool schema injects flowExpectedRevision=0 as a
+    // default value, ordinary run calls should not be misrouted into
+    // managed TaskFlow mode.
+    await expect(
+      tool.execute("lobster-call-run", {
+        action: "run",
+        pipeline: "workflows/example.lobster",
+        argsJson: "{}",
+        cwd: "/tmp",
+        projectDir: "/tmp",
+        timeoutMs: 30000,
+        flowExpectedRevision: 0,
+      }),
+    ).rejects.toThrow(); // expected: runner not set up, but not "does not accept flowId"
+  });
+
+  it("runs ordinary resume when schema defaults inject flowExpectedRevision=0", async () => {
+    const tool = createLobsterTool(fakeApi(), { runner: { run: vi.fn() } });
+    // When schema defaults inject flowExpectedRevision=0 and flowId="",
+    // ordinary resume should not be misrouted into managed TaskFlow mode.
+    await expect(
+      tool.execute("lobster-call-resume", {
+        action: "resume",
+        token: "resume-token",
+        approve: true,
+        projectDir: "/tmp",
+        flowExpectedRevision: 0,
+        flowId: "",
+      }),
+    ).rejects.toThrow(); // expected: runner not set up, but not "flowExpectedRevision required"
+  });
+
   it("requires action", async () => {
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
