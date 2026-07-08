@@ -475,6 +475,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
   "tools.experimental.planTool":
     "Kill-switch for the structured `update_plan` tool. Default-on for all models (Codex-parity plan mode); set to false to remove it, or true to force-enable where a policy would otherwise drop it.",
+  "tools.experimental.goalDriver":
+    "Autonomous goal continuation driver. When enabled, a session carrying an active goal is pursued unattended: the driver starts a fresh turn whenever the session goes idle, until the goal is completed, blocked, paused, or a budget/no-progress ceiling is reached. The driver only enqueues a steering prompt and wakes a turn; it never bypasses exec or approval gates. Experimental; leave off unless you want unattended goal pursuit.",
+  "tools.experimental.goalDriver.enabled":
+    "Enable the autonomous goal continuation driver (default: false).",
+  "tools.experimental.goalDriver.debounceMs":
+    "Idle debounce in milliseconds after a turn completes before a continuation may fire (default: 20000). Bounds the minimum spacing between autonomous continuations.",
+  "tools.experimental.goalDriver.jitterMs":
+    "Extra random delay in [0, jitterMs) milliseconds added to each arm so many idle sessions do not all fire on the same tick (default: 5000).",
+  "tools.experimental.goalDriver.maxNoProgressContinuations":
+    "Consecutive driver-fired continuations with no intervening real turn before the goal auto-pauses as stuck (default: 3). A real inbound turn resets the counter.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

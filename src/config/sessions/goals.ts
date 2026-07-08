@@ -316,6 +316,61 @@ export async function updateSessionGoalObjective(
   return cloneGoal(updated);
 }
 
+/**
+ * Increments the durable no-progress continuation counter for a session goal.
+ *
+ * The goal-driver calls this immediately before it fires a continuation turn so
+ * the consecutive-continuation ceiling survives a gateway restart (the counter
+ * is otherwise process-local). No-ops when no goal exists or the goal is not
+ * `active`. Returns the updated goal, or undefined when there is nothing to
+ * increment. Token accounting is intentionally NOT re-projected here — this is a
+ * narrow counter write on the hot driver path, not a display read.
+ */
+export async function recordSessionGoalContinuation(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || goal.status !== "active") {
+        return null;
+      }
+      updated = { ...goal, continuationTurns: goal.continuationTurns + 1 };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  return updated ? cloneGoal(updated) : undefined;
+}
+
+/**
+ * Resets the durable no-progress continuation counter to zero.
+ *
+ * Called when a real inbound (non-driver) turn completes: any genuine user
+ * interaction counts as progress and re-opens the full continuation budget.
+ * No-ops when no goal exists or the counter is already zero.
+ */
+export async function resetSessionGoalContinuations(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || goal.continuationTurns === 0) {
+        return null;
+      }
+      updated = { ...goal, continuationTurns: 0 };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  return updated ? cloneGoal(updated) : undefined;
+}
+
 export async function clearSessionGoal(options: SessionGoalStoreOptions): Promise<boolean> {
   let removed = false;
   const result = await patchSessionEntry(

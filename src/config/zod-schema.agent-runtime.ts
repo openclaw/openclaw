@@ -1150,6 +1150,15 @@ export const ToolsSchema = z
     experimental: z
       .object({
         planTool: z.boolean().optional(),
+        goalDriver: z
+          .object({
+            enabled: z.boolean().optional(),
+            debounceMs: z.number().optional(),
+            jitterMs: z.number().optional(),
+            maxNoProgressContinuations: z.number().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

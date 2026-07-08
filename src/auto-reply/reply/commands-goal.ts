@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isGoalDriverContinuationPrompt } from "../../agents/goal-driver/continuation-prompt.js";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -109,12 +110,21 @@ export function formatGoalResumeContinuationPrompt(note: string): string {
     : `Continue pursuing the current goal. Note: ${trimmed}`;
 }
 
-/** Returns true for internally generated goal continuation prompts. */
+/**
+ * Returns true for internally generated goal continuation prompts.
+ *
+ * Recognizes both the manual `/goal start|resume` prompts and the autonomous
+ * goal-driver continuation marker so the gateway classifies every driver-fired
+ * turn as a goal continuation. Without folding the driver marker in here the
+ * no-progress ceiling counter would reset on the driver's own turns and the
+ * auto-pause safety valve could never trip.
+ */
 export function isFormattedGoalContinuationPrompt(message: string): boolean {
   const trimmed = message.trim();
   return (
     trimmed.startsWith(GOAL_CONTINUATION_PROMPT_PREFIX) ||
-    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX)
+    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX) ||
+    isGoalDriverContinuationPrompt(trimmed)
   );
 }
 
