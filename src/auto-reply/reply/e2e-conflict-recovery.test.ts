@@ -5,10 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  testing as sessionMcpTesting,
-  getOrCreateSessionMcpRuntime,
-} from "../../agents/agent-bundle-mcp-tools.js";
+import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { initSessionState } from "./session.js";
 
