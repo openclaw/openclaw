@@ -13,6 +13,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -226,11 +227,11 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         timeoutMs: req.timeoutMs,
         label: "Together video generation",
       });
+      const providerConfig = req.cfg?.models?.providers?.together;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveTogetherVideoBaseUrl(req),
           defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
@@ -238,6 +239,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           provider: "together",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
         });
       const body: Record<string, unknown> = {
         model: normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL,

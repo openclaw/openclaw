@@ -6,7 +6,12 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildTogetherVideoGenerationProvider: typeof import("./video-generation-provider.js").buildTogetherVideoGenerationProvider;
 
@@ -341,5 +346,68 @@ describe("together video generation provider", () => {
     const body = requireRecord(request.body, "Together request body");
     expect(body.model).toBe("Wan-AI/Wan2.2-I2V-A14B");
     expect(body.reference_images).toHaveLength(1);
+  });
+
+  it("applies configured request policy to Together video requests", async () => {
+    const request = {
+      allowPrivateNetwork: true,
+      headers: { "X-Proxy": "enabled" },
+    };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy: undefined,
+      };
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "video_123",
+        status: "in_progress",
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "video_123",
+          status: "completed",
+          outputs: { video_url: "https://example.com/together.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "together",
+      model: "Wan-AI/Wan2.2-T2V-A14B",
+      prompt: "A bicycle weaving through a rainy neon street",
+      cfg: {
+        models: {
+          providers: {
+            together: {
+              request,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(request);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({ request }),
+    );
+    const createRequest = requireFirstPostJsonRequest("Together request");
+    expect(createRequest.allowPrivateNetwork).toBe(true);
+    expect(createRequest.headers).toBeInstanceOf(Headers);
+    expect((createRequest.headers as Headers).get("x-proxy")).toBe("enabled");
   });
 });
