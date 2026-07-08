@@ -330,7 +330,7 @@ type GatewayConnectTimingPhase =
   | "hello"
   | "failed";
 
-export type GatewayConnectTiming = {
+type GatewayConnectTiming = {
   generation: number;
   phase: GatewayConnectTimingPhase;
   durationMs: number;

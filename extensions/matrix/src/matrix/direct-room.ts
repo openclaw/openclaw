@@ -72,7 +72,7 @@ export async function hasDirectMatrixMemberFlag(
   }
 }
 
-export type MatrixDirectRoomEvidence = {
+type MatrixDirectRoomEvidence = {
   joinedMembers: string[] | null;
   strict: boolean;
   viaMemberState: boolean;

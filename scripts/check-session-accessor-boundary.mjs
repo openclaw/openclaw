@@ -672,8 +672,7 @@ export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName 
 // migrated lists, so unmigrated files could quietly gain new legacy call
 // sites. The checked-in baseline locks each unmigrated file's current legacy
 // call-site count per concern; any drift from the baseline fails the guard.
-export const sessionAccessorDebtBaselineRelativePath =
-  "scripts/lib/session-accessor-debt-baseline.json";
+const sessionAccessorDebtBaselineRelativePath = "scripts/lib/session-accessor-debt-baseline.json";
 const debtBaselineRegenCommand = "pnpm lint:tmp:session-accessor-boundary:gen";
 
 // Keys sorted alphabetically so the generated baseline JSON stays deterministic.

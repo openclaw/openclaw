@@ -16,6 +16,7 @@ import {
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
+  resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -779,15 +780,23 @@ function buildGoogleHeaders(
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
+    resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: normalizeGoogleTransportRouteApi(model.api),
+      baseUrl: model.baseUrl,
+      capability: "llm",
+      transport: "stream",
+      defaultHeaders: mergeTransportHeaders(
+        {
+          "Content-Type": "application/json",
+          accept: "text/event-stream",
+        },
+        authHeaders,
+        model.headers,
+      ),
+      callerHeaders: optionHeaders,
+      precedence: "caller-wins",
+    }) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }
