@@ -16,6 +16,10 @@
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on iOS.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on iOS.",
+    "question.pending": "Structured ask_user_question prompts are a Control-UI/channel surface; iOS answers via /answer text, no push consumer yet.",
+    "question.resolved": "Structured ask_user_question prompts are a Control-UI/channel surface; iOS answers via /answer text, no push consumer yet.",
+    "question.expired": "Structured ask_user_question prompts are a Control-UI/channel surface; iOS answers via /answer text, no push consumer yet.",
+    "goal.updated": "Goal-mode UI is a Control-UI/channel surface; iOS does not render the goal chip/editor yet.",
     "terminal.data": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store."
@@ -37,6 +41,10 @@
     "voicewake.routing.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on Android.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on Android.",
+    "question.pending": "Structured ask_user_question prompts are a Control-UI/channel surface; Android answers via /answer text, no push consumer yet.",
+    "question.resolved": "Structured ask_user_question prompts are a Control-UI/channel surface; Android answers via /answer text, no push consumer yet.",
+    "question.expired": "Structured ask_user_question prompts are a Control-UI/channel surface; Android answers via /answer text, no push consumer yet.",
+    "goal.updated": "Goal-mode UI is a Control-UI/channel surface; Android does not render the goal chip/editor yet.",
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client."
   }
