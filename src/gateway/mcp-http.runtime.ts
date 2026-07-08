@@ -80,6 +80,9 @@ export class McpLoopbackToolCache {
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      params.authProfileStore
+        ? `auth:${Object.keys(params.authProfileStore.profiles).toSorted().join(",")}`
+        : "no-auth",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false
