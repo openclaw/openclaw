@@ -175,6 +175,42 @@ describe("readResponseText", () => {
     });
   });
 
+  it("does not mark an exact-limit read as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", " world"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 11 })).resolves.toEqual({
+      text: "hello world",
+      truncated: false,
+      bytesRead: 11,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks as truncated when the next chunk confirms more data after exact limit", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", " world", "more data"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 11 })).resolves.toEqual({
+      text: "hello world",
+      truncated: true,
+      bytesRead: 11,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves uncapped text-only fallback byte accounting", async () => {
     const value = "中文🔥";
     const text = vi.fn(async () => value);

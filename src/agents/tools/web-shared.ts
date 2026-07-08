@@ -272,8 +272,12 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
-          truncated = true;
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          const next = await reader.read();
+          truncated = !next.done && next.value != null && next.value.byteLength > 0;
           break;
         }
       }
