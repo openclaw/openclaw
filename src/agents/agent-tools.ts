@@ -1096,8 +1096,8 @@ export function createOpenClawCodingTools(options?: {
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
-  // Sender identity is carried for command/channel-action auth; tool visibility
-  // comes from configured tool policies, not per-turn sender ownership.
+  // Sender identity is primarily command/action auth, with one Gateway parity exception:
+  // explicit non-owner callers never receive owner-only control-plane core tools.
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsForModelProvider,
     toolMeta: (tool) => getPluginToolMeta(tool),
