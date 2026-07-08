@@ -639,6 +639,28 @@ describe("qa-lab server", () => {
     expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
+  it("returns controlled errors for malformed JSON body reads", async () => {
+    const lab = await startQaLabServerForTest({
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/inbound/message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: "{",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Malformed JSON body." });
+  });
+
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-self-check-root-"));
     cleanups.push(async () => {
