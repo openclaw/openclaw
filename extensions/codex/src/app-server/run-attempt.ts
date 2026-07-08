@@ -3515,6 +3515,7 @@ export async function runCodexAppServerAttempt(
     const codexTrajectoryTerminal = resolveCodexTrajectoryTerminal({
       result,
       aborted: finalAborted,
+      externalAbort: explicitCancellationObserved,
       timedOut: effectiveTimedOut,
       promptError: finalPromptError,
     });
@@ -3526,6 +3527,7 @@ export async function runCodexAppServerAttempt(
       timedOut: effectiveTimedOut,
       yieldDetected,
       aborted: finalAborted,
+      externalAbort: explicitCancellationObserved,
       promptError: finalPromptError,
     });
     trajectoryRecorder?.recordEvent("session.ended", {

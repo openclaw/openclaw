@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
@@ -436,6 +437,49 @@ describe("Codex trajectory recorder", () => {
       assistantTexts: ["final answer"],
     });
     expect(events[1].data.truncated).toBeUndefined();
+  });
+
+  it("marks aborted empty completions as non-deliverable", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+    } as never;
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    recordCodexTrajectoryCompletion(expectTrajectoryRecorder(recorder), {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      aborted: true,
+      result: {
+        aborted: true,
+        promptError: null,
+        assistantTexts: [],
+        messagesSnapshot: [],
+        toolMetas: [],
+      } as never,
+    });
+    await recorder?.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.data).toMatchObject({
+      aborted: true,
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
   });
 
   it("redacts secrets before preserving usage in truncated completion events", async () => {

@@ -104,16 +104,20 @@ function hasCodexTrajectoryDeliveryEvidence(result: EmbeddedRunAttemptResult): b
 export function resolveCodexTrajectoryTerminal(params: {
   result: EmbeddedRunAttemptResult;
   aborted: boolean;
+  externalAbort?: boolean;
   timedOut: boolean;
   promptError?: unknown;
 }): CodexTrajectoryTerminal {
   if (params.promptError) {
     return { status: "error" };
   }
-  if (params.aborted || params.timedOut) {
+  if ((params.aborted && params.externalAbort === true) || params.timedOut) {
     return { status: "interrupted" };
   }
-  if (params.result.lastToolError && !hasCodexTrajectoryDeliveryEvidence(params.result)) {
+  if (
+    (params.aborted || params.result.lastToolError) &&
+    !hasCodexTrajectoryDeliveryEvidence(params.result)
+  ) {
     return {
       status: "error",
       terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
@@ -331,6 +335,7 @@ export function recordCodexTrajectoryCompletion(
     timedOut: boolean;
     yieldDetected?: boolean;
     aborted?: boolean;
+    externalAbort?: boolean;
     promptError?: unknown;
   },
 ): void {
@@ -340,6 +345,7 @@ export function recordCodexTrajectoryCompletion(
   const terminal = resolveCodexTrajectoryTerminal({
     result: params.result,
     aborted: params.aborted ?? params.result.aborted,
+    externalAbort: params.externalAbort ?? params.result.externalAbort,
     timedOut: params.timedOut,
     promptError: params.promptError ?? params.result.promptError,
   });
