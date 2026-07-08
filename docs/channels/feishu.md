@@ -198,7 +198,9 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 ### Bot does not receive messages
 
 1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
-2. Ensure event subscription includes `im.message.receive_v1`, plus `im.message.recalled_v1` so the gateway can cancel in-flight agent runs when a source message is recalled
+2. Ensure event subscription includes `im.message.receive_v1`, plus
+   `im.message.recalled_v1` so the gateway can cancel in-flight agent runs
+   when a source message is recalled
 3. Ensure **persistent connection** (WebSocket) is selected
 4. Ensure all required permission scopes are granted
 5. Ensure the gateway is running: `openclaw gateway status`
