@@ -705,12 +705,10 @@ describe("memory tools", () => {
     expect(getSupplement).not.toHaveBeenCalled();
   });
 
-  it("returns structured error when supplement lookup throws in memory_get corpus=all fallback", async () => {
-    // Primary memory read → throw → enters catch → resolveMemoryReadFailureResult
+  it("returns the primary error when a corpus=all supplement fallback throws", async () => {
     setMemoryReadFileImpl(async () => {
       throw new Error("primary read failed");
     });
-    // Supplement get → throw → would be uncaught without the fix
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
       get: async () => {
@@ -724,21 +722,11 @@ describe("memory tools", () => {
       corpus: "all",
     });
 
-    // Must receive the PRIMARY structured error result, NOT an unhandled rejection
-    // from the supplement's thrown error. The error message must reference the
-    // original primary read failure, not the supplement failure.
-    const details = result.details as {
-      path: string;
-      text: string;
-      disabled: boolean;
-      error: string;
-    };
-    expect(details).toEqual({
+    expect(result.details).toEqual({
       path: "entities/alpha.md",
       text: "",
       disabled: true,
-      error: expect.stringContaining("primary read failed"),
+      error: "primary read failed",
     });
-    expect(details.error).not.toContain("supplement lookup failed");
   });
 });

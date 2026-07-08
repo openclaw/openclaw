@@ -360,7 +360,8 @@ async function resolveMemoryReadFailureResult(params: {
         return jsonResult(supplement);
       }
     } catch {
-      // Supplement lookup failed; fall through to return the primary error result.
+      // Supplement lookup is best-effort after the primary memory read failed.
+      // Preserve the original structured error instead of rejecting the tool call.
     }
   }
   const message = formatErrorMessage(params.error);
