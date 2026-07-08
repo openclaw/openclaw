@@ -77,6 +77,7 @@ import {
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { exportChatMarkdown } from "./export.ts";
+import { getPlanChecklist } from "./plan-stream-store.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -818,6 +819,21 @@ class ChatPane extends LitElement {
       : selectedSessionArchived
         ? t("chat.archivedSessionDisabled")
         : null;
+    const activeSessionRow = state.sessionsResult?.sessions.find(
+      (row) => row.key === state.sessionKey,
+    );
+    // Keep the docked plan pane live: re-derive it from the session's current plan +
+    // checklist each render, and close it if the plan ends.
+    const sidebarContent =
+      state.sidebarContent?.kind === "plan"
+        ? activeSessionRow?.plan
+          ? {
+              kind: "plan" as const,
+              plan: activeSessionRow.plan,
+              checklist: getPlanChecklist(state.sessionKey),
+            }
+          : null
+        : state.sidebarContent;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
@@ -970,6 +986,14 @@ class ChatPane extends LitElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onViewPlan: activeSessionRow?.plan
+        ? () =>
+            state.handleOpenSidebar({
+              kind: "plan",
+              plan: activeSessionRow.plan!,
+              checklist: getPlanChecklist(state.sessionKey),
+            })
+        : undefined,
       questionInline: (() => {
         const entry = this.selectInlineQuestion(state.sessionKey);
         if (!entry) {
@@ -1025,7 +1049,7 @@ class ChatPane extends LitElement {
         });
       },
       sidebarOpen: state.sidebarOpen,
-      sidebarContent: state.sidebarContent,
+      sidebarContent,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,

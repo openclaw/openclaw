@@ -4042,6 +4042,61 @@ td.data-table-key-col {
   justify-content: flex-end;
   gap: 8px;
 }
+/* Compact plan status chip in the composer status-stack (full plan lives in the sidebar). */
+.agent-chat__plan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  max-width: 100%;
+  margin: 0 auto 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-full);
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out);
+}
+
+.agent-chat__plan-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
+}
+
+.agent-chat__plan-chip:disabled {
+  cursor: default;
+}
+
+.agent-chat__plan-chip--pending_approval {
+  border-color: color-mix(in srgb, var(--accent, var(--border)) 55%, transparent);
+}
+
+.agent-chat__plan-chip-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.agent-chat__plan-chip-label {
+  font-weight: 600;
+}
+
+.agent-chat__plan-chip-progress {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__plan-chip-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  color: var(--accent, var(--text));
+}
+
 
 
 /* ===========================================

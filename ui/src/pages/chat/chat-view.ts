@@ -121,6 +121,7 @@ export type ChatProps = {
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
   questionInline?: InlineQuestionProps | null;
+  onViewPlan?: () => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -246,6 +247,7 @@ export function renderChat(props: ChatProps) {
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
     questionInline: props.questionInline,
+    onViewPlan: props.onViewPlan,
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,

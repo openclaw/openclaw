@@ -2040,6 +2040,7 @@ export const zh_TW: TranslationMap = {
     decision: "Plan decision",
     approve: "Approve plan",
     keepPlanning: "Keep planning",
+    view: "View",
     approveTitle: "Implement this plan?",
     approveCta: "Approve",
     revise: "Revise with feedback",

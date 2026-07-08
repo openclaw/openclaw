@@ -3,7 +3,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionGoal,
+  SessionPlanState,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { InlineQuestionProps } from "../../../components/inline-question-card.ts";
@@ -34,6 +39,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { formatPlanProgress, formatPlanStateLabel } from "../../../lib/session-plan.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -47,7 +53,6 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderPlanPanel } from "./plan-panel.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -119,6 +124,8 @@ type ChatComposerProps = {
   onGoalCommand?: (command: string) => void;
   /** Pending ask_user_question for this session, rendered inline in the status-stack. */
   questionInline?: InlineQuestionProps | null;
+  /** Opens the full plan in the right sidebar pane (the compact stack chip links to it). */
+  onViewPlan?: () => void;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -474,6 +481,34 @@ function renderChatGoal(
           `
         : nothing}
     </div>
+  `;
+}
+
+// Compact plan status chip in the composer status-stack. The full plan + live
+// checklist lives in the right sidebar pane (U-V3); this one-liner links to it.
+function renderCompactPlanChip(
+  plan: SessionPlanState,
+  checklist: ReturnType<typeof getPlanChecklist>,
+  onView: (() => void) | undefined,
+): TemplateResult {
+  const progress = formatPlanProgress(checklist?.steps ?? []);
+  return html`
+    <button
+      class="agent-chat__plan-chip agent-chat__plan-chip--${plan.status}"
+      type="button"
+      data-plan-chip-compact="true"
+      ?disabled=${!onView}
+      @click=${() => onView?.()}
+    >
+      <span class="agent-chat__plan-chip-icon" aria-hidden="true">${icons.scrollText}</span>
+      <span class="agent-chat__plan-chip-label">${formatPlanStateLabel(plan.status)}</span>
+      ${progress ? html`<span class="agent-chat__plan-chip-progress">${progress}</span>` : nothing}
+      ${onView
+        ? html`<span class="agent-chat__plan-chip-view"
+            >${t("plan.view")} ${icons.chevronRight}</span
+          >`
+        : nothing}
+    </button>
   `;
 }
 
@@ -2258,12 +2293,13 @@ export function renderChatComposer(props: ChatComposerProps) {
             },
             requestUpdate,
           })}
-          ${renderPlanPanel({
-            plan: activeSession?.plan,
-            // Live checklist captured from the update_plan tool stream (stream:plan); updates in
-            // real time via the throttled tool-stream sync/re-render.
-            checklist: getPlanChecklist(props.sessionKey),
-          })}
+          ${activeSession?.plan
+            ? renderCompactPlanChip(
+                activeSession.plan,
+                getPlanChecklist(props.sessionKey),
+                props.onViewPlan,
+              )
+            : nothing}
           ${activeSession?.plan?.status === "pending_approval" && canCompose && props.onGoalCommand
             ? html`<openclaw-inline-plan-approval
                 .props=${{

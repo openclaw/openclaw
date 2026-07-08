@@ -3,14 +3,16 @@ import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { SessionPlanState } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
   highlightCode,
   markdownFileLinkFromEvent,
   toSanitizedMarkdownHtml,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
+import { t } from "../../../i18n/index.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";
 import {
   resolveCanvasIframeUrl,
@@ -18,6 +20,8 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import type { PlanChecklist } from "../../../lib/session-plan.ts";
+import { renderPlanPanel } from "./plan-panel.ts";
 
 export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
@@ -77,11 +81,18 @@ type FileSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
+type PlanSidebarContent = {
+  kind: "plan";
+  plan: SessionPlanState;
+  checklist?: PlanChecklist | null;
+};
+
 export type SidebarContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
-  | FileSidebarContent;
+  | FileSidebarContent
+  | PlanSidebarContent;
 
 function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
   fullMessageRequest: NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -466,15 +477,17 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         )
       : null;
   const title =
-    content?.kind === "canvas"
-      ? content.title?.trim() || "Render Preview"
-      : content?.kind === "image"
-        ? content.title.trim() || "Image Preview"
-        : content?.kind === "file"
-          ? content.name.trim() || "File"
-          : content?.kind === "markdown"
-            ? "Markdown Preview"
-            : "Tool Details";
+    content?.kind === "plan"
+      ? t("plan.title")
+      : content?.kind === "canvas"
+        ? content.title?.trim() || "Render Preview"
+        : content?.kind === "image"
+          ? content.title.trim() || "Image Preview"
+          : content?.kind === "file"
+            ? content.name.trim() || "File"
+            : content?.kind === "markdown"
+              ? "Markdown Preview"
+              : "Tool Details";
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
@@ -503,48 +516,30 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                 : nothing}
             `
           : content
-            ? content.kind === "file"
-              ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
-              : content.kind === "canvas"
-                ? html`
-                    <div class="chat-tool-card__preview" data-kind="canvas">
-                      <div class="chat-tool-card__preview-panel" data-side="front">
-                        ${keyed(
-                          `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                          html`
-                            <iframe
-                              class="chat-tool-card__preview-frame"
-                              title=${content.title?.trim() || "Render preview"}
-                              sandbox=${canvasSandbox}
-                              src=${canvasSrc ?? nothing}
-                              style=${content.preferredHeight
-                                ? `height:${content.preferredHeight}px`
-                                : ""}
-                            ></iframe>
-                          `,
-                        )}
-                      </div>
-                      ${content.rawText?.trim()
-                        ? html`
-                            <div style="margin-top: 12px;">
-                              <button @click=${props.onViewRawText} class="btn" type="button">
-                                View Raw Text
-                              </button>
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `
-                : content.kind === "image"
+            ? content.kind === "plan"
+              ? html`<div class="sidebar-plan">
+                  ${renderPlanPanel({ plan: content.plan, checklist: content.checklist })}
+                </div>`
+              : content.kind === "file"
+                ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
+                : content.kind === "canvas"
                   ? html`
-                      <div class="chat-tool-card__preview" data-kind="image">
+                      <div class="chat-tool-card__preview" data-kind="canvas">
                         <div class="chat-tool-card__preview-panel" data-side="front">
-                          <img
-                            class="chat-tool-card__preview-image"
-                            src=${content.src}
-                            alt=${title}
-                            style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                          />
+                          ${keyed(
+                            `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                            html`
+                              <iframe
+                                class="chat-tool-card__preview-frame"
+                                title=${content.title?.trim() || "Render preview"}
+                                sandbox=${canvasSandbox}
+                                src=${canvasSrc ?? nothing}
+                                style=${content.preferredHeight
+                                  ? `height:${content.preferredHeight}px`
+                                  : ""}
+                              ></iframe>
+                            `,
+                          )}
                         </div>
                         ${content.rawText?.trim()
                           ? html`
@@ -557,35 +552,57 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                           : nothing}
                       </div>
                     `
-                  : html`
-                      <section class="sidebar-markdown-shell">
-                        <div class="sidebar-markdown-shell__toolbar">
-                          <div class="sidebar-markdown-shell__intro">
-                            <div class="sidebar-markdown-shell__eyebrow">
-                              ${icons.scrollText}
-                              <span>Rendered Markdown</span>
-                            </div>
-                            <div class="sidebar-markdown-shell__hint">
-                              Sanitized rich-text preview for quick reading.
-                            </div>
+                  : content.kind === "image"
+                    ? html`
+                        <div class="chat-tool-card__preview" data-kind="image">
+                          <div class="chat-tool-card__preview-panel" data-side="front">
+                            <img
+                              class="chat-tool-card__preview-image"
+                              src=${content.src}
+                              alt=${title}
+                              style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                            />
                           </div>
-                          <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                            View Raw Text
-                          </button>
+                          ${content.rawText?.trim()
+                            ? html`
+                                <div style="margin-top: 12px;">
+                                  <button @click=${props.onViewRawText} class="btn" type="button">
+                                    View Raw Text
+                                  </button>
+                                </div>
+                              `
+                            : nothing}
                         </div>
-                        ${markdownHtml
-                          ? html`
-                              <article class="sidebar-markdown-reader sidebar-markdown">
-                                ${unsafeHTML(markdownHtml)}
-                              </article>
-                            `
-                          : html`
-                              <div class="sidebar-markdown-empty">
-                                No previewable markdown content.
+                      `
+                    : html`
+                        <section class="sidebar-markdown-shell">
+                          <div class="sidebar-markdown-shell__toolbar">
+                            <div class="sidebar-markdown-shell__intro">
+                              <div class="sidebar-markdown-shell__eyebrow">
+                                ${icons.scrollText}
+                                <span>Rendered Markdown</span>
                               </div>
-                            `}
-                      </section>
-                    `
+                              <div class="sidebar-markdown-shell__hint">
+                                Sanitized rich-text preview for quick reading.
+                              </div>
+                            </div>
+                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
+                              View Raw Text
+                            </button>
+                          </div>
+                          ${markdownHtml
+                            ? html`
+                                <article class="sidebar-markdown-reader sidebar-markdown">
+                                  ${unsafeHTML(markdownHtml)}
+                                </article>
+                              `
+                            : html`
+                                <div class="sidebar-markdown-empty">
+                                  No previewable markdown content.
+                                </div>
+                              `}
+                        </section>
+                      `
             : html` <div class="muted">No content available</div> `}
       </div>
     </div>

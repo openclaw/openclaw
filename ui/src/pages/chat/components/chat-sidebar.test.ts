@@ -149,3 +149,38 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 });
+
+describe("renderMarkdownSidebar plan variant (U-V3)", () => {
+  it("docks the full plan panel with a Plan title", () => {
+    const container = document.createElement("div");
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "plan",
+          plan: {
+            schemaVersion: 1,
+            status: "pending_approval",
+            enteredAt: 0,
+            updatedAt: 0,
+            lastSummary: "Ship the parity UI",
+          },
+          checklist: {
+            steps: [
+              { step: "Research the seam", status: "completed" },
+              { step: "Dock the pane", status: "in_progress" },
+            ],
+          },
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Plan");
+    expect(container.querySelector(".sidebar-plan")).not.toBeNull();
+    expect(container.querySelector("[data-plan-panel]")).not.toBeNull();
+    expect(container.textContent).toContain("Research the seam");
+    expect(container.textContent).toContain("Ship the parity UI");
+  });
+});
