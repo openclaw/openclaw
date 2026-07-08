@@ -157,7 +157,7 @@ export async function runSessionsSendA2AFlow(params: {
     // round-trip reply reaches the requester's channel even in cross-channel
     // A2A (e.g., Discord requester → Telegram target).
     let requesterTarget: AnnounceTarget | null = null;
-    if (params.requesterSessionKey && params.requesterSessionKey !== params.targetSessionKey) {
+    if (params.requesterSessionKey) {
       requesterTarget = await resolveAnnounceTarget({
         sessionKey: params.requesterSessionKey,
         displayKey: params.requesterSessionKey,
@@ -193,9 +193,9 @@ export async function runSessionsSendA2AFlow(params: {
     // the only reliable delivery point: the ping-pong loop consumes messages
     // within agent sessions, and the final announce step depends on the target
     // agent choosing to announce.
-    if (preDeliveryTarget && primaryReply) {
+    if (requesterTarget && primaryReply) {
       await deliverAnnounceReply({
-        announceTarget: preDeliveryTarget,
+        announceTarget: requesterTarget,
         message: primaryReply,
         runContextId,
       });
@@ -244,7 +244,7 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    if (!(preDeliveryTarget && primaryReply)) {
+    if (!(requesterTarget && primaryReply)) {
       const announcePrompt = buildAgentToAgentAnnounceContext({
         requesterSessionKey: params.requesterSessionKey,
         requesterChannel: params.requesterChannel,

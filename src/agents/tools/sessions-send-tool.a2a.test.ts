@@ -228,8 +228,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("delivers primaryReply via gateway for same-session sends from a different channel and skips announce", async () => {
-    vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
-
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:main:discord:channel:target-room",
       displayKey: "agent:main:discord:channel:target-room",
@@ -455,7 +453,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it("skips announce when primaryReply is already delivered and ping-pong is disabled", async () => {
+  it("keeps announce gate for unresolvable requester when ping-pong is disabled", async () => {
     const targetSessionKey = "agent:other:discord:group:ops";
 
     await runSessionsSendA2AFlow({
@@ -469,20 +467,25 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    // primaryReply delivered via gateway send; announce step is skipped
-    expect(runAgentStep).not.toHaveBeenCalled();
+    // cron requester unresolvable → no pre-ping-pong delivery
+    // announce gate stays active → announce step runs
+    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.message).toContain("announce");
+
+    // announce reply delivered via gateway send
     const sendCall = gatewayCalls.find((c) => c.method === "send");
     expect(sendCall).toBeDefined();
     if (sendCall) {
       const p = sendCall.params;
       expect(p).toMatchObject({
-        message: "Worker completed successfully",
+        message: "Test announce reply",
       });
     }
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(
-    "skips announce when primaryReply is present regardless of reply content",
+    "keeps announce gate when no requester session is provided",
     async (announceReply) => {
       vi.mocked(runAgentStep).mockResolvedValueOnce(announceReply);
 
@@ -495,10 +498,15 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply: "Worker completed successfully",
       });
 
-      // announce skipped; primaryReply delivered via gateway send
-      expect(runAgentStep).not.toHaveBeenCalled();
-      const sendCall = gatewayCalls.find((call) => call.method === "send");
-      expect(sendCall).toBeDefined();
+      // no requesterSessionKey → no pre-ping-pong delivery
+      // announce gate stays active → announce step runs
+      expect(runAgentStep).toHaveBeenCalledTimes(1);
+      const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+      expect(stepInput.message).toContain("announce");
+
+      // announce reply may be suppressed by control tokens
+      // (ANNOUNCE_SKIP, NO_REPLY, HEARTBEAT_OK, REPLY_SKIP);
+      // gateway send only happens for substantive replies
     },
   );
 
@@ -516,20 +524,22 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Target first reply",
     });
 
-    // primaryReply delivered via gateway send before ping-pong
-    const primarySend = gatewayCalls.find(
+    // requester cron key unresolvable → no pre-ping-pong delivery
+    const preSend = gatewayCalls.find(
       (c) => c.method === "send" && c.params?.message === "Target first reply",
     );
-    expect(primarySend).toBeDefined();
+    expect(preSend).toBeUndefined();
 
     // ping-pong: one target turn, requester round skipped by guard
-    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    expect(runAgentStep).toHaveBeenCalledTimes(2);
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.sessionKey).toBe("agent:main:discord:group:dev");
     expect(stepInput.message).toBe("Target first reply");
 
-    // announce skipped because primaryReply was delivered
-    expect(gatewayCalls.filter((c) => c.method === "send")).toHaveLength(1);
+    // announce step ran (guard: no requesterTarget → keep announce gate)
+    // announce produced "Test announce reply" → delivered via gateway send
+    const announceSend = gatewayCalls.filter((c) => c.method === "send");
+    expect(announceSend).toHaveLength(1);
   });
 
   it("uses requester-derived target for pre-ping-pong delivery when requester session resolves", async () => {
