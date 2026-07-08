@@ -247,7 +247,7 @@ function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
     label: TURN_MAINTENANCE_TASK_LABEL,
     task: TURN_MAINTENANCE_TASK_TASK,
     notifyPolicy: "silent",
-    deliveryStatus: "pending",
+    deliveryStatus: "not_applicable",
     preferMetadata: true,
   });
 }

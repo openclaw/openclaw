@@ -654,7 +654,7 @@ describe("runContextEngineMaintenance", () => {
           requesterSessionKey: sessionKey,
           taskKind: TURN_MAINTENANCE_TASK_KIND,
           notifyPolicy: "silent",
-          deliveryStatus: "pending",
+          deliveryStatus: "not_applicable",
         });
 
         if (!releaseForeground) {
@@ -1494,6 +1494,21 @@ describe("runContextEngineMaintenance", () => {
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         expect(sendMessageMock).not.toHaveBeenCalled();
         expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        await waitForAssertion(() =>
+          expect(getTaskById(tasks[0].taskId)?.status).toBe("succeeded"),
+        );
+        const task = requireRecord(getTaskById(tasks[0].taskId), "maintenance task");
+        expectRecordFields(task, {
+          status: "succeeded",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        expect(task.parentFlowId).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }
