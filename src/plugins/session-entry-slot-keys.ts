@@ -38,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRuns",
   "goal",
   "pendingQuestion",
+  "plan",
   "pendingSkillSuggestion",
   "skillCaptureSignalHashes",
   "sessionStartedAt",
