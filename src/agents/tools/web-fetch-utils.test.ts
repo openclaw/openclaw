@@ -153,6 +153,13 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     );
   });
 
+  it("preserves hrefs when anchor labels strip to empty", () => {
+    expect(htmlToMarkdown(`<p>See <a href="/next"><img src="arrow.png"></a></p>`).text).toBe(
+      "See /next",
+    );
+    expect(htmlToMarkdown(`<a href="/next"></a>`).text).toBe("/next");
+  });
+
   it("uses the title as fallback content when an HTML shell has no body text", async () => {
     await expect(
       extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),
@@ -166,6 +173,14 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     const payload = `<a href="x>${"<".repeat(20_000)}`;
 
     expect(htmlToMarkdown(payload).text).toBe("");
+  });
+
+  it("does not rescan the full suffix for repeated malformed tags with raw-text openers", () => {
+    const payload = `${`<a "<script></script>"`.repeat(1_000)}<p>Visible</p>`;
+    const rendered = htmlToMarkdown(payload).text;
+
+    expect(rendered).toContain("Visible");
+    expect(rendered).not.toContain("script");
   });
 
   it("does not leak malformed quoted tag payloads", () => {

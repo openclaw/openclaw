@@ -151,20 +151,32 @@ function startsLikeHtmlTag(html: string, start: number): boolean {
 
 function findTagEnd(html: string, start: number): number {
   let quote: string | null = null;
+  let afterEquals = false;
   for (let i = start + 1; i < html.length; i += 1) {
     const ch = html[i];
+    if (readRawTextOpenTagName(html, i)) {
+      return -1;
+    }
     if (quote) {
       if (ch === quote) {
         quote = null;
       }
       continue;
     }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
+    if (afterEquals && isAsciiWhitespace(ch)) {
       continue;
     }
+    if (afterEquals && (ch === '"' || ch === "'")) {
+      quote = ch;
+      afterEquals = false;
+      continue;
+    }
+    afterEquals = false;
     if (ch === ">") {
       return i;
+    }
+    if (ch === "=") {
+      afterEquals = true;
     }
   }
   return -1;
@@ -178,8 +190,8 @@ function isSelfClosingTagRaw(raw: string): boolean {
   const beforeSlash = trimmed[trimmed.length - 2];
   const tagBody = trimmed.slice(0, -1);
   let hasAttributeSeparator = false;
-  for (let i = 0; i < tagBody.length; i += 1) {
-    if (isAsciiWhitespace(tagBody[i])) {
+  for (const ch of tagBody) {
+    if (isAsciiWhitespace(ch)) {
       hasAttributeSeparator = true;
       break;
     }
@@ -343,7 +355,7 @@ function closeContext(
   state: { title?: string },
 ): void {
   const label = normalizeWhitespace(contextText(context));
-  if (!label && context.kind !== "title") {
+  if (!label && context.kind !== "title" && !(context.kind === "anchor" && context.href)) {
     return;
   }
   switch (context.kind) {
