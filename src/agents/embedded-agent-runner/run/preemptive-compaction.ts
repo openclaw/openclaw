@@ -24,7 +24,7 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
-const TOOL_RESULT_CHARS_PER_TOKEN = 2;
+const TOOL_RESULT_CHARS_PER_TOKEN = 4;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;

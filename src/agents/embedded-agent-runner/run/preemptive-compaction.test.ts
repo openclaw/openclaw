@@ -266,14 +266,14 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
-      reserveTokens: 20_000,
+      contextTokenBudget: 52_000,
+      reserveTokens: 5_000,
     });
 
     expect(result.route).not.toBe("fits");
@@ -300,7 +300,7 @@ describe("preemptive-compaction", () => {
     expect(estimatedPromptTokens).toBeGreaterThan(30_000);
   });
 
-  it("prechecks a regression-sized synthetic tool-heavy transcript as over budget", () => {
+  it("prechecks a regression-sized synthetic tool-heavy transcript as within the prompt budget", () => {
     const toolResultCharsPerMessage = Math.ceil(427_000 / 120);
     const generalCharsPerMessage = Math.ceil((503_000 - 427_000) / 121);
     const messages: AgentMessage[] = [];
@@ -325,10 +325,10 @@ describe("preemptive-compaction", () => {
       reserveTokens: 32_000,
     });
 
-    expect(result.estimatedPromptTokens).toBeGreaterThan(200_000);
+    expect(result.estimatedPromptTokens).toBeLessThan(168_000);
     expect(result.promptBudgetBeforeReserve).toBe(168_000);
-    expect(result.route).not.toBe("fits");
-    expect(result.overflowTokens).toBeGreaterThan(0);
+    expect(result.route).toBe("fits");
+    expect(result.overflowTokens).toBe(0);
   });
 
   it("caps reserve tokens so small context models keep usable prompt budget", () => {
@@ -517,7 +517,7 @@ describe("preemptive-compaction", () => {
     expect(aboveCutoff - belowCutoff).toBeLessThanOrEqual(2);
   });
 
-  it("keeps the conservative ratio for non-CJK tool results", () => {
+  it("uses the normal text ratio for non-CJK tool results", () => {
     const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
     const toolResultTokens = estimateLlmBoundaryTokenPressure({
       messages: [makeToolResultMessage(latinText)],
@@ -530,8 +530,7 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
-    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
+    expect(Math.abs(toolResultTokens - assistantTokens)).toBeLessThanOrEqual(5);
   });
 
   it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
@@ -583,5 +582,35 @@ describe("preemptive-compaction", () => {
     });
 
     expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
+  });
+
+  it("does not false-positive overflow for a tool-result-heavy turn within the context window (#101929)", () => {
+    // The reporter's scenario: ~250k chars of tool result text across ~20
+    // tool-result messages on a 200k context window with 50k reserve tokens.
+    // With TOOL_RESULT_CHARS_PER_TOKEN=4 the estimate stays comfortably below
+    // the 150k prompt budget (200k − 50k), where TOOL_RESULT_CHARS_PER_TOKEN=2
+    // produced ~162k estimated tokens → false-positive overflow.
+    const toolCharsPerMessage = Math.ceil(250_000 / 20);
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 43; i += 1) {
+      if (i % 2 === 0) {
+        messages.push(makeToolResultMessage("x".repeat(toolCharsPerMessage)));
+      } else {
+        messages.push(makeAssistantHistory("y".repeat(500)));
+      }
+    }
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 200_000,
+      reserveTokens: 50_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeLessThan(150_000);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
   });
 });
