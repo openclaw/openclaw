@@ -399,12 +399,17 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
  * Wraps a stream function with idle timeout detection for both stream creation
  * and iterator progress. Each successful `next()` resets the timer; a timeout
  * aborts the provider request and surfaces the same Error to the caller.
+ * `scope: "creation-only"` bounds only the creation phase: local providers opt
+ * out of gap policing, but a request whose headers never arrive must still fail
+ * instead of wedging the turn until the run budget.
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
   onIdleTimeout?: (error: Error) => void,
+  opts?: { scope?: "creation-and-gaps" | "creation-only" },
 ): StreamFn {
+  const guardIterationGaps = opts?.scope !== "creation-only";
   return (model, context, options) => {
     const createIdleTimeoutError = () =>
       new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
@@ -469,7 +474,7 @@ export function streamWithIdleTimeout(
           };
           const armTimer = () => {
             clearTimer();
-            if (!waitingForProvider) {
+            if (!guardIterationGaps || !waitingForProvider) {
               return;
             }
             idleTimer = setTimeout(() => {

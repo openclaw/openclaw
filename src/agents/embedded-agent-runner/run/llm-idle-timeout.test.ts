@@ -693,6 +693,47 @@ describe("streamWithIdleTimeout", () => {
     await next;
   });
 
+  it("creation-only scope bounds stream creation but not iterator gaps", async () => {
+    vi.useFakeTimers();
+    // Creation hang: still rejected at the deadline.
+    const hangingCreate = vi.fn(
+      () => new Promise<AssistantMessageEventStream>(() => {}),
+    ) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
+    const onIdleTimeout = vi.fn();
+    const wrappedCreate = streamWithIdleTimeout(hangingCreate, 50, onIdleTimeout, {
+      scope: "creation-only",
+    });
+    const model = {} as Parameters<typeof hangingCreate>[0];
+    const context = {} as Parameters<typeof hangingCreate>[1];
+    const options = {} as Parameters<typeof hangingCreate>[2];
+    const pending = expect(wrappedCreate(model, context, options)).rejects.toThrow(
+      /LLM idle timeout/,
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    await pending;
+    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+
+    // Iterator gap: never bounded — local providers own their stream pacing.
+    const slowStream = createNeverYieldingStream();
+    const slowFn = vi.fn().mockReturnValue(slowStream);
+    const wrappedGaps = streamWithIdleTimeout(slowFn, 50, onIdleTimeout, {
+      scope: "creation-only",
+    });
+    const stream = wrappedGaps(
+      model as Parameters<typeof slowFn>[0],
+      context as Parameters<typeof slowFn>[1],
+      options as Parameters<typeof slowFn>[2],
+    ) as AsyncIterable<unknown>;
+    const iterator = stream[Symbol.asyncIterator]();
+    let settled = false;
+    void iterator.next().finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).toBe(false);
+    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+  });
+
   it("clears the connection timer when stream setup rejects", async () => {
     vi.useFakeTimers();
     const setupError = new Error("provider setup failed");
