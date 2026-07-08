@@ -319,12 +319,14 @@ const {
   mockTranscribeFirstAudio,
   mockMaybeCreateDynamicAgent,
 } = vi.hoisted(() => ({
-  mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcher: createReplyDispatcher(),
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-    ensureNoVisibleReplyFallback: vi.fn(),
-  })),
+  mockCreateFeishuReplyDispatcher: vi.fn(
+    (_params: { onTypingTargetMissing?: (messageId: string) => void }) => ({
+      dispatcher: createReplyDispatcher(),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    }),
+  ),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
   mockListFeishuThreadMessages: vi.fn().mockResolvedValue([]),
