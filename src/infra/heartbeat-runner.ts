@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isReasoningReplyPayload,
@@ -861,6 +862,10 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
 }
 
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
+
+function truncateHeartbeatPreview(value: string | undefined): string | undefined {
+  return value ? truncateUtf16Safe(value, 200) : undefined;
+}
 
 function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; silent: boolean } {
   const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
@@ -2007,7 +2012,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
-        preview: heartbeatToolResponse.summary.slice(0, 200),
+        preview: truncateHeartbeatPreview(heartbeatToolResponse.summary),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
@@ -2161,7 +2166,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
-        preview: normalized.text.slice(0, 200),
+        preview: truncateHeartbeatPreview(normalized.text),
         durationMs: Date.now() - startedAt,
         hasMedia: false,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -2190,7 +2195,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
@@ -2210,7 +2215,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel,
         hasMedia: mediaUrls.length > 0,
@@ -2233,7 +2238,7 @@ export async function runHeartbeatOnce(opts: {
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
-          preview: previewText?.slice(0, 200),
+          preview: truncateHeartbeatPreview(previewText),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
           channel: delivery.channel,
@@ -2317,7 +2322,7 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
-      preview: previewText?.slice(0, 200),
+      preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
@@ -2344,6 +2349,8 @@ export async function runHeartbeatOnce(opts: {
     heartbeatTyping?.onCleanup?.();
   }
 }
+
+export const testing = { truncateHeartbeatPreview };
 
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;

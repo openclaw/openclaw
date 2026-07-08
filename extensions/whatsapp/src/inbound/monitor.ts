@@ -137,7 +137,7 @@ function resolveRetryableWhatsAppInboundError(
   return new WhatsAppRetryableInboundError(formatErrorMessage(error), { cause: error });
 }
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
-export type WhatsAppBaileysCacheEntry<T> = {
+type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
   value: T;
 };

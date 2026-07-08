@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -313,7 +314,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${truncateUtf16Safe(collapsed, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }

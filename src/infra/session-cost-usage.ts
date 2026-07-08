@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -2159,7 +2160,7 @@ export async function discoverAllSessions(params?: {
             if (message?.role === "user") {
               const content = message.content;
               if (typeof content === "string") {
-                firstUserMessage = content.slice(0, 100);
+                firstUserMessage = truncateUtf16Safe(content, 100);
               } else if (Array.isArray(content)) {
                 for (const block of content) {
                   if (
@@ -2169,7 +2170,7 @@ export async function discoverAllSessions(params?: {
                   ) {
                     const text = (block as Record<string, unknown>).text;
                     if (typeof text === "string") {
-                      firstUserMessage = text.slice(0, 100);
+                      firstUserMessage = truncateUtf16Safe(text, 100);
                     }
                     break;
                   }
@@ -2749,10 +2750,10 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content
+      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
-        content = content.slice(0, maxLen) + "…";
+        content = truncateUtf16Safe(content, maxLen) + "…";
       }
 
       // Get timestamp

@@ -78,7 +78,7 @@ function isLightBackground(): boolean {
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
-export const darkPalette = {
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",

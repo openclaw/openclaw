@@ -19,7 +19,7 @@ type MessagesHistoryResult = {
   messages?: unknown[];
 };
 
-export type RepairIMessageConversationAnchorParams = {
+type RepairIMessageConversationAnchorParams = {
   client: IMessageRpcClient;
   message: IMessagePayload;
   runtime?: RuntimeLogger;

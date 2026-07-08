@@ -179,6 +179,7 @@ const toolCommonMocks = vi.hoisted(() => ({
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
+  stageBrowserScreenshotForSharing: vi.fn(async () => "/tmp/openclaw-media/outbound/share.png"),
 }));
 vi.mock("./sdk-setup-tools.js", async () => {
   const actual =
@@ -189,6 +190,7 @@ vi.mock("./sdk-setup-tools.js", async () => {
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     describeImageFile: toolCommonMocks.describeImageFile,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     listNodes: nodesUtilsMocks.listNodes,
   };
 });
@@ -233,6 +235,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     }),
     describeImageFile: toolCommonMocks.describeImageFile,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     jsonResult: (result: unknown) => ({
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -314,6 +317,9 @@ function resetBrowserToolMocks() {
     buffer,
   }));
   toolCommonMocks.saveMediaBuffer.mockResolvedValue({ path: "/tmp/openclaw-media/resized.jpg" });
+  toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
+    "/tmp/openclaw-media/outbound/share.png",
+  );
   browserToolTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserArmDialog: browserActionsMocks.browserArmDialog as never,
@@ -336,6 +342,7 @@ function resetBrowserToolMocks() {
     callGatewayTool: gatewayMocks.callGatewayTool as never,
     normalizeBrowserScreenshot: toolCommonMocks.normalizeBrowserScreenshot as never,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer as never,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing as never,
     trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
     untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
   });
@@ -500,6 +507,8 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+    expect(tool.description).toContain("trigger ref with paths in the same upload call");
+    expect(tool.description).toContain("paths-only arming");
   });
 });
 
@@ -1116,8 +1125,19 @@ describe("browser tool snapshot maxChars", () => {
 
     const imageParams = lastMockCallArg<{
       imageSanitization?: { maxDimensionPx?: number };
+      extraText?: string;
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+    expect(imageParams.extraText).toContain(
+      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+    );
+    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
+    expect(toolCommonMocks.stageBrowserScreenshotForSharing).toHaveBeenCalledWith(
+      "/tmp/test.png",
+      2000,
+    );
   });
 
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
@@ -1149,6 +1169,8 @@ describe("browser tool snapshot maxChars", () => {
     const joined = textBlocks.map((entry) => entry.text).join("\n");
     expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(joined).toContain("/tmp/secret.png");
+    expect(joined).toContain(JSON.stringify("/tmp/openclaw-media/outbound/share.png"));
+    expect(joined).toContain("message tool");
     // The vision-success path must not surface raw screenshot media via
     // details.media so channel auto-delivery cannot grab the screenshot.
     expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
@@ -1184,10 +1206,16 @@ describe("browser tool snapshot maxChars", () => {
     const imageParams = lastMockCallArg<{
       path: string;
       extraText?: string;
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/screen.png");
     expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(imageParams.extraText).toContain("/tmp/secret.png");
+    expect(imageParams.extraText).toContain(
+      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+    );
+    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("preserves screenshot image sanitization on vision failure fallback", async () => {
@@ -1224,6 +1252,33 @@ describe("browser tool snapshot maxChars", () => {
     // bypassed whenever vision fails.
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 1600 });
     expect(imageParams.extraText).toContain("browser screenshot vision failed");
+  });
+
+  it("keeps the screenshot usable when explicit-share staging fails", async () => {
+    toolCommonMocks.stageBrowserScreenshotForSharing.mockRejectedValueOnce(
+      new Error("outbound store unavailable"),
+    );
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/test.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      path: string;
+      extraText?: string;
+      details?: { media?: { outbound?: boolean } };
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.path).toBe("/tmp/test.png");
+    expect(imageParams.extraText).toContain("Screenshot sharing is unavailable");
+    expect(imageParams.extraText).not.toContain("/tmp/test.png");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("passes screenshot timeoutMs through the node browser proxy", async () => {

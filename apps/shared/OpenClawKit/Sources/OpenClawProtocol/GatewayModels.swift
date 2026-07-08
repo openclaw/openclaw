@@ -2979,6 +2979,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
     public let expectedlifecyclerevision: String?
     public let expectedsessionupdatedat: Double?
     public let emitlifecyclehooks: Bool?
+    public let archivedonly: Bool?
 
     public init(
         key: String,
@@ -2987,7 +2988,8 @@ public struct SessionsDeleteParams: Codable, Sendable {
         expectedsessionid: String? = nil,
         expectedlifecyclerevision: String? = nil,
         expectedsessionupdatedat: Double? = nil,
-        emitlifecyclehooks: Bool?)
+        emitlifecyclehooks: Bool?,
+        archivedonly: Bool?)
     {
         self.key = key
         self.agentid = agentid
@@ -2996,6 +2998,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
         self.expectedlifecyclerevision = expectedlifecyclerevision
         self.expectedsessionupdatedat = expectedsessionupdatedat
         self.emitlifecyclehooks = emitlifecyclehooks
+        self.archivedonly = archivedonly
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3006,6 +3009,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case expectedlifecyclerevision = "expectedLifecycleRevision"
         case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
+        case archivedonly = "archivedOnly"
     }
 }
 
@@ -7053,6 +7057,7 @@ public struct CronJob: Codable, Sendable {
     public let createdatms: Int
     public let updatedatms: Int
     public let schedule: AnyCodable
+    public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
@@ -7084,6 +7089,7 @@ public struct CronJob: Codable, Sendable {
         createdatms: Int,
         updatedatms: Int,
         schedule: AnyCodable,
+        trigger: [String: AnyCodable]?,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
@@ -7114,6 +7120,7 @@ public struct CronJob: Codable, Sendable {
         self.createdatms = createdatms
         self.updatedatms = updatedatms
         self.schedule = schedule
+        self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
@@ -7146,6 +7153,7 @@ public struct CronJob: Codable, Sendable {
         case createdatms = "createdAtMs"
         case updatedatms = "updatedAtMs"
         case schedule
+        case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
@@ -7232,6 +7240,7 @@ public struct CronAddParams: Codable, Sendable {
     public let enabled: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
+    public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
@@ -7249,6 +7258,7 @@ public struct CronAddParams: Codable, Sendable {
         enabled: Bool?,
         deleteafterrun: Bool?,
         schedule: AnyCodable,
+        trigger: [String: AnyCodable]?,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
@@ -7265,6 +7275,7 @@ public struct CronAddParams: Codable, Sendable {
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.schedule = schedule
+        self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
@@ -7283,6 +7294,7 @@ public struct CronAddParams: Codable, Sendable {
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case schedule
+        case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
@@ -7390,6 +7402,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
+    public let triggerfired: Bool?
     public let model: String?
     public let provider: String?
     public let usage: [String: AnyCodable]?
@@ -7414,6 +7427,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?,
+        triggerfired: Bool?,
         model: String?,
         provider: String?,
         usage: [String: AnyCodable]?,
@@ -7437,6 +7451,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
+        self.triggerfired = triggerfired
         self.model = model
         self.provider = provider
         self.usage = usage
@@ -7462,6 +7477,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"
+        case triggerfired = "triggerFired"
         case model
         case provider
         case usage
@@ -7859,24 +7875,78 @@ public struct ExecApprovalsNodeGetParams: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
+    public let path: String?
+    public let exists: Bool?
+    public let hash: String?
+    public let file: [String: AnyCodable]?
+    public let enabled: Bool?
+    public let basehash: String?
+    public let defaultaction: AnyCodable?
+    public let rules: [[String: AnyCodable]]?
+    public let constraints: [String: AnyCodable]?
+    public let message: String?
+
+    public init(
+        path: String?,
+        exists: Bool?,
+        hash: String?,
+        file: [String: AnyCodable]?,
+        enabled: Bool?,
+        basehash: String?,
+        defaultaction: AnyCodable?,
+        rules: [[String: AnyCodable]]?,
+        constraints: [String: AnyCodable]?,
+        message: String?)
+    {
+        self.path = path
+        self.exists = exists
+        self.hash = hash
+        self.file = file
+        self.enabled = enabled
+        self.basehash = basehash
+        self.defaultaction = defaultaction
+        self.rules = rules
+        self.constraints = constraints
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case exists
+        case hash
+        case file
+        case enabled
+        case basehash = "baseHash"
+        case defaultaction = "defaultAction"
+        case rules
+        case constraints
+        case message
+    }
+}
+
 public struct ExecApprovalsNodeSetParams: Codable, Sendable {
     public let nodeid: String
-    public let file: [String: AnyCodable]
+    public let file: [String: AnyCodable]?
+    public let native: [String: AnyCodable]?
     public let basehash: String?
 
     public init(
         nodeid: String,
-        file: [String: AnyCodable],
+        file: [String: AnyCodable]?,
+        native: [String: AnyCodable]?,
         basehash: String?)
     {
         self.nodeid = nodeid
         self.file = file
+        self.native = native
         self.basehash = basehash
     }
 
     private enum CodingKeys: String, CodingKey {
         case nodeid = "nodeId"
         case file
+        case native
         case basehash = "baseHash"
     }
 }

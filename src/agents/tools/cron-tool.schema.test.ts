@@ -63,6 +63,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
@@ -83,6 +84,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );

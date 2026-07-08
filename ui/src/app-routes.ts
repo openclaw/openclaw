@@ -83,13 +83,11 @@ export async function startApplicationRouter(
 }
 
 export {
-  APP_ROUTE_DEFINITIONS,
   APP_ROUTE_IDS,
   inferBasePathFromPathname,
   isRouteId,
   locationForRoute,
   normalizeBasePath,
-  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

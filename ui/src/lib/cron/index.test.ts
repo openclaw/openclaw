@@ -9,6 +9,7 @@ import {
   loadCronRuns,
   loadMoreCronRuns,
   normalizeCronFormState,
+  resolveConfiguredCronModelSuggestions,
   runCronJob,
   startCronEdit,
   startCronClone,
@@ -108,6 +109,48 @@ type EmptyCronListResponse = {
 };
 
 describe("cron controller", () => {
+  it("collects configured model suggestions from defaults and per-agent entries", () => {
+    expect(
+      resolveConfiguredCronModelSuggestions({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.2",
+              fallbacks: ["google/gemini-2.5-pro", "openai/gpt-5.2-mini"],
+            },
+            models: {
+              "anthropic/claude-sonnet-4-5": { alias: "smart" },
+              "openai/gpt-5.2": { alias: "main" },
+            },
+          },
+          list: {
+            writer: {
+              model: { primary: "xai/grok-4", fallbacks: ["openai/gpt-5.2-mini"] },
+            },
+            planner: {
+              model: "google/gemini-2.5-flash",
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      "anthropic/claude-sonnet-4-5",
+      "google/gemini-2.5-flash",
+      "google/gemini-2.5-pro",
+      "openai/gpt-5.2",
+      "openai/gpt-5.2-mini",
+      "xai/grok-4",
+    ]);
+  });
+
+  it("returns no configured model suggestions for invalid or missing config", () => {
+    expect(resolveConfiguredCronModelSuggestions(null)).toStrictEqual([]);
+    expect(resolveConfiguredCronModelSuggestions({})).toStrictEqual([]);
+    expect(
+      resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
+    ).toStrictEqual([]);
+  });
+
   it("loads model suggestions from the configured model view", async () => {
     const request = vi.fn(async () => ({
       models: [

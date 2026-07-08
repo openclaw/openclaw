@@ -491,7 +491,7 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
 
-describeBrowserLayout("chat responsive browser layout", () => {
+describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
     sharedBrowser = await chromium.launch({
       executablePath: chromiumExecutablePath,
