@@ -3,15 +3,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import {
   startQaLabServer,
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
-import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -637,6 +638,34 @@ describe("qa-lab server", () => {
 
     expect(res.statusCode).toBe(413);
     expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+  });
+
+  it("returns controlled errors for malformed JSON body reads", async () => {
+    const req = Object.assign(Readable.from(["{"]), {
+      headers: {},
+    });
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    let error: unknown;
+    try {
+      await readQaJsonBody(req as never);
+    } catch (caught) {
+      error = caught;
+    }
+
+    writeQaLabServerError(res as never, error);
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "Malformed JSON body" });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
