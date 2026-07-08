@@ -69,4 +69,20 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    "429 rate_limit_exceeded; Retry-After: 100 ms",
+    "429 rate_limit_exceeded; Retry-After: 60000 milliseconds",
+    "429 rate_limit_exceeded; Retry-After: 1 minute",
+  ])("retries explicit short Retry-After windows: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it.each([
+    "429 rate_limit_exceeded; Retry-After: 100",
+    "429 rate_limit_exceeded; Retry-After: 60001 ms",
+    "429 rate_limit_exceeded; Retry-After: 2 minutes",
+  ])("does not retry long Retry-After windows: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
 });
