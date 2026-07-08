@@ -1,8 +1,12 @@
 /** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { constants as sqliteConstants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createInMemoryAcpEventLedger,
@@ -428,4 +432,70 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
+  it("marks SQLite-backed replay incomplete when serialized byte retention trims payloads", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const ledger = createSqliteAcpEventLedger({
+        path: path.join(dir, "openclaw.sqlite"),
+        maxSerializedBytes: 1_024,
+      });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          rawOutput: { content: "x".repeat(5_000) },
+        },
+      });
+
+      await expect(
+        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("does not rescan replay event payloads on every SQLite-backed write", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: databasePath });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      const database = openOpenClawStateDatabase({ path: databasePath });
+      let eventPayloadReads = 0;
+      database.db.setAuthorizer((action, tableName, columnName) => {
+        if (
+          action === sqliteConstants.SQLITE_READ &&
+          tableName === "acp_replay_events" &&
+          columnName === "update_json"
+        ) {
+          eventPayloadReads++;
+        }
+        return sqliteConstants.SQLITE_OK;
+      });
+
+      for (const text of ["First", "Second", "Third"]) {
+        await ledger.recordUpdate({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      }
+
+      expect(eventPayloadReads).toBeLessThanOrEqual(1);
+    });
+  });
 });
