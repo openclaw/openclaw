@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: read
     name: "build-artifacts"
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 35
     steps:
