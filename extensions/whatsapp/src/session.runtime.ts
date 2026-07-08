@@ -7,6 +7,7 @@ export function createBaileysSignalRepository(
 }
 
 export {
+  Browsers,
   BufferJSON,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,

@@ -4,7 +4,7 @@ import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/run
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearStalePhoneCodePairingAuthIfNeeded, restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } from "./login.js";
-import { createWaSocket, type waitForWaConnection } from "./session.js";
+import { createWaSocket, WHATSAPP_PHONE_CODE_BROWSER, type waitForWaConnection } from "./session.js";
 
 const waiter = vi.fn<typeof waitForWaConnection>();
 vi.mock("./session.js", async () => {
@@ -167,6 +167,9 @@ describe("web login", () => {
     await loginPromise;
 
     expect(sock.requestPairingCode).toHaveBeenCalledWith("15551234567");
+    expect(vi.mocked(createWaSocket).mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ browser: WHATSAPP_PHONE_CODE_BROWSER }),
+    );
     expect(waiter).toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 1234 5678"));
     expect(runtime.log).toHaveBeenCalledWith(
@@ -199,6 +202,12 @@ describe("web login", () => {
 
     expect(firstSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
     expect(secondSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
+    expect(vi.mocked(createWaSocket).mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ browser: WHATSAPP_PHONE_CODE_BROWSER }),
+    );
+    expect(vi.mocked(createWaSocket).mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({ browser: WHATSAPP_PHONE_CODE_BROWSER }),
+    );
     expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledTimes(2);
     const cleanupBeforeReplacement = vi.mocked(clearStalePhoneCodePairingAuthIfNeeded).mock
       .invocationCallOrder[1];

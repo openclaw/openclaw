@@ -29,6 +29,7 @@ let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
+let WHATSAPP_PHONE_CODE_BROWSER: typeof import("./session.js").WHATSAPP_PHONE_CODE_BROWSER;
 let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
 
 async function emitCredsUpdate(authDir?: string) {
@@ -179,6 +180,7 @@ describe("web session", () => {
       waitForWaConnection,
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,
+      WHATSAPP_PHONE_CODE_BROWSER,
     } = await import("./session.js"));
     renderQrTerminalMock = vi.mocked((await import("./qr-terminal.js")).renderQrTerminal);
     ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
@@ -209,6 +211,7 @@ describe("web session", () => {
     expect(passed.keepAliveIntervalMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs);
     expect(passed.connectTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs);
     expect(passed.defaultQueryTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+    expect(passed.browser).toEqual(["openclaw", "cli", expect.any(String)]);
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
     if (typeof passedLogger?.trace !== "function") {
@@ -386,6 +389,14 @@ describe("web session", () => {
     });
 
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49152/ws/chat");
+  });
+
+  it("passes explicit Baileys browser metadata overrides", async () => {
+    await createWaSocket(false, false, {
+      browser: WHATSAPP_PHONE_CODE_BROWSER,
+    });
+
+    expect(readLastSocketOptions().browser).toEqual(["Mac OS", "Chrome", "14.4.1"]);
   });
 
   it("uses OPENCLAW_WHATSAPP_WEB_SOCKET_URL as the default Baileys WebSocket URL", async () => {
