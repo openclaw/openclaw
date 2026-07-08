@@ -218,6 +218,24 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+/** Lifecycle status for Codex-parity plan mode. Absence of the slot means `inactive`. */
+export type SessionPlanStatus = "planning" | "pending_approval";
+
+export type SessionPlanState = {
+  schemaVersion: 1;
+  status: SessionPlanStatus;
+  enteredAt: number;
+  updatedAt: number;
+  /** Absolute path of the persisted plan document, set once exit_plan_mode composes it. */
+  planFilePath?: string;
+  /** Pending approval question id (PR-A QuestionManager) while status is `pending_approval`. */
+  pendingQuestionId?: string;
+  /** Most recent plan summary the model presented via exit_plan_mode. */
+  lastSummary?: string;
+  /** Latest reject feedback returned to the model so it can revise the plan. */
+  lastFeedback?: string;
+};
+
 export type PendingSkillSuggestion = {
   skillName: string;
   detectedAt: number;
@@ -319,6 +337,8 @@ export type SessionEntry = {
   goal?: SessionGoal;
   /** Durable breadcrumb for an in-flight ask_user_question (restart expiry-sweep). */
   pendingQuestion?: SessionPendingQuestion;
+  /** Core-owned durable plan-mode state for this thread/session (Codex-parity plan mode). */
+  plan?: SessionPlanState;
   /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
   pendingSkillSuggestion?: PendingSkillSuggestion;
   /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
