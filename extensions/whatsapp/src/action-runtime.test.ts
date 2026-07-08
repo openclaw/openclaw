@@ -328,96 +328,34 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
-  it("edits own WhatsApp messages through the resolved account", async () => {
-    await handleWhatsAppAction(
-      {
+  it.each([
+    {
+      name: "edits own WhatsApp messages through the resolved account",
+      params: {
         action: "edit",
         chatJid: "123@s.whatsapp.net",
         messageId: "msg1",
         message: "updated text",
       },
-      enabledConfig,
-    );
-
-    expect(editMessageWhatsApp).toHaveBeenLastCalledWith(
-      "+123",
-      "msg1",
-      "updated text",
-      expect.objectContaining({
-        verbose: false,
-        accountId: DEFAULT_ACCOUNT_ID,
-      }),
-    );
-  });
-
-  it("accepts text as an edit message alias", async () => {
-    await handleWhatsAppAction(
-      {
+      expectedEditText: "updated text",
+    },
+    {
+      name: "accepts text as an edit message alias",
+      params: {
         action: "edit",
         chatJid: "123@s.whatsapp.net",
         messageId: "msg1",
         text: "updated text",
       },
-      enabledConfig,
-    );
+      expectedEditText: "updated text",
+    },
+  ])("$name", async ({ params, expectedEditText }) => {
+    await handleWhatsAppAction(params, enabledConfig);
 
     expect(editMessageWhatsApp).toHaveBeenLastCalledWith(
       "+123",
       "msg1",
-      "updated text",
-      expect.any(Object),
-    );
-  });
-
-  it("rejects missing edit text as a tool input error", async () => {
-    await expect(
-      handleWhatsAppAction(
-        {
-          action: "edit",
-          chatJid: "123@s.whatsapp.net",
-          messageId: "msg1",
-        },
-        enabledConfig,
-      ),
-    ).rejects.toMatchObject({
-      name: "ToolInputError",
-      status: 400,
-    });
-    expect(editMessageWhatsApp).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty edit text as a tool input error", async () => {
-    await expect(
-      handleWhatsAppAction(
-        {
-          action: "edit",
-          chatJid: "123@s.whatsapp.net",
-          messageId: "msg1",
-          message: "   ",
-        },
-        enabledConfig,
-      ),
-    ).rejects.toMatchObject({
-      message: expect.stringMatching(/edit text cannot be empty/),
-      name: "ToolInputError",
-      status: 400,
-    });
-    expect(editMessageWhatsApp).not.toHaveBeenCalled();
-  });
-
-  it("unsends own WhatsApp messages through the resolved account", async () => {
-    await handleWhatsAppAction(
-      {
-        action: "unsend",
-        chatJid: "123@s.whatsapp.net",
-        messageId: "msg1",
-      },
-      enabledConfig,
-    );
-
-    expect(unsendMessageWhatsApp).toHaveBeenLastCalledWith(
-      "+123",
-      "msg1",
+      expectedEditText,
       expect.objectContaining({
         verbose: false,
         accountId: DEFAULT_ACCOUNT_ID,
@@ -425,17 +363,56 @@ describe("handleWhatsAppAction", () => {
     );
   });
 
-  it("deletes own WhatsApp messages as an unsend alias", async () => {
+  it.each([
+    {
+      name: "rejects missing edit text as a tool input error",
+      params: {
+        action: "edit",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "msg1",
+      },
+    },
+    {
+      name: "rejects empty edit text as a tool input error",
+      params: {
+        action: "edit",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "msg1",
+        message: "   ",
+      },
+      message: /edit text cannot be empty/,
+    },
+  ])("$name", async ({ params, message }) => {
+    await expect(handleWhatsAppAction(params, enabledConfig)).rejects.toMatchObject({
+      ...(message ? { message: expect.stringMatching(message) } : {}),
+      name: "ToolInputError",
+      status: 400,
+    });
+    expect(editMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "unsends own WhatsApp messages through the resolved account",
+      action: "unsend",
+      expectedDetails: { ok: true, unsent: true, messageId: "msg1" },
+    },
+    {
+      name: "deletes own WhatsApp messages as an unsend alias",
+      action: "delete",
+      expectedDetails: { ok: true, deleted: true, messageId: "msg1" },
+    },
+  ])("$name", async ({ action, expectedDetails }) => {
     const result = await handleWhatsAppAction(
       {
-        action: "delete",
+        action,
         chatJid: "123@s.whatsapp.net",
         messageId: "msg1",
       },
       enabledConfig,
     );
 
-    expect(result.details).toEqual({ ok: true, deleted: true, messageId: "msg1" });
+    expect(result.details).toEqual(expectedDetails);
     expect(unsendMessageWhatsApp).toHaveBeenLastCalledWith(
       "+123",
       "msg1",
@@ -446,7 +423,7 @@ describe("handleWhatsAppAction", () => {
     );
   });
 
-  it("respects sendMessage gating for edit, delete, and unsend", async () => {
+  it.each(["edit", "delete", "unsend"])("respects sendMessage gating for %s", async (action) => {
     const cfg = {
       channels: { whatsapp: { actions: { sendMessage: false } } },
     } as OpenClawConfig;
@@ -454,33 +431,13 @@ describe("handleWhatsAppAction", () => {
     await expect(
       handleWhatsAppAction(
         {
-          action: "edit",
+          action,
           chatJid: "123@s.whatsapp.net",
           messageId: "msg1",
-          message: "updated",
+          ...(action === "edit" ? { message: "updated" } : {}),
         },
         cfg,
       ),
-    ).rejects.toThrow(/message edit is disabled/);
-    await expect(
-      handleWhatsAppAction(
-        {
-          action: "delete",
-          chatJid: "123@s.whatsapp.net",
-          messageId: "msg1",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/message delete is disabled/);
-    await expect(
-      handleWhatsAppAction(
-        {
-          action: "unsend",
-          chatJid: "123@s.whatsapp.net",
-          messageId: "msg1",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/message unsend is disabled/);
+    ).rejects.toThrow(new RegExp(`message ${action} is disabled`));
   });
 });

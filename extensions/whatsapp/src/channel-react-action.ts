@@ -59,9 +59,28 @@ function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
   return readStringParam(args, "buffer", { trim: false }) !== undefined;
 }
 
+function readExplicitWhatsAppActionTarget(args: Record<string, unknown>): string | undefined {
+  const chatJid = readStringParam(args, "chatJid");
+  const to = readStringParam(args, "to");
+  if (!chatJid || !to) {
+    return to ?? chatJid;
+  }
+
+  const normalizedChatJid = normalizeWhatsAppTarget(chatJid);
+  const normalizedTo = normalizeWhatsAppTarget(to);
+  if (normalizedChatJid !== normalizedTo) {
+    throw Object.assign(
+      new Error(
+        "WhatsApp action target aliases conflict; provide either to or chatJid for one chat.",
+      ),
+      { name: "ToolInputError", status: 400 },
+    );
+  }
+  return to;
+}
+
 function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
-  const explicit =
-    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  const explicit = readExplicitWhatsAppActionTarget(params.params);
   if (explicit) {
     return explicit;
   }

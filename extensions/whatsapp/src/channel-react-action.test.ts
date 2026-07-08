@@ -569,182 +569,152 @@ describe("whatsapp react action messageId resolution", () => {
     expect((err as Error).name).toBe("ToolInputError");
   });
 
-  it("forwards edit actions with explicit target and message id", async () => {
-    await handleWhatsAppMessageAction({
+  it.each([
+    {
+      name: "forwards edit actions with explicit target and message id",
       action: "edit",
       params: { to: "+1555", messageId: "msg-42", message: "updated" },
-      cfg: baseCfg,
-      accountId: "default",
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
+      expected: {
         action: "edit",
         chatJid: "+1555",
         messageId: "msg-42",
         message: "updated",
         accountId: "default",
       },
-      baseCfg,
-    );
-  });
-
-  it("uses current WhatsApp channel as edit target when target is omitted", async () => {
-    await handleWhatsAppMessageAction({
+    },
+    {
+      name: "uses current WhatsApp channel as edit target when target is omitted",
       action: "edit",
       params: { messageId: "msg-42", text: "updated" },
-      cfg: baseCfg,
-      accountId: "default",
       toolContext: {
         currentChannelId: "whatsapp:+1555",
         currentChannelProvider: "whatsapp",
         currentMessageId: "ctx-msg-42",
       },
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expected: {
         action: "edit",
         chatJid: "+1555",
         messageId: "msg-42",
         message: "updated",
-      }),
-      baseCfg,
-    );
-  });
-
-  it("requires explicit message id for edit actions", async () => {
-    const err = await handleWhatsAppMessageAction({
-      action: "edit",
-      params: { to: "+1555", message: "updated" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
+        accountId: "default",
       },
-    }).catch((e: unknown) => e);
-
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("ToolInputError");
-    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty edit text before forwarding edit actions", async () => {
-    const err = await handleWhatsAppMessageAction({
-      action: "edit",
-      params: { to: "+1555", messageId: "msg-42", message: "   " },
-      cfg: baseCfg,
-      accountId: "default",
-    }).catch((e: unknown) => e);
-
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("ToolInputError");
-    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
-  });
-
-  it("throws ToolInputError when edit target is missing outside WhatsApp context", async () => {
-    const err = await handleWhatsAppMessageAction({
-      action: "edit",
-      params: { messageId: "msg-42", message: "updated" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "telegram:-1003841603622",
-        currentChannelProvider: "telegram",
-        currentMessageId: "tg-msg-99",
-      },
-    }).catch((e: unknown) => e);
-
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("ToolInputError");
-    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
-  });
-
-  it("forwards unsend actions without exposing participant control", async () => {
-    await handleWhatsAppMessageAction({
+    },
+    {
+      name: "forwards unsend actions without exposing participant control",
       action: "unsend",
-      params: { chatJid: "12345@g.us", messageId: "msg-42", participant: "other@s.whatsapp.net" },
-      cfg: baseCfg,
-      accountId: "default",
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
+      params: {
+        chatJid: "12345@g.us",
+        messageId: "msg-42",
+        participant: "other@s.whatsapp.net",
+      },
+      expected: {
         action: "unsend",
         chatJid: "12345@g.us",
         messageId: "msg-42",
         accountId: "default",
       },
-      baseCfg,
-    );
-  });
-
-  it("uses current WhatsApp channel as unsend target when target is omitted", async () => {
-    await handleWhatsAppMessageAction({
+    },
+    {
+      name: "uses current WhatsApp channel as unsend target when target is omitted",
       action: "unsend",
       params: { messageId: "msg-42" },
-      cfg: baseCfg,
-      accountId: "default",
       toolContext: {
         currentChannelId: "whatsapp:+1555",
         currentChannelProvider: "whatsapp",
         currentMessageId: "ctx-msg-42",
       },
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
+      expected: {
         action: "unsend",
         chatJid: "+1555",
         messageId: "msg-42",
         accountId: "default",
       },
-      baseCfg,
-    );
-  });
-
-  it("forwards delete actions as WhatsApp message mutations", async () => {
-    await handleWhatsAppMessageAction({
+    },
+    {
+      name: "forwards delete actions as WhatsApp message mutations",
       action: "delete",
       params: { to: "+1555", messageId: "msg-42" },
-      cfg: baseCfg,
-      accountId: "default",
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
+      expected: {
         action: "delete",
         chatJid: "+1555",
         messageId: "msg-42",
         accountId: "default",
       },
-      baseCfg,
-    );
-  });
-
-  it("uses current WhatsApp channel as delete target when target is omitted", async () => {
-    await handleWhatsAppMessageAction({
+    },
+    {
+      name: "uses current WhatsApp channel as delete target when target is omitted",
       action: "delete",
       params: { messageId: "msg-42" },
-      cfg: baseCfg,
-      accountId: "default",
       toolContext: {
         currentChannelId: "whatsapp:+1555",
         currentChannelProvider: "whatsapp",
         currentMessageId: "ctx-msg-42",
       },
-    });
-
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
+      expected: {
         action: "delete",
         chatJid: "+1555",
         messageId: "msg-42",
         accountId: "default",
       },
-      baseCfg,
-    );
+    },
+  ])("$name", async ({ action, params, toolContext, expected }) => {
+    await handleWhatsAppMessageAction({
+      action,
+      params,
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext,
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(expected, baseCfg);
+  });
+
+  it.each([
+    {
+      name: "requires explicit message id for edit actions",
+      action: "edit",
+      params: { to: "+1555", message: "updated" },
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    },
+    {
+      name: "rejects empty edit text before forwarding edit actions",
+      action: "edit",
+      params: { to: "+1555", messageId: "msg-42", message: "   " },
+    },
+    {
+      name: "throws ToolInputError when edit target is missing outside WhatsApp context",
+      action: "edit",
+      params: { messageId: "msg-42", message: "updated" },
+      toolContext: {
+        currentChannelId: "telegram:-1003841603622",
+        currentChannelProvider: "telegram",
+        currentMessageId: "tg-msg-99",
+      },
+    },
+    {
+      name: "rejects conflicting WhatsApp action target aliases before forwarding",
+      action: "unsend",
+      params: { to: "+1555", chatJid: "+1666", messageId: "msg-42" },
+      message: /target aliases conflict/,
+    },
+  ])("$name", async ({ action, params, toolContext, message }) => {
+    const err = await handleWhatsAppMessageAction({
+      action,
+      params,
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+    if (message) {
+      expect((err as Error).message).toMatch(message);
+    }
+    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
   });
 });
