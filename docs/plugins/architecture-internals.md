@@ -573,7 +573,7 @@ Notes:
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
-Plugins can also launch background subagent runs through `api.runtime.subagent`:
+Plugins can also launch asynchronous subagent runs through `api.runtime.subagent`:
 
 ```ts
 const result = await api.runtime.subagent.run({
@@ -591,7 +591,7 @@ Notes:
 - `provider` and `model` are optional per-run overrides, not persistent session changes.
 - `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
-- For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
+- Unless the calling Gateway client already has override authority (admin scope), operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`. The opt-in covers every execution context: interactive-session runs and clientless background runs alike.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
 - Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.

@@ -194,6 +194,18 @@ function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
 }
 
+function createRequestScope(label: string, scopes: string[]): PluginRuntimeGatewayRequestScope {
+  return {
+    context: createTestContext(label),
+    client: {
+      connect: {
+        scopes,
+      },
+    } as GatewayRequestOptions["client"],
+    isWebchatConnect: () => false,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1103,15 +1115,7 @@ describe("loadGatewayPlugins", () => {
   test("does not inherit admin scope for trusted plugin gateway requests", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();
-    const scope = {
-      context: createTestContext("plugin-gateway-request-admin-caller"),
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-        },
-      } as GatewayRequestOptions["client"],
-      isWebchatConnect: () => false,
-    } satisfies PluginRuntimeGatewayRequestScope;
+    const scope = createRequestScope("plugin-gateway-request-admin-caller", ["operator.admin"]);
     const runtime = runtimeModule.createPluginRuntime();
 
     await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
@@ -1209,15 +1213,7 @@ describe("loadGatewayPlugins", () => {
   test("forwards provider and model overrides when the request scope is authorized", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    const scope = {
-      context: createTestContext("request-scope-forward-overrides"),
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-        },
-      } as GatewayRequestOptions["client"],
-      isWebchatConnect: () => false,
-    } satisfies PluginRuntimeGatewayRequestScope;
+    const scope = createRequestScope("request-scope-forward-overrides", ["operator.admin"]);
 
     await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
       runtime.run({
@@ -1457,9 +1453,7 @@ describe("loadGatewayPlugins", () => {
         model: "claude-haiku-4-5",
         deliver: false,
       }),
-    ).rejects.toThrow(
-      "provider/model override requires plugin identity in fallback subagent runs.",
-    );
+    ).rejects.toThrow("provider/model override requires plugin identity for plugin subagent runs.");
   });
 
   test("allows trusted fallback provider/model overrides when plugin config is explicit", async () => {
@@ -1491,6 +1485,7 @@ describe("loadGatewayPlugins", () => {
     expect(params.sessionKey).toBe("s-trusted-override");
     expect(params.provider).toBe("anthropic");
     expect(params.model).toBe("claude-haiku-4-5");
+    expect(getLastDispatchedClientInternal().allowModelOverride).toBe(true);
   });
 
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
@@ -1525,8 +1520,67 @@ describe("loadGatewayPlugins", () => {
         }),
       ),
     ).rejects.toThrow(
-      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
+      'plugin "voice-call" is not trusted for provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
     );
+  });
+
+  test("allows trusted plugin overrides when a non-admin client is in scope", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const scope = createRequestScope("interactive-trusted-override", ["operator.write"]);
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-interactive-trusted-override",
+          message: "use trusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      ),
+    );
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-interactive-trusted-override");
+    expect(params.provider).toBe("anthropic");
+    expect(params.model).toBe("claude-haiku-4-5");
+    // The reused scoped client (not a synthetic admin client) must carry the
+    // merged override authority so the downstream `agent` gate accepts it.
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientInternal().allowModelOverride).toBe(true);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("voice-call");
+  });
+
+  test("rejects untrusted plugin overrides when a non-admin client is in scope", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const scope = createRequestScope("interactive-untrusted-override", ["operator.write"]);
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+          runtime.run({
+            sessionKey: "s-interactive-untrusted-override",
+            message: "use untrusted override",
+            provider: "anthropic",
+            model: "claude-haiku-4-5",
+            deliver: false,
+          }),
+        ),
+      ),
+    ).rejects.toThrow('plugin "voice-call" is not trusted for provider/model override requests.');
   });
 
   test("allows trusted fallback model-only overrides when the model ref is canonical", async () => {
@@ -1699,15 +1753,7 @@ describe("loadGatewayPlugins", () => {
   test("allows session deletion when the request scope already has admin", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    const scope = {
-      context: createTestContext("request-scope-delete-session"),
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-        },
-      } as GatewayRequestOptions["client"],
-      isWebchatConnect: () => false,
-    } satisfies PluginRuntimeGatewayRequestScope;
+    const scope = createRequestScope("request-scope-delete-session", ["operator.admin"]);
 
     await expect(
       gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
@@ -1724,15 +1770,7 @@ describe("loadGatewayPlugins", () => {
   test("keeps plugin owner metadata on admin-scoped plugin session cleanup", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    const scope = {
-      context: createTestContext("request-scope-plugin-delete-session"),
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-        },
-      } as GatewayRequestOptions["client"],
-      isWebchatConnect: () => false,
-    } satisfies PluginRuntimeGatewayRequestScope;
+    const scope = createRequestScope("request-scope-plugin-delete-session", ["operator.admin"]);
 
     await expect(
       gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
