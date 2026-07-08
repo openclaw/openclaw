@@ -189,14 +189,19 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (hasJobModeField) {
+    // A channel-shaped override without a mode is an announce destination, matching
+    // primary-delivery defaults; inheriting a global webhook mode would feed the
+    // chat target to the webhook URL validator and silently drop the alert.
+    const jobImpliesAnnounce = !hasJobModeField && jobChannel !== undefined;
+    if (hasJobModeField || jobImpliesAnnounce) {
+      const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
       const globalMode = globalConfig?.mode ?? "announce";
-      const resolvedJobMode = jobMode ?? "announce";
+      const resolvedJobMode = effectiveJobMode ?? "announce";
       if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
         // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
-      mode = jobMode;
+      mode = effectiveJobMode;
     }
   }
 
