@@ -6,11 +6,11 @@ import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-s
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
-  refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
+import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
@@ -33,79 +33,23 @@ type SharedCodexAppServerClientState = {
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
 };
 
-type LegacySharedCodexAppServerClientState = Partial<SharedCodexAppServerClientEntry> & {
-  key?: string;
-  clients?: unknown;
-};
-
-type KeyedSharedCodexAppServerClientState = {
-  clients: Map<string, Partial<SharedCodexAppServerClientEntry>>;
-  leasedReleases?: unknown;
-};
-
+// Symbol.for shares one client table across duplicate module copies (dist +
+// src bundles in one process). Plugin updates restart the gateway, so every
+// copy writing this state runs the same code and the shape never migrates.
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: unknown;
+    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: SharedCodexAppServerClientState;
   };
-  const state = globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
-  const keyedState = readKeyedSharedCodexAppServerClientState(state);
-  if (keyedState) {
-    const clients = keyedState.clients as Map<string, SharedCodexAppServerClientEntry>;
-    for (const entry of clients.values()) {
-      entry.activeLeases ??= 0;
-      entry.pendingAcquires ??= 0;
-      entry.closeWhenIdle ??= false;
-    }
-    const nextState: SharedCodexAppServerClientState = {
-      clients,
-      leasedReleases:
-        keyedState.leasedReleases instanceof WeakMap ? keyedState.leasedReleases : new WeakMap(),
-    };
-    globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
-    return nextState;
-  }
-  const legacyState = readLegacySharedCodexAppServerClientState(state);
-  const clients = new Map<string, SharedCodexAppServerClientEntry>();
-  if (legacyState?.key && (legacyState.client || legacyState.promise)) {
-    const legacyKey = legacyState.key;
-    clients.set(legacyKey, {
-      client: legacyState.client,
-      promise: legacyState.promise,
-      activeLeases: 0,
-      pendingAcquires: 0,
-      closeWhenIdle: false,
-    });
-    legacyState.client?.addCloseHandler((closedClient) =>
-      clearSharedClientEntryIfCurrent(legacyKey, closedClient),
-    );
-  }
-  const nextState: SharedCodexAppServerClientState = { clients, leasedReleases: new WeakMap() };
-  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
-  return nextState;
+  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
+    clients: new Map(),
+    leasedReleases: new WeakMap(),
+  };
+  return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
 
-function readKeyedSharedCodexAppServerClientState(
-  value: unknown,
-): KeyedSharedCodexAppServerClientState | undefined {
-  return value !== null &&
-    typeof value === "object" &&
-    (value as { clients?: unknown }).clients instanceof Map
-    ? (value as KeyedSharedCodexAppServerClientState)
-    : undefined;
-}
-
-function readLegacySharedCodexAppServerClientState(
-  value: unknown,
-): LegacySharedCodexAppServerClientState | undefined {
-  if (value === null || typeof value !== "object") {
-    return undefined;
-  }
-  return value as LegacySharedCodexAppServerClientState;
-}
-
-type CodexAppServerClientOptions = {
+export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string | null;
@@ -114,6 +58,11 @@ type CodexAppServerClientOptions = {
   onStartedClient?: (client: CodexAppServerClient) => void;
   abandonSignal?: AbortSignal;
 };
+
+/** Factory used by attempt startup and side turns to acquire a leased client. */
+export type CodexAppServerClientFactory = (
+  options?: CodexAppServerClientOptions,
+) => Promise<CodexAppServerClient>;
 
 type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
   authProfileStore?: AuthProfileStore;
@@ -250,14 +199,10 @@ async function acquireSharedCodexAppServerClient(
         config: options?.config,
         onStartedClient: (startedClient) => {
           entry.client = startedClient;
-          startedClient.setActiveSharedLeaseCountProviderForUnscopedNotifications(
-            () => entry.activeLeases,
-          );
           options?.onStartedClient?.(startedClient);
         },
       });
       entry.client = client;
-      client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       return client;
     })());
@@ -267,7 +212,13 @@ async function acquireSharedCodexAppServerClient(
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
-    client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
+    // Later leases of the same keyed client may carry fresher config; the
+    // runtime install itself stays one-per-physical-client.
+    ensureCodexAppServerClientRuntime(client, {
+      agentDir,
+      authProfileId: usesNativeAuth ? undefined : authProfileId,
+      config: options?.config,
+    });
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
@@ -325,21 +276,12 @@ async function startInitializedCodexAppServerClient(params: {
       throw error;
     }
 
-    if (params.authProfileId) {
-      // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
-      // available whether the profile came from a scoped store or persisted state.
-      client.addRequestHandler(async (request) => {
-        if (request.method !== "account/chatgptAuthTokens/refresh") {
-          return undefined;
-        }
-        return await refreshCodexAppServerAuthTokens({
-          agentDir: params.agentDir,
-          authProfileId: params.authProfileId!,
-          ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
-          config: params.config,
-        });
-      });
-    }
+    ensureCodexAppServerClientRuntime(client, {
+      agentDir: params.agentDir,
+      authProfileId: params.authProfileId ?? undefined,
+      ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+      config: params.config,
+    });
 
     try {
       await applyCodexAppServerAuthProfile({

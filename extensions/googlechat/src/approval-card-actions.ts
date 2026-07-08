@@ -10,7 +10,7 @@ const GOOGLECHAT_APPROVAL_ACTION_VALUE = "approval";
 const MANUAL_EXEC_APPROVAL_COMMAND_RE =
   /(?:^|[\s`])\/approve[ \t]+([^ \t\r\n`|]+)[ \t]+(allow-once|allow-always|deny)(?=$|[\s`|.,;:!?])/giu;
 
-export type GoogleChatApprovalCardBinding = {
+type GoogleChatApprovalCardBinding = {
   token: string;
   accountId: string;
   approvalId: string;
@@ -45,7 +45,7 @@ type GoogleChatManualApprovalFollowupSuppression = {
   expiresAtMs: number;
 };
 
-export type GoogleChatApprovalCardClaim =
+type GoogleChatApprovalCardClaim =
   | { kind: "claimed"; binding: GoogleChatApprovalCardBinding }
   | { kind: "missing" }
   | { kind: "in-flight" };

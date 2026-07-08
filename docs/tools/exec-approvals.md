@@ -435,6 +435,11 @@ Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
 node host). If a node does not advertise exec approvals yet, edit its
 local approvals file directly.
 
+Some node hosts, including the Windows companion, own a different approval
+policy format. Control UI shows these host-native policies read-only. Use the
+companion app or `openclaw approvals set --node <id|name|ip>` with the native
+policy shape to edit them; see [Approvals CLI](/cli/approvals).
+
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).
 

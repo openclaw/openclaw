@@ -63,6 +63,7 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     theme: "主题",
     colorMode: "颜色模式",
+    colorModeOption: "颜色模式：{mode}",
     resources: "资源",
     search: "搜索",
     save: "保存",
@@ -1552,6 +1553,8 @@ export const zh_CN: TranslationMap = {
       splitDown: "向下拆分",
       closePane: "关闭窗格",
       sessionSelect: "窗格会话",
+      dropSplit: "拆分",
+      dropOpenHere: "在此处打开",
     },
     sidebar: {
       allSessions: "所有会话",

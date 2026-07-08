@@ -63,6 +63,7 @@ export const vi: TranslationMap = {
     docs: "Tài liệu",
     theme: "Giao diện",
     colorMode: "Chế độ màu",
+    colorModeOption: "Chế độ màu: {mode}",
     resources: "Tài nguyên",
     search: "Tìm kiếm",
     save: "Lưu",
@@ -1582,6 +1583,8 @@ export const vi: TranslationMap = {
       splitDown: "Chia xuống dưới",
       closePane: "Đóng khung",
       sessionSelect: "Phiên trong khung",
+      dropSplit: "Chia đôi",
+      dropOpenHere: "Mở tại đây",
     },
     sidebar: {
       allSessions: "Tất cả phiên",

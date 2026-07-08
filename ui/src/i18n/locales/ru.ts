@@ -63,6 +63,7 @@ export const ru: TranslationMap = {
     docs: "Документация",
     theme: "Тема",
     colorMode: "Цветовой режим",
+    colorModeOption: "Цветовой режим: {mode}",
     resources: "Ресурсы",
     search: "Поиск",
     save: "Сохранить",
@@ -1604,6 +1605,8 @@ export const ru: TranslationMap = {
       splitDown: "Разделить вниз",
       closePane: "Закрыть панель",
       sessionSelect: "Сессия панели",
+      dropSplit: "Разделить",
+      dropOpenHere: "Открыть здесь",
     },
     sidebar: {
       allSessions: "Все сеансы",

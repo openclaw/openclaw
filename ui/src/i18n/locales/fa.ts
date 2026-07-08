@@ -63,6 +63,7 @@ export const fa: TranslationMap = {
     docs: "مستندات",
     theme: "پوسته",
     colorMode: "حالت رنگ",
+    colorModeOption: "حالت رنگ: {mode}",
     resources: "منابع",
     search: "جستجو",
     save: "ذخیره",
@@ -1591,6 +1592,8 @@ export const fa: TranslationMap = {
       splitDown: "تقسیم به پایین",
       closePane: "بستن پنل",
       sessionSelect: "نشست پنل",
+      dropSplit: "تقسیم",
+      dropOpenHere: "اینجا باز شود",
     },
     sidebar: {
       allSessions: "همهٔ نشست‌ها",

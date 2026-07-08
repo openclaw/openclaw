@@ -63,6 +63,7 @@ export const ko: TranslationMap = {
     docs: "문서",
     theme: "테마",
     colorMode: "색상 모드",
+    colorModeOption: "색상 모드: {mode}",
     resources: "리소스",
     search: "검색",
     save: "저장",
@@ -1580,6 +1581,8 @@ export const ko: TranslationMap = {
       splitDown: "아래쪽으로 분할",
       closePane: "창 닫기",
       sessionSelect: "창 세션",
+      dropSplit: "분할",
+      dropOpenHere: "여기에서 열기",
     },
     sidebar: {
       allSessions: "모든 세션",

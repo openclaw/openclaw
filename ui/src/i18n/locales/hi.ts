@@ -63,6 +63,7 @@ export const hi: TranslationMap = {
     docs: "दस्तावेज़",
     theme: "थीम",
     colorMode: "रंग मोड",
+    colorModeOption: "रंग मोड: {mode}",
     resources: "संसाधन",
     search: "खोजें",
     save: "सहेजें",
@@ -1575,6 +1576,8 @@ export const hi: TranslationMap = {
       splitDown: "नीचे विभाजित करें",
       closePane: "पैन बंद करें",
       sessionSelect: "पैन सत्र",
+      dropSplit: "विभाजित करें",
+      dropOpenHere: "यहाँ खोलें",
     },
     sidebar: {
       allSessions: "सभी सत्र",

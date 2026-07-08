@@ -63,6 +63,7 @@ export const ar: TranslationMap = {
     docs: "المستندات",
     theme: "السمة",
     colorMode: "وضع اللون",
+    colorModeOption: "وضع اللون: {mode}",
     resources: "الموارد",
     search: "بحث",
     save: "حفظ",
@@ -1573,6 +1574,8 @@ export const ar: TranslationMap = {
       splitDown: "تقسيم إلى الأسفل",
       closePane: "إغلاق الجزء",
       sessionSelect: "جلسة الجزء",
+      dropSplit: "تقسيم",
+      dropOpenHere: "افتح هنا",
     },
     sidebar: {
       allSessions: "كل الجلسات",

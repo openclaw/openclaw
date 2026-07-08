@@ -22,7 +22,7 @@ import {
 import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
 
 describe("canonical live-transport scenarios", () => {
-  it("loads every migrated command and session-context scenario from YAML", () => {
+  it("loads every migrated routing, command, and session-context scenario from YAML", () => {
     const telegram = listCanonicalScenarios({
       ids: TELEGRAM_CANONICAL_SCENARIO_IDS,
       defaultIds: TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS,

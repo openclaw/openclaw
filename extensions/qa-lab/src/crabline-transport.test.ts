@@ -73,6 +73,71 @@ describe("crabline transport", () => {
     });
   });
 
+  it("configures distinct Telegram actors for canonical sender allowlist flows", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        transportPolicy: {
+          requireGroupMention: true,
+          senderAllowlist: ["driver"],
+        },
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+          channels: {
+            telegram: {
+              allowFrom: ["100001"],
+              groupAllowFrom: ["100001"],
+              groupPolicy: "allowlist",
+            },
+          },
+        });
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-routing-ordering", kind: "group" },
+          senderId: "observer",
+          text: "observer",
+        });
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-routing-ordering", kind: "group" },
+          senderId: "driver",
+          text: "driver",
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const response = await fetch(
+          `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/getUpdates`,
+        );
+        const payload = (await response.json()) as {
+          result?: Array<{ message?: { from?: { id?: number }; text?: string } }>;
+        };
+        expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("rejects canonical sender-policy flows on non-Telegram Crabline bridges", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      await expect(
+        createQaCrablineTransportAdapter({
+          outputDir,
+          transportPolicy: { senderAllowlist: ["driver"] },
+          selection: createSelection("matrix"),
+          state: createQaBusState(),
+        }),
+      ).rejects.toThrow("Crabline matrix does not support the requested group transport policy");
+    });
+  });
+
   it("injects Telegram native commands through the shared transport adapter", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({

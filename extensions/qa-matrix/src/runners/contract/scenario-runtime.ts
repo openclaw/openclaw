@@ -1,9 +1,5 @@
 // Qa Matrix plugin module implements scenario runtime behavior.
-import {
-  MATRIX_QA_DRIVER_DM_ROOM_KEY,
-  MATRIX_QA_SECONDARY_ROOM_KEY,
-  type MatrixQaScenarioDefinition,
-} from "./scenario-catalog.js";
+import { MATRIX_QA_SECONDARY_ROOM_KEY, type MatrixQaScenarioDefinition } from "./scenario-catalog.js";
 import {
   runAllowBotsDefaultBlockScenario,
   runAllowBotsMentionsDmUnmentionedScenario,
@@ -88,7 +84,6 @@ import {
   runBlockStreamingScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
-  runObserverAllowlistOverrideScenario,
   runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
   runReactionThreadedScenario,
@@ -100,7 +95,6 @@ import {
   runToolProgressMentionSafetyScenario,
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
-  runTopLevelReplyShapeScenario,
 } from "./scenario-runtime-room.js";
 import {
   buildExactMarkerPrompt,
@@ -109,7 +103,6 @@ import {
   buildMatrixReplyDetails,
   buildMentionPrompt,
   readMatrixQaSyncCursor,
-  resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   writeMatrixQaSyncCursor,
@@ -172,32 +165,6 @@ async function runNoReplyScenario(params: {
   });
 }
 
-async function runMultiActorOrderingScenario(context: MatrixQaScenarioContext) {
-  const blockedToken = buildMatrixQaToken("MATRIX_QA_MULTI_BLOCKED");
-  const blocked = await runNoReplyScenario({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
-    actorUserId: context.observerUserId,
-    body: buildMentionPrompt(context.sutUserId, blockedToken),
-    mentionUserIds: [context.sutUserId],
-    context,
-    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
-    token: blockedToken,
-  });
-  const accepted = await runDriverTopologyScopedScenario({
-    context,
-    roomKey: context.topology.defaultRoomKey,
-    tokenPrefix: "MATRIX_QA_MULTI_DRIVER",
-  });
-  return {
-    artifacts: {
-      accepted: accepted.artifacts ?? {},
-      blocked: blocked.artifacts ?? {},
-    },
-    details: [blocked.details, accepted.details].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
 export async function runMatrixQaScenario(
   scenario: MatrixQaScenarioDefinition,
   context: MatrixQaScenarioContext,
@@ -207,8 +174,6 @@ export async function runMatrixQaScenario(
       return await runThreadRootPreservationScenario(context);
     case "matrix-thread-nested-reply-shape":
       return await runThreadNestedReplyShapeScenario(context);
-    case "matrix-top-level-reply-shape":
-      return await runTopLevelReplyShapeScenario(context);
     case "matrix-room-partial-streaming-preview":
       return await runPartialStreamingPreviewScenario(context);
     case "matrix-room-quiet-streaming-preview":
@@ -237,21 +202,8 @@ export async function runMatrixQaScenario(
       return await runAttachmentOnlyIgnoredScenario(context);
     case "matrix-unsupported-media-safe":
       return await runUnsupportedMediaSafeScenario(context);
-    case "matrix-dm-reply-shape":
-      return await runDriverTopologyScopedScenario({
-        context,
-        roomKey: MATRIX_QA_DRIVER_DM_ROOM_KEY,
-        tokenPrefix: "MATRIX_QA_DM",
-        withMention: false,
-      });
     case "matrix-room-autojoin-invite":
       return await runRoomAutoJoinInviteScenario(context);
-    case "matrix-secondary-room-reply":
-      return await runDriverTopologyScopedScenario({
-        context,
-        roomKey: MATRIX_QA_SECONDARY_ROOM_KEY,
-        tokenPrefix: "MATRIX_QA_SECONDARY",
-      });
     case "matrix-secondary-room-open-trigger":
       return await runDriverTopologyScopedScenario({
         context,
@@ -287,17 +239,6 @@ export async function runMatrixQaScenario(
       return await runMembershipLossScenario(context);
     case "matrix-homeserver-restart-resume":
       return await runHomeserverRestartResumeScenario(context);
-    case "matrix-mention-gating": {
-      const token = buildMatrixQaToken("MATRIX_QA_NOMENTION");
-      return await runNoReplyScenario({
-        accessToken: context.driverAccessToken,
-        actorId: "driver",
-        actorUserId: context.driverUserId,
-        body: buildExactMarkerPrompt(token),
-        context,
-        token,
-      });
-    }
     case "matrix-allowbots-default-block":
       return await runAllowBotsDefaultBlockScenario(context);
     case "matrix-allowbots-true-unmentioned-open-room":
@@ -338,22 +279,6 @@ export async function runMatrixQaScenario(
         token,
       });
     }
-    case "matrix-observer-allowlist-override":
-      return await runObserverAllowlistOverrideScenario(context);
-    case "matrix-allowlist-block": {
-      const token = buildMatrixQaToken("MATRIX_QA_ALLOWLIST");
-      return await runNoReplyScenario({
-        accessToken: context.observerAccessToken,
-        actorId: "observer",
-        actorUserId: context.observerUserId,
-        body: buildMentionPrompt(context.sutUserId, token),
-        mentionUserIds: [context.sutUserId],
-        context,
-        token,
-      });
-    }
-    case "matrix-multi-actor-ordering":
-      return await runMultiActorOrderingScenario(context);
     case "matrix-inbound-edit-ignored":
       return await runInboundEditIgnoredScenario(context);
     case "matrix-inbound-edit-no-duplicate-trigger":

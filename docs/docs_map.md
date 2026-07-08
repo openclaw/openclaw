@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How cron works
   - H2: Schedule types
   - H3: Day-of-month and day-of-week use OR logic
+  - H2: Event triggers (condition watchers)
   - H2: Payloads
   - H3: Agent-turn options
   - H3: Command payloads
@@ -1827,6 +1828,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Repair
   - H2: Exit codes
   - H2: Related
+
+## cli/promos.md
+
+- Route: /cli/promos
+- Headings:
+  - H1: openclaw promos
+  - H2: Commands
+  - H2: openclaw promos list
+  - H2: openclaw promos claim &lt;slug&gt;
+  - H2: Passive discovery in models list
 
 ## cli/proxy.md
 
@@ -9108,7 +9119,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Install and pair
   - H2: Use it
-  - H2: Remote browser nodes
+  - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model
 
@@ -9576,6 +9587,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: How it works
   - H2: Lifecycle
+  - H2: Lifecycle curation
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI

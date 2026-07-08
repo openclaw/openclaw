@@ -32,8 +32,22 @@ describe("live transport adapter factories", () => {
   it("assigns shared thread scenarios to Slack", () => {
     expect(slackQaAdapterFactory.scenarioIds).toEqual([
       "channel-chat-baseline",
+      "channel-canary",
+      "channel-mention-gating",
+      "channel-top-level-reply-shape",
       "thread-follow-up",
       "thread-isolation",
+    ]);
+  });
+
+  it("keeps WhatsApp routing flows available without making them DM-safe CLI defaults", () => {
+    expect(whatsappQaAdapterFactory.scenarioIds).toEqual([
+      "dm-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-top-level-reply-shape",
+      "whatsapp-help-command",
     ]);
   });
 

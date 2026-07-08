@@ -62,6 +62,7 @@ export const en: TranslationMap = {
     docs: "Docs",
     theme: "Theme",
     colorMode: "Color mode",
+    colorModeOption: "Color mode: {mode}",
     resources: "Resources",
     search: "Search",
     save: "Save",
@@ -1579,6 +1580,8 @@ export const en: TranslationMap = {
       splitDown: "Split down",
       closePane: "Close pane",
       sessionSelect: "Pane session",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "All sessions",

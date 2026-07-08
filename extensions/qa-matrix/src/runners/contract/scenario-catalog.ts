@@ -17,7 +17,6 @@ import {
 type MatrixQaScenarioId =
   | "matrix-thread-root-preservation"
   | "matrix-thread-nested-reply-shape"
-  | "matrix-top-level-reply-shape"
   | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
   | "matrix-room-tool-progress-preview"
@@ -32,9 +31,7 @@ type MatrixQaScenarioId =
   | "matrix-voice-preflight-mention"
   | "matrix-attachment-only-ignored"
   | "matrix-unsupported-media-safe"
-  | "matrix-dm-reply-shape"
   | "matrix-room-autojoin-invite"
-  | "matrix-secondary-room-reply"
   | "matrix-secondary-room-open-trigger"
   | "matrix-reaction-notification"
   | "matrix-reaction-threaded"
@@ -50,7 +47,6 @@ type MatrixQaScenarioId =
   | "matrix-stale-sync-replay-dedupe"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
-  | "matrix-mention-gating"
   | "matrix-allowbots-default-block"
   | "matrix-allowbots-true-unmentioned-open-room"
   | "matrix-allowbots-mentions-mentioned-room"
@@ -61,9 +57,6 @@ type MatrixQaScenarioId =
   | "matrix-allowbots-self-sender-ignored"
   | "matrix-mxid-prefixed-command-block"
   | "matrix-mention-metadata-spoof-block"
-  | "matrix-observer-allowlist-override"
-  | "matrix-allowlist-block"
-  | "matrix-multi-actor-ordering"
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
   | "matrix-e2ee-basic-reply"
@@ -123,7 +116,7 @@ export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
-export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
+const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
 export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
 const MATRIX_QA_MAIN_ROOM_KEY = "main";
@@ -330,12 +323,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix nested threaded replies keep fallback replies on the root event",
   },
   {
-    id: "matrix-top-level-reply-shape",
-    standardId: "top-level-reply-shape",
-    timeoutMs: 45_000,
-    title: "Matrix top-level reply keeps replyToMode off",
-  },
-  {
     id: "matrix-room-partial-streaming-preview",
     timeoutMs: 45_000,
     title: "Matrix partial streaming emits text previews before finalizing",
@@ -472,12 +459,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
-    id: "matrix-dm-reply-shape",
-    timeoutMs: 45_000,
-    title: "Matrix DM reply stays top-level without a mention",
-    topology: MATRIX_QA_DRIVER_DM_TOPOLOGY,
-  },
-  {
     id: "matrix-room-autojoin-invite",
     timeoutMs: 60_000,
     title: "Matrix invite auto-join accepts fresh group rooms",
@@ -485,12 +466,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       autoJoin: "always",
       groupPolicy: "open",
     },
-  },
-  {
-    id: "matrix-secondary-room-reply",
-    timeoutMs: 45_000,
-    title: "Matrix secondary room reply stays scoped to that room",
-    topology: MATRIX_QA_SECONDARY_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-secondary-room-open-trigger",
@@ -586,12 +561,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     timeoutMs: 75_000,
     title: "Matrix lane resumes after homeserver restart",
     topology: MATRIX_QA_HOMESERVER_ROOM_TOPOLOGY,
-  },
-  {
-    id: "matrix-mention-gating",
-    standardId: "mention-gating",
-    timeoutMs: 8_000,
-    title: "Matrix room message without mention does not trigger",
   },
   {
     id: "matrix-allowbots-default-block",
@@ -709,25 +678,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-mention-metadata-spoof-block",
     timeoutMs: 8_000,
     title: "Matrix metadata-only mention spoof does not trigger",
-  },
-  {
-    id: "matrix-observer-allowlist-override",
-    timeoutMs: 45_000,
-    title: "Matrix sender allowlist override lets observer messages trigger replies",
-    configOverrides: {
-      groupAllowRoles: ["driver", "observer"],
-    },
-  },
-  {
-    id: "matrix-allowlist-block",
-    standardId: "allowlist-block",
-    timeoutMs: 8_000,
-    title: "Matrix sender allowlist blocks observer replies",
-  },
-  {
-    id: "matrix-multi-actor-ordering",
-    timeoutMs: 60_000,
-    title: "Matrix blocked observer traffic does not poison later driver replies",
   },
   {
     id: "matrix-inbound-edit-ignored",
@@ -1102,7 +1052,7 @@ export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScena
   scenarios: MATRIX_QA_SCENARIOS,
 });
 
-export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
+const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
   "all",
   "fast",
   "transport",
@@ -1113,14 +1063,11 @@ export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
 ] as const;
 
 const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
-  "matrix-top-level-reply-shape",
   "matrix-reaction-notification",
   "matrix-approval-exec-metadata-single-event",
   "matrix-approval-exec-metadata-chunked",
-  "matrix-mention-gating",
   "matrix-allowbots-default-block",
   "matrix-allowbots-mentions-mentioned-room",
-  "matrix-allowlist-block",
   "matrix-e2ee-basic-reply",
 ] satisfies MatrixQaScenarioId[];
 

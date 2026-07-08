@@ -71,6 +71,7 @@ import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
+  collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -124,6 +125,7 @@ async function createQaSuiteTransportAdapter(params: {
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
+  transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
@@ -141,7 +143,17 @@ async function createQaSuiteTransportAdapter(params: {
             ? "crabline"
             : params.transportId,
         outputDir: params.outputDir,
-        adapterOptions: params.adapterOptions,
+        adapterOptions: {
+          ...params.adapterOptions,
+          ...(params.transportPolicy
+            ? {
+                transportPolicy: {
+                  ...params.adapterOptions?.transportPolicy,
+                  ...params.transportPolicy,
+                },
+              }
+            : {}),
+        },
         state: params.state,
       },
       usesLiveAdapter ? params.adapterFactories : undefined,
@@ -762,6 +774,7 @@ async function runQaRuntimeParitySuite(params: {
     adapterOptions: params.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
+    transportPolicy: collectQaSuiteTransportPolicy(params.selectedScenarios),
     state: lab.state,
     transportId: params.transportId,
   });
@@ -1604,6 +1617,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     adapterOptions: params?.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
+    transportPolicy: collectQaSuiteTransportPolicy(selectedScenarios),
     state: lab.state,
     transportId,
   });

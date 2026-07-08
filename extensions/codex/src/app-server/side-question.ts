@@ -22,7 +22,7 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
@@ -84,10 +84,14 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
-import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
+import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { isCodexAppServerNativeAuthProfile, readCodexAppServerBinding } from "./session-binding.js";
+import {
+  isCodexAppServerNativeAuthProfile,
+  sessionBindingIdentity,
+  type CodexAppServerBindingStore,
+} from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -145,6 +149,7 @@ Do not modify files, source, git state, permissions, configuration, workspace st
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options: {
+    bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
     nativeHookRelay?: {
       enabled?: boolean;
@@ -153,12 +158,16 @@ export async function runCodexAppServerSideQuestion(
       gatewayTimeoutMs?: number;
       hookTimeoutSec?: number;
     };
-  } = {},
+  },
 ): Promise<AgentHarnessSideQuestionResult> {
-  const binding = await readCodexAppServerBinding(params.sessionFile, {
-    agentDir: params.agentDir,
-    config: params.cfg,
-  });
+  const binding = await options.bindingStore.read(
+    sessionBindingIdentity({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.cfg,
+    }),
+  );
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -240,7 +249,7 @@ export async function runCodexAppServerSideQuestion(
     agentDir: params.agentDir,
     config: params.cfg,
   });
-  const collector = new CodexSideQuestionCollector(params);
+  const collector = new CodexSideQuestionCollector(params, () => readRecentCodexRateLimits(client));
   const runAbortController = new AbortController();
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
   const pendingNativeToolNotifications: CodexServerNotification[] = [];
@@ -351,14 +360,14 @@ export async function runCodexAppServerSideQuestion(
       runId,
       signal: runAbortController.signal,
     });
+    // Auth refresh is a physical-client concern; the shared runtime handler
+    // stays installed once per client instead of once per side question.
+    ensureCodexAppServerClientRuntime(client, {
+      agentDir: params.agentDir,
+      authProfileId,
+      config: params.cfg,
+    });
     removeRequestHandler = client.addRequestHandler(async (request) => {
-      if (request.method === "account/chatgptAuthTokens/refresh") {
-        return (await refreshCodexAppServerAuthTokens({
-          agentDir: params.agentDir,
-          authProfileId,
-          config: params.cfg,
-        })) as unknown as JsonValue;
-      }
       if (!childThreadId || !turnId) {
         return undefined;
       }
@@ -1010,7 +1019,6 @@ class CodexSideQuestionCollector {
   private assistantText = "";
   private finalText: string | undefined;
   private terminalError: Error | undefined;
-  private latestRateLimits: JsonValue | undefined;
   private settle:
     | {
         resolve: (text: string) => void;
@@ -1019,7 +1027,10 @@ class CodexSideQuestionCollector {
     | undefined;
   completed = false;
 
-  constructor(private readonly params: AgentHarnessSideQuestionParams) {}
+  constructor(
+    private readonly params: AgentHarnessSideQuestionParams,
+    private readonly readRecentRateLimits: () => JsonValue | undefined,
+  ) {}
 
   setTurn(threadId: string, turnId: string): void {
     this.threadId = threadId;
@@ -1034,11 +1045,6 @@ class CodexSideQuestionCollector {
   handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
-      return;
-    }
-    if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
-      rememberCodexRateLimits(params);
       return;
     }
     if (!this.threadId || !this.turnId) {
@@ -1056,11 +1062,8 @@ class CodexSideQuestionCollector {
       this.completeFromTurn(params);
       return;
     }
-    if (
-      notification.method === "error" &&
-      readBooleanAlias(params, ["willRetry", "will_retry"]) !== true
-    ) {
-      this.reject(formatCodexErrorMessage(params, this.latestRateLimits));
+    if (notification.method === "error" && params.willRetry !== true) {
+      this.reject(formatCodexErrorMessage(params, this.readRecentRateLimits()));
     }
   }
 
@@ -1138,7 +1141,7 @@ class CodexSideQuestionCollector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+          rateLimits: this.readRecentRateLimits(),
         }) ??
           turn.error?.message ??
           "Codex /btw side thread failed.",
@@ -1186,31 +1189,18 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
   return readCodexNotificationTurnId(record);
 }
 
-function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
 
-function formatCodexErrorMessage(
-  params: JsonObject,
-  latestRateLimits: JsonValue | undefined,
-): Error {
+function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {
   const error = isJsonObject(params.error) ? params.error : undefined;
   const message =
     formatCodexUsageLimitErrorMessage({
       message: error ? readString(error, "message") : undefined,
       codexErrorInfo: error?.codexErrorInfo,
-      rateLimits: latestRateLimits ?? readRecentCodexRateLimits(),
+      rateLimits,
     }) ??
     (error ? (readString(error, "message") ?? readString(error, "error")) : undefined) ??
     readString(params, "message") ??

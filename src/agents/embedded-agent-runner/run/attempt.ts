@@ -33,8 +33,14 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
-import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticErrorMessage,
+} from "../../../infra/diagnostic-error-metadata.js";
+import {
+  emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+} from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
@@ -174,11 +180,13 @@ import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js"
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import {
   applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
+  shouldCatalogToolForLocalModelLean,
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -307,6 +315,7 @@ import {
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -463,9 +472,11 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import {
+  canContinueFromMessage,
   resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
+  trimToContinuableTail,
 } from "./compaction-timeout.js";
 import {
   resolveFinalAssistantRawText,
@@ -734,6 +745,34 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
   }
+}
+
+function normalizeCompactionRecoveryTranscriptTail(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: ReturnType<typeof guardSessionManager>;
+}): number {
+  const messages = params.activeSession.agent.state.messages;
+  const continuableMessages = trimToContinuableTail(messages) ?? [];
+
+  // This is the single recovery owner for compaction exits that hand control
+  // back to a continuation. AgentCore rejects assistant tails before providers run.
+  const removedEntries = params.sessionManager.removeTrailingEntries(
+    (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
+  params.activeSession.agent.state.messages =
+    removedEntries > 0
+      ? params.sessionManager.buildSessionContext().messages
+      : continuableMessages.length === messages.length
+        ? messages
+        : continuableMessages;
+  return removedEntries;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -1093,6 +1132,11 @@ export async function runEmbeddedAttempt(
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
@@ -1152,14 +1196,19 @@ export async function runEmbeddedAttempt(
         return;
       }
       diagnosticRunCompleted = true;
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        ...diagnosticRunBase,
-        durationMs: Date.now() - diagnosticRunStartedAt,
-        outcome,
-        ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
-        ...(err && outcome !== "blocked" ? { errorCategory: diagnosticErrorCategory(err) } : {}),
-      });
+      const failed = err != null && outcome !== "blocked";
+      const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
+      emitTrustedDiagnosticEventWithPrivateData(
+        {
+          type: "run.completed",
+          ...diagnosticRunBase,
+          durationMs: Date.now() - diagnosticRunStartedAt,
+          outcome,
+          ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
+          ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
+        },
+        errorMessage ? { errorMessage } : undefined,
+      );
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
     const forceDirectMessageTool =
@@ -1271,6 +1320,11 @@ export async function runEmbeddedAttempt(
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: effectiveToolsAllow,
     });
+    const localModelLeanEnabled = isLocalModelLeanEnabled({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
     const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
       toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
@@ -1341,6 +1395,13 @@ export async function runEmbeddedAttempt(
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
+            ...(params.replyOperation
+              ? {
+                  hasCurrentInboundAudio: () =>
+                    params.currentInboundAudio === true ||
+                    params.replyOperation?.acceptedSteeredInboundAudio === true,
+                }
+              : {}),
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: (toolParams) => {
@@ -1368,6 +1429,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
@@ -1757,6 +1819,10 @@ export async function runEmbeddedAttempt(
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: catalogToolHookContext,
+            shouldCatalogTool:
+              localModelLeanEnabled && toolSearchConfig.mode === "tools"
+                ? shouldCatalogToolForLocalModelLean
+                : undefined,
           });
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
@@ -2577,7 +2643,17 @@ export async function runEmbeddedAttempt(
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
-          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
+          await baseConvertToLlm(
+            // Wire-only: move the current-turn runtime-context carrier to the
+            // absolute tail so the request is an append-only prefix-extension
+            // through the active user turn (see the function's cache rationale).
+            // Applied here, not inside normalizeMessagesForLlmBoundary, because
+            // normalizeMessagesForCurrentPromptBoundary slices off its appended
+            // prompt by position and must not see the carrier relocated past it.
+            relocateCurrentRuntimeContextCarrierToTail(
+              normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()),
+            ),
+          );
       }
       let prePromptMessageCount = activeSession.messages.length;
       const toolResultPromptProjectionState: ToolResultPromptProjectionState =
@@ -2775,10 +2851,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         messageProvider: params.messageProvider,
         messageChannel: params.messageChannel,
-        localModelLean: isLocalModelLeanEnabled({
-          config: params.config,
-          agentId: sessionAgentId,
-        }),
+        localModelLean: localModelLeanEnabled,
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });
@@ -4345,14 +4418,35 @@ export async function runEmbeddedAttempt(
               ? "model-prompt"
               : "runtime-event",
           });
-          const promptForSession = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.prompt,
-          });
-          const promptForModel = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-          });
+          const isRuntimeOnlyTurn = promptSubmission.runtimeOnly === true;
+          const currentInboundContextText = isRuntimeOnlyTurn
+            ? undefined
+            : params.currentInboundContext?.text?.trim() || undefined;
+          // Normal user turns keep the user prompt BARE and route current-turn
+          // inbound metadata into the runtime-context carrier (relocated after the
+          // active user turn on the wire), so the persisted/replayed user message
+          // is byte-identical whether active or historical — the cache-stability
+          // fix. Runtime-only turns (room events, etc.) have no bare user turn to
+          // protect, so their inbound context stays inline exactly as before. That
+          // inline path stays byte-stable because a runtime-only turn only ever
+          // carries room-event/system context, which is NOT strip-eligible: the
+          // historical strip only removes the `buildInboundUserContextPrefix`
+          // blocks (Conversation info / Reply target / Sender / …), and those are
+          // produced only for non-room turns — which always have a non-empty body
+          // and so are never runtime-only. So inline-active and inline-historical
+          // serialize identically (verified in the cache-stability tests).
+          const promptForSession = isRuntimeOnlyTurn
+            ? buildCurrentInboundPrompt({
+                context: params.currentInboundContext,
+                prompt: promptSubmission.prompt,
+              })
+            : promptSubmission.prompt;
+          const promptForModel = isRuntimeOnlyTurn
+            ? buildCurrentInboundPrompt({
+                context: params.currentInboundContext,
+                prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
+              })
+            : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
           currentUserTimestampOverride =
             !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
               ? {
@@ -4371,9 +4465,11 @@ export async function runEmbeddedAttempt(
               setActiveSessionSystemPrompt(runtimeSystemPrompt);
             }
           }
-          const runtimeContextForHook = promptSubmission.runtimeOnly
+          const runtimeContextForHook = isRuntimeOnlyTurn
             ? undefined
-            : promptSubmission.runtimeContext?.trim();
+            : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
+                .filter((value): value is string => Boolean(value))
+                .join("\n\n") || undefined;
           const runtimeContextMessageForCurrentTurn =
             buildRuntimeContextCustomMessage(runtimeContextForHook);
           const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -5187,6 +5283,19 @@ export async function runEmbeddedAttempt(
             modelApi: params.model.api,
             isCacheTtlEligibleProvider,
           });
+
+          if (timedOutDuringCompaction) {
+            const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+              activeSession,
+              sessionManager: activeSessionManager,
+            });
+            if (removedEntries > 0 && !isProbeSession) {
+              log.warn(
+                `normalized compaction timeout transcript tail: ` +
+                  `removedEntries=${removedEntries} runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
 
           // If timeout occurred during compaction, use pre-compaction snapshot when available
           // (compaction restructures messages but does not add user/assistant turns).

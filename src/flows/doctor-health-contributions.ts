@@ -1916,6 +1916,29 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:default-account-routing",
+      label: "Default account routing",
+      healthChecks: {
+        id: "core/doctor/default-account-routing",
+        description: "Multi-account channels have explicit default routing or complete bindings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectMissingDefaultAccountBindingWarnings,
+            collectMissingExplicitDefaultAccountWarnings,
+          } = await import("../commands/doctor/shared/default-account-warnings.js");
+          return [
+            ...collectMissingDefaultAccountBindingWarnings(ctx.cfg),
+            ...collectMissingExplicitDefaultAccountWarnings(ctx.cfg),
+          ].map((message) => ({
+            checkId: "core/doctor/default-account-routing",
+            severity: "warning" as const,
+            message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
       healthCheckIds: [
@@ -2037,6 +2060,32 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runWorkspaceStatusHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skill-curator",
+      label: "Skill curator",
+      healthChecks: {
+        id: "core/doctor/skill-curator",
+        description: "Stalled skill lifecycle curation is reported as a warning.",
+        defaultEnabled: false,
+        async detect() {
+          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
+          const warning = getSkillCuratorDoctorWarning();
+          return warning
+            ? [
+                {
+                  checkId: "core/doctor/skill-curator",
+                  severity: "warning" as const,
+                  source: "doctor",
+                  message: warning,
+                  target: "skill-curator",
+                  requirement:
+                    "latest sweep succeeds and attempts do not trail success by seven days",
+                },
+              ]
+            : [];
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:skills",

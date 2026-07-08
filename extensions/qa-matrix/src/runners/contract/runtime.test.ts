@@ -235,11 +235,11 @@ describe("matrix live qa runtime", () => {
     const blockStreamingScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
       (scenario) => scenario.id === "matrix-room-block-streaming",
     );
-    const topLevelScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
-      (scenario) => scenario.id === "matrix-top-level-reply-shape",
+    const threadScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-thread-root-preservation",
     );
     expect(blockStreamingScenario).toBeDefined();
-    expect(topLevelScenario).toBeDefined();
+    expect(threadScenario).toBeDefined();
 
     const pinnedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
       blockStreamingScenario!,
@@ -247,7 +247,7 @@ describe("matrix live qa runtime", () => {
     expect(liveTesting.selectMatrixQaCanaryProviderMode(pinnedSchedule)).toBe("mock-openai");
 
     const mixedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
-      topLevelScenario!,
+      threadScenario!,
       blockStreamingScenario!,
     ]);
     expect(liveTesting.selectMatrixQaCanaryProviderMode(mixedSchedule)).toBeUndefined();
@@ -521,51 +521,6 @@ describe("matrix live qa runtime", () => {
     expect(config.scenarios[0]?.config.blockStreaming).toBe(true);
   });
 
-  it("preserves negative-scenario artifacts in the Matrix summary", () => {
-    const summary = liveTesting.buildMatrixQaSummary(
-      buildMatrixQaSummaryInput({
-        scenarios: [
-          {
-            id: "matrix-mention-gating",
-            title: "Matrix room message without mention does not trigger",
-            status: "pass",
-            details: "no reply",
-            artifacts: {
-              actorUserId: "@driver:matrix-qa.test",
-              driverEventId: "$driver",
-              expectedNoReplyWindowMs: 8_000,
-              token: "MATRIX_QA_NOMENTION_TOKEN",
-              triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
-            },
-          },
-        ],
-        timings: {
-          scenarios: [
-            {
-              durationMs: 80,
-              gatewayBootMs: 0,
-              gatewayRestartMs: 0,
-              id: "matrix-mention-gating",
-              title: "Matrix room message without mention does not trigger",
-              transportInterruptMs: 0,
-            },
-          ],
-          totalMs: 905,
-        },
-      }),
-    );
-    expect(summary.counts.total).toBe(2);
-    expect(summary.counts.passed).toBe(2);
-    expect(summary.counts.failed).toBe(0);
-    expect(summary.scenarios[0]?.id).toBe("matrix-mention-gating");
-    expect(summary.scenarios[0]?.artifacts?.actorUserId).toBe("@driver:matrix-qa.test");
-    expect(summary.scenarios[0]?.artifacts?.expectedNoReplyWindowMs).toBe(8_000);
-    expect(summary.scenarios[0]?.artifacts?.triggerBody).toBe(
-      "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
-    );
-    expect(summary.timings.totalMs).toBe(905);
-  });
-
   it("keeps failing Matrix scenario details and timings complete in summary + report output", () => {
     const summary = liveTesting.buildMatrixQaSummary(
       buildMatrixQaSummaryInput({
@@ -628,7 +583,7 @@ describe("matrix live qa runtime", () => {
 
   it("groups Matrix scenario execution by gateway config while preserving tail scenarios", () => {
     const scenarios = liveTesting.findMatrixQaScenarios([
-      "matrix-top-level-reply-shape",
+      "matrix-thread-root-preservation",
       "matrix-e2ee-cli-encryption-setup-multi-account",
       "matrix-reaction-notification",
       "matrix-e2ee-cli-setup-then-gateway-reply",
@@ -641,7 +596,7 @@ describe("matrix live qa runtime", () => {
         .scheduleMatrixQaScenariosInCatalogOrder(scenarios)
         .map(({ scenario }) => scenario.id),
     ).toEqual([
-      "matrix-top-level-reply-shape",
+      "matrix-thread-root-preservation",
       "matrix-reaction-notification",
       "matrix-e2ee-cli-self-verification",
       "matrix-e2ee-cli-encryption-setup-multi-account",

@@ -726,10 +726,7 @@ extension SettingsProTab {
 
     func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
         Section {
-            Toggle(isOn: isOn) {
-                Text(title)
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle(title, isOn: isOn)
         }
     }
 
@@ -960,10 +957,7 @@ extension SettingsProTab {
 
     var manualGatewayCard: some View {
         Section("Manual Gateway") {
-            Toggle(isOn: self.manualGatewayEnabledBinding) {
-                Text("Use Manual Gateway")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Use Manual Gateway", isOn: self.manualGatewayEnabledBinding)
             TextField("Host", text: self.manualHostBinding)
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
@@ -971,9 +965,20 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Toggle(isOn: self.$manualGatewayTLS) {
-                Text("Use TLS")
-                    .font(OpenClawType.body)
+            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+                Text("Unencrypted")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(false)
+                Text("Secure (TLS)")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(self.manualGatewayTransport.requiresTLS)
+            if let helperText = self.manualGatewayTransport.helperText {
+                Text(helperText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
             self.gatewayActionButton(
                 title: "Connect Manual",
@@ -989,12 +994,24 @@ extension SettingsProTab {
         .disabled(self.setupAttemptID != nil)
     }
 
+    private var manualGatewayTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualGatewayHost,
+            requestedTLS: self.manualGatewayTLS)
+    }
+
+    private var manualGatewayTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualGatewayTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayTLS = enabled
+            })
+    }
+
     var gatewayAdvancedCard: some View {
         Section {
-            Toggle(isOn: self.$gatewayAutoConnect) {
-                Text("Auto-connect on launch")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
             self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
             self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
             if let headersStableID = self.gatewayCustomHeadersTargetStableID {
@@ -1107,10 +1124,7 @@ extension SettingsProTab {
 
     var shareSettingsCard: some View {
         Section {
-            Toggle(isOn: self.$talkButtonEnabled) {
-                Text("Show Talk Control")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Show Talk Control", isOn: self.$talkButtonEnabled)
             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                 .font(OpenClawType.body)
                 .lineLimit(2...5)
@@ -1160,10 +1174,21 @@ extension SettingsProTab {
         isOn: Binding<Bool>,
         onChange: ((Bool) -> Void)? = nil) -> some View
     {
-        Toggle(isOn: isOn) {
-            Text(title)
-                .font(OpenClawType.body)
+        // Native Toggle rows can ignore visible-row taps on iOS 26; reuse the shared indicator row.
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                    .font(OpenClawType.body)
+                Spacer(minLength: 8)
+                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
         }

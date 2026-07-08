@@ -63,6 +63,7 @@ export const uk: TranslationMap = {
     docs: "Документація",
     theme: "Тема",
     colorMode: "Колірний режим",
+    colorModeOption: "Режим кольору: {mode}",
     resources: "Ресурси",
     search: "Пошук",
     save: "Зберегти",
@@ -1593,6 +1594,8 @@ export const uk: TranslationMap = {
       splitDown: "Розділити вниз",
       closePane: "Закрити панель",
       sessionSelect: "Сеанс панелі",
+      dropSplit: "Розділити",
+      dropOpenHere: "Відкрити тут",
     },
     sidebar: {
       allSessions: "Усі сеанси",

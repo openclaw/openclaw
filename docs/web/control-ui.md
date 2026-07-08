@@ -119,7 +119,7 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
 
 The sidebar pins navigation above a scrollable recent-session list split into **Pinned**, one section per custom group (the session `category`, sorted alphabetically), and **Ungrouped** for the rest. Every pinned session stays visible, while unpinned sessions keep an independent nine-item recent budget. Opening a visible session moves the selection highlight without reordering the rows; an off-list deep link is surfaced at the top. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Group headers have their own menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session, including archived ones, and deleting a group keeps its sessions and moves them back to Ungrouped. Groups created from the header start empty and stay visible as move targets. The sort control in the session list header also has a Group by toggle: Custom groups (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. Multi-agent setups show a compact scope control in the Ungrouped header. **Overview** is the only destination pinned by default; expand **More** to reach every other destination. Select **Customize sidebar** under More, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set and More expansion state are stored in the current browser profile and survive reloads.
 
-The compact footer keeps connection status, **Settings**, **Docs**, mobile pairing, and the sidebar collapse toggle together. Collapsing shrinks the sidebar to an icon rail with the expand button at the top of the footer stack. At drawer breakpoints, the topbar hamburger button replaces that control.
+A **Search** field at the top of the sidebar opens the command palette (⌘K). The compact footer keeps connection status, **Settings**, **Docs**, mobile pairing, and the light/dark/system color-mode toggle together. The sidebar collapse toggle sits at the left edge of the top bar, macOS style; collapsing shrinks the sidebar to an icon rail. At drawer breakpoints, the same top bar button opens the sidebar as a slide-over drawer instead.
 
 ## What it can do (today)
 
@@ -239,13 +239,14 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists recent sessions by pinned/custom/ungrouped section with a New Session action and an All Sessions link. Pinned sessions always stay visible; unpinned sessions keep a nine-item budget and a stable recency order, so opening a visible row moves only the highlight. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Switching the compact agent scope shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
-    - Session search lives in the command palette (⌘K, or the search button in the top bar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The All Sessions page keeps the exhaustive searchable list with filters.
+    - Session search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The All Sessions page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - **Split view:** open it from the composer controls, then split any pane right or down for as many panes as fit. Each pane has its own session, transcript, composer, and tool stream.
+    - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
     - The active split pane drives the sidebar selection and URL. Dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane; its pane header still provides session switching and close controls.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
@@ -282,13 +283,15 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
-retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
-connection returns; **Retry now** in the banner forces an immediate attempt.
+stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
+bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
+actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
 
-The login gate only appears when there is no established session yet (first open, page reload
-before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
-pairing) — states that need your input rather than waiting.
+When this browser already holds credentials (a configured token/password or an approved device
+token), first opens and reloads show a small animated OpenClaw mark while the connection is
+established instead of flashing the login gate. The login gate only appears when no credentials
+are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
+states that need your input rather than waiting.
 
 ## PWA install and web push
 

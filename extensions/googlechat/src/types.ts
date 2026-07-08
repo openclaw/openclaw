@@ -97,13 +97,13 @@ export type GoogleChatReaction = {
   emoji?: { unicode?: string };
 };
 
-export type GoogleChatTextParagraphWidget = {
+type GoogleChatTextParagraphWidget = {
   textParagraph: {
     text: string;
   };
 };
 
-export type GoogleChatButtonWidget = {
+type GoogleChatButtonWidget = {
   buttonList: {
     buttons: Array<{
       text: string;
@@ -118,9 +118,9 @@ export type GoogleChatButtonWidget = {
   };
 };
 
-export type GoogleChatDividerWidget = { divider: Record<string, never> };
+type GoogleChatDividerWidget = { divider: Record<string, never> };
 
-export type GoogleChatWidget =
+type GoogleChatWidget =
   | GoogleChatTextParagraphWidget
   | GoogleChatButtonWidget
   | GoogleChatDividerWidget;

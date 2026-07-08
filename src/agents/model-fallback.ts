@@ -2,6 +2,7 @@
  * Runs model and image fallback chains across provider/model candidates.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   resolveAgentModelFallbackValues,
@@ -87,6 +88,14 @@ import {
 
 const log = createSubsystemLogger("model-fallback");
 
+function isTranscriptNotContinuableError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  return code === TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE;
+}
+
 function hasExactConfiguredProviderModel(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -167,7 +176,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
   return err instanceof FallbackSummaryError;
 }
 
-export type ModelFallbackRunOptions = {
+type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
 };
@@ -1372,6 +1381,7 @@ function shouldDiscardDeferredSessionSuspension(params: {
     isTerminalAbortFromError(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
     isNonProviderRuntimeCoordinationError(params.error) ||
+    isTranscriptNotContinuableError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
   );
 }
@@ -1765,6 +1775,9 @@ async function runWithModelFallbackInternal<T>(
       // the same local condition and surfacing a misleading "All models
       // failed" summary. See #83510.
       if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
+      if (isTranscriptNotContinuableError(err)) {
         throw err;
       }
       if (transientProbeProviderForAttempt) {

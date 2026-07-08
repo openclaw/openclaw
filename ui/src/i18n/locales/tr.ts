@@ -63,6 +63,7 @@ export const tr: TranslationMap = {
     docs: "Dokümanlar",
     theme: "Tema",
     colorMode: "Renk modu",
+    colorModeOption: "Renk modu: {mode}",
     resources: "Kaynaklar",
     search: "Ara",
     save: "Kaydet",
@@ -1597,6 +1598,8 @@ export const tr: TranslationMap = {
       splitDown: "Aşağı böl",
       closePane: "Bölmeyi kapat",
       sessionSelect: "Bölme oturumu",
+      dropSplit: "Böl",
+      dropOpenHere: "Burada aç",
     },
     sidebar: {
       allSessions: "Tüm oturumlar",

@@ -63,6 +63,7 @@ export const th: TranslationMap = {
     docs: "เอกสาร",
     theme: "ธีม",
     colorMode: "โหมดสี",
+    colorModeOption: "โหมดสี: {mode}",
     resources: "ทรัพยากร",
     search: "ค้นหา",
     save: "บันทึก",
@@ -1557,6 +1558,8 @@ export const th: TranslationMap = {
       splitDown: "แบ่งลงด้านล่าง",
       closePane: "ปิดบานหน้าต่าง",
       sessionSelect: "เซสชันของบานหน้าต่าง",
+      dropSplit: "แยก",
+      dropOpenHere: "เปิดที่นี่",
     },
     sidebar: {
       allSessions: "เซสชันทั้งหมด",

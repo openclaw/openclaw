@@ -661,6 +661,10 @@ class NodeRuntime private constructor(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
+  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
+  // clear it so the newly connected gateway's canonical main agent wins again.
+  @Volatile private var selectedChatAgentId: String? = null
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -818,6 +822,7 @@ class NodeRuntime private constructor(
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
     _gatewayDefaultAgentId.value = null
     _gatewayAgents.value = emptyList()
+    selectedChatAgentId = null
     _modelCatalog.value = emptyList()
     _modelAuthProviders.value = emptyList()
     _modelCatalogRefreshing.value = false
@@ -1737,7 +1742,11 @@ class NodeRuntime private constructor(
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
-    connect(endpoint)
+    // Cold-start fallback only: discovery can emit late, so atomically claim the very first
+    // lifecycle intent. If any explicit connect/disconnect/switch intent already exists, stand
+    // down permanently instead of overriding the user's decision with a stale auto-connect.
+    if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
@@ -2626,10 +2635,7 @@ class NodeRuntime private constructor(
 
   fun connect(endpoint: GatewayEndpoint) {
     gatewayLifecycleIntentSeq.incrementAndGet()
-    launchGatewayLifecycle {
-      prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
-    }
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   fun connect(
@@ -2637,9 +2643,16 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
   ) {
     gatewayLifecycleIntentSeq.incrementAndGet()
+    launchConnect(endpoint, explicitAuth = auth)
+  }
+
+  private fun launchConnect(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+  ) {
     launchGatewayLifecycle {
       prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, auth))
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, explicitAuth))
     }
   }
 
@@ -2699,7 +2712,7 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
         "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
@@ -3090,6 +3103,17 @@ class NodeRuntime private constructor(
     chat.switchSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    val normalizedAgentId = agentId.trim()
+    if (normalizedAgentId.isEmpty()) return
+    stopMessageSpeech()
+    // Agent selection owns every main-session consumer; switching chat alone would
+    // leave Talk mode and the home canvas bound to the previous agent.
+    selectedChatAgentId = normalizedAgentId
+    syncMainSessionKey(normalizedAgentId)
+    chat.switchSession(_mainSessionKey.value)
+  }
+
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
@@ -3250,7 +3274,6 @@ class NodeRuntime private constructor(
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
       val parsed = parseHexColorArgb(raw)
       publishGatewayData(gatewayScope) {
-        syncMainSessionKey(gatewayDefaultAgentId.value)
         _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
         updateHomeCanvasState()
       }
@@ -3320,7 +3343,9 @@ class NodeRuntime private constructor(
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
         _gatewayAgents.value = agents
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        selectedChatAgentId = selectedAgentId
+        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
         updateHomeCanvasState()
       }
     } catch (_: Throwable) {

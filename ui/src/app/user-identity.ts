@@ -39,10 +39,6 @@ export function normalizeLocalUserIdentity(
   };
 }
 
-export function hasLocalUserIdentity(identity: LocalUserIdentity): boolean {
-  return Boolean(identity.name || identity.avatar);
-}
-
 export function resolveLocalUserName(
   input?: Partial<LocalUserIdentity> | null,
   fallback = "You",
