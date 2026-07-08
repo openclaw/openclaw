@@ -52,6 +52,7 @@ import {
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
 import { fileExists } from "./fs.js";
+import { compressImageForDescription } from "./image-compression.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
@@ -786,12 +787,19 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       maxBytes,
     });
+    const compressedImage = await compressImageForDescription({
+      buffer: normalizedMedia.buffer,
+      mime: normalizedMedia.mime,
+      fileName: media.fileName,
+      maxBytes,
+      cfg: params.cfg,
+    });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
-      buffer: normalizedMedia.buffer,
+      buffer: compressedImage.buffer,
       fileName: media.fileName,
-      mime: normalizedMedia.mime,
+      mime: compressedImage.mime,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,

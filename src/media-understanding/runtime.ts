@@ -6,6 +6,7 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { compressImageForDescription } from "./image-compression.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
@@ -262,10 +263,17 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
   });
-  return {
+  const compressedImage = await compressImageForDescription({
     buffer: normalizedImage.buffer,
-    fileName: image.fileName,
     mime: normalizedImage.mime,
+    fileName: image.fileName,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+    cfg: params.cfg,
+  });
+  return {
+    buffer: compressedImage.buffer,
+    fileName: image.fileName,
+    mime: compressedImage.mime,
   };
 }
 
