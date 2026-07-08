@@ -151,7 +151,7 @@ export class CodexComputerUseWindowLeaseManager {
         this.leasesByWindowId.delete(windowId);
       }
     }
-    return [...this.leasesByWindowId.values()].map((lease) => ({ ...lease }));
+    return structuredClone([...this.leasesByWindowId.values()]);
   }
 
   private activeLeaseForWindow(

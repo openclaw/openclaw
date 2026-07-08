@@ -76,17 +76,19 @@ describe("Codex Computer Use periodic health", () => {
 
 function createClient() {
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  const request = vi.fn(async () => ({ apps: [] }));
+  const addCloseHandler = vi.fn((handler: (client: CodexAppServerClient) => void) => {
+    closeHandlers.add(handler);
+    return () => closeHandlers.delete(handler);
+  });
   const client = {
-    request: vi.fn(async () => ({ apps: [] })),
-    addCloseHandler: vi.fn((handler: (client: CodexAppServerClient) => void) => {
-      closeHandlers.add(handler);
-      return () => closeHandlers.delete(handler);
-    }),
+    request,
+    addCloseHandler,
   } as unknown as CodexAppServerClient;
   return {
     client,
-    request: vi.mocked(client.request),
-    addCloseHandler: vi.mocked(client.addCloseHandler),
+    request,
+    addCloseHandler,
     close: () => {
       for (const handler of closeHandlers) {
         handler(client);

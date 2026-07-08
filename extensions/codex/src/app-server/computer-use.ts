@@ -24,6 +24,13 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
+export {
+  CodexComputerUseWindowLeaseManager,
+  type CodexComputerUseAcquireLeaseParams,
+  type CodexComputerUseLeaseAcquireResult,
+  type CodexComputerUseWindowLease,
+} from "./computer-use-leases.js";
+
 /** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
@@ -909,7 +916,7 @@ export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUs
       message: "Computer Use stale child repair skipped on this platform.",
     };
   }
-  let stdout = "";
+  let stdout: string;
   try {
     const result = await execFileAsync("/bin/ps", ["-axo", "pid=,command="], {
       maxBuffer: 5 * 1024 * 1024,

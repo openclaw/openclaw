@@ -5345,6 +5345,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Commands
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
+  - H3: Shared plugin cache
   - H2: Remote catalog limit
   - H2: Configuration reference
   - H2: What OpenClaw checks
