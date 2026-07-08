@@ -33,6 +33,12 @@ const mocks = vi.hoisted(() => {
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    optimizeImageBufferForWebMedia: vi.fn(async ({ buffer, contentType, fileName }) => ({
+      buffer,
+      contentType,
+      fileName,
+      kind: "image" as const,
+    })),
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
@@ -64,6 +70,10 @@ vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
 }));
 
+vi.mock("../media/web-media.js", () => ({
+  optimizeImageBufferForWebMedia: mocks.optimizeImageBufferForWebMedia,
+}));
+
 function requireRunCapabilityRequest(): unknown {
   // File API tests verify the normalized request handed to runCapability, not
   // just the public return shape.
@@ -92,6 +102,15 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
+    mocks.optimizeImageBufferForWebMedia.mockReset();
+    mocks.optimizeImageBufferForWebMedia.mockImplementation(
+      async ({ buffer, contentType, fileName }) => ({
+        buffer,
+        contentType,
+        fileName,
+        kind: "image" as const,
+      }),
+    );
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -541,6 +560,92 @@ describe("media-understanding runtime", () => {
         buffer: Buffer.from("jpeg-normalized"),
         fileName: "sample.bin",
         mime: "image/jpeg",
+      }),
+    );
+  });
+
+  it("applies configured image compression before explicit image provider execution", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("oversized-jpeg") });
+    mocks.optimizeImageBufferForWebMedia.mockResolvedValue({
+      buffer: Buffer.from("compressed-jpeg"),
+      contentType: "image/jpeg",
+      fileName: "sample.jpg",
+      kind: "image",
+    });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      prompt: "Describe it",
+      cfg: {
+        agents: {
+          defaults: {
+            imageMaxDimensionPx: 1568.9,
+            imageQuality: "balanced",
+          },
+        },
+      } as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.optimizeImageBufferForWebMedia).toHaveBeenCalledWith({
+      buffer: Buffer.from("oversized-jpeg"),
+      contentType: "image/jpeg",
+      fileName: "sample.jpg",
+      maxBytes: 10 * 1024 * 1024,
+      imageCompression: {
+        quality: "balanced",
+        models: [{ maxSidePx: 1568 }],
+      },
+    });
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("compressed-jpeg"),
+        fileName: "sample.jpg",
+        mime: "image/jpeg",
+      }),
+    );
+  });
+
+  it("infers GIF MIME before configured image compression", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("gif-bytes") });
+    mocks.optimizeImageBufferForWebMedia.mockResolvedValue({
+      buffer: Buffer.from("gif-bytes"),
+      contentType: "image/gif",
+      fileName: "anim.gif",
+      kind: "image",
+    });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/anim.gif",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      prompt: "Describe it",
+      cfg: {
+        agents: {
+          defaults: {
+            imageQuality: "balanced",
+          },
+        },
+      } as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.optimizeImageBufferForWebMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("gif-bytes"),
+        contentType: "image/gif",
+        fileName: "anim.gif",
+        imageCompression: { quality: "balanced" },
+      }),
+    );
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("gif-bytes"),
+        fileName: "anim.gif",
+        mime: "image/gif",
       }),
     );
   });

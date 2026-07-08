@@ -53,7 +53,11 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import { fileExists } from "./fs.js";
+import {
+  normalizeImageDescriptionInput,
+  resolveImageDescriptionCompressionPolicy,
+} from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   recordLocalAudioBackendObservation,
@@ -823,6 +827,7 @@ export async function runProviderEntry(params: {
     const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
+      imageCompression: resolveImageDescriptionCompressionPolicy(cfg),
       mime: media.mime,
       maxBytes,
     });
