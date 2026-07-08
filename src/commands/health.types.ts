@@ -88,6 +88,17 @@ type ConfigReloadHealthSummary = {
   hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
 };
 
+/** Live-vs-disk runtime config drift diagnostic surfaced by `openclaw health`. */
+export type RuntimeConfigHealthSummary = {
+  state: "ok" | "drift" | "unknown";
+  liveSourceFingerprint?: string | null;
+  diskSourceFingerprint?: string | null;
+  liveDefaultModel?: string | null;
+  diskDefaultModel?: string | null;
+  driftPaths?: string[];
+  message?: string;
+};
+
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
   ok: true;
@@ -99,6 +110,7 @@ export type HealthSummary = {
   deliveryQueues?: DeliveryQueueHealthSummary;
   modelPricing?: ModelPricingHealthSummary;
   configReload?: ConfigReloadHealthSummary;
+  runtimeConfig?: RuntimeConfigHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

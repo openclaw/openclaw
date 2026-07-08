@@ -21,6 +21,7 @@ import {
   resolveContextEngine,
 } from "../../context-engine/registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
+import { bumpConfigReloadObservedGeneration } from "../config-reload-observed.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -54,6 +55,21 @@ const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+const { buildRuntimeConfigHealthMock } = vi.hoisted(() => ({
+  buildRuntimeConfigHealthMock: vi.fn<
+    (opts?: {
+      includeFingerprints?: boolean;
+    }) => Promise<import("../../commands/health.types.js").RuntimeConfigHealthSummary | undefined>
+  >(async () => undefined),
+}));
+
+// Only the drift recompute is stubbed; everything else in commands/health.js
+// stays real so cache-merge tests keep exercising the production merge logic.
+vi.mock("../../commands/health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/health.js")>()),
+  buildRuntimeConfigHealth: buildRuntimeConfigHealthMock,
 }));
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -5027,6 +5043,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
+    buildRuntimeConfigHealthMock.mockClear();
   });
 
   afterEach(() => {
@@ -5564,6 +5581,195 @@ describe("gateway healthHandlers.health cache freshness", () => {
       includeSensitive: false,
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("recomputes runtime-config drift on cache hits so read-scoped callers see fresh drift", async () => {
+    // Regression for the ClawSweeper P1 finding on #89526: `openclaw health`
+    // connects least-privilege at `operator.read`, so its responses come from
+    // the non-sensitive cache. The cached snapshot may predate disk-config
+    // drift; once the reloader observes the disk change (generation bump), the
+    // merge path must recompute the drift summary instead of echoing a stale
+    // "ok" for up to a refresh interval.
+    bumpConfigReloadObservedGeneration();
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      runtimeConfig: { state: "ok" as const },
+    };
+    buildRuntimeConfigHealthMock.mockResolvedValueOnce({
+      state: "drift",
+      driftPaths: ["gateway.auth"],
+      liveDefaultModel: "openai/gpt-5.5",
+      diskDefaultModel: "openai/gpt-5.5",
+      message:
+        "Live gateway runtime config differs from disk for model/provider/auth paths; restart is required or pending.",
+    });
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(buildRuntimeConfigHealthMock).toHaveBeenCalledWith({ includeFingerprints: false });
+    const payload = mockCallArg(respond, 0, 1) as {
+      runtimeConfig?: { state?: string; driftPaths?: string[]; liveSourceFingerprint?: string };
+    };
+    expect(payload?.runtimeConfig?.state).toBe("drift");
+    expect(payload?.runtimeConfig?.driftPaths).toEqual(["gateway.auth"]);
+    expect(payload?.runtimeConfig?.liveSourceFingerprint).toBeUndefined();
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("reuses the drift summary on cache hits until the reloader observes a change", async () => {
+    // The other half of the #89526 P1: with no new disk observation, cache
+    // hits must not re-read/re-parse openclaw.json. The single-slot summary
+    // keyed by the reloader's observation generation is reused as-is.
+    bumpConfigReloadObservedGeneration();
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    buildRuntimeConfigHealthMock.mockResolvedValueOnce({ state: "ok" });
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const call = async () =>
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+    await call();
+    await call();
+
+    expect(buildRuntimeConfigHealthMock).toHaveBeenCalledTimes(1);
+    const secondPayload = mockCallArg(respond, 1, 1) as {
+      runtimeConfig?: { state?: string };
+    };
+    expect(secondPayload?.runtimeConfig?.state).toBe("ok");
+  });
+
+  it("threads the admin scope into the cache-hit drift recompute so fingerprints stay admin-only", async () => {
+    bumpConfigReloadObservedGeneration();
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    buildRuntimeConfigHealthMock.mockResolvedValueOnce({
+      state: "drift",
+      driftPaths: ["auth.profiles"],
+      liveSourceFingerprint: "live-fp",
+      diskSourceFingerprint: "disk-fp",
+    });
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(buildRuntimeConfigHealthMock).toHaveBeenCalledWith({ includeFingerprints: true });
+    const payload = mockCallArg(respond, 0, 1) as {
+      runtimeConfig?: { state?: string; liveSourceFingerprint?: string };
+    };
+    expect(payload?.runtimeConfig?.state).toBe("drift");
+    expect(payload?.runtimeConfig?.liveSourceFingerprint).toBe("live-fp");
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    // Background refresh still runs so the shared cache catches up.
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: true,
+    });
+  });
+
+  it("drops a stale cached runtime-config summary when the recompute returns none", async () => {
+    bumpConfigReloadObservedGeneration();
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      runtimeConfig: { state: "drift" as const, driftPaths: ["models"] },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as { runtimeConfig?: unknown };
+    expect(payload?.runtimeConfig).toBeUndefined();
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
   });
 });
 

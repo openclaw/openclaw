@@ -14,6 +14,7 @@ import {
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
   formatModelPricingHealthLine,
+  formatRuntimeConfigHealthLine,
   healthCommand,
 } from "./health.js";
 
@@ -524,6 +525,72 @@ describe("healthCommand", () => {
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
     expect(lines).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+  });
+});
+
+describe("formatRuntimeConfigHealthLine", () => {
+  it("returns null when runtimeConfig is absent or state is ok", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    expect(formatRuntimeConfigHealthLine(summary)).toBeNull();
+
+    summary.runtimeConfig = { state: "ok", liveDefaultModel: "openai/gpt-5.5" };
+    expect(formatRuntimeConfigHealthLine(summary)).toBeNull();
+  });
+
+  it("renders the drift warning with paths and live/disk model labels", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = {
+      state: "drift",
+      driftPaths: ["gateway.auth"],
+      liveDefaultModel: "openai/gpt-5.5",
+      diskDefaultModel: "openai/gpt-5.5",
+      message: "Live gateway runtime config differs from disk.",
+    };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (live gateway differs from disk for gateway.auth; restart required or pending; live=openai/gpt-5.5 disk=openai/gpt-5.5)",
+    );
+  });
+
+  it("renders the unknown state with the diskReadError message so missing/invalid disk surfaces in text output", () => {
+    // Regression for the ClawSweeper P2 finding on #89526: the formatter
+    // previously returned null for every non-drift state, so the new
+    // unknown-state diagnostic (missing or invalid disk config) was silently
+    // omitted from text `openclaw health` even though JSON showed it.
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = {
+      state: "unknown",
+      message: "Disk config file not found at /tmp/openclaw.json.",
+    };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (unknown disk source: Disk config file not found at /tmp/openclaw.json.)",
+    );
+  });
+
+  it("falls back to a generic reason when the unknown state has no message", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = { state: "unknown" };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (unknown disk source: disk source unavailable)",
     );
   });
 });
