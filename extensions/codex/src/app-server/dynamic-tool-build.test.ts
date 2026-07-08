@@ -167,6 +167,24 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("discord");
   });
 
+  it("strips the internal webchat channel so heartbeat turns can send cross-provider", () => {
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves a real delivery channel provider", () => {
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "discord",
+        messageProvider: "discord",
+      }),
+    ).toBe("discord");
+  });
+
   it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
     expect(
       mapCodexAppServerRemoteWorkspacePath({

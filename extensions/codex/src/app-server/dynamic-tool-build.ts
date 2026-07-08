@@ -112,7 +112,11 @@ export function resolveOpenClawCodingToolsSessionKeys(
 export function resolveCodexMessageToolProvider(
   params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
 ): string | undefined {
-  return params.messageChannel ?? params.messageProvider;
+  const provider = params.messageChannel ?? params.messageProvider;
+  if (provider === "webchat") {
+    return undefined;
+  }
+  return provider;
 }
 
 /** Resolves the channel id that hook events should target for this Codex app-server turn. */
