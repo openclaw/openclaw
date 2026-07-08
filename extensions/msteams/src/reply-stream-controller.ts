@@ -83,6 +83,7 @@ export function createTeamsReplyStreamController(params: {
 
   let tokensEmitted = false;
   let streamFinalizationPending = false;
+  let streamRetired = false;
   let canceledLocally = false;
   // Set when `stream.emit/close` fails for a non-cancel reason after we've
   // already started streaming. Differentiates "user pressed Stop" from "the
@@ -162,6 +163,7 @@ export function createTeamsReplyStreamController(params: {
         !stream ||
         !payload.text ||
         wasCanceled() ||
+        streamRetired ||
         streamMode !== "partial" ||
         streamFinalizationPending
       ) {
@@ -270,6 +272,12 @@ export function createTeamsReplyStreamController(params: {
       if (wasCanceled()) {
         return undefined;
       }
+      // The SDK stream is a single preview-card lifecycle. Once OpenClaw has
+      // handed a streamed segment to close(), later post-tool segments must use
+      // normal block delivery instead of appending to the closed preview.
+      if (streamRetired) {
+        return payload;
+      }
       // Partial mode with tokens already streamed: stream carries the text;
       // strip text from the payload (keep media if any) so block delivery
       // doesn't duplicate. Exception: if a non-cancel stream failure was
@@ -279,6 +287,7 @@ export function createTeamsReplyStreamController(params: {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
+        streamRetired = true;
         tokensEmitted = false;
         return hasMedia ? { ...payload, text: undefined } : undefined;
       }
@@ -292,6 +301,7 @@ export function createTeamsReplyStreamController(params: {
           stream.emit(payload.text);
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
+          streamRetired = true;
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
           return hasMedia ? { ...payload, text: undefined } : undefined;
         } catch (err) {

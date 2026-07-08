@@ -120,6 +120,22 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "Second segment" })).toEqual({ text: "Second segment" });
   });
 
+  it("uses fallback when post-tool partial text arrives after the stream is finalized", async () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "I'll check the CRM." });
+    expect(ctrl.preparePayload({ text: "I'll check the CRM." })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toBeUndefined();
+
+    const emitCountAfterFinalize = stream.emit.mock.calls.length;
+    const finalText = "There are **190 contacts** in RForce.";
+    ctrl.onPartialReply({ text: finalText });
+
+    expect(stream.emit).toHaveBeenCalledTimes(emitCountAfterFinalize);
+    expect(ctrl.preparePayload({ text: finalText })).toEqual({ text: finalText });
+  });
+
   it("delivers all later segments across 3+ tool call rounds", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
@@ -273,6 +289,25 @@ describe("createTeamsReplyStreamController", () => {
 
     expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
     expect(stream.emit).toHaveBeenCalledWith("complete final answer");
+  });
+
+  it("uses block delivery for progress-mode text after the stream is finalized", async () => {
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress" } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "I will check." })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toBeUndefined();
+
+    const emitCountAfterFinalize = stream.emit.mock.calls.length;
+    expect(ctrl.preparePayload({ text: "The result is ready." })).toEqual({
+      text: "The result is ready.",
+    });
+    expect(stream.emit).toHaveBeenCalledTimes(emitCountAfterFinalize);
   });
 
   it("falls back to normal delivery when progress final streaming fails", () => {
