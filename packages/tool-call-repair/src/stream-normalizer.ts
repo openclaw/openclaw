@@ -9,6 +9,7 @@ import {
   isPlainTextToolNameChar,
   isXmlishNameChar,
   matchesLiteralPrefix,
+  skipWhitespace,
 } from "./grammar.js";
 
 export type PlainTextToolCallNameMatcher = {
@@ -313,6 +314,58 @@ function stripCompleteSerializedToolCallPrefix(
   return text.slice(consumeJsonToolClosingMarker(text, jsonEnd));
 }
 
+function startsWithAsciiIgnoreCase(text: string, marker: string, start: number): boolean {
+  return text.slice(start, start + marker.length).toLowerCase() === marker;
+}
+
+function indexOfAsciiIgnoreCase(text: string, marker: string, start: number): number {
+  let cursor = start;
+  while (cursor < text.length) {
+    const next = text.indexOf(marker[0] ?? "", cursor);
+    if (next === -1) {
+      return -1;
+    }
+    if (startsWithAsciiIgnoreCase(text, marker, next)) {
+      return next;
+    }
+    cursor = next + 1;
+  }
+  return -1;
+}
+
+function stripIncompletePlainBracketedXmlishToolCallPrefix(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): string | null {
+  const trimmed = text.trimStart();
+  const bracketed = /^\[([A-Za-z0-9_-]+)\]/.exec(trimmed);
+  if (!bracketed?.[1] || !matcher.hasExactName(bracketed[1])) {
+    return null;
+  }
+  if (findXmlishToolCallEnd(trimmed) !== null) {
+    return null;
+  }
+
+  let cursor = skipWhitespace(trimmed, bracketed[0].length);
+  if (!startsWithAsciiIgnoreCase(trimmed, "<parameter=", cursor)) {
+    return null;
+  }
+  while (cursor < trimmed.length) {
+    const parameterClose = indexOfAsciiIgnoreCase(trimmed, "</parameter>", cursor);
+    if (parameterClose === -1) {
+      return null;
+    }
+    cursor = skipWhitespace(trimmed, parameterClose + "</parameter>".length);
+    if (startsWithAsciiIgnoreCase(trimmed, "</function>", cursor)) {
+      return null;
+    }
+    if (!startsWithAsciiIgnoreCase(trimmed, "<parameter=", cursor)) {
+      return trimmed.slice(cursor);
+    }
+  }
+  return null;
+}
+
 function stripSerializedToolCallPrefixes(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
@@ -523,6 +576,18 @@ function scrubFirstOverCapTextPrefixFromContent(
   const suppressedTextIndexes = new Set<number>();
   let accumulated = "";
   let reachedOverCap = false;
+  const scrubWithVisibleSuffix = (index: number) => {
+    const visibleSuffix = stripIncompletePlainBracketedXmlishToolCallPrefix(accumulated, matcher);
+    return visibleSuffix === null
+      ? null
+      : scrubSuppressedTextIndexesFromContent(
+          content,
+          suppressedTextIndexes,
+          options,
+          visibleSuffix,
+          index,
+        );
+  };
   for (let index = 0; index < content.length; index += 1) {
     const record = asRecord(content[index]);
     if (record?.type !== "text" || typeof record.text !== "string") {
@@ -561,6 +626,10 @@ function scrubFirstOverCapTextPrefixFromContent(
           index,
         );
       }
+      const scrubbed = scrubWithVisibleSuffix(index);
+      if (scrubbed !== null) {
+        return scrubbed;
+      }
       continue;
     }
     if (state === "impossible") {
@@ -575,6 +644,10 @@ function scrubFirstOverCapTextPrefixFromContent(
             index,
           );
         }
+        const scrubbed = scrubWithVisibleSuffix(index);
+        if (scrubbed !== null) {
+          return scrubbed;
+        }
         return scrubSuppressedTextIndexesFromContent(content, suppressedTextIndexes, options);
       }
       accumulated = "";
@@ -583,6 +656,12 @@ function scrubFirstOverCapTextPrefixFromContent(
     }
   }
   if (reachedOverCap) {
+    const lastSuppressedIndex = Array.from(suppressedTextIndexes).at(-1);
+    const scrubbed =
+      lastSuppressedIndex === undefined ? null : scrubWithVisibleSuffix(lastSuppressedIndex);
+    if (scrubbed !== null) {
+      return scrubbed;
+    }
     return scrubSuppressedTextIndexesFromContent(content, suppressedTextIndexes, options);
   }
   return { changed: false, content };
@@ -1158,9 +1237,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const bufferState = shouldRescan
           ? getPlainTextToolCallBufferState(appended.scanText, options.matcher)
           : "over-cap";
-        if (bufferState === "impossible") {
-          const visibleText =
-            stripSerializedToolCallPrefixes(appended.scanText, options.matcher) ?? "";
+        const incompleteXmlishVisibleText = shouldRescan
+          ? stripIncompletePlainBracketedXmlishToolCallPrefix(appended.scanText, options.matcher)
+          : null;
+        if (bufferState === "impossible" || incompleteXmlishVisibleText !== null) {
+          const strippedText = stripSerializedToolCallPrefixes(appended.scanText, options.matcher);
+          const visibleText = strippedText ?? incompleteXmlishVisibleText ?? "";
           yield* flushScrubbedBufferedNonTextEvents(true);
           suppressingOverCapTextToolCall = false;
           suppressedTextContentIndex = undefined;

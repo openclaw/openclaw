@@ -1638,6 +1638,50 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
+  it("does not strip incomplete bracketed XML parameter text before visible suffixes", async () => {
+    const visibleSuffix = "Visible answer after an incomplete bracketed XML parameter block.";
+    const toolPrefix = ["[read]", "<parameter=path>", `${"x".repeat(256_001)}İ`].join("\n");
+    const closingAndSuffixText = ["</parameter>", visibleSuffix].join("\n");
+    const rawText = [toolPrefix, closingAndSuffixText].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: toolPrefix },
+        { type: "text_delta", contentIndex: 0, delta: closingAndSuffixText },
+        { type: "text_end", contentIndex: 0, content: rawText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
+    expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
+    const doneMessage = requireRecord(
+      requireRecord(events.at(-1), "done event").message,
+      "done message",
+    );
+    expect(doneMessage.content).toEqual([{ type: "text", text: visibleSuffix }]);
+    expect(JSON.stringify(events)).not.toContain("</parameter>");
+  });
+
   it("preserves XML visible suffix after Unicode payload text", async () => {
     const toolPrefix = ["[tool:read]", "<parameter=path>", `${"x".repeat(256_001)}İ`].join("\n");
     const visibleSuffix = "Visible suffix after Unicode payload.";

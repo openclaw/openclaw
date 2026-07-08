@@ -197,6 +197,7 @@ function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start: numbe
 /** Returns the end offset for a complete XML-ish or bracketed plain-text tool call. */
 export function findXmlishToolCallEnd(text: string): number | null {
   let cursor: number;
+  let allowsOptionalFunctionClose = false;
   const xmlFunction = /^<function=[A-Za-z0-9_.:-]+>/i.exec(text);
   if (xmlFunction) {
     cursor = xmlFunction[0].length;
@@ -205,6 +206,7 @@ export function findXmlishToolCallEnd(text: string): number | null {
     if (!bracketed) {
       return null;
     }
+    allowsOptionalFunctionClose = bracketed[0].startsWith("[tool:");
     cursor = bracketed[0].length;
     cursor = skipHorizontalWhitespace(text, cursor);
     cursor = skipSerializedToolCallTrailingLineBreak(text, cursor);
@@ -225,7 +227,9 @@ export function findXmlishToolCallEnd(text: string): number | null {
       return skipSerializedToolCallTrailingLineBreak(text, cursor + "</function>".length);
     }
     if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
-      return skipSerializedToolCallTrailingLineBreak(text, cursor);
+      return allowsOptionalFunctionClose
+        ? skipSerializedToolCallTrailingLineBreak(text, cursor)
+        : null;
     }
   }
   return null;
