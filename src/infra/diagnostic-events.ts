@@ -76,6 +76,8 @@ export type DiagnosticCrossContextDeniedEvent = DiagnosticBaseEvent & {
   boundTarget?: string;
   /** Error message for diagnostics */
   message: string;
+  /** Agent id when available */
+  agentId?: string | null;
 };
 
 export type DiagnosticSecurityEventActor = {
