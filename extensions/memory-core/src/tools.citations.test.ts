@@ -696,20 +696,28 @@ describe("memory tools", () => {
       text: "",
       path: params.relPath,
     }));
+    const sourceActor = {
+      id: "signal:participant-redacted",
+      peerId: "signal:peer-redacted",
+      displayName: "Participant Redacted",
+      role: "participant",
+      context: "signal",
+    } as const;
+    const get = vi.fn(async () => ({
+      corpus: "wiki" as const,
+      path: "memory/entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      content: "Alpha wiki entry after empty miss",
+      fromLine: 3,
+      lineCount: 5,
+    }));
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
-      get: async () => ({
-        corpus: "wiki",
-        path: "memory/entities/alpha.md",
-        title: "Alpha",
-        kind: "entity",
-        content: "Alpha wiki entry after empty miss",
-        fromLine: 3,
-        lineCount: 5,
-      }),
+      get,
     });
 
-    const tool = createMemoryGetToolOrThrow();
+    const tool = createMemoryGetToolOrThrow(createDefaultMemoryToolConfig(), { sourceActor });
     const result = await tool.execute("call_get_all_empty_miss_fallback", {
       path: "memory/entities/alpha.md",
       from: 3,
@@ -726,6 +734,12 @@ describe("memory tools", () => {
       fromLine: 3,
       lineCount: 5,
     });
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "memory/entities/alpha.md",
+        sourceActor,
+      }),
+    );
   });
 
   it("preserves an empty in-file range for memory_get corpus=all", async () => {

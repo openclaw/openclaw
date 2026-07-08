@@ -394,6 +394,7 @@ async function executeMemoryReadResult(params: {
         from: params.from,
         lines: params.lines,
         agentSessionKey: params.agentSessionKey,
+        sourceActor: params.sourceActor,
         corpus: params.requestedCorpus,
       });
       if (supplement) {
