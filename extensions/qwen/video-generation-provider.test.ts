@@ -11,7 +11,12 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildQwenVideoGenerationProvider: typeof import("./video-generation-provider.js").buildQwenVideoGenerationProvider;
 
@@ -102,6 +107,61 @@ describe("qwen video generation provider", () => {
     });
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
+  });
+
+  it("applies configured request policy to DashScope video requests", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-DashScope-Route": "qwen-policy" },
+    };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy: undefined,
+      };
+    });
+    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
+
+    const provider = buildQwenVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      prompt: "animate this shot",
+      cfg: {
+        models: {
+          providers: {
+            qwen: {
+              request: requestPolicy,
+            },
+          },
+        },
+      },
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "qwen",
+        capability: "video",
+        transport: "http",
+        request: requestPolicy,
+      }),
+    );
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as
+      | {
+          allowPrivateNetwork?: unknown;
+          headers?: Headers;
+        }
+      | undefined;
+    expect(request?.allowPrivateNetwork).toBe(true);
+    expect(request?.headers).toBeInstanceOf(Headers);
+    expect(request?.headers?.get("x-dashscope-route")).toBe("qwen-policy");
   });
 
   it("rejects DashScope video downloads that exceed the configured media cap", async () => {
