@@ -289,6 +289,10 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
 
     const read = readTagToken(html, i);
     if (!read) {
+      if (findTagEnd(html, i) === -1) {
+        appendText(stack, decodeEntities(html.slice(i)));
+        break;
+      }
       appendText(stack, decodeEntities(ch));
       i += 1;
       continue;
