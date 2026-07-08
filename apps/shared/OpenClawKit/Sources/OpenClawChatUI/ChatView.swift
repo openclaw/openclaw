@@ -370,7 +370,9 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.pendingRunCount > 0 ||
+            self.viewModel.hasActiveSessionRunWithoutChatSnapshot
+        {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
