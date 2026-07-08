@@ -798,8 +798,8 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     // Cleanup can yield to attachment, mirror, or announce work. A successor
     // registered while it was suspended owns every session-scoped side effect.
+    // retireSupersededRun owns the persist-before-cleanup transaction.
     await params.retireSupersededRun(runId, entry);
-    params.persist();
     return true;
   };
 
@@ -1698,8 +1698,8 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const retireSupersededSession = async (currentEntry: SubagentRunRecord) => {
       if (completionReason !== SUBAGENT_ENDED_REASON_KILLED) {
+        // retireSupersededRun owns the persist-before-cleanup transaction.
         await params.retireSupersededRun(completeParams.runId, currentEntry);
-        params.persist();
       }
     };
     sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);

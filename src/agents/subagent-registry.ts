@@ -983,8 +983,24 @@ async function discardSuspendedPendingFinalDelivery(
 
 async function retireSupersededSubagentRun(runId: string, entry: SubagentRunRecord): Promise<void> {
   const transcriptFile = entry.execution?.transcriptFile;
-  clearPendingLifecycleError(runId);
   subagentRuns.delete(runId);
+  // Commit the durable removal before the irreversible transcript/attachment
+  // cleanup. Otherwise a persist failure drops the run from memory while its
+  // SQLite row survives: cross-process reads still see it active and a restart
+  // resurrects a ghost run that waits forever. On failure restore the entry
+  // (cleanup has not run, so it is intact) and let a later sweep retry.
+  try {
+    persistSubagentRunsOrThrow();
+  } catch (error) {
+    subagentRuns.set(runId, entry);
+    log.warn("failed to persist superseded subagent retirement; deferring cleanup", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      error,
+    });
+    return;
+  }
+  clearPendingLifecycleError(runId);
   const transcriptStillOwned = Array.from(subagentRuns.values()).some(
     (candidate) => candidate.execution?.transcriptFile === transcriptFile,
   );
@@ -1027,7 +1043,12 @@ async function sweepSubagentRuns() {
         pressureDiscardCount: pressureDiscardRunIds.size,
       });
     }
-    for (const [runId, entry] of subagentRuns.entries()) {
+    // Snapshot the entries: retireSupersededSubagentRun re-inserts an entry when
+    // its durable removal fails, and a live Map iterator would re-append and
+    // revisit that key, spinning forever while persistence keeps failing. The
+    // deferred retirement is retried on the next sweep instead.
+    const sweepEntries = [...subagentRuns.entries()];
+    for (const [runId, entry] of sweepEntries) {
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
@@ -1331,6 +1352,15 @@ async function sweepSubagentRuns() {
         entry.cleanupCompletedAt = undefined;
         mutated = true;
         startSubagentAnnounceCleanupFlow(runId, entry);
+        continue;
+      }
+      // Retire a superseded terminal run whose completion-path retirement did not
+      // commit (its persist failed and deferred). A newer generation owns the
+      // session, so this backstop retries retirement until it commits instead of
+      // letting the run linger in memory/on disk. Killed runs retire above.
+      if (typeof entry.endedAt === "number" && findNextSubagentRunCreatedAt(entry) !== undefined) {
+        await retireSupersededSubagentRun(runId, entry);
+        mutated = true;
         continue;
       }
       if (!entry.archiveAtMs && entry.cleanup === "keep" && entry.spawnMode !== "session") {

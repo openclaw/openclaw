@@ -3648,6 +3648,97 @@ describe("subagent registry seam flow", () => {
     ).toBe(false);
   });
 
+  it("defers superseded retirement when persist fails, then retries it on the next sweep", async () => {
+    const oldStartedAt = Date.parse("2026-03-24T11:50:00Z");
+    const oldEndedAt = Date.parse("2026-03-24T11:55:00Z");
+    const newStartedAt = Date.parse("2026-03-24T11:58:00Z");
+    const oldRunId = "run-superseded-persist-fail";
+    mocks.getAgentRunContext.mockImplementation((runId: string) =>
+      runId === "run-superseded-successor" ? ({} as never) : undefined,
+    );
+    // Fail exactly the persist that commits the durable removal: at that point
+    // the retiring run is already deleted from the snapshot, while every earlier
+    // persist still contains it and succeeds. persistFails flips to false to
+    // model a transient failure clearing before the next sweep.
+    let persistFails = true;
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(
+      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => {
+        if (persistFails && !runs.has(oldRunId)) {
+          throw new Error("disk full during superseded retirement");
+        }
+      },
+    );
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-persist-fail-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
+    const oldTranscriptFile = "/tmp/internal-agent-runs/run-superseded-persist-fail.jsonl";
+    // A superseded run that already completed normally (no kill reconciliation),
+    // so retirement runs through the generic superseded backstop, not the kill
+    // path. This is the path whose deferred retirement must still be retried.
+    mod.addSubagentRunForTests({
+      runId: oldRunId,
+      childSessionKey: "agent:main:subagent:reused-persist-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old generation",
+      cleanup: "delete",
+      createdAt: oldStartedAt,
+      startedAt: oldStartedAt,
+      sessionStartedAt: oldStartedAt,
+      endedAt: oldEndedAt,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok", startedAt: oldStartedAt, endedAt: oldEndedAt },
+      attachmentsDir,
+      attachmentsRootDir,
+      execution: {
+        status: "terminal",
+        startedAt: oldStartedAt,
+        endedAt: oldEndedAt,
+        transcriptFile: oldTranscriptFile,
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-superseded-successor",
+      childSessionKey: "agent:main:subagent:reused-persist-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new generation",
+      cleanup: "keep",
+      createdAt: newStartedAt,
+      startedAt: newStartedAt,
+      sessionStartedAt: newStartedAt,
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    // Durable removal failed, so the run must stay in memory to match the
+    // surviving SQLite row instead of diverging into a ghost on restart, and
+    // the irreversible cleanup must not run until the removal commits.
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
+    ).toBe(true);
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalled();
+    expect(mocks.removeInternalSessionEffectsTranscript).not.toHaveBeenCalled();
+    await fs.access(attachmentsDir);
+
+    // The transient failure clears; the next sweep must retry and complete the
+    // retirement, removing the run and its transcript/attachments.
+    persistFails = false;
+    await mod.testing.sweepOnceForTests();
+
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
+    ).toBe(false);
+    expect(mocks.removeInternalSessionEffectsTranscript).toHaveBeenCalledWith(oldTranscriptFile);
+    await expectPathMissing(attachmentsDir);
+    await fs.rm(attachmentsRootDir, { recursive: true, force: true });
+    // Persistent conditional impl would leak; clearAllMocks does not reset it.
+    mocks.persistSubagentRunsToDiskOrThrow.mockReset();
+  });
+
   it("checks the raw completion time before clamping an old run deadline", async () => {
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
