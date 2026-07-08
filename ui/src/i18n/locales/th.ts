@@ -1545,7 +1545,7 @@ export const th: TranslationMap = {
     gatewayStatus: "สถานะ Gateway: {status}",
     commandPaletteTitle: "ค้นหาหรือข้ามไปที่… (⌘K)",
     openCommandPalette: "เปิดแถบคำสั่ง",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (เปิดในแท็บใหม่)",
     updateAvailable: "มีอัปเดตพร้อมใช้งาน:",
     runningVersion: "กำลังใช้ v{version}",
     updating: "กำลังอัปเดต…",

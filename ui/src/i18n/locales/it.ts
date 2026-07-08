@@ -1590,7 +1590,7 @@ export const it: TranslationMap = {
     gatewayStatus: "Stato Gateway: {status}",
     commandPaletteTitle: "Cerca o passa a… (⌘K)",
     openCommandPalette: "Apri tavolozza comandi",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (si apre in una nuova scheda)",
     updateAvailable: "Aggiornamento disponibile:",
     runningVersion: "in esecuzione v{version}",
     updating: "Aggiornamento…",

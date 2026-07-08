@@ -1704,7 +1704,9 @@ class AppSidebar extends LitElement {
                   ${icons.settings}
                 </a>
               </openclaw-tooltip>
-              <openclaw-tooltip .content=${t("chat.docsTooltip")}>
+              <openclaw-tooltip
+                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
+              >
                 <a
                   class="sidebar-footer-icon"
                   href="https://docs.openclaw.ai"

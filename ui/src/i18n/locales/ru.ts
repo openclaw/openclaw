@@ -1592,7 +1592,7 @@ export const ru: TranslationMap = {
     gatewayStatus: "Статус Gateway: {status}",
     commandPaletteTitle: "Поиск или переход к… (⌘K)",
     openCommandPalette: "Открыть палитру команд",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (откроется в новой вкладке)",
     updateAvailable: "Доступно обновление:",
     runningVersion: "запущена v{version}",
     updating: "Обновление…",

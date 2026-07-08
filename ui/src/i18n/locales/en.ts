@@ -1567,7 +1567,7 @@ export const en: TranslationMap = {
     gatewayStatus: "Gateway status: {status}",
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (opens in new tab)",
     updateAvailable: "Update available:",
     runningVersion: "running v{version}",
     updating: "Updating…",

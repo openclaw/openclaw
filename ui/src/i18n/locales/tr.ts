@@ -1585,7 +1585,7 @@ export const tr: TranslationMap = {
     gatewayStatus: "Gateway durumu: {status}",
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",
     openCommandPalette: "Komut paletini aç",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (yeni sekmede açılır)",
     updateAvailable: "Güncelleme mevcut:",
     runningVersion: "çalışan v{version}",
     updating: "Güncelleniyor…",

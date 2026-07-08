@@ -1581,7 +1581,7 @@ export const uk: TranslationMap = {
     gatewayStatus: "Стан Gateway: {status}",
     commandPaletteTitle: "Пошук або перехід до… (⌘K)",
     openCommandPalette: "Відкрити палітру команд",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (відкривається в новій вкладці)",
     updateAvailable: "Доступне оновлення:",
     runningVersion: "працює v{version}",
     updating: "Оновлення…",

@@ -1586,7 +1586,7 @@ export const ja_JP: TranslationMap = {
     gatewayStatus: "Gateway ステータス: {status}",
     commandPaletteTitle: "検索または移動… (⌘K)",
     openCommandPalette: "コマンドパレットを開く",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label} (新しいタブで開きます)",
     updateAvailable: "アップデートがあります:",
     runningVersion: "実行中 v{version}",
     updating: "更新中…",

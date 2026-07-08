@@ -1568,7 +1568,7 @@ export const ko: TranslationMap = {
     gatewayStatus: "Gateway 상태: {status}",
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
     openCommandPalette: "명령 팔레트 열기",
-    docsTooltip: "Documentation ↗",
+    docsOpensInNewTab: "{label}(새 탭에서 열림)",
     updateAvailable: "업데이트 사용 가능:",
     runningVersion: "실행 중 v{version}",
     updating: "업데이트 중…",
