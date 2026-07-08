@@ -190,4 +190,23 @@ describe("readResponseText", () => {
     });
     expect(text).toHaveBeenCalledTimes(1);
   });
+
+  it("does not mark exact-size responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    // Chunk is exactly maxBytes — should not be truncated
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
 });
