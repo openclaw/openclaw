@@ -53,6 +53,7 @@ export const PNPM_FLAG_OPTIONS = new Set([
 export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
+const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["run"]);
 
 const YARN_OPTIONS_WITH_VALUE = new Set(["--cwd"]);
 const YARN_FLAG_OPTIONS = new Set(["--immutable", "--silent", "-s"]);
@@ -363,8 +364,12 @@ export function resolveKnownPackageManagerExecInvocation(
         optionsWithValue: new Set([...PNPM_OPTIONS_WITH_VALUE, ...PNPM_DLX_OPTIONS_WITH_VALUE]),
         flagOptions: PNPM_FLAG_OPTIONS,
       });
-      return PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "") ||
-        (firstSubcommand === null && containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS))
+      const detectedKnownExec = PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "");
+      const hiddenKnownExec =
+        firstSubcommand === null && containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS);
+      const implicitExecShorthand =
+        firstSubcommand !== null && !PNPM_SCRIPT_RUN_SUBCOMMANDS.has(firstSubcommand);
+      return detectedKnownExec || hiddenKnownExec || implicitExecShorthand
         ? { kind: "unsafe-exec" }
         : { kind: "not-exec" };
     }

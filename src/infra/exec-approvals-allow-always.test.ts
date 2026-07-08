@@ -1119,6 +1119,37 @@ $0 \\"$1\\"" touch {marker}`,
     },
   );
 
+  it("rejects stale pnpm allow-always entries for implicit exec shorthands", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "eslint");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm eslint .",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("requires bound args for package-manager shell script carriers", async () => {
     if (process.platform === "win32") {
       return;
