@@ -122,6 +122,7 @@ describe("Codex Computer Use setup", () => {
         developerInstructions: "OpenClaw Computer Use readiness probe",
         sandbox: "danger-full-access",
         approvalPolicy: "never",
+        ephemeral: true,
       },
       { timeoutMs: 60_000 },
     );

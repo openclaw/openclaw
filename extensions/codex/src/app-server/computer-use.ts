@@ -470,6 +470,7 @@ export async function runCodexComputerUseLiveTest(params: {
           developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
           sandbox: "danger-full-access",
           approvalPolicy: "never",
+          ephemeral: true,
         },
         {
           timeoutMs: params.config.liveTestTimeoutMs,
