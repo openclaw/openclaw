@@ -91,12 +91,43 @@ export function createQuestionEmitter(broadcast: QuestionBroadcast): QuestionEmi
   };
 }
 
-/** Binds the global manager emitter to the gateway broadcast (call once at startup). */
+/** A QuestionManager-emitter-shaped side channel (e.g. the turn-source channel forwarder). */
+export type QuestionEmitterSink = {
+  onPending: (record: QuestionRecord) => void;
+  onResolved: (record: QuestionRecord) => void;
+  onExpired: (record: QuestionRecord) => void;
+};
+
+/**
+ * Binds the global manager emitter to the gateway broadcast (call once at startup).
+ * An optional forwarder sink is composed in so the same lifecycle also pushes the
+ * question to its turn-source chat.
+ */
 export function bindQuestionManagerEmitter(params: {
   manager: QuestionManager;
   broadcast: QuestionBroadcast;
+  forwarder?: QuestionEmitterSink;
 }): void {
-  params.manager.setEmitter(createQuestionEmitter(params.broadcast));
+  const broadcastEmitter = createQuestionEmitter(params.broadcast);
+  const forwarder = params.forwarder;
+  if (!forwarder) {
+    params.manager.setEmitter(broadcastEmitter);
+    return;
+  }
+  params.manager.setEmitter({
+    onPending: (record) => {
+      broadcastEmitter.onPending?.(record);
+      forwarder.onPending(record);
+    },
+    onResolved: (record, answers) => {
+      broadcastEmitter.onResolved?.(record, answers);
+      forwarder.onResolved(record);
+    },
+    onExpired: (record, reason) => {
+      broadcastEmitter.onExpired?.(record, reason);
+      forwarder.onExpired(record);
+    },
+  });
 }
 
 /** Creates the question.list and question.resolve gateway handlers. */

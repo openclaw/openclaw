@@ -1234,8 +1234,17 @@ export async function startGatewayServer(
     // Bind the global question manager to the persistent gateway broadcast so the
     // ask_user_question tool's pending/resolved/expired lifecycle reaches Control UI
     // and channels even though the tool registers outside any request context.
-    const { bindQuestionManagerEmitter } = await import("./server-methods/question.js");
-    bindQuestionManagerEmitter({ manager: questionManager, broadcast });
+    const [{ bindQuestionManagerEmitter }, { createQuestionForwarder }] = await Promise.all([
+      import("./server-methods/question.js"),
+      import("../infra/question-forwarder.js"),
+    ]);
+    // Also push each pending question to its originating chat (Telegram inline
+    // keyboard / Slack blocks) through the durable outbound path.
+    bindQuestionManagerEmitter({
+      manager: questionManager,
+      broadcast,
+      forwarder: createQuestionForwarder(),
+    });
     // In-memory pending questions died with the previous process; sweep the durable
     // breadcrumbs so any surface still showing a pre-restart question is dismissed
     // via question.expired instead of hanging. Best-effort, default store scope.
