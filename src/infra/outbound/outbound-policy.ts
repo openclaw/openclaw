@@ -9,7 +9,6 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageToolsConfig } from "../../config/types.tools.js";
-import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
@@ -245,19 +244,9 @@ export function enforceCrossContextPolicy(params: {
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
   if (currentProvider && currentProvider !== params.channel) {
     if (!allowAcrossProviders) {
-      const errorMessage = `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".`;
-
-      // Emit diagnostic event for observability (heartbeat/cron turns can otherwise silently lose messages).
-      emitDiagnosticEvent({
-        type: "outbound.cross_context_denied",
-        channel: params.channel,
-        action: params.action,
-        boundChannel: currentProvider,
-        message: errorMessage,
-        agentId: params.agentId,
-      });
-
-      throw new Error(errorMessage);
+      throw new Error(
+        `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".`,
+      );
     }
     return;
   }
@@ -276,18 +265,6 @@ export function enforceCrossContextPolicy(params: {
   }
 
   const errorMessage = `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (channel=${params.channel}).`;
-
-  // Emit diagnostic event for observability.
-  emitDiagnosticEvent({
-    type: "outbound.cross_context_denied",
-    channel: params.channel,
-    action: params.action,
-    target,
-    boundChannel: currentProvider,
-    boundTarget: currentTarget,
-    message: errorMessage,
-    agentId: params.agentId,
-  });
 
   throw new Error(errorMessage);
 }

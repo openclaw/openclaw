@@ -299,40 +299,6 @@ describe("outbound policy helpers", () => {
     ).not.toThrow();
   });
 
-  it("emits diagnostic event when denying cross-provider send for heartbeat turns observability", async () => {
-    const events: Array<{ type: string; channel: string; action: string }> = [];
-    vi.spyOn(
-      await import("../../infra/diagnostic-events.js"),
-      "emitDiagnosticEvent",
-    ).mockImplementation((event) => {
-      events.push(event as { type: string; channel: string; action: string });
-    });
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        channel: "discord",
-        action: "send",
-        args: { to: "C999" },
-        toolContext: {
-          currentChannelId: "webchat-internal",
-          currentChannelProvider: "webchat",
-        },
-        cfg: workspaceConfig,
-      }),
-    ).toThrow(/Cross-context messaging denied/);
-
-    // Verify diagnostic event was emitted for observability
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "outbound.cross_context_denied",
-      channel: "discord",
-      action: "send",
-      boundChannel: "webchat",
-    });
-
-    vi.restoreAllMocks();
-  });
-
   it("uses presentation when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: richChatConfig,

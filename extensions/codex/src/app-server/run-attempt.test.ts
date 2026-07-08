@@ -506,6 +506,80 @@ describe("runCodexAppServerAttempt", () => {
     expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
+  it("does not bind the message tool to the internal channel for internal turns", async () => {
+    // Proves the resolver output actually flows into the dynamic-tools factory wiring,
+    // not just that the leaf function returns the right value.
+    const capturedProviders: Array<string | undefined> = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedProviders.push(options?.messageProvider);
+      return [createRuntimeDynamicTool("message")];
+    });
+
+    const buildFor = async (
+      overrides: Partial<EmbeddedRunAttemptParams>,
+    ): Promise<string | undefined> => {
+      capturedProviders.length = 0;
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = {
+        ...createParams(sessionFile, workspaceDir),
+        disableTools: false,
+        runtimePlan: createCodexRuntimePlanFixture(),
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        ...overrides,
+      } as EmbeddedRunAttemptParams;
+      await testing.buildDynamicTools({
+        params,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sandboxSessionKey: params.sessionKey!,
+        sandbox: { enabled: false, backendId: "docker" } as never,
+        nativeToolSurfaceEnabled: false,
+        runAbortController: new AbortController(),
+        sessionAgentId: "main",
+        pluginConfig: {},
+        onYieldDetected: () => undefined,
+      });
+      return capturedProviders[0];
+    };
+
+    // 1. Real WebChat UI user turn keeps the binding
+    expect(await buildFor({ trigger: "user" })).toBe("webchat");
+    // 2. Owner manual turn keeps the binding
+    expect(await buildFor({ trigger: "manual" })).toBe("webchat");
+    // 3. Memory internal trigger conservatively keeps the binding
+    expect(await buildFor({ trigger: "memory" })).toBe("webchat");
+    // 4. Overflow internal trigger conservatively keeps the binding
+    expect(await buildFor({ trigger: "overflow" })).toBe("webchat");
+    // 5. Heartbeat drops the internal-channel binding
+    expect(await buildFor({ trigger: "heartbeat" })).toBeUndefined();
+    // 6. Cron drops the internal-channel binding
+    expect(await buildFor({ trigger: "cron" })).toBeUndefined();
+    // 7. sessions_send/ln inter-session handoff drops the binding
+    expect(
+      await buildFor({
+        trigger: "user",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+    // 8. external_user provenance does not count as internal
+    expect(
+      await buildFor({
+        trigger: "user",
+        inputProvenance: { kind: "external_user" },
+      }),
+    ).toBe("webchat");
+    // 9. Heartbeat on a real delivery channel keeps the real provider
+    expect(
+      await buildFor({
+        trigger: "heartbeat",
+        messageChannel: undefined,
+        messageProvider: "discord",
+      }),
+    ).toBe("discord");
+  });
+
   it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
