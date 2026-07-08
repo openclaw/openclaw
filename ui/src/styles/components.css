@@ -3756,6 +3756,151 @@ td.data-table-key-col {
 }
 
 /* ===========================================
+   Ask User Question Card
+   =========================================== */
+
+.question-card {
+  width: 100%;
+  max-height: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  overflow-y: auto;
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.question-card-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.question-card-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.question-card-queue {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.question-card-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-card-question + .question-card-question {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.question-card-header {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.question-card-prompt {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.question-card-secret {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.question-card-option {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  cursor: pointer;
+  transition:
+    background 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out);
+}
+
+.question-card-option:hover {
+  background: var(--bg-hover);
+}
+
+.question-card-option:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.question-card-option input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.question-card-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.question-card-recommended {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: var(--radius-full);
+  padding: 1px 8px;
+}
+
+.question-card-option-desc {
+  width: 100%;
+  padding-left: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.question-card-other-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.question-card-other-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.question-card-error {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.question-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ===========================================
    Agents
    =========================================== */
 
