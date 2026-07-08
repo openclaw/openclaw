@@ -110,6 +110,76 @@ describe("lobster plugin tool", () => {
     expect(approval.resumeToken).toBe("resume-token-1");
   });
 
+  it("keeps ordinary run on the embedded runner when flow defaults are injected", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "Continue?",
+          items: [],
+          resumeToken: "resume-token-1",
+        },
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const res = await tool.execute("call-default-flow-run", {
+      action: "run",
+      pipeline: "noop",
+      flowStateJson: "{}",
+      flowExpectedRevision: 0,
+    });
+
+    expect(taskFlow.createManaged).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "ordinary run with flow defaults details");
+    expect(details.status).toBe("needs_approval");
+  });
+
+  it("keeps ordinary resume on the embedded runner when flow defaults are injected", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [{ approved: true }],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const res = await tool.execute("call-default-flow-resume", {
+      action: "resume",
+      token: "resume-token-1",
+      approve: true,
+      flowStateJson: "{}",
+      flowExpectedRevision: 0,
+    });
+
+    expect(taskFlow.resume).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      token: "resume-token-1",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "ordinary resume with flow defaults details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+  });
+
   it("normalizes numeric string run limits before invoking the runner", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -203,6 +273,7 @@ describe("lobster plugin tool", () => {
       flowControllerId: "tests/lobster",
       flowGoal: "Run Lobster workflow",
       flowStateJson: '{"lane":"email"}',
+      flowExpectedRevision: 0,
       flowCurrentStep: "run_lobster",
       flowWaitingStep: "await_review",
     });
@@ -284,6 +355,7 @@ describe("lobster plugin tool", () => {
       approve: true,
       flowId: "flow-1",
       flowExpectedRevision: 1,
+      flowStateJson: "{}",
       flowCurrentStep: "resume_lobster",
     });
 

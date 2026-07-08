@@ -97,8 +97,21 @@ function parseOptionalFlowStateJson(value: unknown): JsonLike | undefined {
   if (typeof value !== "string") {
     throw new Error("flowStateJson must be a JSON string");
   }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
   try {
-    return JSON.parse(value) as JsonLike;
+    const parsed = JSON.parse(trimmed) as JsonLike;
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).length === 0
+    ) {
+      return undefined;
+    }
+    return parsed;
   } catch {
     throw new Error("flowStateJson must be valid JSON");
   }
@@ -111,7 +124,6 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
   const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
   const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
   const resumeFlowId = readOptionalTrimmedString(params.flowId, "flowId");
-  const resumeRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
 
   const hasRunFields =
     controllerId !== undefined ||
@@ -123,7 +135,7 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
   if (!hasRunFields) {
     return null;
   }
-  if (resumeFlowId !== undefined || resumeRevision !== undefined) {
+  if (resumeFlowId !== undefined) {
     throw new Error("run action does not accept flowId or flowExpectedRevision");
   }
   if (!controllerId) {
@@ -143,7 +155,6 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
 
 function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResumeParams | null {
   const flowId = readOptionalTrimmedString(params.flowId, "flowId");
-  const expectedRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
   const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
   const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
   const token = readOptionalTrimmedString(params.token, "token");
@@ -151,17 +162,15 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const approve = readOptionalBoolean(params.approve, "approve");
   const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
-  const stateJson = params.flowStateJson;
 
   const hasResumeFields =
-    flowId !== undefined ||
-    expectedRevision !== undefined ||
-    currentStep !== undefined ||
-    waitingStep !== undefined;
+    flowId !== undefined || currentStep !== undefined || waitingStep !== undefined;
 
   if (!hasResumeFields) {
     return null;
   }
+  const expectedRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
+  const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
   if (runControllerId !== undefined || runGoal !== undefined || stateJson !== undefined) {
     throw new Error("resume action does not accept flowControllerId, flowGoal, or flowStateJson");
   }
