@@ -249,8 +249,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
   model?: { baseUrl?: string; id?: string; provider?: string };
 }): number {
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
-  const clampImplicitTimeoutMs = (valueMs: number) =>
-    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
 
   const runTimeoutMs = params?.runTimeoutMs;
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -275,6 +273,23 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value > 0 &&
       value < MAX_TIMER_TIMEOUT_MS,
   );
+
+  // Run/agent budgets bound idle from below the provider-class ceiling; they
+  // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
+  // Clamping every class to the cloud default reopened #85826-style kills for
+  // self-hosted users with explicit budgets above 120s.
+  const clampToClassIdleCeiling = (budgetMs: number): number => {
+    if (isLocalRuntimeModel) {
+      return clampTimeoutMs(budgetMs);
+    }
+    const classIdleTimeoutMs =
+      isSelfHostedRuntimeModel ||
+      isExplicitLocalHostnameRuntimeModel ||
+      isSelfHostedHostnameRuntimeModel
+        ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+        : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+    return clampTimeoutMs(Math.min(budgetMs, classIdleTimeoutMs));
+  };
 
   // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
   // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
@@ -314,23 +329,11 @@ export function resolveLlmIdleTimeoutMs(params?: {
       }
       return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
     }
-    return clampImplicitTimeoutMs(runTimeoutMs);
+    return clampToClassIdleCeiling(runTimeoutMs);
   }
 
   if (agentTimeoutMs !== undefined) {
-    // The agent budget bounds idle from below the provider-class ceiling; it
-    // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
-    // Clamping every class to the cloud default here reopened #85826-style kills.
-    if (isLocalRuntimeModel) {
-      return clampTimeoutMs(agentTimeoutMs);
-    }
-    const classIdleTimeoutMs =
-      isSelfHostedRuntimeModel ||
-      isExplicitLocalHostnameRuntimeModel ||
-      isSelfHostedHostnameRuntimeModel
-        ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
-        : DEFAULT_LLM_IDLE_TIMEOUT_MS;
-    return clampTimeoutMs(Math.min(agentTimeoutMs, classIdleTimeoutMs));
+    return clampToClassIdleCeiling(agentTimeoutMs);
   }
 
   // The default watchdog is a network-silence-as-hang guard for cloud providers.

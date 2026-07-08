@@ -520,6 +520,27 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(expected);
   });
 
+  it.each([
+    ["local keeps no class ceiling", { baseUrl: "http://127.0.0.1:11434" }, 900_000],
+    [
+      "self-hosted keeps the 300s tier",
+      { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
+      300_000,
+    ],
+    ["cloud keeps the 120s default", { provider: "openai" }, 120_000],
+  ])("explicit run timeout above the tiers: %s", (_label, model, expected) => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000, model })).toBe(expected);
+  });
+
+  it("explicit run timeouts below the class tier still bound self-hosted idle", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        runTimeoutMs: 90_000,
+        model: { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
+      }),
+    ).toBe(90_000);
+  });
+
   it("cron exempts provider-id self-hosted models from the 60s clamp", () => {
     expect(
       resolveLlmIdleTimeoutMs({
