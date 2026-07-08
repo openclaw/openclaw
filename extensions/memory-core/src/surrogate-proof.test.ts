@@ -38,14 +38,10 @@ function hasLoneSurrogate(str: string): boolean {
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
     if (code >= 0xd800 && code <= 0xdbff) {
-      // High surrogate -> must be followed by low surrogate
       const next = str.charCodeAt(i + 1);
-      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      i++; // skip paired low surrogate
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return true;
+      i++;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
-      // Lone low surrogate (no preceding high surrogate)
       return true;
     }
   }
@@ -67,6 +63,11 @@ const PROOF_CONFIG: OpenClawConfig = {
                 limit: 20,
                 lookbackDays: 2,
               },
+              rem: {
+                enabled: true,
+                limit: 20,
+                lookbackDays: 2,
+              },
             },
           },
         },
@@ -76,29 +77,32 @@ const PROOF_CONFIG: OpenClawConfig = {
 };
 
 describe("dreaming ingestion surrogate-proof boundary", () => {
-  it("daily + session corpus snippets have no lone surrogates from boundary emoji", async () => {
+  it("generated daily markdown and session corpus have no lone surrogates", async () => {
     const workspaceDir = await createTempWorkspace("surrogate-proof-");
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Emoji near the 280-char boundary so truncation code path is exercised
-    // 275 ASCII + 🌍 (2 utf16) = 277 total, well within 280 but exercises truncation
-    const padShort = "x".repeat(275);
-    // 300-char line ensures truncation kicks in
-    const padLong = "x".repeat(298);
+    // normalizeDailySnippet strips "- " prefix, then truncates to 280.
+    // We need the stripped text to be 281 chars so truncation at 280 drops the emoji.
+    // "- " (2) + 279 ASCII + 🌍 (2 utf16) = 283 total, stripped = 281
+    const pad = "x".repeat(279);
     const emoji = "🌍";
 
-    // Daily note: lines that trigger truncation at 280 chars
+    // normalizeSessionCorpusSnippet collapses whitespace then truncates.
+    // Session message text with emoji at boundary.
+    const sessionPad = "y".repeat(279);
+
+    // Daily note: line where normalized text hits the 280-char emoji boundary
     const dailyContent = [
       `# ${PROOF_DAY}`,
       "",
-      `- emoji-near-boundary: ${padShort}${emoji}`,
-      `- overflow-with-emoji: ${padLong}${emoji}`,
+      `- ${pad}${emoji}`,
+      `- Regular short item`,
       "",
     ].join("\n");
     await fs.writeFile(path.join(memoryDir, `${PROOF_DAY}.md`), dailyContent, "utf-8");
 
-    // Session transcript with emoji at both near-boundary and overflow positions
+    // Session transcript with emoji at boundary in message text
     setTestEnv(path.join(workspaceDir, ".state"));
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -116,7 +120,7 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
             content: [
               {
                 type: "text",
-                text: `User: I found an issue with the ${padShort}${emoji} module.`,
+                text: `I found a bug in the ${sessionPad}${emoji} module. Please investigate.`,
               },
             ],
           },
@@ -129,7 +133,7 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
             content: [
               {
                 type: "text",
-                text: `I'll investigate the ${padLong}${emoji} issue and get back to you.`,
+                text: `Investigating the ${sessionPad}${emoji} issue now. Will report back shortly.`,
               },
             ],
           },
@@ -140,7 +144,7 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
     const mtime = new Date(`${PROOF_DAY}T10:30:00.000Z`);
     await fs.utimes(transcriptPath, mtime, mtime);
 
-    // Run dreaming sweep
+    // Run full dreaming sweep (light + rem)
     const subagent = createMockSubagent("Dreaming narrative generated.");
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const testConfig: OpenClawConfig = {
@@ -163,24 +167,22 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
       nowMs: Date.parse(`${PROOF_DAY}T11:00:00.000Z`),
     });
 
-    // Read outputs and verify no lone surrogates
+    // Assert: generated daily markdown has no lone surrogates
     const dailyMarkdown = await fs.readFile(path.join(memoryDir, `${PROOF_DAY}.md`), "utf-8");
-    const sessionContent = await fs.readFile(transcriptPath, "utf-8");
-
     expect(hasLoneSurrogate(dailyMarkdown), "daily markdown has lone surrogate").toBe(false);
-    expect(hasLoneSurrogate(sessionContent), "session content has lone surrogate").toBe(false);
 
-    // Also verify the log output is clean
+    // Assert: generated session corpus file has no lone surrogates
+    const sessionCorpusPath = path.join(memoryDir, ".dreams", "session-corpus", `${PROOF_DAY}.txt`);
+    const sessionCorpus = await fs.readFile(sessionCorpusPath, "utf-8");
+    expect(hasLoneSurrogate(sessionCorpus), "session corpus has lone surrogate").toBe(false);
+
+    // Assert: all log output clean
     const logCalls = logger.info.mock.calls
       .concat(logger.warn.mock.calls)
       .concat(logger.error.mock.calls)
       .map((c) => c.map(String).join(" "));
-
     for (const msg of logCalls) {
-      const msgStr = Array.isArray(msg) ? msg.join(" ") : String(msg);
-      expect(hasLoneSurrogate(msgStr), `log has lone surrogate: ${msgStr.slice(0, 80)}`).toBe(
-        false,
-      );
+      expect(hasLoneSurrogate(msg), `log has lone surrogate: ${msg.slice(0, 80)}`).toBe(false);
     }
   });
 });
