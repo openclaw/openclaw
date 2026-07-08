@@ -82,7 +82,9 @@ async function driveCommandWhenQuestionReady(command: string, storePath: string)
       await handlePlanCommand(planParams(command, storePath), true);
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error("exit_plan_mode never reached pending_approval");
 }

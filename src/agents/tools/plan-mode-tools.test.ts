@@ -61,7 +61,9 @@ describe("plan-mode lifecycle tools", () => {
         getGlobalQuestionManager().resolve(record.id, { q1: { text: answer } });
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
     }
     throw new Error("pending plan-approval question never registered");
   }

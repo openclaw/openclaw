@@ -31,17 +31,15 @@ export function resolvePlanModeGate(ctx: PlanModeGateContext): PlanModeGateResul
   }
   const agentId = normalizeAgentId(ctx.agentId ?? parseAgentSessionKey(sessionKey)?.agentId);
   const storePath = resolveStorePath(ctx.config?.session?.store, { agentId });
-  let planActive = false;
-  try {
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    const status = resolveSessionPlanState(entry).status;
-    planActive = status === "planning" || status === "pending_approval";
-  } catch {
-    // A store read failure must never open the gate; treat as inactive only when we could
-    // not observe an active plan. (Fail-closed applies once plan mode is known active.)
-    planActive = false;
-  }
-  if (!planActive) {
+  const status = (() => {
+    try {
+      return resolveSessionPlanState(loadSessionEntry({ sessionKey, storePath })).status;
+    } catch {
+      // A store read failure must never be observed as an active plan; treat as inactive.
+      return "inactive" as const;
+    }
+  })();
+  if (status !== "planning" && status !== "pending_approval") {
     return { blocked: false };
   }
   return checkPlanModeMutationGate({

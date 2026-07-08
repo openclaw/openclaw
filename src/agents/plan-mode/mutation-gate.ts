@@ -209,13 +209,3 @@ export function checkPlanModeMutationGate(params: {
     `Tool "${params.toolName}" is not in the plan-mode read-only allowlist and is blocked by default — present the plan via exit_plan_mode to execute.`,
   );
 }
-
-/** Test/introspection view of the gate's contract lists. */
-export const __planModeGateContract = {
-  PLAN_MODE_ALLOWED_TOOLS: Array.from(PLAN_MODE_ALLOWED_TOOLS),
-  MUTATION_TOOL_BLOCKLIST: Array.from(MUTATION_TOOL_BLOCKLIST),
-  MUTATION_SUFFIX_PATTERNS,
-  READONLY_SUFFIX_PATTERNS,
-  READ_ONLY_EXEC_PREFIXES,
-  DANGEROUS_FLAGS,
-};
