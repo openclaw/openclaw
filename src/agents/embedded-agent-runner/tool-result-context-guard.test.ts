@@ -327,13 +327,14 @@ describe("installToolResultContextGuard", () => {
     expectOpenClawTruncation(getToolResultText(transformed[0]));
   });
 
-  it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
+  it("raises a structured mid-turn precheck signal after projected tool results overflow", async () => {
     // The signal carries route metadata so the run loop can compact/truncate
     // without guessing from a generic overflow error.
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("prompt already in history"),
       makeToolResult("call_big", "x".repeat(80_000)),
+      makeToolResult("call_big_2", "y".repeat(80_000)),
     ];
 
     try {
@@ -349,10 +350,46 @@ describe("installToolResultContextGuard", () => {
       expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
       const signal = err as MidTurnPrecheckSignal;
       expect(signal.name).toBe("MidTurnPrecheckSignal");
-      expect(signal.request.route).toBe("compact_then_truncate");
+      expect(signal.request.route).toBe("compact_only");
       expect(typeof signal.request.overflowTokens).toBe("number");
       expect(typeof signal.request.toolResultReducibleChars).toBe("number");
     }
+  });
+
+  it("does not fire mid-turn precheck for tool-heavy history that fits after boundary projection", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("prompt already in history")];
+    for (let index = 0; index < 20; index += 1) {
+      contextForNextCall.push(makeToolResult(`call_${index}`, "x".repeat(12_500)));
+    }
+
+    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 200_000,
+      reserveTokens: 50_000,
+      toolResultMaxChars: 16_000,
+      prePromptMessageCount: 1,
+    });
+
+    expect(transformed).toBe(contextForNextCall);
+  });
+
+  it("uses the context window, not the pre-reserve budget, for mid-turn projection", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("prompt already in history")];
+    for (let index = 0; index < 40; index += 1) {
+      contextForNextCall.push(makeToolResult(`call_${index}`, "x".repeat(22_500)));
+    }
+
+    await expect(
+      applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 120_000,
+        reserveTokens: 20_000,
+        toolResultMaxChars: 16_000,
+        prePromptMessageCount: 1,
+      }),
+    ).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
   });
 
   it("does not run mid-turn precheck when no new tool result was appended", async () => {
@@ -604,7 +641,11 @@ describe("installContextEngineLoopHook", () => {
       toolResultMaxChars: 16_000,
     });
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+    const messages = [
+      makeUser("first"),
+      makeToolResult("call_1", "x".repeat(80_000)),
+      makeToolResult("call_2", "y".repeat(80_000)),
+    ];
 
     await expect(callTransform(agent, messages)).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
@@ -625,7 +666,11 @@ describe("installContextEngineLoopHook", () => {
       toolResultMaxChars: 16_000,
     });
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+    const messages = [
+      makeUser("first"),
+      makeToolResult("call_1", "x".repeat(80_000)),
+      makeToolResult("call_2", "y".repeat(80_000)),
+    ];
     const transformed = await callTransform(agent, messages);
 
     expect(transformed).toBe(compactedView);

@@ -266,13 +266,13 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
+      contextTokenBudget: 60_000,
       reserveTokens: 20_000,
     });
 
@@ -300,7 +300,7 @@ describe("preemptive-compaction", () => {
     expect(estimatedPromptTokens).toBeGreaterThan(30_000);
   });
 
-  it("prechecks a regression-sized synthetic tool-heavy transcript as over budget", () => {
+  it("does not precheck a regression-sized synthetic tool-heavy transcript as over budget", () => {
     const toolResultCharsPerMessage = Math.ceil(427_000 / 120);
     const generalCharsPerMessage = Math.ceil((503_000 - 427_000) / 121);
     const messages: AgentMessage[] = [];
@@ -325,10 +325,10 @@ describe("preemptive-compaction", () => {
       reserveTokens: 32_000,
     });
 
-    expect(result.estimatedPromptTokens).toBeGreaterThan(200_000);
+    expect(result.estimatedPromptTokens).toBeLessThan(168_000);
     expect(result.promptBudgetBeforeReserve).toBe(168_000);
-    expect(result.route).not.toBe("fits");
-    expect(result.overflowTokens).toBeGreaterThan(0);
+    expect(result.route).toBe("fits");
+    expect(result.overflowTokens).toBe(0);
   });
 
   it("caps reserve tokens so small context models keep usable prompt budget", () => {
@@ -517,7 +517,7 @@ describe("preemptive-compaction", () => {
     expect(aboveCutoff - belowCutoff).toBeLessThanOrEqual(2);
   });
 
-  it("keeps the conservative ratio for non-CJK tool results", () => {
+  it("uses the normal text ratio for non-CJK tool results", () => {
     const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
     const toolResultTokens = estimateLlmBoundaryTokenPressure({
       messages: [makeToolResultMessage(latinText)],
@@ -530,8 +530,7 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
-    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
+    expect(Math.abs(toolResultTokens - assistantTokens)).toBeLessThanOrEqual(5);
   });
 
   it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
