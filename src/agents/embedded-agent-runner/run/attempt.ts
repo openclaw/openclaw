@@ -2214,7 +2214,8 @@ export async function runEmbeddedAttempt(
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
-    let trajectoryEndRecorded = false;
+    let trajectoryTerminalStatus: string | undefined;
+    let trajectoryTerminalError: unknown;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     let cleanupYieldAborted = false;
     let repairedRejectedThinkingReplay = false;
@@ -5886,20 +5887,9 @@ export async function runEmbeddedAttempt(
           lastToolError,
         }),
       );
-      trajectoryRecorder?.recordEvent("session.ended", {
-        status: attemptTrajectoryTerminal.status,
-        aborted,
-        externalAbort,
-        timedOut,
-        idleTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-        timedOutByRunBudget,
-        promptError: promptError ? formatErrorMessage(promptError) : undefined,
-        terminalError: attemptTrajectoryTerminal.terminalError,
-      });
-      trajectoryEndRecorded = true;
-
+      // 存储终止状态：在模型完成、准备进入清理阶段前，将终止原因暂存到临时变量中
+      trajectoryTerminalStatus = attemptTrajectoryTerminal.status;
+      trajectoryTerminalError = attemptTrajectoryTerminal.terminalError;
       return {
         replayMetadata,
         itemLifecycle: getItemLifecycle(),
@@ -5958,25 +5948,6 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
-      if (trajectoryRecorder && !trajectoryEndRecorded) {
-        trajectoryRecorder.recordEvent("session.ended", {
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup",
-          aborted,
-          externalAbort,
-          timedOut,
-          idleTimedOut,
-          timedOutDuringCompaction,
-          timedOutDuringToolExecution,
-          timedOutByRunBudget,
-          promptError: promptError ? formatErrorMessage(promptError) : undefined,
-        });
-      }
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
-      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
@@ -6022,6 +5993,41 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      // Record session.ended *after* cleanup work completes so the timestamp
+      // reflects actual wall-clock time at session termination, not the
+      // last model.completed timestamp. See https://github.com/openclaw/openclaw/issues/102014
+      // If cleanup failed, derive status from cleanupError rather than from
+      // the pre-cleanup terminal status.
+      const sessionEndedStatus: string = cleanupError
+        ? "error"
+        : (trajectoryTerminalStatus ??
+          (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"));
+      const sessionEndedTerminalError: unknown =
+        cleanupError && trajectoryTerminalError === undefined
+          ? formatErrorMessage(cleanupError)
+          : trajectoryTerminalError;
+      trajectoryRecorder?.recordEvent("session.ended", {
+        status: sessionEndedStatus,
+        aborted,
+        externalAbort,
+        timedOut,
+        idleTimedOut,
+        timedOutDuringCompaction,
+        timedOutDuringToolExecution,
+        timedOutByRunBudget,
+        promptError: promptError ? formatErrorMessage(promptError) : undefined,
+        ...(sessionEndedTerminalError !== undefined
+          ? { terminalError: sessionEndedTerminalError }
+          : {}),
+      });
+      // Flush trajectory after session.ended so the event is included in the
+      // exported bundle, not just the pre-cleanup events.
+      await flushEmbeddedAttemptTrajectoryRecorder({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        log,
+        trajectoryRecorder,
+      });
       const synthesizedCleanupTakeoverError =
         !cleanupError && promptError && sessionLockController.hasSessionTakeover()
           ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
