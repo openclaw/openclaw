@@ -90,6 +90,10 @@ the screenshots, then shuts down the emulator it started.
 For PR evidence, `.github/workflows/android-language-proof.yml` can build the
 Play debug APK on GitHub Actions, run the same screenshot script against a
 managed AVD, and upload the language screenshot plus debug APK as artifacts.
+The Android App Bundle keeps language resource splitting disabled because the
+app can apply explicit language overrides at runtime; this keeps localized
+string resources available immediately for Play-delivered installs without a
+Play Core language-download step.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 

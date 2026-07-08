@@ -107,6 +107,15 @@ android {
     }
   }
 
+  // OpenClaw applies explicit app locales at runtime. Keep all localized string
+  // resources installed in App Bundle deliveries so language overrides work
+  // immediately and offline without a Play Core language-download flow.
+  bundle {
+    language {
+      enableSplit = false
+    }
+  }
+
   buildTypes {
     release {
       if (hasAndroidReleaseSigning) {
