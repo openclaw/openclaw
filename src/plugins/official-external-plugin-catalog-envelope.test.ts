@@ -205,6 +205,32 @@ describe("official external plugin catalog signed envelopes", () => {
     });
   });
 
+  it("rejects excessive raw signature entries before filtering malformed entries", () => {
+    const { envelope, publicKeyPem } = signedEnvelope();
+    const [signature] = envelope.signatures ?? [];
+    expect(signature).toBeDefined();
+
+    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      {
+        ...envelope,
+        signatures: [
+          ...Array.from({ length: 16 }, () => ({
+            algorithm: "ed25519",
+          })),
+          signature!,
+        ],
+      },
+      {
+        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "invalid-envelope",
+    });
+  });
+
   it("rejects unsupported payload types before trusting the payload", () => {
     const { envelope, publicKeyPem } = signedEnvelope({
       payloadType: "openclaw.other-feed.v1",

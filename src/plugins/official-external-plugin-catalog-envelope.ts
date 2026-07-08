@@ -148,6 +148,9 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   if (!Array.isArray(signatures) || signatures.length === 0) {
     return null;
   }
+  if (signatures.length > OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES) {
+    return null;
+  }
   const parsedSignatures = signatures.filter(
     (signature): signature is Required<OfficialExternalPluginCatalogEnvelopeSignature> =>
       isRecord(signature) &&
