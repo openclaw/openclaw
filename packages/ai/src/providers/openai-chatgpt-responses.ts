@@ -31,6 +31,7 @@ import {
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -264,10 +265,14 @@ export const streamOpenAICodexResponses: StreamFunction<
     };
 
     try {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      if (!apiKey) {
+      const unresolvedApiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+      if (!unresolvedApiKey) {
         throw new Error(`No API key for provider: ${model.provider}`);
       }
+      // WebSocket auth has no fetch seam; unwrap immediately before request construction.
+      const apiKey = getAiTransportHost().resolveSecretSentinel(unresolvedApiKey);
+      const modelHeaders = resolveAiTransportHeaderSentinels(model.headers);
+      const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
       let body = buildRequestBody(model, context, options);
@@ -281,15 +286,15 @@ export const streamOpenAICodexResponses: StreamFunction<
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const websocketRequestId = options?.sessionId || createCodexRequestId();
       const sseHeaders = buildSSEHeaders(
-        model.headers,
-        options?.headers,
+        modelHeaders,
+        optionHeaders,
         accountId,
         apiKey,
         options?.sessionId,
       );
       const websocketHeaders = buildWebSocketHeaders(
-        model.headers,
-        options?.headers,
+        modelHeaders,
+        optionHeaders,
         accountId,
         apiKey,
         websocketRequestId,
