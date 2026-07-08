@@ -15,7 +15,7 @@ describe("Codex Computer Use periodic health", () => {
 
     const result = startCodexComputerUseHealthMonitor({
       client: client.client,
-      config: computerUseConfig({ healthCheckIntervalMinutes: 30 }),
+      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
     });
 
     expect(result).toEqual({ started: true, intervalMs: 30 * 60_000 });
@@ -53,7 +53,11 @@ describe("Codex Computer Use periodic health", () => {
 
     startCodexComputerUseHealthMonitor({
       client: client.client,
-      config: computerUseConfig({ healthCheckIntervalMinutes: 30 }),
+      config: computerUseConfig({
+        autoRepair: true,
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 30,
+      }),
       repairComputerUseMcpChildren,
     });
 
@@ -74,6 +78,18 @@ describe("Codex Computer Use periodic health", () => {
         config: computerUseConfig({ enabled: false }),
       }),
     ).toEqual({ started: false, reason: "disabled" });
+    expect(client.addCloseHandler).not.toHaveBeenCalled();
+  });
+
+  it("does not start periodic health checks unless explicitly enabled", () => {
+    const client = createClient();
+
+    expect(
+      startCodexComputerUseHealthMonitor({
+        client: client.client,
+        config: computerUseConfig(),
+      }),
+    ).toEqual({ started: false, reason: "health_disabled" });
     expect(client.addCloseHandler).not.toHaveBeenCalled();
   });
 });
@@ -140,10 +156,11 @@ function computerUseConfig(
     liveTestTimeoutMs: 60_000,
     toolCallTimeoutMs: 60_000,
     leaseTimeoutMs: 300_000,
+    healthCheckEnabled: false,
     healthCheckIntervalMinutes: 60,
     pluginCacheMode: "shared",
     fallbackOnFailure: false,
-    autoRepair: true,
+    autoRepair: false,
     pluginName: "computer-use",
     mcpServerName: "computer-use",
     ...overrides,

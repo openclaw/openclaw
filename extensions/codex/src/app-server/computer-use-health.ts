@@ -35,6 +35,9 @@ export function startCodexComputerUseHealthMonitor(params: {
   if (!params.config.enabled) {
     return { started: false, reason: "disabled" };
   }
+  if (!params.config.healthCheckEnabled) {
+    return { started: false, reason: "health_disabled" };
+  }
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);

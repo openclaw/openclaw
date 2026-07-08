@@ -83,6 +83,7 @@ export type CodexComputerUseConfig = {
   liveTestTimeoutMs?: number;
   toolCallTimeoutMs?: number;
   leaseTimeoutMs?: number;
+  healthCheckEnabled?: boolean;
   healthCheckIntervalMinutes?: number;
   pluginCacheMode?: "shared" | "independent";
   fallbackOnFailure?: boolean;
@@ -101,6 +102,7 @@ export type ResolvedCodexComputerUseConfig = {
   liveTestTimeoutMs: number;
   toolCallTimeoutMs: number;
   leaseTimeoutMs: number;
+  healthCheckEnabled: boolean;
   healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
   pluginCacheMode: "shared" | "independent";
   fallbackOnFailure: boolean;
@@ -294,6 +296,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "liveTestTimeoutMs",
   "toolCallTimeoutMs",
   "leaseTimeoutMs",
+  "healthCheckEnabled",
   "healthCheckIntervalMinutes",
   "pluginCacheMode",
   "fallbackOnFailure",
@@ -425,6 +428,7 @@ const codexPluginConfigSchema = z
         liveTestTimeoutMs: z.number().positive().optional(),
         toolCallTimeoutMs: z.number().positive().optional(),
         leaseTimeoutMs: z.number().positive().optional(),
+        healthCheckEnabled: z.boolean().optional(),
         healthCheckIntervalMinutes: codexComputerUseHealthIntervalSchema.optional(),
         pluginCacheMode: codexComputerUsePluginCacheModeSchema.optional(),
         fallbackOnFailure: z.boolean().optional(),
@@ -922,6 +926,11 @@ export function resolveCodexComputerUseConfig(
       config.healthCheckIntervalMinutes ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
   );
+  const healthCheckEnabled =
+    params.overrides?.healthCheckEnabled ??
+    config.healthCheckEnabled ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    false;
   const pluginCacheMode =
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
@@ -936,7 +945,7 @@ export function resolveCodexComputerUseConfig(
     params.overrides?.autoRepair ??
     config.autoRepair ??
     readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
-    true;
+    false;
   const enabled =
     params.overrides?.enabled ??
     config.enabled ??
@@ -950,6 +959,7 @@ export function resolveCodexComputerUseConfig(
     liveTestTimeoutMs,
     toolCallTimeoutMs,
     leaseTimeoutMs,
+    healthCheckEnabled,
     healthCheckIntervalMinutes,
     pluginCacheMode,
     fallbackOnFailure,

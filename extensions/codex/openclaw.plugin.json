@@ -89,6 +89,10 @@
             "minimum": 1,
             "default": 300000
           },
+          "healthCheckEnabled": {
+            "type": "boolean",
+            "default": false
+          },
           "healthCheckIntervalMinutes": {
             "type": "number",
             "enum": [30, 60, 120, 240],
@@ -105,7 +109,7 @@
           },
           "autoRepair": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "marketplaceSource": {
             "type": "string"
@@ -364,9 +368,14 @@
       "help": "Default lifetime for a Computer Use window-scope lease. Active tool calls renew the lease.",
       "advanced": true
     },
+    "computerUse.healthCheckEnabled": {
+      "label": "Periodic Health Checks",
+      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "advanced": true
+    },
     "computerUse.healthCheckIntervalMinutes": {
       "label": "Health Check Interval",
-      "help": "Cadence for periodic Computer Use health checks when Computer Use is enabled.",
+      "help": "Cadence for periodic Computer Use health checks when health checks are enabled.",
       "advanced": true
     },
     "computerUse.pluginCacheMode": {
@@ -381,7 +390,7 @@
     },
     "computerUse.autoRepair": {
       "label": "Auto Repair",
-      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children and retry once.",
+      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {

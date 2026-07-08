@@ -161,7 +161,9 @@ describe("Codex Computer Use setup", () => {
     }));
 
     const status = await readCodexComputerUseStatus({
-      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      pluginConfig: {
+        computerUse: { enabled: true, marketplaceName: "desktop-tools", autoRepair: true },
+      },
       request,
       repairComputerUseMcpChildren,
     });
@@ -187,7 +189,7 @@ describe("Codex Computer Use setup", () => {
     ).toHaveLength(2);
   });
 
-  it("surfaces install, exposure, and live-test layers separately when the live test fails", async () => {
+  it("does not repair stale Computer Use MCP children unless autoRepair is enabled", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
     const repairComputerUseMcpChildren = vi.fn(async () => ({
       attempted: true,
@@ -198,6 +200,34 @@ describe("Codex Computer Use setup", () => {
 
     const status = await readCodexComputerUseStatus({
       pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+      repairComputerUseMcpChildren,
+    });
+
+    expect(status.liveTest).toMatchObject({
+      status: "failed",
+      ok: false,
+      attempts: 2,
+      retried: true,
+      repaired: false,
+    });
+    expect(status.repair).toBeUndefined();
+    expect(repairComputerUseMcpChildren).not.toHaveBeenCalled();
+  });
+
+  it("surfaces install, exposure, and live-test layers separately when the live test fails", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
+    const repairComputerUseMcpChildren = vi.fn(async () => ({
+      attempted: true,
+      killedPids: [],
+      warnings: [],
+      message: "No stale Computer Use MCP children were found.",
+    }));
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: { enabled: true, marketplaceName: "desktop-tools", autoRepair: true },
+      },
       request,
       repairComputerUseMcpChildren,
     });

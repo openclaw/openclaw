@@ -260,10 +260,11 @@ remote install is unsupported, run install with a local source or path:
 | `liveTestTimeoutMs`             | 60000          | Timeout for the `computer-use.list_apps` readiness probe.                      |
 | `toolCallTimeoutMs`             | 60000          | Timeout budget for the real `computer-use.list_apps` MCP tool call.            |
 | `leaseTimeoutMs`                | 300000         | Default timeout used by the shared window-scope Computer Use lease manager.    |
-| `healthCheckIntervalMinutes`    | 60             | Allowed periodic health cadence: 30, 60, 120, or 240 minutes.                  |
+| `healthCheckEnabled`            | false          | Run periodic Computer Use health probes.                                       |
+| `healthCheckIntervalMinutes`    | 60             | Periodic health cadence when health checks are enabled: 30, 60, 120, or 240.   |
 | `pluginCacheMode`               | `shared`       | Refresh a Codex-discoverable cache copy, or use `independent` cache handling.  |
 | `fallbackOnFailure`             | false          | Allow fallback inside the Computer Use setup path instead of failing closed.   |
-| `autoRepair`                    | true           | Repair scoped stale Computer Use MCP children after a failed probe.            |
+| `autoRepair`                    | false          | Repair scoped stale Computer Use MCP children before retrying a failed probe.  |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -277,12 +278,12 @@ values. Adding a new source is an explicit setup operation, so use
 Turn-start auto-install can use a configured `marketplacePath`, because that
 is already a local path on the host.
 
-When Computer Use setup passes for a shared Codex app-server client, OpenClaw
-also starts a per-client periodic health monitor. The monitor runs the same
-`computer-use.list_apps` live probe on the configured cadence, skips
-overlapping checks, clears its timer when the app-server client closes, and
-uses the same scoped stale-child repair/retry path as
-`/codex computer-use status`.
+When `computerUse.healthCheckEnabled` is true and Computer Use setup passes for
+a shared Codex app-server client, OpenClaw starts a per-client periodic health
+monitor. The monitor runs the same `computer-use.list_apps` live probe on the
+configured cadence, skips overlapping checks, and clears its timer when the
+app-server client closes. It uses the same scoped stale-child repair path as
+`/codex computer-use status` only when `computerUse.autoRepair` is also true.
 
 OpenClaw includes a window-scope lease manager for Computer Use coordination.
 The lease is intentionally scoped to a desktop window, not an app and not the
@@ -302,6 +303,7 @@ matching config key is unset:
 | `liveTestTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS`             |
 | `toolCallTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS`             |
 | `leaseTimeoutMs`                | `OPENCLAW_CODEX_COMPUTER_USE_LEASE_TIMEOUT_MS`                 |
+| `healthCheckEnabled`            | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED`             |
 | `healthCheckIntervalMinutes`    | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES`    |
 | `pluginCacheMode`               | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE`                |
 | `fallbackOnFailure`             | `OPENCLAW_CODEX_COMPUTER_USE_FALLBACK_ON_FAILURE`              |

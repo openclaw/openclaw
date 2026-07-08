@@ -2741,11 +2741,20 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
     computerUse.healthCheckIntervalMinutes === 240
       ? computerUse.healthCheckIntervalMinutes
       : 60;
+  const healthCheckLine =
+    computerUse.healthCheckEnabled === true
+      ? `- Periodic Computer Use health checks are enabled with a ${cadence}-minute cadence.`
+      : "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.";
+  const repairLine =
+    computerUse.autoRepair === true
+      ? "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children."
+      : "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.";
   return [
     [
       "- Codex Computer Use is enabled.",
       "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
-      `- Periodic Computer Use health cadence resolves to ${cadence} minutes; stale MCP child repair is limited to SkyComputerUseClient children.`,
+      healthCheckLine,
+      repairLine,
     ].join("\n"),
   ];
 }
