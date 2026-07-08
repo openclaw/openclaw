@@ -16,7 +16,7 @@ export function clampRuntimeAuthRefreshDelayMs(params: {
   return resolveSafeTimeoutDelayMs(params.refreshAt - params.now, { minMs: params.minDelayMs });
 }
 
-// Hard backstop for a single runtime auth refresh. Sits above the OAuth
+// Hard backstop for a single runtime auth refresh. Covers at least the OAuth
 // manager's own call timeout (120s) plus a peer's stale-lock window (180s) so a
 // legitimately slow cross-agent refresh still completes, while any refresh that
 // hangs indefinitely (a provider auth hook, keychain/lock wait, or token
@@ -26,10 +26,11 @@ export function clampRuntimeAuthRefreshDelayMs(params: {
 export const RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS = 300_000;
 
 /**
- * Races a runtime auth refresh against a hard deadline so the caller's promise
- * always settles. On timeout the underlying work is abandoned (it cannot be
- * cancelled) and a descriptive error is thrown; the caller clears any
- * single-flight handle in its own `finally`.
+ * Races a runtime auth operation (refresh, cold-start prep, profile rotation)
+ * against a hard deadline so the caller's promise always settles. On timeout
+ * the underlying work is abandoned (it cannot be cancelled) and a descriptive
+ * error is thrown; the caller clears any single-flight handle in its own
+ * `finally`.
  */
 export async function withRuntimeAuthRefreshDeadline<T>(
   work: Promise<T>,
@@ -46,7 +47,7 @@ export async function withRuntimeAuthRefreshDeadline<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           reject(
-            new Error(`Runtime auth refresh for ${label} exceeded hard deadline (${timeoutMs}ms)`),
+            new Error(`Runtime auth operation for ${label} exceeded hard deadline (${timeoutMs}ms)`),
           );
         }, timeoutMs);
         timer.unref?.();
