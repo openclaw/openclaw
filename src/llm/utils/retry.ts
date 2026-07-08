@@ -5,23 +5,31 @@ function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
 }
 
 const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
+  "\\b(?:HTTP\\s*)?(?:400|401|403|404)\\b",
   "GoUsageLimitError",
   "FreeUsageLimitError",
   "Monthly usage limit reached",
   "available balance",
   "insufficient_quota",
   "out of budget",
+  "invalid[\\s_-]*api[\\s_-]*key",
+  "unauthorized",
+  "forbidden",
+  "permission.?denied",
+  "model.?not.?found",
+  "unsupported.?model",
+  "image.?dimensions",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "overloaded",
   "rate.?limit",
   "too many requests",
-  "429",
-  "500",
-  "502",
-  "503",
-  "504",
+  "\\b429\\b",
+  "\\b500\\b",
+  "\\b502\\b",
+  "\\b503\\b",
+  "\\b504\\b",
   "service.?unavailable",
   "server.?error",
   "internal.?error",
