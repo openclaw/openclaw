@@ -154,11 +154,10 @@ describe("agentLoop continuation guards", () => {
     });
   });
 
-  it("suppresses failure events for control-flow errors carrying the sentinel", async () => {
-    // Control-flow signals like MidTurnPrecheckSignal should not produce
-    // visible error events. handleRunFailure emits clean turn_end + agent_end
-    // lifecycle settlement but skips error-message forwarding for errors
-    // carrying the agent-core.controlFlowError sentinel.
+  it("settles control-flow runs cleanly — no error, no stale tool state, no abandoned stream", async () => {
+    // Control-flow signals like MidTurnPrecheckSignal must settle cleanly:
+    // no error messages, no abandoned streaming state, no stale tool calls,
+    // and a clean terminal lifecycle so callers see coherent event pairs.
     const signalError = new Error(
       "Context overflow: prompt too large for the model (mid-turn precheck).",
     );
@@ -166,6 +165,8 @@ describe("agentLoop continuation guards", () => {
     (signalError as unknown as Record<symbol, unknown>)[Symbol.for("agent-core.controlFlowError")] =
       true;
 
+    // Subscribe to capture the terminal settlement events.
+    const events: Array<{ type: string; stopReason?: string; errorMessage?: string }> = [];
     const agent = new Agent({
       initialState: {
         messages: [{ role: "user", content: "test", timestamp: 1 }],
@@ -175,13 +176,39 @@ describe("agentLoop continuation guards", () => {
         throw signalError;
       },
     });
+    agent.subscribe((event) => {
+      if (event.type === "turn_end") {
+        const msg = event.message as unknown as {
+          stopReason?: string;
+          errorMessage?: string;
+        };
+        events.push({ type: "turn_end", stopReason: msg.stopReason, errorMessage: msg.errorMessage });
+      }
+      if (event.type === "agent_end") {
+        events.push({ type: "agent_end" });
+      }
+    });
 
-    // Must not throw — handleRunFailure settles cleanly for sentinel errors.
+    // Must not throw — handleRunFailure settles via settleControlFlowRun.
     await agent.continue();
-    // No error message leaked to UI-visible state.
-    // Lifecycle events (turn_end + agent_end) are still emitted for callers
-    // that depend on consistent terminal settlement.
+
+    // No error state leaked.
     expect(agent.state.errorMessage).toBeUndefined();
+    // Streaming state cleaned up (no abandoned stream).
+    expect(agent.state.isStreaming).toBe(false);
+    // No stale tool call state.
+    expect(agent.state.pendingToolCalls.size).toBe(0);
+
+    // Terminal lifecycle events emitted with clean settlement.
+    const turnEnds = events.filter((e) => e.type === "turn_end");
+    const agentEnds = events.filter((e) => e.type === "agent_end");
+    expect(turnEnds.length).toBeGreaterThanOrEqual(1);
+    expect(agentEnds.length).toBeGreaterThanOrEqual(1);
+    // Settlement uses stopReason "stop" — not "error" or "toolUse".
+    for (const te of turnEnds) {
+      expect(te.stopReason).toBe("stop");
+      expect(te.errorMessage).toBeUndefined();
+    }
   });
 
   it("still forwards real errors through handleRunFailure", async () => {
