@@ -198,7 +198,13 @@ function isSelfClosingTagRaw(raw: string): boolean {
       break;
     }
   }
-  return !beforeSlash || isAsciiWhitespace(beforeSlash) || !hasAttributeSeparator;
+  return (
+    !beforeSlash ||
+    isAsciiWhitespace(beforeSlash) ||
+    beforeSlash === '"' ||
+    beforeSlash === "'" ||
+    !hasAttributeSeparator
+  );
 }
 
 function readTagToken(html: string, start: number): ReadTagResult | null {
