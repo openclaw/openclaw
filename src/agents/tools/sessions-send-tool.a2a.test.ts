@@ -79,6 +79,10 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     return call;
   }
 
+  function sendMessage(call: CallGatewayOptions): unknown {
+    return (call.params as Record<string, unknown> | undefined)?.message;
+  }
+
   afterEach(() => {
     testing.setDepsForTest();
     vi.restoreAllMocks();
@@ -526,7 +530,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     // requester cron key unresolvable → no pre-ping-pong delivery
     const preSend = gatewayCalls.find(
-      (c) => c.method === "send" && c.params?.message === "Target first reply",
+      (c) => c.method === "send" && sendMessage(c) === "Target first reply",
     );
     expect(preSend).toBeUndefined();
 
@@ -547,7 +551,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     sessionListRows = [
       {
         key: "agent:requester:telegram:user:6278285192",
-        kind: "dm",
+        kind: "direct",
         channel: "telegram",
         lastChannel: "telegram",
         lastTo: "6278285192",
@@ -568,7 +572,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     // pre-ping-pong delivery should use requester session route (Telegram), not target (Discord)
     const primarySend = gatewayCalls.find(
-      (c) => c.method === "send" && c.params?.message === "Target first reply",
+      (c) => c.method === "send" && sendMessage(c) === "Target first reply",
     );
     expect(primarySend).toBeDefined();
     if (primarySend) {
