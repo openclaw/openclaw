@@ -914,6 +914,7 @@ describe("core/doctor/bootstrap-size", () => {
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
         message: expect.stringContaining("AGENTS.md"),
+        fixHint: expect.stringContaining("agents.list[].bootstrapMaxChars"),
       }),
     );
   });

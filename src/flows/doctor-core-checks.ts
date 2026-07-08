@@ -487,7 +487,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
