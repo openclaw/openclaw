@@ -5,6 +5,7 @@ import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const mistralMockState = vi.hoisted(() => ({
+  configs: [] as unknown[],
   payloads: [] as unknown[],
 }));
 
@@ -19,6 +20,10 @@ vi.mock("@mistralai/mistralai", async () => {
   return {
     ...actual,
     Mistral: class MockMistral {
+      constructor(config: unknown) {
+        mistralMockState.configs.push(config);
+      }
+
       chat = {
         stream: vi.fn(async (payload: unknown) => {
           mistralMockState.payloads.push(payload);
@@ -70,6 +75,7 @@ function makeUnreadableParameterTool() {
 
 describe("Mistral provider", () => {
   beforeEach(() => {
+    mistralMockState.configs = [];
     mistralMockState.payloads = [];
   });
 
@@ -87,6 +93,22 @@ describe("Mistral provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect((mistralMockState.payloads[0] as { stop?: unknown }).stop).toEqual(["STOP"]);
+  });
+
+  it("routes the Mistral HTTPClient through the host guarded fetch", async () => {
+    const hostFetch = vi.fn<typeof fetch>(async () => new Response("guarded"));
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+
+    await streamMistral(makeMistralModel(), context, { apiKey: "sentinel-key" }).result();
+
+    const config = mistralMockState.configs[0] as {
+      apiKey?: string;
+      httpClient?: { request(request: Request): Promise<Response> };
+    };
+    expect(config.apiKey).toBe("sentinel-key");
+    const response = await config.httpClient?.request(new Request("https://api.mistral.ai/chat"));
+    expect(await response?.text()).toBe("guarded");
+    expect(hostFetch).toHaveBeenCalledTimes(1);
   });
 
   it("uses reasoning effort for Mistral Medium 3.5", async () => {

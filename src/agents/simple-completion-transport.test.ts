@@ -5,6 +5,8 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createMoonshotThinkingWrapper } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
+import type { StreamFn } from "./runtime/index.js";
 
 const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
@@ -16,6 +18,7 @@ const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
 const prepareGoogleSimpleCompletionModel = vi.fn((model: unknown) => model);
+const pluginStreamFn = vi.fn(() => "plugin-stream-result" as never);
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -62,6 +65,7 @@ describe("prepareModelForSimpleCompletion", () => {
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
+    pluginStreamFn.mockClear();
     wrapProviderSimpleCompletionStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
     createOpenClawTransportStreamFnForModel.mockReset();
@@ -70,7 +74,7 @@ describe("prepareModelForSimpleCompletion", () => {
     resolveTransportAwareSimpleApi.mockReset();
     prepareGoogleSimpleCompletionModel.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
-    resolveProviderStreamFn.mockReturnValue("ollama-stream");
+    resolveProviderStreamFn.mockReturnValue(pluginStreamFn);
     wrapProviderSimpleCompletionStreamFn.mockReturnValue(undefined);
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
     createOpenClawTransportStreamFnForModel.mockReturnValue(undefined);
@@ -142,6 +146,8 @@ describe("prepareModelForSimpleCompletion", () => {
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
+    const secret = "ollama-provider-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:ollama" });
     const model: Model<"ollama"> = {
       id: "llama3",
       name: "Llama 3",
@@ -153,7 +159,7 @@ describe("prepareModelForSimpleCompletion", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 8192,
       maxTokens: 4096,
-      headers: {},
+      headers: { Authorization: `Bearer ${sentinel}` },
     };
     const cfg: OpenClawConfig = {
       models: {
@@ -183,9 +189,58 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(request.config).toBe(cfg);
     expect(request.context?.provider).toBe("ollama");
     expect(request.context?.modelId).toBe("llama3");
-    expect(request.context?.model).toBe(model);
-    expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", "ollama-stream");
+    expect(request.context?.model).toEqual({
+      ...model,
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", expect.any(Function));
+    const registeredStream = ensureCustomApiRegistered.mock.calls[0]?.[1] as StreamFn;
+    void registeredStream(
+      { ...model, headers: { Authorization: `Bearer ${sentinel}` } } as never,
+      {} as never,
+      { apiKey: sentinel, headers: { "X-Managed": `Bearer ${sentinel}` } } as never,
+    );
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
+      {},
+      { apiKey: secret, headers: { "X-Managed": `Bearer ${secret}` } },
+    );
     expect(result).toBe(model);
+  });
+
+  it("unwraps the provider-owned Google transport fallback at its plugin boundary", () => {
+    const secret = JSON.stringify({ token: "google-oauth-token", projectId: "demo" });
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:custom-google" });
+    const googleStream = vi.fn(() => "google-stream-result" as never);
+    resolveProviderStreamFn.mockReturnValue(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValue(googleStream);
+    const model: Model<"google-generative-ai"> = {
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      api: "google-generative-ai" as const,
+      provider: "custom-google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8_192,
+      headers: { Authorization: `Bearer ${sentinel}` },
+    };
+
+    prepareModelForSimpleCompletion({ model });
+
+    expect(createTransportAwareStreamFnForModel).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
+      expect.any(Object),
+    );
+    const registeredStream = ensureCustomApiRegistered.mock.calls[0]?.[1] as StreamFn;
+    void registeredStream(model as never, {} as never, { apiKey: sentinel } as never);
+    expect(googleStream).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
+      {},
+      { apiKey: secret },
+    );
   });
 
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {
