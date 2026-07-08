@@ -481,11 +481,8 @@ export function createHooksRequestHandler(
           });
           const cachedReplay = resolveCachedHookReplay(replayKey, now);
           if (cachedReplay) {
-            sendJson(res, 200, {
-              ok: true,
-              runId: cachedReplay.runId,
-              sessionKey: cachedReplay.sessionKey,
-            });
+            // Fresh mapped-hook responses only carry runId; keep replays identical.
+            sendJson(res, 200, { ok: true, runId: cachedReplay.runId });
             return true;
           }
           // Mappings are external-event-triggered and intentionally non-blocking
@@ -493,11 +490,7 @@ export function createHooksRequestHandler(
           // Pre-allocate the runId and cache it BEFORE awaiting dispatch so a
           // concurrent retry with the same idempotency key hits the cache.
           const preRunId = randomUUID();
-          rememberHookReplay(
-            replayKey,
-            { runId: preRunId, sessionKey: dispatchSessionKey },
-            now,
-          );
+          rememberHookReplay(replayKey, { runId: preRunId, sessionKey: dispatchSessionKey }, now);
           let mappedDispatchResult: Awaited<ReturnType<typeof dispatchAgentHook>>;
           try {
             mappedDispatchResult = await dispatchAgentHook({
