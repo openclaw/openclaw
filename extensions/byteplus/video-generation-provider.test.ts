@@ -5,13 +5,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 // Submit/poll transport is mocked locally so each test can inject the BytePlus task JSON
 // bodies, while readProviderJsonResponse is kept REAL (via importActual) so the byte-bounded
 // reader actually streams and cancels oversized bodies under test instead of a stub.
-const { postJsonRequestMock, fetchWithTimeoutMock, resolveApiKeyForProviderMock } = vi.hoisted(
-  () => ({
-    postJsonRequestMock: vi.fn(),
-    fetchWithTimeoutMock: vi.fn(),
-    resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  }),
-);
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+  resolveApiKeyForProviderMock,
+} = vi.hoisted(() => ({
+  postJsonRequestMock: vi.fn(),
+  fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
+  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
@@ -24,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
   return {
     // REAL byte-bounded JSON reader under test — not stubbed.
     readProviderJsonResponse: actual.readProviderJsonResponse,
+    sanitizeConfiguredModelProviderRequest: actual.sanitizeConfiguredModelProviderRequest,
     postJsonRequest: postJsonRequestMock,
     fetchProviderOperationResponse: async (params: {
       url: string;
@@ -37,7 +42,13 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       timeoutMs?: unknown;
       fetchFn: typeof fetch;
     }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
-    assertOkOrThrowHttpError: async () => {},
+    fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock.mockImplementation(
+      async (url: string, init: RequestInit, timeoutMs: number) => ({
+        response: await fetchWithTimeoutMock(url, init, timeoutMs),
+        release: vi.fn(async () => {}),
+      }),
+    ),
+    assertOkOrThrowHttpError: actual.assertOkOrThrowHttpError,
     createProviderOperationDeadline: ({
       label,
       timeoutMs,
@@ -56,12 +67,26 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       defaultBaseUrl: string;
       allowPrivateNetwork?: boolean;
       defaultHeaders?: Record<string, string>;
-    }) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork === true,
-      headers: new Headers(params.defaultHeaders),
-      dispatcherPolicy: undefined,
-    }),
+      request?: {
+        allowPrivateNetwork?: boolean;
+        headers?: Record<string, string>;
+      };
+    }) => {
+      const mergedHeaders = new Headers(params.defaultHeaders);
+      if (params.request?.headers) {
+        for (const [key, value] of Object.entries(params.request.headers)) {
+          mergedHeaders.set(key, value);
+        }
+      }
+      const allowPrivateNetwork =
+        params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork ?? false;
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork,
+        headers: mergedHeaders,
+        dispatcherPolicy: undefined,
+      };
+    },
     waitProviderOperationPollInterval: async () => {},
   };
 });
@@ -75,6 +100,7 @@ beforeAll(async () => {
 afterEach(() => {
   postJsonRequestMock.mockReset();
   fetchWithTimeoutMock.mockReset();
+  fetchWithTimeoutGuardedMock.mockClear();
   resolveApiKeyForProviderMock.mockClear();
 });
 
@@ -96,10 +122,11 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
         model: params?.model ?? "seedance-1-0-lite-t2v-250428",
       }),
     )
-    .mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/webm" }),
-      arrayBuffer: async () => Buffer.from("webm-bytes"),
-    });
+    .mockResolvedValueOnce(
+      new Response(Buffer.from("webm-bytes"), {
+        headers: new Headers({ "content-type": "video/webm" }),
+      }),
+    );
 }
 
 function requireBytePlusPostRequest(): { body?: Record<string, unknown>; url?: string } {
@@ -213,6 +240,111 @@ describe("byteplus video generation provider", () => {
     expect(video.fileName).toBe("video-1.webm");
     const metadata = result.metadata as Record<string, unknown>;
     expect(metadata.taskId).toBe("task_123");
+  });
+
+  it("applies configured provider request overrides to transport", async () => {
+    mockSuccessfulBytePlusTask();
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-lite-t2v-250428",
+      prompt: "A lantern floats upward into the night sky",
+      cfg: {
+        models: {
+          providers: {
+            byteplus: {
+              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+              models: [],
+              request: {
+                allowPrivateNetwork: true,
+                headers: {
+                  "X-Custom-Header": "custom-value",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    const [postCall] = postJsonRequestMock.mock.calls;
+    if (!postCall) {
+      throw new Error("expected BytePlus video request");
+    }
+    const [postRequest] = postCall as [Record<string, unknown>];
+    expect(postRequest.allowPrivateNetwork).toBe(true);
+    const postHeaders = postRequest.headers as Headers;
+    expect(postHeaders.get("X-Custom-Header")).toBe("custom-value");
+    expect(postHeaders.get("Authorization")).toBe("Bearer provider-key");
+
+    // Status poll and video download must also use the configured private-network policy.
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    const [pollCall, downloadCall] = fetchWithTimeoutGuardedMock.mock.calls;
+    if (!pollCall || !downloadCall) {
+      throw new Error("expected BytePlus guarded poll and download requests");
+    }
+    const pollOptions = pollCall[4] as {
+      ssrfPolicy?: { allowPrivateNetwork?: boolean };
+      auditContext?: string;
+    };
+    expect(pollOptions.ssrfPolicy?.allowPrivateNetwork).toBe(true);
+    expect(pollOptions.auditContext).toBe("byteplus-video-poll");
+    const downloadUrl = downloadCall[0] as string;
+    const downloadOptions = downloadCall[4] as {
+      ssrfPolicy?: { allowPrivateNetwork?: boolean };
+      auditContext?: string;
+    };
+    expect(downloadUrl).toBe("https://example.com/byteplus.mp4");
+    expect(downloadOptions.ssrfPolicy?.allowPrivateNetwork).toBe(true);
+    expect(downloadOptions.auditContext).toBe("byteplus-video-download");
+
+    // Guarded poll/download results must be released to avoid leaking dispatcher connections.
+    const [pollResult, downloadResult] = fetchWithTimeoutGuardedMock.mock.results;
+    if (pollResult?.type === "return") {
+      const { release } = (await pollResult.value) as { release: ReturnType<typeof vi.fn> };
+      expect(release).toHaveBeenCalledTimes(1);
+    }
+    if (downloadResult?.type === "return") {
+      const { release } = (await downloadResult.value) as { release: ReturnType<typeof vi.fn> };
+      expect(release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("releases guarded results when a non-2xx poll/download response is returned", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task_500" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(new Response("BytePlus error", { status: 500 }));
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "guarded error path",
+        cfg: {
+          models: {
+            providers: {
+              byteplus: {
+                baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+                models: [],
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
+    const [pollResult] = fetchWithTimeoutGuardedMock.mock.results;
+    if (pollResult?.type === "return") {
+      const { release } = (await pollResult.value) as { release: ReturnType<typeof vi.fn> };
+      expect(release).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
@@ -343,10 +475,11 @@ describe("byteplus video generation provider", () => {
           duration: 1.5,
         }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({
