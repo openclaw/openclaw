@@ -15,6 +15,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { toErrorObject } from "../../../infra/errors.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
@@ -127,6 +128,36 @@ type SessionFileFingerprint =
     };
 
 export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
+
+// Opt-in diagnostics for session-fence takeovers. A takeover means the session
+// `.jsonl` changed under a released prompt lock in a way the fence cannot explain
+// as an owned in-process write, so the embedded attempt is torn down. The record
+// is emitted on the `session-lock` subsystem at debug level, so enable debug
+// logging (`OPENCLAW_LOG_LEVEL=debug`, `logging.level: "debug"`, or
+// `--log-level debug`) to see which check tripped, the fingerprints involved, and
+// the owned-write history — the context needed to tell a benign concurrent writer
+// from a real external editor.
+const sessionLockLog = createSubsystemLogger("session-lock");
+
+function describeSessionFileFingerprint(
+  fingerprint: SessionFileFingerprint | undefined,
+): Record<string, string | boolean> | null {
+  if (!fingerprint) {
+    return null;
+  }
+  if (!fingerprint.exists) {
+    return { exists: false };
+  }
+  // Fields are bigint; stringify so the diagnostic survives any JSON transport.
+  return {
+    exists: true,
+    dev: fingerprint.dev.toString(),
+    ino: fingerprint.ino.toString(),
+    size: fingerprint.size.toString(),
+    mtimeNs: fingerprint.mtimeNs.toString(),
+    ctimeNs: fingerprint.ctimeNs.toString(),
+  };
+}
 
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -1224,6 +1255,27 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     pruneOwnedSessionFileWriteHistory(sessionFileFenceKey, history);
   }
 
+  // Records a fence takeover and, when session-lock debug logging is enabled,
+  // emits the diagnostic that identifies which check tripped and the file state
+  // that could not be reconciled. Behaviour is unchanged from the bare flag set.
+  function markSessionTakeover(reason: string, current?: SessionFileFingerprint): void {
+    takeoverDetected = true;
+    if (!sessionLockLog.isEnabled("debug")) {
+      return;
+    }
+    const ownedWrites = ownedSessionFileWrites.get(sessionFileFenceKey)?.writes ?? [];
+    sessionLockLog.debug(`embedded session fence takeover: ${reason}`, {
+      reason,
+      sessionFile: params.lockOptions.sessionFile,
+      fenceActive,
+      fenceGeneration,
+      expectedFingerprint: describeSessionFileFingerprint(fenceFingerprint),
+      currentFingerprint: describeSessionFileFingerprint(current),
+      ownedWriteCount: ownedWrites.length,
+      lastOwnedWriteGeneration: ownedWrites.at(-1)?.generation ?? null,
+    });
+  }
+
   function activateFence(generation: number): void {
     fenceActive = true;
     setFenceGeneration(generation);
@@ -1279,7 +1331,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       mergeResult = await params.mergePromptReleasedSessionEntries(change.entries);
     } catch (error) {
-      takeoverDetected = true;
+      markSessionTakeover("prompt-released-merge-callback-error", current);
       throw error;
     }
     const refreshedSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
@@ -1287,7 +1339,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       ? { exists: true as const, ...mergeResult.sessionFileSnapshot }
       : current;
     if (!sameSessionFileFingerprint(expectedFingerprint, refreshedSnapshot.fingerprint)) {
-      takeoverDetected = true;
+      markSessionTakeover(
+        "prompt-released-merge-fingerprint-mismatch",
+        refreshedSnapshot.fingerprint,
+      );
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
     return {
@@ -1313,12 +1368,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       await params.reloadPromptReleasedSessionFile();
     } catch (error) {
-      takeoverDetected = true;
+      markSessionTakeover("prompt-released-reload-callback-error");
       throw error;
     }
     const snapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
     if (!sameSessionFileFingerprint(expectedFingerprint, snapshot.fingerprint)) {
-      takeoverDetected = true;
+      markSessionTakeover("prompt-released-reload-fingerprint-mismatch", snapshot.fingerprint);
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
     return snapshot;
@@ -1369,7 +1424,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return { lock: await acquireLock(), owned: true };
     } catch (err) {
       if (isSessionWriteLockAcquireError(err)) {
-        takeoverDetected = true;
+        markSessionTakeover("write-lock-acquire-error");
       }
       throw err;
     }
@@ -1438,7 +1493,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (unseenOwnedWrites.some((write) => write.requiresReload)) {
         const reloadedSnapshot = await reloadPromptReleasedSessionFile(current);
         if (!reloadedSnapshot) {
-          takeoverDetected = true;
+          markSessionTakeover("owned-write-reload-failed", current);
           throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
         }
         fenceFingerprint = reloadedSnapshot.fingerprint;
@@ -1458,7 +1513,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         expectedPublishedEntries ? { expectedPublishedEntries } : undefined,
       );
       if (params.mergePromptReleasedSessionEntries && !mergedChange) {
-        takeoverDetected = true;
+        markSessionTakeover("owned-write-merge-rejected", current);
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
       const mergedFingerprint = mergedChange?.snapshot.fingerprint ?? current;
@@ -1504,7 +1559,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (changeKind && params.mergePromptReleasedSessionEntries) {
       const mergedChange = await mergePromptReleasedSessionChange(fenceSnapshot, current);
       if (!mergedChange) {
-        takeoverDetected = true;
+        markSessionTakeover("transcript-change-merge-rejected", current);
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
       fenceSnapshot = mergedChange.snapshot;
@@ -1520,7 +1575,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
-    takeoverDetected = true;
+    markSessionTakeover("unexplained-session-file-change", current);
     throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
   }
 
@@ -1570,7 +1625,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       expectedPublishedEntries ? { expectedPublishedEntries } : undefined,
     );
     if (params.mergePromptReleasedSessionEntries && !mergedChange) {
-      takeoverDetected = true;
+      markSessionTakeover("owned-publish-merge-rejected", current);
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
     const publishedEntries = mergedChange
@@ -1729,7 +1784,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return await acquireLock();
     } catch (err) {
       if (isSessionWriteLockAcquireError(err)) {
-        takeoverDetected = true;
+        markSessionTakeover("cleanup-lock-acquire-error");
         return undefined;
       }
       throw err;
