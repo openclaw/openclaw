@@ -9,6 +9,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const {
   postJsonRequestMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+  pollProviderOperationJsonMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -349,6 +351,7 @@ describe("together video generation provider", () => {
   });
 
   it("applies configured request policy to Together video requests", async () => {
+    const dispatcherPolicy = { mode: "env-proxy" as const };
     const request = {
       allowPrivateNetwork: true,
       headers: { "X-Proxy": "enabled" },
@@ -362,8 +365,8 @@ describe("together video generation provider", () => {
         baseUrl: params.baseUrl ?? params.defaultBaseUrl,
         allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
         headers,
-        dispatcherPolicy: undefined,
-      };
+        dispatcherPolicy,
+      } as never;
     });
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({
@@ -407,7 +410,23 @@ describe("together video generation provider", () => {
     );
     const createRequest = requireFirstPostJsonRequest("Together request");
     expect(createRequest.allowPrivateNetwork).toBe(true);
+    expect(createRequest.dispatcherPolicy).toBe(dispatcherPolicy);
     expect(createRequest.headers).toBeInstanceOf(Headers);
     expect((createRequest.headers as Headers).get("x-proxy")).toBe("enabled");
+    expect(pollProviderOperationJsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
+        dispatcherPolicy,
+      }),
+    );
+    const guardedDownloadCall = fetchWithTimeoutGuardedMock.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].endsWith("/together.mp4"),
+    );
+    expect(guardedDownloadCall).toBeDefined();
+    expect(guardedDownloadCall?.[4]).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext: "together-video-download",
+    });
   });
 });

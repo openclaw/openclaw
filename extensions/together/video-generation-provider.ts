@@ -7,7 +7,9 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
   fetchProviderDownloadResponse,
+  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
@@ -37,6 +39,11 @@ const MAX_POLL_ATTEMPTS = 120;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
+
+type TogetherVideoRequestPolicy = {
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
+};
 
 type TogetherVideoResponse = {
   id?: string;
@@ -119,13 +126,15 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
-async function pollTogetherVideo(params: {
-  videoId: string;
-  headers: Headers;
-  timeoutMs?: number;
-  baseUrl: string;
-  fetchFn: typeof fetch;
-}): Promise<TogetherVideoResponse> {
+async function pollTogetherVideo(
+  params: {
+    videoId: string;
+    headers: Headers;
+    timeoutMs?: number;
+    baseUrl: string;
+    fetchFn: typeof fetch;
+  } & TogetherVideoRequestPolicy,
+): Promise<TogetherVideoResponse> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
     label: `Together video generation task ${params.videoId}`,
@@ -140,6 +149,9 @@ async function pollTogetherVideo(params: {
     pollIntervalMs: POLL_INTERVAL_MS,
     requestFailedMessage: "Together video status request failed",
     timeoutMessage: `Together video generation task ${params.videoId} did not finish in time`,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
+    auditContext: "together-video-status",
     isComplete: (payload) => payload.status === "completed",
     getFailureMessage: (payload) =>
       payload.status === "failed"
@@ -148,30 +160,87 @@ async function pollTogetherVideo(params: {
   });
 }
 
-async function downloadTogetherVideo(params: {
-  url: string;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  maxBytes: number;
-}): Promise<GeneratedVideoAsset> {
-  const response = await fetchProviderDownloadResponse({
+async function fetchTogetherVideoDownload(
+  params: {
+    url: string;
+    init: RequestInit;
+    timeoutMs?: ProviderOperationTimeoutMs;
+    fetchFn: typeof fetch;
+  } & TogetherVideoRequestPolicy,
+) {
+  if (!params.allowPrivateNetwork && !params.dispatcherPolicy) {
+    const response = await fetchProviderDownloadResponse({
+      url: params.url,
+      init: params.init,
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      fetchFn: params.fetchFn,
+      provider: "together",
+      requestFailedMessage: "Together generated video download failed",
+    });
+    return {
+      response,
+      release: async () => {},
+    };
+  }
+
+  return await executeProviderOperationWithRetry({
+    provider: "together",
+    stage: "download",
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init,
+        typeof params.timeoutMs === "function"
+          ? params.timeoutMs()
+          : (params.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        params.fetchFn,
+        {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          auditContext: "together-video-download",
+        },
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, "Together generated video download failed");
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+    },
+  });
+}
+
+async function downloadTogetherVideo(
+  params: {
+    url: string;
+    timeoutMs?: ProviderOperationTimeoutMs;
+    fetchFn: typeof fetch;
+    maxBytes: number;
+  } & TogetherVideoRequestPolicy,
+): Promise<GeneratedVideoAsset> {
+  const { response, release } = await fetchTogetherVideoDownload({
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
-    provider: "together",
-    requestFailedMessage: "Together generated video download failed",
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    onOverflow: ({ maxBytes }) =>
-      new Error(`Together generated video download exceeds ${maxBytes} bytes`),
-  });
-  return {
-    buffer,
-    mimeType,
-    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-  };
+  try {
+    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Together generated video download exceeds ${maxBytes} bytes`),
+    });
+    return {
+      buffer,
+      mimeType,
+      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
+    };
+  } finally {
+    await release();
+  }
 }
 
 export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider {
@@ -303,6 +372,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           }),
           baseUrl,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         const videoUrl = extractTogetherVideoUrl(completed);
         if (!videoUrl) {
@@ -316,6 +387,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           }),
           fetchFn,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos: [video],
