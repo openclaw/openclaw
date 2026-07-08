@@ -7,9 +7,12 @@ import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugi
 import { resolveWhatsAppAccount } from "./accounts.js";
 import {
   clearStalePhoneCodePairingAuthIfNeeded,
+  isLinkedWebCredsPayload,
   restoreCredsFromBackupIfNeeded,
+  type WhatsAppWebCredsPayload,
 } from "./auth-store.js";
 import { closeWaSocket, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { resolveComparableIdentity } from "./identity.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection, WHATSAPP_PHONE_CODE_BROWSER } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
@@ -19,6 +22,8 @@ const CLEAR_TERMINAL = "\x1b[2J\x1b[H";
 const MIN_PAIRING_PHONE_DIGITS = 6;
 const MAX_PAIRING_PHONE_DIGITS = 15;
 const PHONE_CODE_PAIRING_WINDOW_MS = 5 * 60_000;
+const STALE_PHONE_CODE_AUTH_NOT_CLEARED_MESSAGE =
+  "Previous WhatsApp phone-code login left partial credentials in this auth directory, but OpenClaw could not safely clear them. Run `openclaw channels logout --channel whatsapp` for managed accounts, or remove the custom auth directory's WhatsApp credentials manually, then retry login.";
 
 type LoginSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
@@ -43,9 +48,38 @@ function formatPairingCode(code: string): string {
   return trimmed.length === 8 ? `${trimmed.slice(0, 4)} ${trimmed.slice(4)}` : trimmed;
 }
 
-function isRegisteredLoginSocket(sock: LoginSocket): boolean {
-  const candidate = sock as unknown as { authState?: { creds?: { registered?: unknown } } };
-  return candidate.authState?.creds?.registered === true;
+function getLoginSocketCredsPayload(sock: LoginSocket): WhatsAppWebCredsPayload | null {
+  const candidate = sock as unknown as { authState?: { creds?: unknown } };
+  const creds = candidate.authState?.creds;
+  return creds && typeof creds === "object" ? (creds as WhatsAppWebCredsPayload) : null;
+}
+
+function isLinkedLoginSocket(sock: LoginSocket): boolean {
+  const creds = getLoginSocketCredsPayload(sock);
+  return Boolean(creds && isLinkedWebCredsPayload(creds));
+}
+
+function assertLinkedLoginSocketMatchesPairingPhoneNumber(
+  sock: LoginSocket,
+  pairingPhoneNumber: string,
+  authDir: string,
+): void {
+  const creds = getLoginSocketCredsPayload(sock);
+  const identity = resolveComparableIdentity(
+    {
+      jid: typeof creds?.me?.id === "string" ? creds.me.id : null,
+      lid: typeof creds?.me?.lid === "string" ? creds.me.lid : null,
+    },
+    authDir,
+  );
+  const linkedPhoneNumber = identity.e164?.replace(/\D/g, "");
+  if (!linkedPhoneNumber || linkedPhoneNumber === pairingPhoneNumber) {
+    return;
+  }
+  const linkedIdentity = identity.e164 ?? identity.jid ?? identity.lid ?? "unknown";
+  throw new Error(
+    `Existing WhatsApp credentials are linked to ${linkedIdentity}, not +${pairingPhoneNumber}. Run ${formatCliCommand("openclaw channels logout --channel whatsapp")} before linking a different phone number.`,
+  );
 }
 
 function createWhatsAppPairingCodeReadySignal(timeoutMs: number): {
@@ -112,6 +146,17 @@ function waitForWhatsAppPairingCodeReady(
 }
 
 type CredentialPersistenceFailure = { error: unknown };
+
+async function clearStalePhoneCodePairingAuthForLogin(params: {
+  authDir: string;
+  isLegacyAuthDir: boolean;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  const result = await clearStalePhoneCodePairingAuthIfNeeded(params);
+  if (result === "stale-not-cleared") {
+    throw new Error(STALE_PHONE_CODE_AUTH_NOT_CLEARED_MESSAGE);
+  }
+}
 
 export async function loginWeb(
   verbose: boolean,
@@ -262,7 +307,7 @@ export async function loginWebWithPhoneCode(
   const cfg = await captureRuntimeConfigAsyncReader()();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
-  await clearStalePhoneCodePairingAuthIfNeeded({
+  await clearStalePhoneCodePairingAuthForLogin({
     authDir: account.authDir,
     isLegacyAuthDir: account.isLegacyAuthDir,
     runtime,
@@ -294,7 +339,7 @@ export async function loginWebWithPhoneCode(
       browser: WHATSAPP_PHONE_CODE_BROWSER,
       beforeCreateLoginSocket: async () => {
         readySignal.reset();
-        await clearStalePhoneCodePairingAuthIfNeeded({
+        await clearStalePhoneCodePairingAuthForLogin({
           authDir: account.authDir,
           isLegacyAuthDir: account.isLegacyAuthDir,
           runtime,
@@ -304,7 +349,12 @@ export async function loginWebWithPhoneCode(
         if (context.reason === "post-pairing") {
           return;
         }
-        if (isRegisteredLoginSocket(loginSock)) {
+        if (isLinkedLoginSocket(loginSock)) {
+          assertLinkedLoginSocketMatchesPairingPhoneNumber(
+            loginSock,
+            pairingPhoneNumber,
+            account.authDir,
+          );
           if (context.reason === "initial") {
             logInfo("Existing WhatsApp credentials found; waiting for connection...", runtime);
           }

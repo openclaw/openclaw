@@ -37,6 +37,10 @@ export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 const authStoreLogger = getChildLogger({ module: "web-auth-store" });
 const emptyWebSelfId = () => ({ e164: null, jid: null, lid: null }) as const;
 export type WhatsAppWebAuthState = "linked" | "not-linked" | "unstable";
+export type WhatsAppStalePhoneCodePairingAuthCleanupResult =
+  | "not-needed"
+  | "cleared"
+  | "stale-not-cleared";
 
 export class WhatsAppAuthUnstableError extends Error {
   readonly code = WHATSAPP_AUTH_UNSTABLE_CODE;
@@ -79,7 +83,7 @@ function isValidJson(raw: string): boolean {
   }
 }
 
-type WhatsAppWebCredsPayload = {
+export type WhatsAppWebCredsPayload = {
   account?: unknown;
   registered?: unknown;
   pairingCode?: unknown;
@@ -108,11 +112,13 @@ function hasUsableWebIdentity(payload: WhatsAppWebCredsPayload): boolean {
   );
 }
 
+export function isLinkedWebCredsPayload(payload: WhatsAppWebCredsPayload): boolean {
+  return hasUsableWebIdentity(payload) && !isPartialPhoneCodePairingCredsPayload(payload);
+}
+
 function isLinkedWebCredsRaw(raw: string): boolean {
   const payload = parseWebCredsPayload(raw);
-  return Boolean(
-    payload && hasUsableWebIdentity(payload) && !isPartialPhoneCodePairingCredsPayload(payload),
-  );
+  return Boolean(payload && isLinkedWebCredsPayload(payload));
 }
 
 function hasSuccessfulPhoneCodePairingMaterial(payload: WhatsAppWebCredsPayload): boolean {
@@ -293,24 +299,25 @@ export async function clearStalePhoneCodePairingAuthIfNeeded(params: {
   authDir: string;
   isLegacyAuthDir: boolean;
   runtime?: RuntimeEnv;
-}): Promise<boolean> {
+}): Promise<WhatsAppStalePhoneCodePairingAuthCleanupResult> {
   const resolvedAuthDir = resolveUserPath(params.authDir);
   const barrierResult = await waitForWebAuthBarrier(
     resolvedAuthDir,
     "clearStalePhoneCodePairingAuthIfNeeded",
   );
   if (barrierResult === "timed_out") {
-    return false;
+    return "not-needed";
   }
   const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
   if (!raw || !isPartialPhoneCodePairingCredsRaw(raw)) {
-    return false;
+    return "not-needed";
   }
-  return await logoutWeb({
+  const cleared = await logoutWeb({
     authDir: resolvedAuthDir,
     isLegacyAuthDir: params.isLegacyAuthDir,
     runtime: params.runtime,
   });
+  return cleared ? "cleared" : "stale-not-cleared";
 }
 
 async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): Promise<boolean> {

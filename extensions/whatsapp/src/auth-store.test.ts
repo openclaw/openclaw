@@ -164,8 +164,30 @@ describe("auth-store", () => {
     await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
     await expect(clearStalePhoneCodePairingAuthIfNeeded({
       authDir, isLegacyAuthDir: false, runtime: createRuntimeSpies(),
-    })).resolves.toBe(true);
+    })).resolves.toBe("cleared");
     expect(fsSync.existsSync(authDir)).toBe(false);
+  });
+
+  it("reports partial phone-code creds that cannot be cleared from a custom auth dir", async () => {
+    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-external-partial");
+    const credsPath = path.join(authDir, "creds.json");
+    fsSync.writeFileSync(
+      credsPath,
+      JSON.stringify({
+        registered: false,
+        pairingCode: "12345678",
+        me: { id: "15551234567@s.whatsapp.net" },
+      }),
+      "utf-8",
+    );
+
+    await expect(
+      clearStalePhoneCodePairingAuthIfNeeded({
+        authDir,
+        isLegacyAuthDir: false,
+      }),
+    ).resolves.toBe("stale-not-cleared");
+    expect(fsSync.existsSync(credsPath)).toBe(true);
   });
 
   it("treats completed phone-code pairing creds as linked", async () => {
@@ -186,7 +208,7 @@ describe("auth-store", () => {
       }) });
       return "drained";
     });
-    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe(false);
+    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe("not-needed");
     expect(fsSync.existsSync(credsPath)).toBe(true);
     await expect(webAuthExists(authDir)).resolves.toBe(true);
   });
