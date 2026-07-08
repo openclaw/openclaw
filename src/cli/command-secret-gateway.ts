@@ -11,6 +11,7 @@ import { callGateway } from "../gateway/call.js";
 import { gatewaySecretInputPathCanWin } from "../gateway/credentials-secret-inputs.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
+  isSupportedGatewaySecretInputPath,
   readGatewaySecretInputValue,
   type SupportedGatewaySecretInputPath,
 } from "../gateway/secret-input-paths.js";
@@ -322,6 +323,32 @@ function targetsRuntimeWebResolution(params: {
     }
   }
   return false;
+}
+
+function collectConfiguredTargetExecRefPaths(params: {
+  config: OpenClawConfig;
+  targetIds: Set<string>;
+  allowedPaths?: ReadonlySet<string>;
+}): string[] {
+  const defaults = params.config.secrets?.defaults;
+  const execRefPaths: string[] = [];
+  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+    params.config,
+    params.targetIds,
+  )) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref?.source === "exec") {
+      execRefPaths.push(target.path);
+    }
+  }
+  return execRefPaths;
 }
 
 function collectConfiguredTargetRefPaths(params: {
@@ -951,6 +978,33 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       resolutionPolicy,
       reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at ${gatewayExecSecretRefCredentialPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`,
     });
+  }
+
+  // Skip the gateway RPC when non-gateway exec SecretRefs (e.g. model-provider
+  // apiKey) are configured.  The gateway's command-path resolution cannot execute
+  // exec providers, so the RPC would always fail with UNAVAILABLE before falling
+  // back locally — pure overhead and noisy log spam.
+  if (configuredTargetRefPaths.size > 0) {
+    const execRefPaths = collectConfiguredTargetExecRefPaths({
+      config: params.config,
+      targetIds: params.targetIds,
+      allowedPaths: params.allowedPaths,
+    });
+    const nonGatewayExecPaths = execRefPaths.filter((p) => !isSupportedGatewaySecretInputPath(p));
+    if (nonGatewayExecPaths.length > 0) {
+      return await resolveCommandSecretRefsWithoutGateway({
+        config: params.config,
+        commandName: params.commandName,
+        targetIds: params.targetIds,
+        preflightDiagnostics: preflight.diagnostics,
+        mode,
+        allowedPaths: params.allowedPaths,
+        forcedActivePaths: params.forcedActivePaths,
+        optionalActivePaths: params.optionalActivePaths,
+        resolutionPolicy,
+        reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because configured secrets use exec SecretRefs at ${nonGatewayExecPaths.join(", ")}; resolved command secrets locally.`,
+      });
+    }
   }
 
   let payload: GatewaySecretsResolveResult;

@@ -623,7 +623,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("keeps local exec SecretRef fallback enabled by default", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -632,15 +631,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       mode: "read_only_status",
     });
 
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(true);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          "memory status: skipped gateway secrets.resolve because configured secrets use exec SecretRefs at talk.providers.acme-speech.apiKey",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -650,6 +655,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       allowLocalExecSecretRefs: false,
     });
 
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(false);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
@@ -665,7 +671,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     ).toBe(true);
     expect(
       result.diagnostics.some((entry) =>
-        entry.includes("attempted local command-secret resolution"),
+        entry.includes(
+          "doctor preview: skipped gateway secrets.resolve because configured secrets use exec SecretRefs at talk.providers.acme-speech.apiKey",
+        ),
       ),
     ).toBe(true);
   });
@@ -746,6 +754,29 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         ).toBe(true);
       },
     );
+  });
+
+  it("skips gateway resolution when non-gateway targets use exec SecretRefs", async () => {
+    const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "reply",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      mode: "read_only_status",
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(await markerExists(markerPath)).toBe(true);
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          "reply: skipped gateway secrets.resolve because configured secrets use exec SecretRefs at talk.providers.acme-speech.apiKey",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
