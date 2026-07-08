@@ -9,6 +9,8 @@ export type GoogleMeetJoinRequest = {
   mode?: GoogleMeetModeInput;
   message?: string;
   requesterSessionKey?: string;
+  /** Agent selected by the calling tool context. */
+  agentId?: string;
   timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;
