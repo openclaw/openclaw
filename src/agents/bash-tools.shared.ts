@@ -133,11 +133,20 @@ export function readEnvInt(key: string, legacyKey?: string) {
   return parseStrictInteger(raw);
 }
 
-/** Splits large output into fixed-size UTF-16 chunks for transport. */
+/** Splits large output into fixed-size chunks for transport, preserving UTF-16 surrogate pairs at chunk boundaries. */
 export function chunkString(input: string, limit = CHUNK_LIMIT) {
   const chunks: string[] = [];
-  for (let i = 0; i < input.length; i += limit) {
-    chunks.push(input.slice(i, i + limit));
+  let i = 0;
+  while (i < input.length) {
+    const chunk = sliceUtf16Safe(input, i, i + limit);
+    if (chunk.length === 0 && limit > 0) {
+      // sliceUtf16Safe backed out completely — force-advance past the
+      // surrogate pair so we don't loop forever on a tiny limit.
+      i += Math.max(2, input.codePointAt(i) !== undefined ? 2 : 1);
+      continue;
+    }
+    chunks.push(chunk);
+    i += chunk.length;
   }
   return chunks;
 }
