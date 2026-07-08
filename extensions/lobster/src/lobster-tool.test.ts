@@ -370,12 +370,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("runs ordinary workflow when schema defaults inject flowExpectedRevision=0", async () => {
-    const run = vi.fn(async () => ({
-      ok: true,
-      stdout: "ok",
-      stderr: "",
-      modifiedFiles: [],
-    }));
     const tool = createLobsterTool(fakeApi(), { runner: { run: vi.fn() } });
     // When the OpenClaw tool schema injects flowExpectedRevision=0 as a
     // default value, ordinary run calls should not be misrouted into
