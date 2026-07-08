@@ -434,24 +434,6 @@ function closeContext(
   }
 }
 
-function closeMatchingContext(
-  stack: RenderContext[],
-  kind: RenderContext["kind"],
-  state: { title?: string },
-): boolean {
-  const top = stack[stack.length - 1];
-  if (!top || top.kind !== kind || stack.length < 2) {
-    return false;
-  }
-  const context = stack.pop();
-  const parent = stack[stack.length - 1];
-  if (!context || !parent) {
-    return false;
-  }
-  closeContext(context, parent, state);
-  return true;
-}
-
 function closeTopContext(stack: RenderContext[], state: { title?: string }): boolean {
   if (stack.length < 2) {
     return false;
@@ -512,8 +494,7 @@ function closeRawTextTagEnd(html: string, tagName: string, contentStart: number)
   let closeStart = html.indexOf("</", contentStart);
   while (closeStart !== -1) {
     if (startsWithClosingTag(html, closeStart, tagName)) {
-      const closeNameEnd = closeStart + tagName.length + 2;
-      const closeEnd = html.indexOf(">", closeNameEnd);
+      const closeEnd = findTagEnd(html, closeStart).end;
       return closeEnd === -1 ? html.length : closeEnd + 1;
     }
     closeStart = html.indexOf("</", closeStart + 2);
@@ -575,9 +556,9 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       } else if (token.name === "a") {
         closeThroughContext(stack, "anchor", state);
       } else if (/^h[1-6]$/.test(token.name)) {
-        closeMatchingContext(stack, "heading", state);
+        closeThroughContext(stack, "heading", state);
       } else if (token.name === "li") {
-        closeMatchingContext(stack, "list-item", state);
+        closeThroughContext(stack, "list-item", state);
       } else if (BLOCK_BREAK_TAGS.has(token.name)) {
         appendText(stack, "\n");
       }

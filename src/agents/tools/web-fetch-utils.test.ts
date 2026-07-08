@@ -232,6 +232,15 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     );
   });
 
+  it("closes heading and list contexts through nested anchors", () => {
+    expect(htmlToMarkdown(`<h1>Head <a href=/x>link</h1><p>Body one.</p>`).text).toBe(
+      "# Head [link](/x)\nBody one.",
+    );
+    expect(htmlToMarkdown(`<li>Item <a href=/x>link</li><p>Body</p>`).text).toBe(
+      "- Item [link](/x)Body",
+    );
+  });
+
   it("uses the title as fallback content when an HTML shell has no body text", async () => {
     await expect(
       extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),
@@ -268,6 +277,15 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
 
     expect(rendered.text).toBe("");
     expect(rendered.text).not.toContain("IGNORE PREVIOUS INSTRUCTIONS");
+  });
+
+  it("does not leak raw-text closing tags with quoted attributes", () => {
+    const rendered = htmlToMarkdown(
+      `<p>Visible</p><script>x</script a=">INJECTED PROMPT"><p>After</p>`,
+    );
+
+    expect(rendered.text).toBe("Visible\nAfter");
+    expect(rendered.text).not.toContain("INJECTED PROMPT");
   });
 
   it("consumes repeated invalid tags before a later close bracket in one span", () => {
