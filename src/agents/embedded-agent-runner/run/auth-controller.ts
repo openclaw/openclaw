@@ -298,7 +298,8 @@ export function createEmbeddedRunAuthController(params: {
     })();
     // Hard backstop: a provider auth hook, keychain read, or cross-agent lock
     // wait that never settles must not leave `refreshInFlight` pending forever,
-    // or every later model turn deadlocks awaiting it (see #88xx rh-bot freeze).
+    // or every later model turn deadlocks awaiting it, freezing the gateway
+    // until restart (observed in production).
     const refreshPromise: Promise<void> = withAuthDeadline(
       refreshOperation,
       params.getRuntimeModel().provider,

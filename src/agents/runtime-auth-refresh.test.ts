@@ -40,7 +40,7 @@ describe("withRuntimeAuthRefreshDeadline", () => {
     const hung = new Promise<string>(() => {});
     const raced = withRuntimeAuthRefreshDeadline(hung, 1_000, "openai");
     const assertion = expect(raced).rejects.toThrow(
-      /Runtime auth refresh for openai exceeded hard deadline \(1000ms\)/,
+      /Runtime auth operation for openai exceeded hard deadline \(1000ms\)/,
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -68,7 +68,7 @@ describe("withRuntimeAuthRefreshDeadline", () => {
     );
   });
 
-  it("keeps the default hard timeout above the OAuth manager call + stale-lock budget", () => {
+  it("keeps the default hard timeout at or above the OAuth manager call + stale-lock budget", () => {
     // OAuth manager: 120s call timeout + 180s peer stale-lock window.
     expect(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000 + 180_000);
   });
