@@ -109,6 +109,25 @@ function startsWithClosingTag(html: string, start: number, tagName: string): boo
   return isTagBoundary(html[start + 2 + tagName.length]);
 }
 
+function readRawTextOpenTagName(html: string, start: number): string | undefined {
+  if (html[start] !== "<" || html[start + 1] === "/") {
+    return undefined;
+  }
+  for (const tagName of RAW_TEXT_TAGS) {
+    let matches = true;
+    for (let offset = 0; offset < tagName.length; offset += 1) {
+      if (asciiLower(html[start + 1 + offset] ?? "") !== tagName[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches && isTagBoundary(html[start + 1 + tagName.length])) {
+      return tagName;
+    }
+  }
+  return undefined;
+}
+
 function findTagEnd(html: string, start: number): number {
   let quote: string | null = null;
   for (let i = start + 1; i < html.length; i += 1) {
@@ -194,7 +213,10 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
       pos += 1;
     }
     if (pos === attrStart) {
-      break;
+      while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
+        pos += 1;
+      }
+      continue;
     }
     const attrName = rawTag.slice(attrStart, pos).toLowerCase();
     while (pos < rawTag.length && isAsciiWhitespace(rawTag[pos])) {
@@ -321,6 +343,12 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       const end = nextTag === -1 ? html.length : nextTag;
       appendText(stack, decodeEntities(html.slice(i, end)));
       i = end;
+      continue;
+    }
+
+    const rawTextTagName = readRawTextOpenTagName(html, i);
+    if (rawTextTagName) {
+      i = closeRawTextTagEnd(html, rawTextTagName, i + rawTextTagName.length + 1);
       continue;
     }
 

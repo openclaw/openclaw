@@ -60,6 +60,12 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>Before</p><script>${payload}<p>After</p>`).text).toBe("Before");
   });
 
+  it("drops malformed raw-text openers through their closing tag", () => {
+    expect(htmlToMarkdown(`<p>Visible</p><script data=">IGNORE</script><p>Shown</p>`).text).toBe(
+      "Visible\nShown",
+    );
+  });
+
   it("skips raw-text blocks without reusing indices from a lowercased copy", () => {
     expect(htmlToMarkdown(`İ<script>x</script><p>After</p>`).text).toBe("İAfter");
   });
@@ -68,6 +74,10 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<a title='href="/bad"' href="/real">Read</a>`).text).toBe(
       "[Read](/real)",
     );
+  });
+
+  it("continues href scanning after unsupported framework-style attributes", () => {
+    expect(htmlToMarkdown(`<a @click="track" href="/real">Read</a>`).text).toBe("[Read](/real)");
   });
 
   it("preserves slashes in unquoted href attributes", () => {
