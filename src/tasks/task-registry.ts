@@ -2407,6 +2407,17 @@ export async function cancelTaskById(params: {
   }
 }
 
+/**
+ * Returns all task records without sorting or the insertion-index bookkeeping
+ * that listTaskRecords() adds for the createdAt sort. Callers that need a
+ * different ordering (e.g. by last activity) should use this to avoid the
+ * wasted O(n log n) sort when the caller re-sorts anyway.
+ */
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  ensureTaskRegistryReady();
+  return [...tasks.values()].map(cloneTaskRecord);
+}
+
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]

@@ -201,6 +201,37 @@ describe("tasks gateway handlers", () => {
     );
   });
 
+  it("pages past the first page of results", async () => {
+    const taskIds: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const task = createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: `run-page-${i}`,
+        task: `Paged task ${i}`,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        lastEventAt: 1_000 + i,
+      });
+      taskIds.push(task.taskId);
+    }
+
+    const page1 = await runTaskHandler("tasks.list", { limit: 4 });
+    expect(page1.calls[0]?.[0]).toBe(true);
+    expect(page1.payload?.tasks).toHaveLength(4);
+    expect(page1.payload?.nextCursor).toBe("4");
+
+    const page2 = await runTaskHandler("tasks.list", { limit: 4, cursor: "4" });
+    expect(page2.payload?.tasks).toHaveLength(4);
+    expect(page2.payload?.nextCursor).toBe("8");
+
+    const page3 = await runTaskHandler("tasks.list", { limit: 4, cursor: "8" });
+    expect(page3.payload?.tasks).toHaveLength(2);
+    expect(page3.payload?.nextCursor).toBeUndefined();
+  });
+
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list
