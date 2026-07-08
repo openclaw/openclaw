@@ -941,15 +941,15 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
         include:
           - name: matrix
+            lane: matrix
             slug: matrix
-          - name: telegram 1/2
-            slug: telegram-1-of-2
-          - name: telegram 2/2
-            slug: telegram-2-of-2
+          - name: crabline
+            lane: crabline
+            slug: crabline
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -959,6 +959,7 @@ jobs:
 
       - name: Run smoke profile shard
         env:
+          SHARD_LANE: ${{ matrix.lane }}
           SHARD_SLUG: ${{ matrix.slug }}
         shell: bash
         run: |
@@ -977,14 +978,9 @@ jobs:
           export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
           SHARD_SCENARIO_IDS_JSON="$(
             node --import tsx --input-type=module <<'EOF'
-          import { createQaSmokeCiMatrix } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
+          import { createQaSmokeCiShard } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
 
-          const shard = createQaSmokeCiMatrix().include.find(
-            (candidate) => candidate.slug === process.env.SHARD_SLUG,
-          );
-          if (!shard) {
-            throw new Error(`unknown QA smoke shard: ${process.env.SHARD_SLUG}`);
-          }
+          const shard = createQaSmokeCiShard(process.env.SHARD_LANE ?? "");
           process.stdout.write(JSON.stringify(shard.scenario_ids));
           EOF
           )"

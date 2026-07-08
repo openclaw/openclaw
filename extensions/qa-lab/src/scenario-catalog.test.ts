@@ -900,10 +900,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("isolates channel baseline silence assertions from shared transport state", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
 
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {
