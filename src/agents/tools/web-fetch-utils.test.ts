@@ -226,6 +226,12 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<a href="/x"><div>Card text</div></a>`).text).toBe("[Card text](/x)");
   });
 
+  it("closes anchors through unclosed nested contexts", () => {
+    expect(htmlToMarkdown(`<a href="/p"><h3>Card</a><p>Body text</p>`).text).toBe(
+      "[Card](/p)Body text",
+    );
+  });
+
   it("uses the title as fallback content when an HTML shell has no body text", async () => {
     await expect(
       extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),

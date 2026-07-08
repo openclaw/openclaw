@@ -573,7 +573,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       if (token.name === "title") {
         closeThroughContext(stack, "title", state);
       } else if (token.name === "a") {
-        closeMatchingContext(stack, "anchor", state);
+        closeThroughContext(stack, "anchor", state);
       } else if (/^h[1-6]$/.test(token.name)) {
         closeMatchingContext(stack, "heading", state);
       } else if (token.name === "li") {
