@@ -3,7 +3,7 @@ import {
   createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
-  writeCronJobs,
+  writeCronStoreSnapshot,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { list, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -24,7 +24,7 @@ describe("cron service ops: disable + list round-trip", () => {
       payload: { kind: "agentTurn", message: "ping" },
       state: { nextRunAtMs: scheduledAt },
     });
-    await writeCronJobs(store.storePath, [job]);
+    await writeCronStoreSnapshot(store.storePath, [job]);
 
     const state = createCronServiceState({
       cronEnabled: true,
