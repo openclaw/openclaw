@@ -6,8 +6,10 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -38,6 +40,11 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
+
+type RunwayVideoRequestPolicy = {
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
+};
 
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -269,82 +276,180 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
   };
 }
 
-async function pollRunwayTask(params: {
-  taskId: string;
-  headers: Headers;
-  timeoutMs?: number;
-  baseUrl: string;
-  fetchFn: typeof fetch;
-}): Promise<RunwayTaskDetailResponse> {
+async function pollRunwayTask(
+  params: {
+    taskId: string;
+    headers: Headers;
+    timeoutMs?: number;
+    baseUrl: string;
+    fetchFn: typeof fetch;
+  } & RunwayVideoRequestPolicy,
+): Promise<RunwayTaskDetailResponse> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
     label: `Runway video generation task ${params.taskId}`,
   });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+  });
+  const guardedOptions =
+    !params.allowPrivateNetwork && !params.dispatcherPolicy
+      ? undefined
+      : {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          auditContext: "runway-video-status",
+        };
+  const taskUrl = `${params.baseUrl}/v1/tasks/${params.taskId}`;
+  const taskInit = {
+    method: "GET",
+    headers: params.headers,
+  };
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchProviderOperationResponse({
-      stage: "poll",
-      url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
-      fetchFn: params.fetchFn,
-      provider: "runway",
-      requestFailedMessage: "Runway video status request failed",
-    });
-    const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
-      response,
-      "Runway video status request failed",
-    );
-    const status = readRunwayTaskStatus(payload);
-    switch (status) {
-      case "SUCCEEDED":
-        return payload;
-      case "FAILED":
-      case "CANCELLED":
-        throw new Error(
-          readRunwayFailureMessage(payload.failure) ||
-            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
+    const { response, release } = guardedOptions
+      ? await executeProviderOperationWithRetry({
+          provider: "runway",
+          stage: "poll",
+          operation: async () => {
+            const result = await fetchWithTimeoutGuarded(
+              taskUrl,
+              taskInit,
+              typeof timeoutMs === "function" ? timeoutMs() : timeoutMs,
+              params.fetchFn,
+              guardedOptions,
+            );
+            try {
+              await assertOkOrThrowHttpError(result.response, "Runway video status request failed");
+              return result;
+            } catch (error) {
+              await result.release();
+              throw error;
+            }
+          },
+        })
+      : {
+          response: await fetchProviderOperationResponse({
+            stage: "poll",
+            url: taskUrl,
+            init: taskInit,
+            timeoutMs,
+            fetchFn: params.fetchFn,
+            provider: "runway",
+            requestFailedMessage: "Runway video status request failed",
+          }),
+          release: async () => {},
+        };
+    try {
+      const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
+        response,
+        "Runway video status request failed",
+      );
+      const status = readRunwayTaskStatus(payload);
+      switch (status) {
+        case "SUCCEEDED":
+          return payload;
+        case "FAILED":
+        case "CANCELLED":
+          throw new Error(
+            readRunwayFailureMessage(payload.failure) ||
+              `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
+          );
+        default:
+          await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
+          break;
+      }
+    } finally {
+      await release();
     }
   }
   throw new Error(`Runway video generation task ${params.taskId} did not finish in time`);
 }
 
-async function downloadRunwayVideos(params: {
-  urls: string[];
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  maxBytes: number;
-}): Promise<GeneratedVideoAsset[]> {
-  const videos: GeneratedVideoAsset[] = [];
-  for (const [index, url] of params.urls.entries()) {
+async function fetchRunwayDownloadResponse(
+  params: {
+    url: string;
+    init: RequestInit;
+    timeoutMs?: ProviderOperationTimeoutMs;
+    fetchFn: typeof fetch;
+  } & RunwayVideoRequestPolicy,
+) {
+  if (!params.allowPrivateNetwork && !params.dispatcherPolicy) {
     const response = await fetchProviderDownloadResponse({
-      url,
-      init: { method: "GET" },
+      url: params.url,
+      init: params.init,
       timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      onOverflow: ({ maxBytes }) =>
-        new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
+    return {
+      response,
+      release: async () => {},
+    };
+  }
+
+  return await executeProviderOperationWithRetry({
+    provider: "runway",
+    stage: "download",
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init,
+        typeof params.timeoutMs === "function"
+          ? params.timeoutMs()
+          : (params.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        params.fetchFn,
+        {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          auditContext: "runway-video-download",
+        },
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, "Runway generated video download failed");
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+    },
+  });
+}
+
+async function downloadRunwayVideos(
+  params: {
+    urls: string[];
+    timeoutMs?: ProviderOperationTimeoutMs;
+    fetchFn: typeof fetch;
+    maxBytes: number;
+  } & RunwayVideoRequestPolicy,
+): Promise<GeneratedVideoAsset[]> {
+  const videos: GeneratedVideoAsset[] = [];
+  for (const [index, url] of params.urls.entries()) {
+    const { response, release } = await fetchRunwayDownloadResponse({
+      url,
+      init: { method: "GET" },
+      timeoutMs: params.timeoutMs,
+      fetchFn: params.fetchFn,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
-    videos.push({
-      buffer,
-      mimeType,
-      fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-      metadata: { sourceUrl: url },
-    });
+    try {
+      const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+      const buffer = await readResponseWithLimit(response, params.maxBytes, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
+      });
+      videos.push({
+        buffer,
+        mimeType,
+        fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
+        metadata: { sourceUrl: url },
+      });
+    } finally {
+      await release();
+    }
   }
   return videos;
 }
@@ -447,6 +552,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           }),
           baseUrl,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         const outputUrls = readRunwayOutputUrls(completed);
         const videos = await downloadRunwayVideos({
@@ -457,6 +564,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           }),
           fetchFn,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos,

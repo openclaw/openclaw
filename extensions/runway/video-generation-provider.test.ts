@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const {
   postJsonRequestMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -223,6 +224,24 @@ describe("runway video generation provider", () => {
     expect(request.dispatcherPolicy).toBe(dispatcherPolicy);
     expect(request.headers).toBeInstanceOf(Headers);
     expect((request.headers as Headers).get("x-runway-policy")).toBe("runway-policy");
+    const guardedCalls = fetchWithTimeoutGuardedMock.mock.calls.filter(
+      (call) => typeof call[0] === "string",
+    );
+    expect(guardedCalls.length).toBeGreaterThanOrEqual(2);
+    const pollCall = guardedCalls.find((call) => String(call[0]).includes("/v1/tasks/task-policy"));
+    const downloadCall = guardedCalls.find((call) => String(call[0]).endsWith("/out.mp4"));
+    expect(pollCall).toBeDefined();
+    expect(downloadCall).toBeDefined();
+    expect(pollCall?.[4]).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext: "runway-video-status",
+    });
+    expect(downloadCall?.[4]).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext: "runway-video-download",
+    });
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
