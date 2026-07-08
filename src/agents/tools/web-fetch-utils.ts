@@ -38,6 +38,12 @@ type HtmlTagToken = {
   selfClosing: boolean;
 };
 
+type ReadTagResult = {
+  token: HtmlTagToken | null;
+  next: number;
+  text?: string;
+};
+
 // Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
 // renderer share one entity contract — the divergent hand-rolled copy here was what truncated astral
 // entities. A single left-to-right pass also avoids double-decoding "&amp;#39;" into "'", because the
@@ -107,7 +113,7 @@ function findTagEnd(html: string, start: number): number {
   return -1;
 }
 
-function readTagToken(html: string, start: number): { token: HtmlTagToken; next: number } | null {
+function readTagToken(html: string, start: number): ReadTagResult | null {
   const end = findTagEnd(html, start);
   if (end === -1) {
     return null;
@@ -127,12 +133,7 @@ function readTagToken(html: string, start: number): { token: HtmlTagToken; next:
 
   if (pos >= end || html[pos] === "!" || html[pos] === "?") {
     return {
-      token: {
-        closing: false,
-        name: "",
-        raw: html.slice(start + 1, end),
-        selfClosing: false,
-      },
+      token: null,
       next: end + 1,
     };
   }
@@ -142,7 +143,11 @@ function readTagToken(html: string, start: number): { token: HtmlTagToken; next:
     pos += 1;
   }
   if (pos === nameStart) {
-    return null;
+    return {
+      token: null,
+      next: end + 1,
+      text: html.slice(start, end + 1),
+    };
   }
 
   const raw = html.slice(start + 1, end);
@@ -289,17 +294,15 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
 
     const read = readTagToken(html, i);
     if (!read) {
-      if (findTagEnd(html, i) === -1) {
-        appendText(stack, decodeEntities(html.slice(i)));
-        break;
-      }
-      appendText(stack, decodeEntities(ch));
-      i += 1;
-      continue;
+      appendText(stack, decodeEntities(html.slice(i)));
+      break;
     }
-    const { token, next } = read;
+    const { token, next, text } = read;
     i = next;
-    if (!token.name) {
+    if (!token) {
+      if (text) {
+        appendText(stack, decodeEntities(text));
+      }
       continue;
     }
 

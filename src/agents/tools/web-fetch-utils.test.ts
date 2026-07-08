@@ -66,6 +66,12 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(payload).text).toBe(payload);
   });
 
+  it("consumes repeated invalid tags before a later close bracket in one span", () => {
+    const payload = `${"<".repeat(20_000)}>`;
+
+    expect(htmlToMarkdown(payload).text).toBe(payload);
+  });
+
   it("truncates without splitting a boundary emoji", () => {
     const prefix = "a".repeat(79);
     const result = truncateText(`${prefix}${grin}tail`, 80);
