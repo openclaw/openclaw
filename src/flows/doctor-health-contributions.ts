@@ -599,7 +599,7 @@ async function runReleaseConfiguredPluginInstallsHealth(
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
-    acknowledgeNonClawHubInstall: ctx.options.acknowledgeNonClawHubInstall === true,
+    acknowledgeNonClawHubInstall: ctx.options?.acknowledgeNonClawHubInstall === true,
     onNonClawHubInstall: confirmNonClawHubRepairInstall,
   });
   if (result.postInstallDoctorResult) {

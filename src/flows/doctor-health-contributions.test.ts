@@ -917,8 +917,10 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.maybeRunConfiguredPluginInstallReleaseStep).toHaveBeenCalledWith({
+      acknowledgeNonClawHubInstall: false,
       cfg: {},
       env: {},
+      onNonClawHubInstall: expect.any(Function),
       touchedVersion: "2026.4.29",
     });
     expect(mocks.note).toHaveBeenCalledWith(
