@@ -633,6 +633,46 @@ function matchesAgentFilter(
   return explicitAgentId === filter;
 }
 
+function matchesBoardFilter(card: WorkboardCard, filter: WorkboardUiState["boardFilter"]): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  const boardId = card.metadata?.automation?.boardId?.trim();
+  if (filter === "none") {
+    return !boardId;
+  }
+  return boardId === filter;
+}
+
+function buildBoardFilterOptions(cards: readonly WorkboardCard[]) {
+  const boardIds = [
+    ...new Set(
+      cards
+        .map((card) => card.metadata?.automation?.boardId?.trim())
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+  const options: WorkboardSelectOption[] = [{ value: "all", label: t("workboard.allBoards") }];
+  if (boardIds.length > 0) {
+    options.push({
+      value: "none",
+      label: t("workboard.boardFilterNone"),
+      description: t("workboard.boardFilterNoneHelp"),
+    });
+  }
+  for (const id of boardIds) {
+    options.push({ value: id, label: id });
+  }
+  return options;
+}
+
+function normalizeActiveBoardFilter(
+  options: readonly WorkboardSelectOption[],
+  filter: WorkboardUiState["boardFilter"],
+): WorkboardUiState["boardFilter"] {
+  return options.some((option) => option.value === filter) ? filter : "all";
+}
+
 function buildConfiguredAgentOptions(
   agentsList: AgentsListResult | null,
 ): WorkboardConfiguredAgentOption[] {
@@ -2609,9 +2649,12 @@ export function renderWorkboard(props: WorkboardProps) {
 
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
+  const boardOptions = buildBoardFilterOptions(state.cards);
+  state.boardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesBoardFilter(card, state.boardFilter))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
         matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
@@ -2652,6 +2695,7 @@ export function renderWorkboard(props: WorkboardProps) {
     state.query.trim() !== "" ||
     state.priorityFilter !== "all" ||
     state.agentFilter !== "all" ||
+    state.boardFilter !== "all" ||
     archivedCardsHidden;
   const showEmptyState = filtered.length === 0 && activeFiltering;
   const autoRefreshEnabled = state.autoRefreshIntervalMs > 0;
@@ -2725,6 +2769,19 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
+            ${boardOptions.length > 1
+              ? renderWorkboardSelect({
+                  value: state.boardFilter,
+                  options: boardOptions.map((o) => ({ ...o, value: o.value })),
+                  label: t("workboard.boardFilter"),
+                  onChange: (value) => {
+                    state.boardFilter = value;
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar",
+                  showLabel: false,
+                })
+              : nothing}
             ${renderWorkboardSelect({
               value: state.agentFilter,
               options: agentSelectOptions,

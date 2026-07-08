@@ -378,6 +378,7 @@ export type WorkboardUiState = {
   query: string;
   priorityFilter: "all" | WorkboardPriority;
   agentFilter: string;
+  boardFilter: string;
   viewPreset: WorkboardViewPresetId;
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
@@ -758,6 +759,7 @@ function createDefaultState(): WorkboardUiState {
     query: "",
     priorityFilter: "all",
     agentFilter: "all",
+    boardFilter: "all",
     viewPreset: "all",
     activeHealthHighlight: null,
     showArchived: false,
