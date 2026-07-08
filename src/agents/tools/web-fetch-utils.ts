@@ -204,6 +204,18 @@ function isSelfClosingTagRaw(raw: string): boolean {
 
 function readTagToken(html: string, start: number): ReadTagResult | null {
   if (html.startsWith("<!--", start)) {
+    if (html[start + 4] === ">") {
+      return {
+        token: null,
+        next: start + 5,
+      };
+    }
+    if (html.startsWith("->", start + 4)) {
+      return {
+        token: null,
+        next: start + 6,
+      };
+    }
     const commentEnd = html.indexOf("-->", start + 4);
     return {
       token: null,

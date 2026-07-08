@@ -113,6 +113,11 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(rendered.text).not.toContain("Ignore previous instructions");
   });
 
+  it("continues after abruptly closed empty comments", () => {
+    expect(htmlToMarkdown(`<p>Before</p><!--><p>After</p>`).text).toBe("Before\nAfter");
+    expect(htmlToMarkdown(`<p>Before</p><!---><p>After</p>`).text).toBe("Before\nAfter");
+  });
+
   it("does not treat underscore tag names as raw-text tags", () => {
     expect(htmlToMarkdown(`<script_template>Visible</script_template><p>After</p>`).text).toBe(
       "VisibleAfter",
