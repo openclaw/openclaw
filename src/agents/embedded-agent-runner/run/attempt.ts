@@ -5952,23 +5952,6 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
-      if (trajectoryRecorder && !trajectoryEndRecorded) {
-        trajectoryRecorder.recordEvent("session.ended", {
-          status:
-            trajectoryTerminalStatus ??
-            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
-          aborted,
-          externalAbort,
-          timedOut,
-          idleTimedOut,
-          timedOutDuringCompaction,
-          timedOutDuringToolExecution,
-          timedOutByRunBudget,
-          promptError: promptError ? formatErrorMessage(promptError) : undefined,
-          terminalError: trajectoryTerminalError,
-        });
-        trajectoryEndRecorded = true;
-      }
       await flushEmbeddedAttemptTrajectoryRecorder({
         runId: params.runId,
         sessionId: params.sessionId,
@@ -6060,6 +6043,26 @@ export async function runEmbeddedAttempt(
         } else {
           await Promise.reject(toErrorObject(cleanupFailure, "Non-Error rejection"));
         }
+      }
+      // Record session.ended after cleanup completes so the timestamp reflects
+      // actual session end including teardown and state persistence.
+      // See: https://github.com/openclaw/openclaw/issues/102014
+      if (trajectoryRecorder && !trajectoryEndRecorded) {
+        trajectoryRecorder.recordEvent("session.ended", {
+          status:
+            trajectoryTerminalStatus ??
+            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
+          aborted,
+          externalAbort,
+          timedOut,
+          idleTimedOut,
+          timedOutDuringCompaction,
+          timedOutDuringToolExecution,
+          timedOutByRunBudget,
+          promptError: promptError ? formatErrorMessage(promptError) : undefined,
+          terminalError: trajectoryTerminalError,
+        });
+        trajectoryEndRecorded = true;
       }
     }
   } finally {
