@@ -107,18 +107,42 @@ const GEN_AI_TOKEN_USAGE_BUCKETS = [
 const GEN_AI_OPERATION_DURATION_BUCKETS = [
   0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
 ];
-// Agent run / harness durations span seconds to ~an hour; the SDK default
-// boundaries top out at 10s, collapsing everything slower into +Inf. Spread
-// resolution across 1s … 1h so p50/p95/p99 stay meaningful for long runs.
+// Preserve the SDK's existing finite boundaries so upgrades do not remove
+// exported bucket series that dashboards or alerts may already reference.
+const OTEL_DEFAULT_HISTOGRAM_BUCKETS = [
+  0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+];
+// Agent run / harness durations routinely exceed the SDK default's 10s ceiling.
+// Extend the existing layout through one hour without changing prior buckets.
 const AGENT_DURATION_MS_BUCKETS = [
-  1000, 2500, 5000, 10000, 15000, 20000, 30000, 45000, 60000, 120000, 180000, 240000, 300000,
-  600000, 900000, 1_800_000, 3_600_000,
+  ...OTEL_DEFAULT_HISTOGRAM_BUCKETS,
+  15000,
+  20000,
+  30000,
+  45000,
+  60000,
+  120000,
+  180000,
+  240000,
+  300000,
+  600000,
+  900000,
+  1_800_000,
+  3_600_000,
 ];
 // openclaw.context.tokens records context window limit/used token counts, which
-// range from a few thousand to >1M for large-context models. Bucket on a token
-// scale so realistic context sizes don't collapse into the +Inf overflow bucket.
+// range from a few thousand to >1M for large-context models. Keep the prior
+// layout and add common context-window sizes above it.
 const CONTEXT_TOKENS_BUCKETS = [
-  1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 200000, 400000, 1_000_000, 2_000_000,
+  ...OTEL_DEFAULT_HISTOGRAM_BUCKETS,
+  16000,
+  32000,
+  64000,
+  128000,
+  200000,
+  400000,
+  1_000_000,
+  2_000_000,
 ];
 const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
 const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;
