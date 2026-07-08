@@ -85,6 +85,9 @@ type PlanSidebarContent = {
   kind: "plan";
   plan: SessionPlanState;
   checklist?: PlanChecklist | null;
+  rawText?: string | null;
+  fullMessageRequest?: SidebarFullMessageRequest;
+  unavailableReason?: DetailUnavailableReason | null;
 };
 
 export type SidebarContent =

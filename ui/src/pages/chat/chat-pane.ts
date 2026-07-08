@@ -1086,7 +1086,7 @@ class ChatPane extends LitElement {
       ? html`<openclaw-goal-editor
           .props=${{
             goal: activeSessionRow?.goal ?? null,
-            busy: state.sending,
+            busy: state.chatSending,
             onSubmit: (command: string) => void state.handleSendChat(command),
             onClose: () => this.closeGoalEditor(),
           }}

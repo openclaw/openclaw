@@ -20,9 +20,9 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageRequest } from "./chat-sidebar.ts";
 
-type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+type FullMessageRequest = NonNullable<SidebarFullMessageRequest>;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {

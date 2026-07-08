@@ -9,8 +9,12 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionGoal, SessionPlanState } from "../../../src/config/sessions/types.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionGoal,
+  SessionPlanState,
+  SessionsListResult,
+} from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 import { resetPlanChecklistStoreForTest, setPlanChecklist } from "./plan-stream-store.ts";
