@@ -43,6 +43,7 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import { renderPlanPanel } from "./plan-panel.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -2244,6 +2245,21 @@ export function renderChatComposer(props: ChatComposerProps) {
               queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
             },
             requestUpdate,
+          })}
+          ${renderPlanPanel({
+            plan: activeSession?.plan,
+            // The live stream:plan checklist is threaded through chat run-state separately; the
+            // panel renders state chip + summary + approve/reject from the session snapshot today.
+            checklist: null,
+            actions:
+              canCompose && props.onGoalCommand
+                ? {
+                    // Approve/keep-planning ride the /plan channel command, which resolves the
+                    // PR-A approval question (no new approval path).
+                    onApprove: () => props.onGoalCommand?.("/plan accept"),
+                    onReject: () => props.onGoalCommand?.("/plan reject"),
+                  }
+                : {},
           })}
         </div>
 

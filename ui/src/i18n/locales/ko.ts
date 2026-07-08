@@ -2037,4 +2037,24 @@ export const ko: TranslationMap = {
       nameRequiredShort: "이름이 필요합니다.",
     },
   },
+  plan: {
+    title: "Plan",
+    checklist: "Plan checklist",
+    empty: "No plan steps yet.",
+    summary: "Plan summary",
+    viewDocument: "View plan document",
+    decision: "Plan decision",
+    approve: "Approve plan",
+    keepPlanning: "Keep planning",
+    progress: "{done}/{total} done",
+    state: {
+      planning: "Planning",
+      awaitingApproval: "Awaiting approval",
+    },
+    step: {
+      pending: "Pending",
+      inProgress: "In progress",
+      completed: "Completed",
+    },
+  },
 };

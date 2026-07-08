@@ -1,0 +1,149 @@
+/* Codex-parity plan-mode side panel. */
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 10px 12px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.plan-panel--pending_approval {
+  border-color: color-mix(in srgb, var(--accent, var(--border)) 55%, transparent);
+}
+
+.plan-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-panel__header-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.plan-panel__title {
+  font-weight: 600;
+}
+
+.plan-panel__chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: color-mix(in srgb, var(--text) 80%, var(--muted));
+}
+
+.plan-panel__chip--pending_approval {
+  background: color-mix(in srgb, var(--accent, var(--muted)) 22%, transparent);
+  color: var(--text);
+}
+
+.plan-panel__progress {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-panel__explanation {
+  margin: 0;
+  color: var(--muted);
+}
+
+.plan-panel__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-panel__step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-panel__step-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.plan-panel__step--completed .plan-panel__step-icon {
+  color: var(--success, #3fb950);
+}
+
+.plan-panel__step--in_progress .plan-panel__step-icon {
+  color: var(--accent, var(--text));
+}
+
+.plan-panel__step--completed .plan-panel__step-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.plan-panel__step-status-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.plan-panel__step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-panel__summary {
+  color: var(--muted);
+}
+
+.plan-panel__summary-body {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plan-panel__doc-button,
+.plan-panel__approve,
+.plan-panel__reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.plan-panel__approve {
+  border-color: color-mix(in srgb, var(--success, #3fb950) 55%, transparent);
+  color: var(--success, #3fb950);
+}
+
+.plan-panel__approve:hover,
+.plan-panel__reject:hover,
+.plan-panel__doc-button:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
