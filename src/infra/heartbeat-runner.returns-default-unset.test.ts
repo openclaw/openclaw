@@ -2035,4 +2035,81 @@ tasks:
       replySpy.mockReset();
     }
   });
+
+  it("does not skip when agent has no heartbeat config but source is cron", async () => {
+    const tmpDir = await createCaseDir("cron-bypass-heartbeat-check");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {},
+        list: [
+          { id: "main", default: true },
+          {
+            id: "ops",
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        ],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+
+    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "cron wake ok" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:test-job",
+        sessionKey,
+        heartbeat: { target: "last" },
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+      expect(res.status).toBe("ran");
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("still skips when global heartbeats are disabled even for cron source", async () => {
+    const { setHeartbeatsEnabled } = await import("./heartbeat-wake.js");
+    setHeartbeatsEnabled(false);
+    try {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: {}, list: [{ id: "main", default: true }] },
+        session: { store: "/tmp/test-disabled-hb.json" },
+      };
+      const res = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:test",
+      });
+      expect(res.status).toBe("skipped");
+      expect((res as { reason?: string }).reason).toBe("disabled");
+    } finally {
+      setHeartbeatsEnabled(true);
+    }
+  });
 });
