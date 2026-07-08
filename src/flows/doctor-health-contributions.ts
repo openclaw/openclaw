@@ -7,6 +7,12 @@ import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import {
+  collectInactiveActiveTranscriptByteGuardWarnings,
+  INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+  INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_FIX_HINT,
+  INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_REQUIREMENT,
+} from "../config/compaction-warnings.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -954,6 +960,27 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
   if (lines.length > 0) {
     note(lines.join("\n"), "Tool result cap");
   }
+}
+
+function collectActiveTranscriptByteGuardFindings(cfg: OpenClawConfig): readonly HealthFinding[] {
+  return collectInactiveActiveTranscriptByteGuardWarnings(cfg).map((warning) => ({
+    checkId: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+    severity: "warning",
+    message: warning.message,
+    path: warning.path,
+    target: "agents.defaults.compaction",
+    requirement: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_REQUIREMENT,
+    fixHint: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_FIX_HINT,
+  }));
+}
+
+async function runActiveTranscriptByteGuardHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const warnings = collectInactiveActiveTranscriptByteGuardWarnings(ctx.cfg);
+  if (warnings.length === 0) {
+    return;
+  }
+  const { note } = await loadNoteModule();
+  note(warnings.map((warning) => `- ${warning.path}: ${warning.message}`).join("\n"), "Compaction");
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -2011,6 +2038,17 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
       },
       run: runToolResultCapHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:active-transcript-byte-guard",
+      label: "Active transcript byte guard",
+      healthChecks: {
+        id: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+        description:
+          "Detect maxActiveTranscriptBytes settings that are inactive without transcript rotation.",
+        detect: async (ctx) => collectActiveTranscriptByteGuardFindings(ctx.cfg),
+      },
+      run: runActiveTranscriptByteGuardHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",

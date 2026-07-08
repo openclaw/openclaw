@@ -53,6 +53,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
+import { collectInactiveActiveTranscriptByteGuardWarnings } from "./compaction-warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -1202,16 +1203,18 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry: registryInfo?.registry,
       })
     : base.config;
+  const warnings: ConfigValidationIssue[] = [
+    ...collectInactiveActiveTranscriptByteGuardWarnings(config),
+  ];
   if (opts.pluginValidation === "skip") {
     return {
       ok: true,
       config,
-      warnings: [],
+      warnings,
     };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 

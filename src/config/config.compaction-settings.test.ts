@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { applyCompactionDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 function materializeCompactionConfig(
   compaction: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"],
@@ -93,5 +94,50 @@ describe("config compaction settings", () => {
     });
 
     expect(compaction?.qualityGuard?.maxRetries).toBe(99);
+  });
+
+  it("warns when active transcript byte guard is inactive without transcript rotation", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual({
+      path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+      message: expect.stringContaining("active-transcript byte guard is inactive"),
+    });
+  });
+
+  it.each([
+    { maxActiveTranscriptBytes: "20mb", truncateAfterCompaction: true },
+    { maxActiveTranscriptBytes: 0 },
+    { maxActiveTranscriptBytes: "0" },
+  ])("does not warn for active or disabled byte guard %#", (compaction) => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            compaction,
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).not.toContainEqual(
+      expect.objectContaining({
+        path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+      }),
+    );
   });
 });

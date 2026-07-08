@@ -1812,6 +1812,98 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("reports inactive active-transcript byte guard as a default doctor lint finding", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/active-transcript-byte-guard",
+    );
+    expect(check).toBeDefined();
+    expect(check).not.toMatchObject({ defaultEnabled: false });
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/active-transcript-byte-guard",
+          path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+          requirement: "requires-truncate-after-compaction",
+          fixHint: expect.stringContaining("truncateAfterCompaction"),
+        }),
+      ],
+    });
+  });
+
+  it("does not report active-transcript byte guard finding when transcript rotation is enabled", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/active-transcript-byte-guard",
+    );
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 1,
+      findings: [],
+    });
+  });
+
+  it("shows inactive active-transcript byte guard in doctor output", async () => {
+    const contribution = requireDoctorContribution("doctor:active-transcript-byte-guard");
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as DoctorContributionRunContext;
+
+    await contribution.run(ctx);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("active-transcript byte guard is inactive"),
+      "Compaction",
+    );
+  });
+
   it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-legacy-plugin-deps-lint-"));
