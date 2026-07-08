@@ -154,10 +154,13 @@ describe("agentLoop continuation guards", () => {
     });
   });
 
-  it("settles control-flow runs cleanly — no error, no stale tool state, no abandoned stream", async () => {
+  it("settles control-flow runs cleanly — no error, no stale tool state, no stale metadata", async () => {
     // Control-flow signals like MidTurnPrecheckSignal must settle cleanly:
     // no error messages, no abandoned streaming state, no stale tool calls,
     // and a clean terminal lifecycle so callers see coherent event pairs.
+    // The settlement must NOT carry stale model/api/provider/usage metadata
+    // from the toolUse turn, which would confuse session replay or liveness
+    // observers during the retry path.
     const signalError = new Error(
       "Context overflow: prompt too large for the model (mid-turn precheck).",
     );
@@ -166,7 +169,13 @@ describe("agentLoop continuation guards", () => {
       true;
 
     // Subscribe to capture the terminal settlement events.
-    const events: Array<{ type: string; stopReason?: string; errorMessage?: string }> = [];
+    const events: Array<{
+      type: string;
+      stopReason?: string;
+      errorMessage?: string;
+      hasModelMeta?: boolean;
+      agentEndMessages?: number;
+    }> = [];
     const agent = new Agent({
       initialState: {
         messages: [{ role: "user", content: "test", timestamp: 1 }],
@@ -181,11 +190,19 @@ describe("agentLoop continuation guards", () => {
         const msg = event.message as unknown as {
           stopReason?: string;
           errorMessage?: string;
+          api?: unknown;
+          provider?: unknown;
+          model?: unknown;
         };
-        events.push({ type: "turn_end", stopReason: msg.stopReason, errorMessage: msg.errorMessage });
+        events.push({
+          type: "turn_end",
+          stopReason: msg.stopReason,
+          errorMessage: msg.errorMessage,
+          hasModelMeta: msg.api !== undefined || msg.provider !== undefined || msg.model !== undefined,
+        });
       }
       if (event.type === "agent_end") {
-        events.push({ type: "agent_end" });
+        events.push({ type: "agent_end", agentEndMessages: event.messages.length });
       }
     });
 
@@ -199,15 +216,22 @@ describe("agentLoop continuation guards", () => {
     // No stale tool call state.
     expect(agent.state.pendingToolCalls.size).toBe(0);
 
-    // Terminal lifecycle events emitted with clean settlement.
+    // Terminal lifecycle events emitted.
     const turnEnds = events.filter((e) => e.type === "turn_end");
     const agentEnds = events.filter((e) => e.type === "agent_end");
     expect(turnEnds.length).toBeGreaterThanOrEqual(1);
     expect(agentEnds.length).toBeGreaterThanOrEqual(1);
+
     // Settlement uses stopReason "stop" — not "error" or "toolUse".
     for (const te of turnEnds) {
       expect(te.stopReason).toBe("stop");
       expect(te.errorMessage).toBeUndefined();
+      // Settlement must NOT carry stale model metadata from the toolUse turn.
+      expect(te.hasModelMeta).toBe(false);
+    }
+    // agent_end carries empty messages — no stale data persisted.
+    for (const ae of agentEnds) {
+      expect(ae.agentEndMessages).toBe(0);
     }
   });
 
