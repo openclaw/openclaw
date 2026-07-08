@@ -581,7 +581,7 @@ describe.concurrent("TUI PTY real backends", () => {
               new Error(`Gateway did not project a safe tool diagnostic (${probedEvents.length})`),
           });
         }
-        await fixture.run.write("\u001b", { delay: false });
+        await fixture.run.write("/stop\r", { delay: false });
         await fixture.run.waitForOutput(
           "run aborted: edit tool validation failed:",
           LOCAL_OUTPUT_TIMEOUT_MS,

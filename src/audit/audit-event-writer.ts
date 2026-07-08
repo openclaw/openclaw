@@ -40,7 +40,7 @@ function resolveAuditEventWriterUrl(currentModuleUrl = import.meta.url): URL {
 
 function resolveSourceWorkerExecArgv(): string[] {
   const require = createRequire(import.meta.url);
-  return [...process.execArgv, "--import", require.resolve("tsx")];
+  return ["--import", require.resolve("tsx")];
 }
 
 /** Start one bounded worker queue. SQLite contention never blocks the agent-event callback. */
