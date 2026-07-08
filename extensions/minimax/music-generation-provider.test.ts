@@ -401,6 +401,10 @@ describe("minimax music generation provider", () => {
   });
 
   it("routes portal music generation through minimax-portal auth and HTTP config", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Music-Policy": "enabled" },
+    };
     mockMusicGenerationResponse({
       task_id: "task-portal",
       audio_url: "https://example.com/portal.mp3",
@@ -422,6 +426,7 @@ describe("minimax music generation provider", () => {
             "minimax-portal": {
               baseUrl: "https://api.minimaxi.com/anthropic",
               models: [],
+              request: requestOverrides,
             },
           },
         },
@@ -434,8 +439,10 @@ describe("minimax music generation provider", () => {
     expect(httpConfigParams.provider).toBe("minimax-portal");
     expect(httpConfigParams.capability).toBe("audio");
     expect(httpConfigParams.transport).toBe("http");
-    expect(mockCallArg(postJsonRequestMock).url).toBe(
-      "https://api.minimaxi.com/v1/music_generation",
-    );
+    expect(httpConfigParams.request).toEqual(requestOverrides);
+    const postParams = mockCallArg(postJsonRequestMock);
+    expect(postParams.allowPrivateNetwork).toBe(true);
+    expect((postParams.headers as Headers).get("x-minimax-music-policy")).toBe("enabled");
+    expect(postParams.url).toBe("https://api.minimaxi.com/v1/music_generation");
   });
 });

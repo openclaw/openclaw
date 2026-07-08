@@ -13,6 +13,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -362,7 +363,6 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxVideoBaseUrl(req.cfg, providerId),
           defaultBaseUrl: DEFAULT_MINIMAX_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
@@ -370,6 +370,9 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
           provider: providerId,
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg.models?.providers?.[providerId]?.request,
+          ),
         });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
       const body: Record<string, unknown> = {

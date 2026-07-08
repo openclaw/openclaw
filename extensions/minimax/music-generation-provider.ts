@@ -14,6 +14,7 @@ import {
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -352,13 +353,15 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
           defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },
           provider: providerId,
           capability: "audio",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg.models?.providers?.[providerId]?.request,
+          ),
         });
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");

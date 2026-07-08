@@ -40,12 +40,24 @@ const minimaxProviderHttpMocks = vi.hoisted(() => ({
   fetchProviderOperationResponseMock: vi.fn(),
   fetchProviderDownloadResponseMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined,
-  })),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => {
+    const request = params.request as
+      | {
+          allowPrivateNetwork?: boolean;
+          headers?: Record<string, string>;
+        }
+      | undefined;
+    const headers = new Headers(params.defaultHeaders);
+    for (const [key, value] of Object.entries(request?.headers ?? {})) {
+      headers.set(key, value);
+    }
+    return {
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: request?.allowPrivateNetwork === true,
+      headers,
+      dispatcherPolicy: undefined,
+    };
+  }),
 }));
 
 function resolveMockProviderTimeoutMs(
@@ -118,6 +130,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
     resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
+    sanitizeConfiguredModelProviderRequest: actual.sanitizeConfiguredModelProviderRequest,
     waitProviderOperationPollInterval: async () => {},
   };
 });

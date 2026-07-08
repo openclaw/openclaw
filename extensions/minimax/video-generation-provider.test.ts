@@ -247,6 +247,10 @@ describe("minimax video generation provider", () => {
   });
 
   it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Video-Policy": "enabled" },
+    };
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({
         task_id: "task-portal",
@@ -283,6 +287,7 @@ describe("minimax video generation provider", () => {
             "minimax-portal": {
               baseUrl: "https://api.minimaxi.com/anthropic",
               models: [],
+              request: requestOverrides,
             },
           },
         },
@@ -295,9 +300,11 @@ describe("minimax video generation provider", () => {
     expect(httpConfigParams.provider).toBe("minimax-portal");
     expect(httpConfigParams.capability).toBe("video");
     expect(httpConfigParams.transport).toBe("http");
-    expect(mockCallArg(postJsonRequestMock).url).toBe(
-      "https://api.minimaxi.com/v1/video_generation",
-    );
+    expect(httpConfigParams.request).toEqual(requestOverrides);
+    const postParams = mockCallArg(postJsonRequestMock);
+    expect(postParams.allowPrivateNetwork).toBe(true);
+    expect((postParams.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+    expect(postParams.url).toBe("https://api.minimaxi.com/v1/video_generation");
     expectMinimaxFetchCall(
       0,
       "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal",
