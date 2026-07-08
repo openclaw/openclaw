@@ -340,6 +340,68 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("keys live OpenRouter video catalog cache by request policy", async () => {
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          data: [{ id: "google/veo-3.1-fast", name: "Veo first policy" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        releasedJson({
+          data: [{ id: "google/veo-3.1-quality", name: "Veo second policy" }],
+        }),
+      );
+
+    const buildCatalogContext = (request: {
+      allowPrivateNetwork?: boolean;
+      headers?: Record<string, string>;
+    }) => ({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request,
+            },
+          },
+        },
+      } as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "resolved-openrouter-key",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "resolved-openrouter-key",
+        mode: "api_key",
+        source: "env",
+      }),
+    });
+
+    const firstRows = await listOpenRouterVideoModelCatalog(
+      buildCatalogContext({
+        allowPrivateNetwork: true,
+        headers: { "X-OpenRouter-Policy": "first" },
+      }),
+    );
+    const secondRows = await listOpenRouterVideoModelCatalog(
+      buildCatalogContext({
+        allowPrivateNetwork: false,
+        headers: { "X-OpenRouter-Policy": "second" },
+      }),
+    );
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(requireFetchCallHeaders(0).get("x-openrouter-policy")).toBe("first");
+    expect(requireFetchCallHeaders(1).get("x-openrouter-policy")).toBe("second");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+    expect(requireFetchGuardOptions(1).ssrfPolicy).toBeUndefined();
+    expect(firstRows?.[0]?.model).toBe("google/veo-3.1-fast");
+    expect(secondRows?.[0]?.model).toBe("google/veo-3.1-quality");
+  });
+
   it("cancels oversized OpenRouter video catalog success bodies", async () => {
     const oversized = releasedOversizedJsonStream();
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(oversized);
