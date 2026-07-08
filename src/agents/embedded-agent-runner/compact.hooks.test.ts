@@ -1587,16 +1587,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("passes allowReentrant:true so overflow-recovery compaction does not block on the self-held lock", async () => {
     acquireSessionWriteLockMock.mockClear();
-    const result = await compactEmbeddedAgentSessionDirect({
-      sessionId: TEST_SESSION_ID,
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: TEST_SESSION_FILE,
-      workspaceDir: TEST_WORKSPACE_DIR,
-      config: {},
-      reason: "overflow",
-      reasonCode: "overflow",
-      abort: new AbortController().signal,
-    });
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs({ config: {} }));
 
     expect(result.ok).toBe(true);
     expect(acquireSessionWriteLockMock).toHaveBeenCalledWith(
