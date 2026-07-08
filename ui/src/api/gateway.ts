@@ -26,6 +26,7 @@ import {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
   loadOrCreateDeviceIdentity,
+  peekStoredDeviceIdentityId,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -329,7 +330,7 @@ type GatewayConnectTimingPhase =
   | "hello"
   | "failed";
 
-export type GatewayConnectTiming = {
+type GatewayConnectTiming = {
   generation: number;
   phase: GatewayConnectTimingPhase;
   durationMs: number;
@@ -476,6 +477,52 @@ async function buildGatewayConnectDevice(params: {
     signedAt: signedAtMs,
     nonce,
   };
+}
+
+// Operator connects only trust stored device tokens that can at least read;
+// weaker tokens go through the pairing upgrade flow instead of silent auth.
+function storedDeviceTokenScopesAllowRead(role: string, scopes: readonly string[]): boolean {
+  return (
+    role !== CONTROL_UI_OPERATOR_ROLE ||
+    scopes.includes("operator.read") ||
+    scopes.includes("operator.write") ||
+    scopes.includes("operator.admin")
+  );
+}
+
+/**
+ * True when the next connect() from this browser would present stored
+ * credentials: an explicit token/password, or a readable stored device token
+ * in a secure context. Render gating only — lets the app paint a connecting
+ * state instead of flashing the login gate while a likely-authenticated first
+ * attempt is in flight. connect() remains the source of truth for auth.
+ */
+export function hasStoredGatewayAuth(params: {
+  gatewayUrl: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  if (params.token?.trim() || params.password?.trim()) {
+    return true;
+  }
+  // Mirrors buildConnectPlan: insecure contexts skip device identity, so a
+  // stored device token would not be presented and must not suppress the gate.
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    return false;
+  }
+  const deviceId = peekStoredDeviceIdentityId();
+  if (!deviceId) {
+    return false;
+  }
+  const storedEntry = loadDeviceAuthToken({
+    deviceId,
+    gatewayUrl: params.gatewayUrl,
+    role: CONTROL_UI_OPERATOR_ROLE,
+  });
+  if (!storedEntry) {
+    return false;
+  }
+  return storedDeviceTokenScopesAllowRead(CONTROL_UI_OPERATOR_ROLE, storedEntry.scopes);
 }
 
 export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): boolean {
@@ -1048,12 +1095,10 @@ export class GatewayBrowserClient {
       gatewayUrl: this.opts.url,
       role: params.role,
     });
-    const storedScopes = storedEntry?.scopes ?? [];
-    const storedTokenCanRead =
-      params.role !== CONTROL_UI_OPERATOR_ROLE ||
-      storedScopes.includes("operator.read") ||
-      storedScopes.includes("operator.write") ||
-      storedScopes.includes("operator.admin");
+    const storedTokenCanRead = storedDeviceTokenScopesAllowRead(
+      params.role,
+      storedEntry?.scopes ?? [],
+    );
     const storedToken = storedTokenCanRead ? storedEntry?.token : undefined;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&

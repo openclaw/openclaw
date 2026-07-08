@@ -569,6 +569,92 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it("rejects outbound attachments that exceed the size cap", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "huge.bin");
+    await fs.writeFile(tmpFile, Buffer.alloc(8 * 1024 * 1024 + 1));
+
+    await expect(
+      containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Photo",
+        attachments: [tmpFile],
+      }),
+    ).rejects.toThrow("exceeds");
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("honors a configured attachment cap above the default", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "configured-large.bin");
+    const fileBytes = 8 * 1024 * 1024 + 1;
+    try {
+      await fs.writeFile(tmpFile, Buffer.alloc(fileBytes));
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        ...bodyStream(JSON.stringify({})),
+      });
+
+      await containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Configured large attachment",
+        attachments: [tmpFile],
+        maxAttachmentBytes: fileBytes,
+      });
+
+      const body = parseFetchBody();
+      expect(body.base64_attachments).toEqual([
+        expect.stringMatching(
+          /^data:application\/octet-stream;filename=configured-large\.bin;base64,/,
+        ),
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("applies the attachment cap to the whole container request", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const firstFile = path.join(tmpDir, "first.bin");
+    const secondFile = path.join(tmpDir, "second.bin");
+    try {
+      await fs.writeFile(firstFile, Buffer.alloc(6));
+      await fs.writeFile(secondFile, Buffer.alloc(6));
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Two attachments",
+          attachments: [firstFile, secondFile],
+          maxAttachmentBytes: 10,
+        }),
+      ).rejects.toThrow("exceeds 4 bytes");
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
 });
 
 describe("containerSendTyping", () => {

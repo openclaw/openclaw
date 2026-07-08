@@ -486,10 +486,10 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
-  // Native /think choices need live-discovery metadata; empty keeps config fallback.
+  // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadModelCatalog({ config: cfg })
+      ? await loadModelCatalog({ config: cfg, readOnly: true })
       : undefined;
   const menu = resolveCommandArgMenu({
     command,

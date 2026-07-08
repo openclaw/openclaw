@@ -658,7 +658,7 @@ function tagPendingCommentaryText(content: TransportContentBlock[]): void {
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
-export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+function resolveAnthropicBaseUrl(baseUrl?: string): string {
   return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
 }
 
@@ -1091,7 +1091,7 @@ function buildAnthropicParams(
       } else {
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
         };
       }
     } else if (options?.thinkingEnabled === false) {
@@ -1178,9 +1178,12 @@ function resolveAnthropicTransportOptions(
     reasoningLevel: reasoning,
     customBudgets: options?.thinkingBudgets,
   });
+  // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
+  // consumers (payload, replay, temperature, tool-choice) see consistent state.
+  const thinkingEnabled = adjusted.thinkingBudget >= 1024;
   resolved.maxTokens = adjusted.maxTokens;
-  resolved.thinkingEnabled = true;
-  resolved.thinkingBudgetTokens = adjusted.thinkingBudget;
+  resolved.thinkingEnabled = thinkingEnabled;
+  resolved.thinkingBudgetTokens = thinkingEnabled ? adjusted.thinkingBudget : undefined;
   return resolved;
 }
 

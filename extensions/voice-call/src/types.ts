@@ -106,6 +106,10 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.assistant-speech"),
+    transcript: z.string(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.speech"),
     transcript: z.string(),
     isFinal: z.boolean(),

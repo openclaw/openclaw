@@ -147,16 +147,6 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
-     the desktop rail toggle makes no sense once the sidebar is a drawer. */
-  .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .sidebar-collapse-toggle {
-    display: none;
-  }
-
   .sidebar,
   .sidebar--collapsed {
     width: 100%;
@@ -255,52 +245,14 @@
   .topnav-shell__actions {
     min-width: 0;
     flex: 1 1 auto;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 10px;
-    align-items: stretch;
+    align-items: center;
   }
 
   .topnav-shell__content {
     display: none;
     width: 100%;
-  }
-
-  .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .topbar-status {
-    gap: 6px;
-    width: auto;
-    flex-wrap: nowrap;
-  }
-
-  .topbar-theme-mode {
-    display: none;
-  }
-
-  .sidebar-mode-switch {
-    display: block;
-  }
-
-  .sidebar-mode-switch .topbar-theme-mode {
-    display: inline-flex;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .topbar-status .pill {
-    padding: 4px 8px;
-    font-size: 12px; /* was 11px */
-    gap: 4px;
-  }
-
-  .topbar-status .pill .mono {
-    display: none;
-  }
-
-  .topbar-status .pill span:nth-child(2) {
-    display: none;
   }
 
   .shell-nav,
@@ -693,12 +645,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
-  .theme-orb__trigger {
-    width: 26px;
-    height: 26px;
-    font-size: 13px;
-  }
 }
 
 /* Small mobile */
@@ -744,17 +690,6 @@
   .btn {
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
-  }
-
-  .topbar-status .pill {
-    padding: 3px 6px;
-    font-size: 12px; /* was 10px */
-  }
-
-  .theme-orb__trigger {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
   }
 }
 

@@ -947,6 +947,8 @@ workspace config:
   `agents.list[].tools.deny` when policy requires those tools to be denied
 - set insecure `gateway.controlUi.*` toggles to `false`
 - set `gateway.mode=local` when policy denies remote gateway mode
+- set reported `gateway.http.endpoints.*.enabled` paths to `false` when policy
+  denies Gateway HTTP API endpoints
 - set reported channel ingress `groupPolicy` paths to `allowlist` when policy
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
@@ -969,7 +971,9 @@ the reported `agents.list[].tools.deny` path.
 
 Scoped channel ingress repairs are skipped when the finding reports inherited
 `channels.defaults.*`, because changing the shared channel default would affect
-more than the scoped policy target.
+more than the scoped policy target. Gateway HTTP URL-fetch allowlist findings
+remain manual because automatic repair cannot choose the correct endpoint URL
+allowlist values.
 
 ```jsonc
 {

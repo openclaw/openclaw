@@ -228,7 +228,7 @@ function isPersistedStringCastType(typeText) {
 /**
  * Collects Kysely/raw SQLite violations from one source file.
  */
-export function collectKyselyGuardrailViolations(content, relativePath) {
+function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
   const violations = [];
@@ -352,7 +352,7 @@ export function collectKyselyGuardrailViolations(content, relativePath) {
 /**
  * Collects Kysely guardrail violations across configured source roots.
  */
-export async function collectKyselyGuardrails() {
+async function collectKyselyGuardrails() {
   const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations = [];
   for (const filePath of files) {

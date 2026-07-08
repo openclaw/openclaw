@@ -76,7 +76,7 @@ export type GitRangeSelection = {
   headRef: string;
 };
 
-export type ParsedPluginReleaseArgs = {
+type ParsedPluginReleaseArgs = {
   selection: string[];
   selectionMode?: PluginReleaseSelectionMode;
   pluginsFlagProvided: boolean;
@@ -98,14 +98,13 @@ function parsePluginNpmDistTagOverride(value: string | undefined): "extended-sta
   throw new Error(`Unknown npm dist-tag override: ${value}. Expected "extended-stable".`);
 }
 
-export type PublishablePluginPackageCandidate<
-  TPackageJson extends PluginPackageJson = PluginPackageJson,
-> = {
-  extensionId: string;
-  packageDir: string;
-  packageJson: TPackageJson;
-  readmeText?: string;
-};
+type PublishablePluginPackageCandidate<TPackageJson extends PluginPackageJson = PluginPackageJson> =
+  {
+    extensionId: string;
+    packageDir: string;
+    packageJson: TPackageJson;
+    readmeText?: string;
+  };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
@@ -402,7 +401,7 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
-export type PublishablePluginPackageFilters = {
+type PublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
   npmDistTag?: "extended-stable";
@@ -654,7 +653,7 @@ function runNpmView(args: string[]): string {
   }
 }
 
-export function resolveNpmLatestVersion(packageName: string): string {
+function resolveNpmLatestVersion(packageName: string): string {
   const raw = runNpmView([packageName, "dist-tags.latest", "--json"]);
   const parsed = JSON.parse(raw) as unknown;
   if (typeof parsed !== "string" || !parsed.trim()) {

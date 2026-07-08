@@ -97,9 +97,9 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 }
 
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
-export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
+const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
   "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
-export const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
+const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
 
 export function buildMatrixToolProgressTaskContent(text: string) {
   return [
@@ -195,14 +195,6 @@ export function buildMatrixReplyArtifact(
     relatesTo: event.relatesTo,
     sender: event.sender,
     ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
-  };
-}
-
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: event.body?.trim().slice(0, 200),
-    eventId: event.eventId,
-    sender: event.sender,
   };
 }
 
@@ -419,7 +411,7 @@ export async function assertNoSutReplyWindow(params: {
   };
 }
 
-export async function runConfigurableTopLevelScenario(params: {
+async function runConfigurableTopLevelScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;

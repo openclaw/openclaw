@@ -258,7 +258,7 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
     : undefined;
 }
 
-function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
+export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);

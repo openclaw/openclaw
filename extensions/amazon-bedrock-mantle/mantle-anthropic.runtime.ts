@@ -210,13 +210,18 @@ export function createMantleAnthropicStreamFn(deps?: {
       reasoning,
       options?.thinkingBudgets,
     );
+    const adaptiveThinking = requiresClaudeMythosAdaptiveThinking(model);
+    const thinkingEnabled = adaptiveThinking || adjusted.thinkingBudget >= 1024;
     return streamFn(model as Model<"anthropic-messages">, context, {
       ...base,
       client: streamClient,
       maxTokens: adjusted.maxTokens,
-      thinkingEnabled: true,
-      ...(requiresClaudeMythosAdaptiveThinking(model) ? { effort: reasoning } : {}),
-      thinkingBudgetTokens: adjusted.thinkingBudget,
+      thinkingEnabled,
+      ...(adaptiveThinking
+        ? { effort: reasoning }
+        : thinkingEnabled
+          ? { thinkingBudgetTokens: adjusted.thinkingBudget }
+          : {}),
     });
   };
 }

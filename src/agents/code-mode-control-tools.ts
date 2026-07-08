@@ -11,7 +11,7 @@ export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 /** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
 /** Hook metadata kind for Code Mode exec tools. */
-export const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
+const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
 /** Hook metadata kind type for Code Mode exec tools. */
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;

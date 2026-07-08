@@ -232,31 +232,7 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
 }));
 
 vi.mock("../../lib/agents/display.ts", () => ({
-  isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
-  resolveChatAvatarRenderUrl: (
-    candidate: string | null | undefined,
-    agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  ) => {
-    const isRenderableControlUiAvatarUrl = (value: string) =>
-      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-      return candidate;
-    }
-    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-        return value;
-      }
-    }
-    return null;
-  },
-  resolveAssistantTextAvatar: (value: string | null | undefined) => {
-    if (!value) {
-      return null;
-    }
-    return value.length <= 3 ? value : null;
-  },
 }));
 
 function renderQueue(params: {
