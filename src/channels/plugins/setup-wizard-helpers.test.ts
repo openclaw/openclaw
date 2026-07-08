@@ -519,6 +519,11 @@ describe("promptSingleChannelToken", () => {
     });
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
+    // Token entry is a credential: masked in terminals, and the Crestodian
+    // chat bridge refuses plain-text secrets based on this flag.
+    for (const call of prompter.text.mock.calls) {
+      expect(call[0]).toMatchObject({ sensitive: true });
+    }
   });
 });
 
