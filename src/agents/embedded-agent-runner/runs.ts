@@ -4,6 +4,7 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
+  expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
@@ -13,6 +14,7 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
@@ -56,6 +58,7 @@ export {
 export type EmbeddedAgentQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
+  | "stale_run"
   | "compacting"
   | "source_reply_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
@@ -87,6 +90,10 @@ type PreparedEmbeddedAgentQueueMessage =
       kind: "embedded_run";
       handle: EmbeddedAgentQueueHandle;
     };
+
+// Paired with REPLY_RUN_STALE_TAKEOVER_MS in the reply registry; src/agents
+// keeps its own constant to avoid importing auto-reply policy into this owner.
+const EMBEDDED_STEER_STALE_CAPTURE_MS = 10 * 60_000;
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -471,6 +478,14 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
+  const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
+  if (
+    typeof activity.lastProgressAgeMs === "number" &&
+    activity.lastProgressAgeMs > EMBEDDED_STEER_STALE_CAPTURE_MS
+  ) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
+  }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
@@ -755,6 +770,19 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  if (
+    params.reason === "stuck_recovery" &&
+    !ACTIVE_EMBEDDED_RUNS.has(params.sessionId) &&
+    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery")
+  ) {
+    // Reply expiry aborts synchronously and clears registry ownership. Let the
+    // command lane observe that abort before recovery decides whether to reset it.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
+    return { aborted: true, drained, forceCleared: false };
+  }
   const aborted = abortEmbeddedAgentRun(params.sessionId);
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =

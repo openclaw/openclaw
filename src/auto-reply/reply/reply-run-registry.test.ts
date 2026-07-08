@@ -18,6 +18,7 @@ import {
   isReplyRunAbortableForSignal,
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  REPLY_RUN_STALE_TAKEOVER_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -847,6 +848,37 @@ describe("reply run registry", () => {
 
     expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
     expect(queueMessage).toHaveBeenCalledWith("hello");
+  });
+
+  it("refuses stale reply-run steering until real activity resumes", () => {
+    vi.useFakeTimers();
+    try {
+      const queueMessage = vi.fn(async () => {});
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        queueMessage,
+      });
+      operation.setPhase("running");
+
+      vi.advanceTimersByTime(REPLY_RUN_STALE_TAKEOVER_MS + 1);
+
+      expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
+      expect(queueMessage).not.toHaveBeenCalled();
+
+      operation.recordActivity();
+
+      expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
+      expect(queueMessage).toHaveBeenCalledWith("fresh");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not queue messages through stopped backends", () => {

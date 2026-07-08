@@ -58,7 +58,6 @@ type ClaudeLiveTurn = {
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
   timeoutTimer: NodeJS.Timeout | null;
-  activeToolTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
   observedStdout: boolean;
   completedToolCallIds: Set<string>;
@@ -109,7 +108,6 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "blocked"; deniedReason: string; reason?: string }
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const CLAUDE_LIVE_ACTIVE_TOOL_PROGRESS_MS = 10_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
@@ -386,10 +384,6 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
   }
-  if (turn.activeToolTimer) {
-    clearInterval(turn.activeToolTimer);
-    turn.activeToolTimer = null;
-  }
 }
 
 function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
@@ -548,31 +542,6 @@ function summarizeClaudeLiveToolInput(input: unknown): DiagnosticToolParamsSumma
   }
 }
 
-function startClaudeLiveActiveToolHeartbeat(turn: ClaudeLiveTurn): void {
-  if (turn.activeToolTimer || turn.activeTools.size === 0) {
-    return;
-  }
-  turn.activeToolTimer = setInterval(() => {
-    if (turn.activeTools.size === 0) {
-      if (turn.activeToolTimer) {
-        clearInterval(turn.activeToolTimer);
-        turn.activeToolTimer = null;
-      }
-      return;
-    }
-    emitClaudeLiveProgress(turn, "cli_live:tool_running");
-  }, CLAUDE_LIVE_ACTIVE_TOOL_PROGRESS_MS);
-  turn.activeToolTimer.unref?.();
-}
-
-function stopClaudeLiveActiveToolHeartbeatIfIdle(turn: ClaudeLiveTurn): void {
-  if (turn.activeTools.size > 0 || !turn.activeToolTimer) {
-    return;
-  }
-  clearInterval(turn.activeToolTimer);
-  turn.activeToolTimer = null;
-}
-
 function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: CliToolUseStartDelta): void {
   if (turn.completedToolCallIds.has(tool.toolCallId) || turn.activeTools.has(tool.toolCallId)) {
     return;
@@ -595,7 +564,6 @@ function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: CliToolUseStartDe
     paramsSummary: summarizeClaudeLiveToolInput(tool.args),
   });
   emitClaudeLiveProgress(turn, "cli_live:tool_started");
-  startClaudeLiveActiveToolHeartbeat(turn);
 }
 
 function markClaudeLiveToolCompleted(
@@ -651,7 +619,6 @@ function markClaudeLiveToolCompleted(
     });
   }
   emitClaudeLiveProgress(turn, "cli_live:tool_result");
-  stopClaudeLiveActiveToolHeartbeatIfIdle(turn);
 }
 
 function markClaudeLiveToolDenied(turn: ClaudeLiveTurn, tool: CliToolUseStartDelta): void {
@@ -1170,7 +1137,6 @@ function createTurn(params: {
     rawChars: 0,
     noOutputTimer: null,
     timeoutTimer: null,
-    activeToolTimer: null,
     activeTools: new Map(),
     observedStdout: false,
     completedToolCallIds: new Set(),

@@ -17,6 +17,7 @@ import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js"
 import {
   onInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
+  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
@@ -66,6 +67,7 @@ type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
 beforeEach(() => {
+  setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
   resetClaudeLiveSessionsForTest();
@@ -2142,7 +2144,7 @@ ${JSON.stringify({
     expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
   });
 
-  it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
+  it("reports Claude live stream progress without timer heartbeats", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
@@ -2250,11 +2252,11 @@ ${JSON.stringify({
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressReason,
-      ).toBe("cli_live:tool_running");
+      ).toBe("cli_live:tool_started");
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressAgeMs,
-      ).toBeLessThan(100);
+      ).toBeGreaterThanOrEqual(10_000);
 
       stdoutListener?.(
         [
