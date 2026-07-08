@@ -67,9 +67,7 @@ describe("xAI OAuth CLI-backend loopback tool surface proof", () => {
         })),
       },
     };
-    // eslint-disable-next-line no-console
     console.log("[xai-oauth-loopback-proof] MCP tools/list response:");
-    // eslint-disable-next-line no-console
     console.log(JSON.stringify(mcpToolsListResponse, null, 2));
 
     expect(names).toContain("x_search");
