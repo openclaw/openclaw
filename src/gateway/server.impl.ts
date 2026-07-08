@@ -1072,6 +1072,7 @@ export async function startGatewayServer(
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       taskUnsub: runtimeState.taskUnsub,
+      goalDriverStop: () => runtimeState.goalDriverStop(),
       chatRunState,
       chatAbortControllers,
       chatQueuedTurns,
@@ -1173,13 +1174,27 @@ export async function startGatewayServer(
     getActiveTaskCount = earlyRuntime.getActiveTaskCount;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
 
-    const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
-      await startupTrace.measure("runtime.post-early-imports", () =>
-        Promise.all([
-          import("./server-runtime-subscriptions.js"),
-          import("./server-runtime-startup-services.js"),
-        ]),
-      );
+    const [
+      { startGatewayEventSubscriptions },
+      { startGatewayRuntimeServices },
+      { startGoalDriverWiring },
+    ] = await startupTrace.measure("runtime.post-early-imports", () =>
+      Promise.all([
+        import("./server-runtime-subscriptions.js"),
+        import("./server-runtime-startup-services.js"),
+        import("./goal-driver-wiring.js"),
+      ]),
+    );
+    // Autonomous goal continuation driver (behind tools.experimental.goalDriver);
+    // undefined when the flag is off, so the turn-completed seam is a no-op.
+    const goalDriverWiring = startGoalDriverWiring({
+      config: cfgAtStart,
+      chatAbortControllers,
+      chatQueuedTurns,
+      broadcast,
+      log,
+    });
+    runtimeState.goalDriverStop = () => goalDriverWiring?.stop();
     const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
         log,
@@ -1193,6 +1208,7 @@ export async function startGatewayServer(
         sessionMessageSubscribers,
         chatAbortControllers,
         restartRecoveryCandidates,
+        ...(goalDriverWiring ? { onGoalTurnCompleted: goalDriverWiring.onTurnCompleted } : {}),
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);

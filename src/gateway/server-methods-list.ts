@@ -67,6 +67,7 @@ export const GATEWAY_EVENTS = [
   "question.pending",
   "question.resolved",
   "question.expired",
+  "goal.updated",
   "terminal.data",
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,

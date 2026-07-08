@@ -42,6 +42,8 @@ export type GatewayServerMutableState = {
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   taskUnsub: (() => void) | null;
+  /** Cancels the goal-driver's pending timers (no-op when the flag is off). */
+  goalDriverStop: () => void;
 };
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
@@ -81,5 +83,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
     taskUnsub: null as (() => void) | null,
+    goalDriverStop: () => {},
   };
 }
