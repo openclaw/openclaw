@@ -60,6 +60,23 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>Before</p><script>${payload}<p>After</p>`).text).toBe("Before");
   });
 
+  it("skips raw-text blocks without reusing indices from a lowercased copy", () => {
+    expect(htmlToMarkdown(`İ<script>x</script><p>After</p>`).text).toBe("İAfter");
+  });
+
+  it("reads href attributes without matching quoted text from another attribute", () => {
+    expect(htmlToMarkdown(`<a title='href="/bad"' href="/real">Read</a>`).text).toBe(
+      "[Read](/real)",
+    );
+  });
+
+  it("preserves slashes in unquoted href attributes", () => {
+    expect(htmlToMarkdown(`<a href=https://example.com/path>Read</a>`).text).toBe(
+      "[Read](https://example.com/path)",
+    );
+    expect(htmlToMarkdown(`<a href=/docs/path>Read</a>`).text).toBe("[Read](/docs/path)");
+  });
+
   it("consumes a malformed tag tail once instead of rescanning every later less-than", () => {
     const payload = `<a href="x>${"<".repeat(20_000)}`;
 

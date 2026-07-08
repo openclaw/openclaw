@@ -92,6 +92,23 @@ function isTagBoundary(value: string | undefined): boolean {
   return !value || isAsciiWhitespace(value) || value === ">" || value === "/";
 }
 
+function asciiLower(value: string): string {
+  const code = value.charCodeAt(0);
+  return code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value;
+}
+
+function startsWithClosingTag(html: string, start: number, tagName: string): boolean {
+  if (html[start] !== "<" || html[start + 1] !== "/") {
+    return false;
+  }
+  for (let offset = 0; offset < tagName.length; offset += 1) {
+    if (asciiLower(html[start + 2 + offset] ?? "") !== tagName[offset]) {
+      return false;
+    }
+  }
+  return isTagBoundary(html[start + 2 + tagName.length]);
+}
+
 function findTagEnd(html: string, start: number): number {
   let quote: string | null = null;
   for (let i = start + 1; i < html.length; i += 1) {
@@ -163,47 +180,63 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
 }
 
 function readAttributeValue(rawTag: string, name: string): string | undefined {
-  const lower = rawTag.toLowerCase();
+  const target = name.toLowerCase();
   let pos = 0;
-  while (pos < lower.length) {
-    const match = lower.indexOf(name, pos);
-    if (match === -1) {
-      return undefined;
-    }
-    const before = match === 0 ? " " : lower[match - 1];
-    const after = lower[match + name.length] ?? "";
-    if (!isTagNameChar(before) && !isTagNameChar(after)) {
-      pos = match + name.length;
-      while (pos < lower.length && isAsciiWhitespace(lower[pos])) {
-        pos += 1;
-      }
-      if (rawTag[pos] !== "=") {
-        continue;
-      }
+  while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
+    pos += 1;
+  }
+  while (pos < rawTag.length) {
+    while (pos < rawTag.length && (isAsciiWhitespace(rawTag[pos]) || rawTag[pos] === "/")) {
       pos += 1;
-      while (pos < lower.length && isAsciiWhitespace(lower[pos])) {
+    }
+    const attrStart = pos;
+    while (pos < rawTag.length && isTagNameChar(rawTag[pos])) {
+      pos += 1;
+    }
+    if (pos === attrStart) {
+      break;
+    }
+    const attrName = rawTag.slice(attrStart, pos).toLowerCase();
+    while (pos < rawTag.length && isAsciiWhitespace(rawTag[pos])) {
+      pos += 1;
+    }
+    let value = "";
+    if (rawTag[pos] === "=") {
+      pos += 1;
+      while (pos < rawTag.length && isAsciiWhitespace(rawTag[pos])) {
         pos += 1;
       }
       const quote = rawTag[pos];
       if (quote === '"' || quote === "'") {
         const valueStart = pos + 1;
         const valueEnd = rawTag.indexOf(quote, valueStart);
-        return valueEnd === -1
-          ? decodeEntities(rawTag.slice(valueStart))
-          : decodeEntities(rawTag.slice(valueStart, valueEnd));
+        if (valueEnd === -1) {
+          value = rawTag.slice(valueStart);
+          pos = rawTag.length;
+        } else {
+          value = rawTag.slice(valueStart, valueEnd);
+          pos = valueEnd + 1;
+        }
+      } else {
+        const valueStart = pos;
+        while (
+          pos < rawTag.length &&
+          !isAsciiWhitespace(rawTag[pos]) &&
+          rawTag[pos] !== '"' &&
+          rawTag[pos] !== "'" &&
+          rawTag[pos] !== "=" &&
+          rawTag[pos] !== "<" &&
+          rawTag[pos] !== ">" &&
+          rawTag[pos] !== "`"
+        ) {
+          pos += 1;
+        }
+        value = rawTag.slice(valueStart, pos);
       }
-      const valueStart = pos;
-      while (
-        pos < rawTag.length &&
-        !isAsciiWhitespace(rawTag[pos]) &&
-        rawTag[pos] !== ">" &&
-        rawTag[pos] !== "/"
-      ) {
-        pos += 1;
-      }
-      return valueStart === pos ? undefined : decodeEntities(rawTag.slice(valueStart, pos));
     }
-    pos = match + name.length;
+    if (attrName === target) {
+      return decodeEntities(value);
+    }
   }
   return undefined;
 }
@@ -263,21 +296,20 @@ function closeMatchingContext(
   return true;
 }
 
-function closeRawTextTagEnd(lowerHtml: string, tagName: string, contentStart: number): number {
-  let closeStart = lowerHtml.indexOf(`</${tagName}`, contentStart);
+function closeRawTextTagEnd(html: string, tagName: string, contentStart: number): number {
+  let closeStart = html.indexOf("</", contentStart);
   while (closeStart !== -1) {
-    const closeNameEnd = closeStart + tagName.length + 2;
-    if (isTagBoundary(lowerHtml[closeNameEnd])) {
-      const closeEnd = lowerHtml.indexOf(">", closeNameEnd);
-      return closeEnd === -1 ? lowerHtml.length : closeEnd + 1;
+    if (startsWithClosingTag(html, closeStart, tagName)) {
+      const closeNameEnd = closeStart + tagName.length + 2;
+      const closeEnd = html.indexOf(">", closeNameEnd);
+      return closeEnd === -1 ? html.length : closeEnd + 1;
     }
-    closeStart = lowerHtml.indexOf(`</${tagName}`, closeNameEnd);
+    closeStart = html.indexOf("</", closeStart + 2);
   }
-  return lowerHtml.length;
+  return html.length;
 }
 
 function htmlFragmentToMarkdown(html: string): { text: string; title?: string } {
-  const lowerHtml = html.toLowerCase();
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
   const state: { title?: string } = {};
@@ -322,7 +354,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
     }
 
     if (RAW_TEXT_TAGS.has(token.name)) {
-      i = closeRawTextTagEnd(lowerHtml, token.name, i);
+      i = closeRawTextTagEnd(html, token.name, i);
       continue;
     }
     if (token.name === "br" || token.name === "hr") {
