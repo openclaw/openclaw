@@ -209,10 +209,12 @@ export function refreshQueuedFollowupSession(params: {
       return;
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
-      run.sessionId = params.nextSessionId!;
-      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
-      if (nextSessionFile) {
-        run.sessionFile = nextSessionFile;
+      if (params.nextSessionId) {
+        run.sessionId = params.nextSessionId;
+        const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+        if (nextSessionFile) {
+          run.sessionFile = nextSessionFile;
+        }
       }
     }
     if (shouldRewriteSelection) {
