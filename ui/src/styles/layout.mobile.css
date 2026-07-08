@@ -105,13 +105,6 @@
     --shell-nav-width: 0px;
   }
 
-  .shell--no-topbar,
-  .shell--nav-collapsed.shell--no-topbar {
-    --shell-topbar-height: 0px;
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-areas: "content";
-  }
-
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     position: fixed;
@@ -157,7 +150,7 @@
 
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
      the desktop rail toggle makes no sense once the sidebar is a drawer. */
-  .topbar-nav-toggle {
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
@@ -304,7 +297,15 @@
     justify-content: center;
   }
 
-  .topbar-nav-toggle {
+  .topnav-shell .dashboard-header {
+    display: none;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 

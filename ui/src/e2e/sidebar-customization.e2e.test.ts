@@ -71,6 +71,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
@@ -159,7 +162,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => searchButton.isVisible()).toBe(true);
       await page.reload();
       await expect
-        .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
+        .poll(() => sidebar.getByRole("button", { name: "Expand sidebar" }).isVisible())
         .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
 
@@ -183,7 +186,23 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
         )
         .toBe(0);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
+
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-drawer-open");
+      await page.setViewportSize({ height: 852, width: 393 });
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
+        )
+        .toBeLessThanOrEqual(0);
+      await captureUiProof(page, "06-mobile-brand.png");
     } finally {
       await context.close();
     }
