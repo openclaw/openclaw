@@ -10,7 +10,11 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { CodexAppServerClient } from "./client.js";
-import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  type CodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexComputerUseConfig,
+} from "./config.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
@@ -106,7 +110,7 @@ function startThreadWithHarness(
       overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
     pluginConfig: effectivePluginConfig,
-    computerUseConfig: effectivePluginConfig.computerUse ?? { enabled: false },
+    computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
     startupAuthProfileId: undefined,
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,

@@ -74,6 +74,39 @@
             "minimum": 1,
             "default": 60000
           },
+          "liveTestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "toolCallTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "leaseTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 300000
+          },
+          "healthCheckIntervalMinutes": {
+            "type": "number",
+            "enum": [30, 60, 120, 240],
+            "default": 60
+          },
+          "pluginCacheMode": {
+            "type": "string",
+            "enum": ["symlink", "independent"],
+            "default": "symlink"
+          },
+          "fallbackOnFailure": {
+            "type": "boolean",
+            "default": false
+          },
+          "autoRepair": {
+            "type": "boolean",
+            "default": true
+          },
           "marketplaceSource": {
             "type": "string"
           },
@@ -314,6 +347,41 @@
     "computerUse.marketplaceDiscoveryTimeoutMs": {
       "label": "Marketplace Discovery Timeout",
       "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
+      "advanced": true
+    },
+    "computerUse.liveTestTimeoutMs": {
+      "label": "Live Test Timeout",
+      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "advanced": true
+    },
+    "computerUse.toolCallTimeoutMs": {
+      "label": "Tool Call Timeout",
+      "help": "Maximum expected time for real Computer Use tool calls such as list_apps before OpenClaw treats the child runtime as stale.",
+      "advanced": true
+    },
+    "computerUse.leaseTimeoutMs": {
+      "label": "Window Lease Timeout",
+      "help": "Default lifetime for a Computer Use window-scope lease. Active tool calls renew the lease.",
+      "advanced": true
+    },
+    "computerUse.healthCheckIntervalMinutes": {
+      "label": "Health Check Interval",
+      "help": "Cadence for periodic Computer Use health checks when Computer Use is enabled.",
+      "advanced": true
+    },
+    "computerUse.pluginCacheMode": {
+      "label": "Plugin Cache Mode",
+      "help": "Use symlink for a shared Codex Computer Use plugin cache or independent for per-runtime copies.",
+      "advanced": true
+    },
+    "computerUse.fallbackOnFailure": {
+      "label": "Fallback On Failure",
+      "help": "When false, Computer Use startup failures stop and report instead of silently falling back inside the Computer Use integration.",
+      "advanced": true
+    },
+    "computerUse.autoRepair": {
+      "label": "Auto Repair",
+      "help": "When true, failed Computer Use live tests repair stale Computer Use MCP children and retry once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {

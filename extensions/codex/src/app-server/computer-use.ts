@@ -2,7 +2,9 @@
  * Computer Use plugin/MCP readiness checks and optional install flow for Codex
  * app-server sessions.
  */
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { promisify } from "node:util";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -26,6 +28,10 @@ import { requestCodexAppServerJson } from "./request.js";
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
+  options?: {
+    timeoutMs?: number;
+    allowComputerUseMcpProbe?: boolean;
+  },
 ) => Promise<T>;
 
 type CodexComputerUseStatusReason =
@@ -35,9 +41,47 @@ type CodexComputerUseStatusReason =
   | "plugin_disabled"
   | "remote_install_unsupported"
   | "mcp_missing"
+  | "live_test_failed"
   | "ready"
   | "check_failed"
   | "auto_install_blocked";
+
+type CodexComputerUseInstallationStatus =
+  | "disabled"
+  | "marketplace_missing"
+  | "not_installed"
+  | "installed_disabled"
+  | "installed";
+
+type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
+
+type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
+
+export type CodexComputerUseStatusSection = {
+  status: string;
+  ok: boolean;
+  message: string;
+};
+
+export type CodexComputerUseLiveTestStatus = {
+  status: CodexComputerUseLiveTestState;
+  ok: boolean;
+  attempted: boolean;
+  attempts: number;
+  timeoutMs: number;
+  retried: boolean;
+  repaired: boolean;
+  message: string;
+  error?: string;
+  durationMs?: number;
+};
+
+export type CodexComputerUseRepairStatus = {
+  attempted: boolean;
+  killedPids: number[];
+  message: string;
+  warnings: string[];
+};
 
 /** Readiness status for Codex Computer Use plugin and MCP server wiring. */
 export type CodexComputerUseStatus = {
@@ -52,6 +96,15 @@ export type CodexComputerUseStatus = {
   marketplaceName?: string;
   marketplacePath?: string;
   tools: string[];
+  installation: CodexComputerUseStatusSection & {
+    status: CodexComputerUseInstallationStatus;
+  };
+  exposure: CodexComputerUseStatusSection & {
+    status: CodexComputerUseExposureStatus;
+  };
+  liveTest: CodexComputerUseLiveTestStatus;
+  repair?: CodexComputerUseRepairStatus;
+  warnings: string[];
   message: string;
 };
 
@@ -75,6 +128,7 @@ export type CodexComputerUseSetupParams = {
   signal?: AbortSignal;
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
+  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 };
 
 type MarketplaceRef =
@@ -108,6 +162,8 @@ const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
 const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
   "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
+const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
+const execFileAsync = promisify(execFile);
 
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
@@ -201,6 +257,7 @@ async function inspectCodexComputerUse(params: {
   config: ResolvedCodexComputerUseConfig;
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
+  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
   if (params.installPlugin) {
@@ -240,6 +297,7 @@ async function inspectCodexComputerUse(params: {
     config: params.config,
     plugin: pluginInspection.plugin,
     installPlugin: params.installPlugin,
+    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
 }
 
@@ -310,6 +368,7 @@ async function readComputerUseTools(params: {
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
   installPlugin: boolean;
+  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
   if (!server && params.installPlugin) {
@@ -326,13 +385,91 @@ async function readComputerUseTools(params: {
     });
   }
 
-  return statusFromPlugin({
+  const status = statusFromPlugin({
     config: params.config,
     plugin: params.plugin,
     tools: Object.keys(server.tools).toSorted(),
     reason: "ready",
     message: "Computer Use is ready.",
   });
+  const { liveTest, repair } = await runCodexComputerUseLiveTest({
+    request: params.request,
+    config: params.config,
+    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
+  });
+  return {
+    ...status,
+    ready: liveTest.ok,
+    reason: liveTest.ok ? "ready" : "live_test_failed",
+    liveTest,
+    ...(repair ? { repair } : {}),
+    warnings: [...status.warnings, ...(repair?.warnings ?? [])],
+    message: liveTest.ok ? "Computer Use is ready." : liveTest.message,
+  };
+}
+
+export async function runCodexComputerUseLiveTest(params: {
+  request: CodexComputerUseRequest;
+  config: ResolvedCodexComputerUseConfig;
+  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+}): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  let repair: CodexComputerUseRepairStatus | undefined;
+  for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
+    try {
+      await params.request(
+        "mcpServer/tool/call",
+        {
+          serverName: params.config.mcpServerName,
+          toolName: "list_apps",
+          arguments: {},
+        },
+        {
+          timeoutMs: params.config.liveTestTimeoutMs,
+          allowComputerUseMcpProbe: true,
+        },
+      );
+      return {
+        liveTest: {
+          status: "passed",
+          ok: true,
+          attempted: true,
+          attempts: attempt + 1,
+          timeoutMs: params.config.liveTestTimeoutMs,
+          retried: attempt > 0,
+          repaired: Boolean(repair?.attempted),
+          durationMs: Math.max(0, Date.now() - startedAt),
+          message: "Computer Use live test passed.",
+        },
+        ...(repair ? { repair } : {}),
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= COMPUTER_USE_LIVE_TEST_RETRY_COUNT) {
+        break;
+      }
+      if (params.config.autoRepair) {
+        repair = await (params.repairComputerUseMcpChildren ?? killStaleComputerUseMcpChildren)();
+      }
+    }
+  }
+  const errorMessage = describeControlFailure(lastError);
+  return {
+    liveTest: {
+      status: "failed",
+      ok: false,
+      attempted: true,
+      attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
+      timeoutMs: params.config.liveTestTimeoutMs,
+      retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
+      repaired: Boolean(repair?.attempted),
+      durationMs: Math.max(0, Date.now() - startedAt),
+      message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
+      error: errorMessage,
+    },
+    ...(repair ? { repair } : {}),
+  };
 }
 
 async function resolveMarketplaceRef(params: {
@@ -617,6 +754,10 @@ function statusFromPlugin(params: {
     marketplaceName: params.plugin.marketplaceName,
     ...(params.plugin.marketplacePath ? { marketplacePath: params.plugin.marketplacePath } : {}),
     tools: params.tools,
+    installation: installationStatusFromPlugin(params.plugin, params.message),
+    exposure: exposureStatusFromTools(params.config, params.tools),
+    liveTest: skippedLiveTestStatus(params.config, "Computer Use live test was not run."),
+    warnings: pluginWarnings(params.plugin),
     message: params.message,
   };
 }
@@ -632,6 +773,21 @@ function disabledStatus(config: ResolvedCodexComputerUseConfig): CodexComputerUs
     pluginName: config.pluginName,
     mcpServerName: config.mcpServerName,
     tools: [],
+    installation: {
+      status: "disabled",
+      ok: false,
+      message: "Computer Use is disabled.",
+    },
+    exposure: {
+      status: "skipped",
+      ok: false,
+      message: "MCP exposure was not checked because Computer Use is disabled.",
+    },
+    liveTest: skippedLiveTestStatus(
+      config,
+      "Computer Use live test was not run because Computer Use is disabled.",
+    ),
+    warnings: [],
     message: "Computer Use is disabled.",
   };
 }
@@ -653,8 +809,163 @@ function unavailableStatus(
     ...(config.marketplaceName ? { marketplaceName: config.marketplaceName } : {}),
     ...(config.marketplacePath ? { marketplacePath: config.marketplacePath } : {}),
     tools: [],
+    installation: {
+      status: reason === "marketplace_missing" ? "marketplace_missing" : "not_installed",
+      ok: false,
+      message,
+    },
+    exposure: {
+      status: "skipped",
+      ok: false,
+      message: "MCP exposure was not checked because Computer Use installation is not ready.",
+    },
+    liveTest: skippedLiveTestStatus(
+      config,
+      "Computer Use live test was not run because installation is not ready.",
+    ),
+    warnings: [],
     message,
   };
+}
+
+function installationStatusFromPlugin(
+  plugin: CodexPluginDetail,
+  message: string,
+): CodexComputerUseStatus["installation"] {
+  if (!plugin.summary.installed) {
+    return {
+      status: "not_installed",
+      ok: false,
+      message,
+    };
+  }
+  if (!plugin.summary.enabled) {
+    return {
+      status: "installed_disabled",
+      ok: false,
+      message,
+    };
+  }
+  return {
+    status: "installed",
+    ok: true,
+    message: "Computer Use plugin is installed and enabled.",
+  };
+}
+
+function exposureStatusFromTools(
+  config: ResolvedCodexComputerUseConfig,
+  tools: string[],
+): CodexComputerUseStatus["exposure"] {
+  if (tools.length === 0) {
+    return {
+      status: "missing",
+      ok: false,
+      message: `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
+    };
+  }
+  return {
+    status: "available",
+    ok: true,
+    message: `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`,
+  };
+}
+
+function skippedLiveTestStatus(
+  config: ResolvedCodexComputerUseConfig,
+  message: string,
+): CodexComputerUseLiveTestStatus {
+  return {
+    status: "skipped",
+    ok: false,
+    attempted: false,
+    attempts: 0,
+    timeoutMs: config.liveTestTimeoutMs,
+    retried: false,
+    repaired: false,
+    message,
+  };
+}
+
+function pluginWarnings(plugin: CodexPluginDetail): string[] {
+  const warnings: string[] = [];
+  const source = plugin.summary.source;
+  if (source && typeof source === "object" && "type" in source && source.type === "remote") {
+    warnings.push(
+      "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
+    );
+  }
+  return warnings;
+}
+
+export async function killStaleComputerUseMcpChildren(): Promise<CodexComputerUseRepairStatus> {
+  if (process.platform !== "darwin") {
+    return {
+      attempted: true,
+      killedPids: [],
+      warnings: [
+        `Computer Use stale child repair is currently macOS-only, not ${process.platform}.`,
+      ],
+      message: "Computer Use stale child repair skipped on this platform.",
+    };
+  }
+  let stdout = "";
+  try {
+    const result = await execFileAsync("/bin/ps", ["-axo", "pid=,command="], {
+      maxBuffer: 5 * 1024 * 1024,
+    });
+    stdout = result.stdout;
+  } catch (error) {
+    return {
+      attempted: true,
+      killedPids: [],
+      warnings: [
+        `Could not list processes for Computer Use repair: ${describeControlFailure(error)}`,
+      ],
+      message: "Computer Use stale child repair could not inspect running processes.",
+    };
+  }
+  const killedPids: number[] = [];
+  const warnings: string[] = [];
+  for (const processInfo of parsePsOutput(stdout)) {
+    if (!isStaleComputerUseMcpChild(processInfo.command)) {
+      continue;
+    }
+    try {
+      process.kill(processInfo.pid, "SIGTERM");
+      killedPids.push(processInfo.pid);
+    } catch (error) {
+      warnings.push(
+        `Could not terminate stale Computer Use MCP child pid ${processInfo.pid}: ${describeControlFailure(error)}`,
+      );
+    }
+  }
+  return {
+    attempted: true,
+    killedPids,
+    warnings,
+    message:
+      killedPids.length === 0
+        ? "No stale Computer Use MCP children were found."
+        : `Terminated ${killedPids.length} stale Computer Use MCP child process${killedPids.length === 1 ? "" : "es"}.`,
+  };
+}
+
+function parsePsOutput(stdout: string): Array<{ pid: number; command: string }> {
+  return stdout
+    .split(/\r?\n/u)
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+      if (!match) {
+        return [];
+      }
+      return [{ pid: Number(match[1]), command: match[2] ?? "" }];
+    })
+    .filter((processInfo) => Number.isSafeInteger(processInfo.pid) && processInfo.pid > 0);
+}
+
+function isStaleComputerUseMcpChild(command: string): boolean {
+  return command.includes("SkyComputerUseClient") && /(?:^|\s)mcp(?:\s|$)/u.test(command);
 }
 
 function createComputerUseRequest(params: {
@@ -668,18 +979,31 @@ function createComputerUseRequest(params: {
     return params.request;
   }
   if (params.client) {
-    return async <T = JsonValue | undefined>(method: string, requestParams?: unknown) =>
+    return async <T = JsonValue | undefined>(
+      method: string,
+      requestParams?: unknown,
+      options?: { timeoutMs?: number },
+    ) =>
       await params.client!.request<T>(method, requestParams, {
-        timeoutMs: params.timeoutMs,
+        timeoutMs: options?.timeoutMs ?? params.timeoutMs,
         signal: params.signal,
       });
   }
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  return async <T = JsonValue | undefined>(method: string, requestParams?: unknown) =>
+  return async <T = JsonValue | undefined>(
+    method: string,
+    requestParams?: unknown,
+    options?: {
+      timeoutMs?: number;
+      allowComputerUseMcpProbe?: boolean;
+    },
+  ) =>
     await requestCodexAppServerJson<T>({
       method,
       requestParams,
-      timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
+      timeoutMs: options?.timeoutMs ?? params.timeoutMs ?? runtime.requestTimeoutMs,
+      allowComputerUseMcpProbe: options?.allowComputerUseMcpProbe,
+      pluginConfig: params.pluginConfig,
       startOptions: runtime.start,
     });
 }

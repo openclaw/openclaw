@@ -23,6 +23,8 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   method: M;
   requestParams: CodexAppServerRequestParams<M>;
   timeoutMs?: number;
+  allowComputerUseMcpProbe?: boolean;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -35,6 +37,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  allowComputerUseMcpProbe?: boolean;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -47,6 +51,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  allowComputerUseMcpProbe?: boolean;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -58,6 +64,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
+    allowComputerUseMcpProbe: params.allowComputerUseMcpProbe,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -72,6 +79,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         params.isolated ? createIsolatedCodexAppServerClient : getLeasedSharedCodexAppServerClient
       )({
         startOptions: params.startOptions,
+        pluginConfig: params.pluginConfig,
         timeoutMs,
         authProfileId: params.authProfileId,
         agentDir: params.agentDir,

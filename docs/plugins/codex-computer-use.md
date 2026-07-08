@@ -112,6 +112,18 @@ also tries to register the bundled Codex marketplace from
 fails. If setup still cannot make the MCP server available, the turn fails
 before the thread starts.
 
+Readiness is deliberately stricter than “the plugin appears in a list.” The
+turn-start check and `/codex computer-use status` report three separate layers:
+
+- installation: marketplace/plugin install and enablement state;
+- exposure: whether Codex app-server exposes the configured MCP server/tools;
+- live test: a real `computer-use.list_apps` call.
+
+The live test uses `liveTestTimeoutMs` (default 60 seconds). If the first
+probe fails, OpenClaw terminates only stale `SkyComputerUseClient ... mcp`
+children, retries exactly once with the same timeout, and reports both the
+repair result and the final live-test result.
+
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
@@ -152,6 +164,12 @@ server exposes tools. Because installation changes trusted host resources,
 only an owner or an `operator.admin` Gateway client can run `install`. Other
 authorized senders can continue to use the read-only `status` command,
 including with overrides.
+
+Browser/DOM tools are separate OpenClaw capabilities. `computerUse` failing
+closed only disables fallback inside the Computer Use setup path; if a user
+prompt, cron, or workflow explicitly requests browser/DOM fallback after a
+Computer Use failure, that explicit instruction still controls the later
+workflow.
 
 ## Marketplace choices
 
@@ -201,6 +219,19 @@ If you use a nonstandard Codex app path, run `/codex computer-use install
 local marketplace file path. Use `--marketplace-path` only when you have the
 marketplace JSON file path, not the bundled marketplace root.
 
+### Shared plugin cache
+
+OpenClaw normally launches local Codex app-server children with isolated
+per-agent `CODEX_HOME` directories. Without reconciliation, one agent can keep
+a stale cached Computer Use plugin even after Codex.app is updated elsewhere.
+
+When Computer Use is enabled, `pluginCacheMode: "symlink"` is the default.
+Before app-server startup, OpenClaw reads the locally installed Codex.app
+bundled Computer Use plugin version, removes stale per-agent Computer Use
+cache versions for that marketplace/plugin, and points the active per-agent
+cache entry at the local bundled plugin. Set `pluginCacheMode: "independent"`
+only when a runtime intentionally needs its own copied plugin cache.
+
 ## Remote catalog limit
 
 Codex app-server can list and read remote-only catalog entries, but it does
@@ -224,6 +255,13 @@ remote install is unsupported, run install with a local source or path:
 | `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
 | `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
+| `liveTestTimeoutMs`             | 60000          | Timeout for the `computer-use.list_apps` readiness probe.                      |
+| `toolCallTimeoutMs`             | 60000          | Expected timeout budget for real Computer Use tool calls such as `list_apps`.  |
+| `leaseTimeoutMs`                | 300000         | Default window-scope Computer Use lease timeout; active calls renew it.        |
+| `healthCheckIntervalMinutes`    | 60             | Allowed periodic health cadence: 30, 60, 120, or 240 minutes.                  |
+| `pluginCacheMode`               | `symlink`      | Share the local Codex.app bundled plugin cache, or use `independent` copies.   |
+| `fallbackOnFailure`             | false          | Allow fallback inside the Computer Use setup path instead of failing closed.   |
+| `autoRepair`                    | true           | Kill stale Computer Use MCP children after a failed live probe before retry.   |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -237,6 +275,19 @@ values. Adding a new source is an explicit setup operation, so use
 Turn-start auto-install can use a configured `marketplacePath`, because that
 is already a local path on the host.
 
+When Computer Use setup passes for a shared Codex app-server client, OpenClaw
+also starts a per-client periodic health monitor. The monitor runs the same
+`computer-use.list_apps` live probe on the configured cadence, skips
+overlapping checks, clears its timer when the app-server client closes, and
+uses the same stale-child repair/retry path as `/codex computer-use status`.
+
+OpenClaw includes a window-scope lease manager for Computer Use coordination.
+The lease is intentionally scoped to a desktop window, not an app and not the
+whole host, and active tool calls renew the lease. Native Codex MCP
+notifications are observational, so full pre-execution enforcement requires
+Computer Use tool payloads to carry a stable window identifier before the MCP
+call begins.
+
 Each field also accepts an environment variable override, checked when the
 matching config key is unset:
 
@@ -245,6 +296,13 @@ matching config key is unset:
 | `enabled`                       | `OPENCLAW_CODEX_COMPUTER_USE`                                  |
 | `autoInstall`                   | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL`                     |
 | `marketplaceDiscoveryTimeoutMs` | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS` |
+| `liveTestTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS`             |
+| `toolCallTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS`             |
+| `leaseTimeoutMs`                | `OPENCLAW_CODEX_COMPUTER_USE_LEASE_TIMEOUT_MS`                 |
+| `healthCheckIntervalMinutes`    | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES`    |
+| `pluginCacheMode`               | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE`                |
+| `fallbackOnFailure`             | `OPENCLAW_CODEX_COMPUTER_USE_FALLBACK_ON_FAILURE`              |
+| `autoRepair`                    | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR`                      |
 | `marketplaceSource`             | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE`               |
 | `marketplacePath`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH`                 |
 | `marketplaceName`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME`                 |
@@ -264,12 +322,14 @@ user-facing status for chat:
 | `plugin_disabled`            | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                  |
 | `remote_install_unsupported` | Selected marketplace is remote-only.                   | Use `marketplaceSource` or `marketplacePath`. |
 | `mcp_missing`                | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions.  |
-| `ready`                      | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                    |
+| `live_test_failed`           | Install/exposure passed but `list_apps` failed.        | Inspect repair output and local CUA process.  |
+| `ready`                      | Install, exposure, and live test passed.               | Start the Codex-mode turn.                    |
 | `check_failed`               | A Codex app-server request failed during status check. | Check app-server connectivity and logs.       |
 | `auto_install_blocked`       | Turn-start setup would need to add a new source.       | Run explicit install first.                   |
 
-The chat output includes the plugin state, MCP server state, marketplace,
-tools when available, and the specific message for the failing setup step.
+The chat output includes the plugin state, installation section, MCP server
+state, exposure section, live-test section, marketplace, tools when available,
+warnings, and the specific message for the failing setup step.
 
 ## macOS permissions
 
@@ -307,10 +367,11 @@ Codex app-server MCP status, or macOS permissions.
 
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and
 MCP server are present, but the local Computer Use bridge did not answer.
-Quit or restart Codex Computer Use, relaunch Codex Desktop if needed, then
-retry in a fresh OpenClaw session. If the host previously ran Computer Use
-through an older managed Codex app-server, refresh the installed plugin from
-the desktop bundled marketplace:
+OpenClaw kills stale `SkyComputerUseClient ... mcp` children once and retries
+once. If the second probe still fails, quit or restart Codex Computer Use,
+relaunch Codex Desktop if needed, then retry in a fresh OpenClaw session. If
+the host previously ran Computer Use through an older managed Codex app-server,
+refresh the installed plugin from the desktop bundled marketplace:
 
 ```text
 /codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled

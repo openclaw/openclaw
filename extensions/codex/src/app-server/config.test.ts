@@ -1490,6 +1490,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       enabled: true,
       autoInstall: true,
       marketplaceDiscoveryTimeoutMs: 60_000,
+      liveTestTimeoutMs: 60_000,
+      toolCallTimeoutMs: 60_000,
+      leaseTimeoutMs: 300_000,
+      healthCheckIntervalMinutes: 60,
+      pluginCacheMode: "symlink",
+      fallbackOnFailure: false,
+      autoRepair: true,
       pluginName: "env-fallback-plugin",
       mcpServerName: "computer-use",
       marketplaceName: "desktop-tools",
@@ -1510,6 +1517,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         enabled: true,
         autoInstall: true,
         marketplaceDiscoveryTimeoutMs: 30_000,
+        liveTestTimeoutMs: 60_000,
+        toolCallTimeoutMs: 60_000,
+        leaseTimeoutMs: 300_000,
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "symlink",
+        fallbackOnFailure: false,
+        autoRepair: true,
         marketplaceSource: "github:example/plugins",
       },
     );
@@ -1527,9 +1541,66 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         {
           enabled: true,
           marketplaceDiscoveryTimeoutMs: 60_000,
+          liveTestTimeoutMs: 60_000,
+          toolCallTimeoutMs: 60_000,
+          leaseTimeoutMs: 300_000,
+          healthCheckIntervalMinutes: 60,
+          pluginCacheMode: "symlink",
+          fallbackOnFailure: false,
+          autoRepair: true,
         },
       );
     }
+  });
+
+  it("resolves Computer Use operational policy knobs", () => {
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            liveTestTimeoutMs: 45_000,
+            toolCallTimeoutMs: 55_000,
+            leaseTimeoutMs: 120_000,
+            healthCheckIntervalMinutes: 120,
+            pluginCacheMode: "independent",
+            fallbackOnFailure: true,
+            autoRepair: false,
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "240",
+        },
+      }),
+      "computer use config",
+      {
+        enabled: true,
+        liveTestTimeoutMs: 45_000,
+        toolCallTimeoutMs: 55_000,
+        leaseTimeoutMs: 120_000,
+        healthCheckIntervalMinutes: 120,
+        pluginCacheMode: "independent",
+        fallbackOnFailure: true,
+        autoRepair: false,
+      },
+    );
+
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: { computerUse: { enabled: true } },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "90",
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE: "stale-copy",
+        },
+      }),
+      "computer use config",
+      {
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "symlink",
+        fallbackOnFailure: false,
+        autoRepair: true,
+      },
+    );
   });
 
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {

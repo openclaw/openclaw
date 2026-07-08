@@ -68,6 +68,41 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
   });
 
+  it("allows only the explicit Computer Use list_apps probe through the MCP direct-call guard", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "mcpServer/tool/call",
+        requestParams: {
+          serverName: "computer-use",
+          toolName: "list_apps",
+          arguments: {},
+        },
+        allowComputerUseMcpProbe: true,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "mcpServer/tool/call",
+        requestParams: {
+          serverName: "computer-use",
+          toolName: "get_app_state",
+          arguments: { app: "Google Chrome" },
+        },
+        allowComputerUseMcpProbe: true,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).rejects.toThrow(
+      "Codex-native app-server method `mcpServer/tool/call` is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+  });
+
   it("allows current native thread management methods in sandboxed sessions", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });

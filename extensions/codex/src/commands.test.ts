@@ -2275,7 +2275,10 @@ describe("codex command", () => {
       text: [
         "Computer Use: ready",
         "Plugin: computer-use (installed)",
+        "Installation: installed (ok)",
         "MCP server: computer-use (1 tools)",
+        "Exposure: available (ok)",
+        "Live test: passed (1 attempt, 60000ms)",
         "Marketplace: desktop-tools",
         "Tools: list\uff3fapps",
         "Computer Use is ready.",
@@ -4659,6 +4662,27 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     mcpServerName: "computer-use",
     marketplaceName: "desktop-tools",
     tools: ["list_apps"],
+    installation: {
+      status: "installed",
+      ok: true,
+      message: "Computer Use plugin is installed and enabled.",
+    },
+    exposure: {
+      status: "available",
+      ok: true,
+      message: "Computer Use MCP server computer-use exposes 1 tools.",
+    },
+    liveTest: {
+      status: "passed",
+      ok: true,
+      attempted: true,
+      attempts: 1,
+      timeoutMs: 60_000,
+      retried: false,
+      repaired: false,
+      message: "Computer Use live test passed.",
+    },
+    warnings: [],
     message: "Computer Use is ready.",
   };
 }

@@ -75,11 +75,19 @@ const NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS = new Set<string>([
 export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   method: string;
   requestParams?: unknown;
+  allowComputerUseMcpProbe?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
 }): string | undefined {
   const policy = resolveDirectMethodPolicy(params.method);
+  if (
+    params.allowComputerUseMcpProbe === true &&
+    params.method === "mcpServer/tool/call" &&
+    isComputerUseListAppsProbe(params.requestParams)
+  ) {
+    return undefined;
+  }
   if (NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS.has(params.method)) {
     const nodeExecBlock = resolveCodexNativeNodeExecBlock({
       config: params.config,
@@ -187,6 +195,33 @@ function hasOpenClawSandboxEnvironmentSelection(value: unknown): boolean {
         environment.cwd.trim().length > 0
       );
     })
+  );
+}
+
+function isComputerUseListAppsProbe(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as {
+    serverName?: unknown;
+    toolName?: unknown;
+    arguments?: unknown;
+  };
+  if (
+    typeof record.serverName !== "string" ||
+    record.serverName.trim().length === 0 ||
+    record.toolName !== "list_apps"
+  ) {
+    return false;
+  }
+  if (record.arguments === undefined) {
+    return true;
+  }
+  return (
+    typeof record.arguments === "object" &&
+    record.arguments !== null &&
+    !Array.isArray(record.arguments) &&
+    Object.keys(record.arguments).length === 0
   );
 }
 

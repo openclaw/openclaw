@@ -75,6 +75,34 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
+  it("surfaces enabled Codex Computer Use in doctor warnings", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                  healthCheckIntervalMinutes: 120,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health cadence resolves to 120 minutes; stale MCP child repair is limited to SkyComputerUseClient children.",
+      ].join("\n"),
+    ]);
+  });
+
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {

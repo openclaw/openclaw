@@ -44,8 +44,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function requestCalls(
   request: CodexComputerUseRequest,
-): ReadonlyArray<readonly [method: string, params?: unknown]> {
-  return vi.mocked(request).mock.calls as ReadonlyArray<readonly [string, unknown?]>;
+): ReadonlyArray<
+  readonly [
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number; allowComputerUseMcpProbe?: boolean },
+  ]
+> {
+  return vi.mocked(request).mock.calls;
 }
 
 function expectRequestMethodNotCalled(request: CodexComputerUseRequest, method: string): void {
@@ -91,9 +97,109 @@ describe("Codex Computer Use setup", () => {
       tools: ["list_apps"],
       message: "Computer Use is ready.",
     });
+    expect(status.installation).toMatchObject({
+      status: "installed",
+      ok: true,
+    });
+    expect(status.exposure).toMatchObject({
+      status: "available",
+      ok: true,
+    });
+    expect(status.liveTest).toMatchObject({
+      status: "passed",
+      ok: true,
+      attempted: true,
+      attempts: 1,
+      timeoutMs: 60_000,
+      retried: false,
+      repaired: false,
+    });
+    expect(request).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      {
+        serverName: "computer-use",
+        toolName: "list_apps",
+        arguments: {},
+      },
+      { timeoutMs: 60_000, allowComputerUseMcpProbe: true },
+    );
     expectRequestMethodNotCalled(request, "marketplace/add");
     expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
     expectRequestMethodNotCalled(request, "plugin/install");
+  });
+
+  it("repairs stale Computer Use MCP children and retries the live test once", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 1 });
+    const repairComputerUseMcpChildren = vi.fn(async () => ({
+      attempted: true,
+      killedPids: [1234],
+      warnings: [],
+      message: "Terminated 1 stale Computer Use MCP child process.",
+    }));
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+      repairComputerUseMcpChildren,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      message: "Computer Use is ready.",
+    });
+    expect(status.liveTest).toMatchObject({
+      status: "passed",
+      attempts: 2,
+      retried: true,
+      repaired: true,
+    });
+    expect(status.repair).toMatchObject({
+      attempted: true,
+      killedPids: [1234],
+    });
+    expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
+    expect(
+      requestCalls(request).filter(([method]) => method === "mcpServer/tool/call"),
+    ).toHaveLength(2);
+  });
+
+  it("surfaces install, exposure, and live-test layers separately when the live test fails", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
+    const repairComputerUseMcpChildren = vi.fn(async () => ({
+      attempted: true,
+      killedPids: [],
+      warnings: [],
+      message: "No stale Computer Use MCP children were found.",
+    }));
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+      repairComputerUseMcpChildren,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "live_test_failed",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: true,
+    });
+    expect(status.installation).toMatchObject({ status: "installed", ok: true });
+    expect(status.exposure).toMatchObject({ status: "available", ok: true });
+    expect(status.liveTest).toMatchObject({
+      status: "failed",
+      ok: false,
+      attempted: true,
+      attempts: 2,
+      timeoutMs: 60_000,
+      retried: true,
+      repaired: true,
+      error: "list_apps timed out",
+    });
+    expect(status.message).toContain("Computer Use live test failed after 2 attempts");
+    expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
   });
 
   it("reports an installed but disabled Computer Use plugin separately", async () => {
@@ -451,10 +557,12 @@ function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
+  liveTestFailures?: number;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
+  let liveTestFailures = params.liveTestFailures ?? 0;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -528,6 +636,18 @@ function createComputerUseRequest(params: {
             : [],
         nextCursor: null,
       };
+    }
+    if (method === "mcpServer/tool/call") {
+      expect(requestParams).toEqual({
+        serverName: "computer-use",
+        toolName: "list_apps",
+        arguments: {},
+      });
+      if (liveTestFailures > 0) {
+        liveTestFailures -= 1;
+        throw new Error("list_apps timed out");
+      }
+      return { content: [{ type: "text", text: "[]" }] };
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
@@ -673,6 +793,9 @@ function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
         nextCursor: null,
       };
     }
+    if (method === "mcpServer/tool/call") {
+      return { content: [{ type: "text", text: "[]" }] };
+    }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
 }
@@ -753,6 +876,9 @@ function createBundledMarketplaceComputerUseRequest(
           : [],
         nextCursor: null,
       };
+    }
+    if (method === "mcpServer/tool/call") {
+      return { content: [{ type: "text", text: "[]" }] };
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;

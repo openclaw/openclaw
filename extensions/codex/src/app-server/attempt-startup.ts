@@ -21,13 +21,14 @@ import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagno
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
-  type CodexComputerUseConfig,
+  type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import {
   disableCodexPluginThreadConfig,
@@ -103,7 +104,7 @@ export async function startCodexAttemptThread(params: {
   bindingStore: CodexAppServerBindingStore;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
-  computerUseConfig: CodexComputerUseConfig;
+  computerUseConfig: ResolvedCodexComputerUseConfig;
   startupAuthProfileId: string | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
@@ -170,8 +171,7 @@ export async function startCodexAttemptThread(params: {
           : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true ||
-          computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -194,6 +194,7 @@ export async function startCodexAttemptThread(params: {
           try {
             startupClient = await params.attemptClientFactory({
               startOptions: params.appServer.start,
+              pluginConfig: params.pluginConfig,
               authProfileId: params.startupAuthProfileId,
               agentDir: params.agentDir,
               config: params.config,
@@ -236,6 +237,10 @@ export async function startCodexAttemptThread(params: {
               pluginConfig: params.pluginConfig,
               timeoutMs: params.appServer.requestTimeoutMs,
               signal: startupAbandonController.signal,
+            });
+            startCodexComputerUseHealthMonitor({
+              client: activeStartupClient,
+              config: params.computerUseConfig,
             });
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({

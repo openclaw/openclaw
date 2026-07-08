@@ -2716,6 +2716,40 @@ function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
+  const plugins = asMutableRecord(cfg.plugins);
+  const entries = asMutableRecord(plugins?.entries);
+  const codex = asMutableRecord(entries?.codex);
+  const config = asMutableRecord(codex?.config);
+  const computerUse = asMutableRecord(config?.computerUse);
+  if (!computerUse) {
+    return [];
+  }
+  const enabled =
+    computerUse.enabled === true ||
+    computerUse.autoInstall === true ||
+    typeof computerUse.marketplaceSource === "string" ||
+    typeof computerUse.marketplacePath === "string" ||
+    typeof computerUse.marketplaceName === "string";
+  if (!enabled) {
+    return [];
+  }
+  const cadence =
+    computerUse.healthCheckIntervalMinutes === 30 ||
+    computerUse.healthCheckIntervalMinutes === 60 ||
+    computerUse.healthCheckIntervalMinutes === 120 ||
+    computerUse.healthCheckIntervalMinutes === 240
+      ? computerUse.healthCheckIntervalMinutes
+      : 60;
+  return [
+    [
+      "- Codex Computer Use is enabled.",
+      "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+      `- Periodic Computer Use health cadence resolves to ${cadence} minutes; stale MCP child repair is limited to SkyComputerUseClient children.`,
+    ].join("\n"),
+  ];
+}
+
 /** Collect doctor warnings for legacy Codex model refs, runtime pins, and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
@@ -2748,6 +2782,7 @@ export function collectCodexRouteWarnings(params: {
     });
   const warnings: string[] = [];
   warnings.push(...collectCodexAppServerCommandWarnings(params.cfg));
+  warnings.push(...collectCodexComputerUseWarnings(params.cfg));
   if (hits.length > 0) {
     warnings.push(
       [
