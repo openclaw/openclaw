@@ -25,6 +25,11 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
+const LINE_SEP_RE = new RegExp(
+  "[" + String.fromCodePoint(0x2028) + String.fromCodePoint(0x2029) + "]",
+  "g",
+);
+
 const allowedTags = [
   "a",
   "b",
@@ -694,7 +699,9 @@ function normalizeMarkdownInput(markdownLocal: string): string {
 
 function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated).replace(/\r\n?/g, "\n");
+  return appendMarkdownTruncationNotice(truncated)
+    .replace(/\r\n?/g, "\n")
+    .replace(LINE_SEP_RE, "\n");
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -709,7 +716,7 @@ function appendMarkdownTruncationNotice(truncated: {
 }
 
 export function isMarkdownBlockArtText(value: string): boolean {
-  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const lines = value.replace(/\r\n?/g, "\n").replace(LINE_SEP_RE, "\n").split("\n");
   const artLines = lines.filter((line) => line.trim().length > 0);
   if (artLines.length < 2) {
     return false;
@@ -1344,7 +1351,9 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal)
+    .replace(/\r\n?/g, "\n")
+    .replace(LINE_SEP_RE, "\n");
   const input = rawInput.trim();
   if (!input) {
     return "";
@@ -1397,7 +1406,9 @@ export function toSanitizedMarkdownHtml(
 }
 
 function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(
+    value.replace(/\r\n?/g, "\n").replace(LINE_SEP_RE, "\n"),
+  )}</div>`;
 }
 
 export function toStreamingPlainTextHtml(markdownLocal: string): string {
@@ -1412,7 +1423,9 @@ export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal)
+    .replace(/\r\n?/g, "\n")
+    .replace(LINE_SEP_RE, "\n");
   if (isMarkdownBlockArtText(rawInput)) {
     const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
     installHooks();
