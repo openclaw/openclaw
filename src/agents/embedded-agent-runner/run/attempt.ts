@@ -5997,15 +5997,24 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      const synthesizedCleanupTakeoverError =
+        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
+          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
+          : undefined;
+      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
       // Record final trajectory events and flush before any rethrow so
       // cleanup failures do not leave the session trajectory incomplete.
+      // Only emit session.cleanup_completed when cleanup succeeded.
       // See: https://github.com/openclaw/openclaw/issues/102014
       if (trajectoryRecorder && !trajectoryEndRecorded) {
-        trajectoryRecorder.recordEvent("session.cleanup_completed");
+        if (!cleanupFailure) {
+          trajectoryRecorder.recordEvent("session.cleanup_completed");
+        }
         trajectoryRecorder.recordEvent("session.ended", {
-          status:
-            trajectoryTerminalStatus ??
-            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
+          status: cleanupFailure
+            ? "error"
+            : (trajectoryTerminalStatus ??
+              (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup")),
           aborted,
           externalAbort,
           timedOut,
@@ -6024,11 +6033,6 @@ export async function runEmbeddedAttempt(
         log,
         trajectoryRecorder,
       });
-      const synthesizedCleanupTakeoverError =
-        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
-          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
-          : undefined;
-      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
       const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
         promptError,
         cleanupError: cleanupFailure,
