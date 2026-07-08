@@ -353,6 +353,7 @@ async function resolveRuntimeModel(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     isNewSession: params.isNewSession,
+    model: runtimeModelId,
   });
   return {
     model,

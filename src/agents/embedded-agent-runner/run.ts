@@ -1773,6 +1773,7 @@ async function runEmbeddedAgentInternal(
           provider: successProvider,
           profileId: successProfileId,
           agentDir: params.agentDir,
+          model: modelId,
         })
           .then(() => {
             const durationMs = Date.now() - successStarted;

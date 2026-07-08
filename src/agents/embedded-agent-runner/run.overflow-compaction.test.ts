@@ -1299,10 +1299,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
     const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
-      [{ provider?: string; profileId?: string }]
+      [{ provider?: string; profileId?: string; model?: string }]
     >;
     expect(successParams.provider).toBe("openai");
     expect(successParams.profileId).toBe("openai:work");
+    // Regression (#99810): the runner must forward the succeeding model so a
+    // healthy sibling success cannot clear another model's active block.
+    expect(successParams.model).toBe("gpt-5.4");
   });
 
   it("bootstraps OAuth credentials for forced openai/* Codex response runs", async () => {

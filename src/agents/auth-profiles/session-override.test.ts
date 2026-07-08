@@ -199,6 +199,63 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
+  it("threads the requested model into cooldown checks so a model-scoped cooldown does not evict an otherwise-usable profile", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-primary",
+          },
+          [TEST_SECONDARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-secondary",
+          },
+        },
+        order: {
+          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+        },
+      });
+      // Only report cooldown for the primary profile when the caller asks
+      // about "gpt-other" - a different model than the one being requested.
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store: AuthProfileStore, profileId: string, _now?: number, forModel?: string) =>
+          profileId === TEST_PRIMARY_PROFILE_ID && forModel === "gpt-other",
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: true,
+        model: "gpt-mine",
+      });
+
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(authStoreMocks.isProfileInCooldown).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        undefined,
+        "gpt-mine",
+      );
+    });
+  });
+
   it("keeps user override when provider alias differs", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -607,6 +664,68 @@ describe("resolveSessionAuthProfileOverride", () => {
   });
 
   it("rotates auth state without restoring concurrent session management fields", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-primary",
+          },
+          [TEST_SECONDARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-secondary",
+          },
+        },
+        order: {
+          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+        },
+      });
+
+      const sessionKey = "agent:main:main";
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const scope = { storePath, sessionKey };
+      await replaceSessionEntry(scope, {
+        sessionId: "s1",
+        updatedAt: 1,
+        label: "before",
+        pinnedAt: 1,
+        compactionCount: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 0,
+      });
+      const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      expect(sessionEntry).toBeDefined();
+      const sessionStore = { [sessionKey]: sessionEntry! };
+
+      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        agentDir,
+        sessionEntry: sessionEntry!,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
+      const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      expect(persisted?.label).toBe("renamed");
+      expect(persisted?.pinnedAt).toBeUndefined();
+      expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(sessionStore[sessionKey]?.label).toBe("renamed");
+      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+    });
+  });
+
+  it("threads the requested model into cooldown checks so a model-scoped cooldown does not evict an otherwise-usable profile", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });

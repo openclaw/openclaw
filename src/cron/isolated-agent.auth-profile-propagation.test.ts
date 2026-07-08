@@ -91,5 +91,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(getEmbeddedAgentParams()).toMatchObject({
       authProfileId: "openrouter:default",
     });
+    // Regression (#99810): cron must thread the active model so a sibling
+    // model's cooldown is not treated as a profile-wide block.
+    expect(resolveSessionAuthProfileOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "moonshotai/kimi-k2.5" }),
+    );
   });
 });

@@ -104,6 +104,7 @@ function createMutableEmbeddedRunAuthController(params: {
   profileCandidates?: string[];
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
+  allowTransientCooldownProbe?: boolean;
   warn?: (message: string) => void;
 }) {
   return createEmbeddedRunAuthController({
@@ -121,7 +122,7 @@ function createMutableEmbeddedRunAuthController(params: {
     initialThinkLevel: "medium",
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
-    allowTransientCooldownProbe: false,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe ?? false,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
     getRuntimeModel: () => params.harness.runtimeModel,
@@ -355,6 +356,60 @@ describe("createEmbeddedRunAuthController", () => {
       reason: "billing",
       authMode: "oauth",
     });
+  });
+
+  it("scopes the all-in-cooldown unavailable-reason inference to the requested model", async () => {
+    // A stale blockedUntil recorded against a different model must not be
+    // reported as the failure reason for the model actually being requested;
+    // the profile's own (unscoped) cooldownReason/failureCounts should win,
+    // and that reason must gate the transient-cooldown probe correctly.
+    const harness = createMutableAuthControllerHarness();
+    const profileId = "custom-openai:default";
+    const now = Date.now();
+    const warn = vi.fn();
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "source-api-key",
+      mode: "api-key",
+      profileId,
+      source: "env",
+    });
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: [profileId],
+      fallbackConfigured: true,
+      allowTransientCooldownProbe: true,
+      warn,
+      authStore: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "custom-openai",
+            key: "sk-test",
+          },
+        },
+        usageStats: {
+          [profileId]: {
+            cooldownUntil: now + 60_000,
+            cooldownReason: "format",
+            blockedUntil: now + 60_000,
+            blockedModel: "other-model",
+            failureCounts: { format: 3 },
+          },
+        },
+      },
+    });
+
+    const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(FailoverError);
+    expect(error).toMatchObject({ reason: "format" });
+    // "format" does not permit a transient cooldown probe, so no probe
+    // warning should have been emitted (unlike "rate_limit", which the
+    // unscoped blockedModel would have incorrectly produced).
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {

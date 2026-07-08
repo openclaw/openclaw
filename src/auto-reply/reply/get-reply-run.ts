@@ -1186,6 +1186,7 @@ export async function runPreparedReply(
     const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
       cfg,
       provider,
+      model,
       acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
       agentDir,
       sessionEntry: authSessionEntry,

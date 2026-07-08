@@ -132,6 +132,7 @@ import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import { buildAutoFallbackRepromotionResolver } from "./auto-fallback-repromotion.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createCompactionHookNoticePayload,
@@ -1602,6 +1603,10 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
   entry?: SessionEntry;
   sessionKey?: string;
+  resolveRepromotionTarget?: (current: {
+    provider: string;
+    model: string;
+  }) => { provider: string; model: string } | undefined;
 }): FollowupRun["run"] {
   const probe = params.run.autoFallbackPrimaryProbe;
   if (!probe || !params.sessionKey) {
@@ -1609,6 +1614,35 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   }
   if (!params.entry) {
     return params.run;
+  }
+  // Per-model cooldown scoping means the primary-only probe never re-walks to an
+  // intermediate tier that recovered while the session was auto-pinned to a lower
+  // fallback (e.g. primary rate-limited, session stuck on the last tier, middle
+  // tier back). Climb straight to the highest available tier and drop the probe so
+  // routing stops re-testing the still-limited primary. Excludes the primary itself
+  // so its recovery keeps flowing through the existing probe-turn path below.
+  const repromotionTarget = params.resolveRepromotionTarget?.({
+    provider: probe.fallbackProvider,
+    model: probe.fallbackModel,
+  });
+  const repromotesToPrimary =
+    repromotionTarget?.provider === probe.provider && repromotionTarget?.model === probe.model;
+  if (repromotionTarget && !repromotesToPrimary) {
+    const repromotedRun: FollowupRun["run"] = {
+      ...params.run,
+      provider: repromotionTarget.provider,
+      model: repromotionTarget.model,
+      autoFallbackPrimaryProbe: undefined,
+    };
+    // A carried authProfileId is scoped to the prior provider. Forwarding it into a
+    // different provider on a cross-provider climb breaks credential selection and
+    // violates the auth-profile runtime contract, so drop it and let the target
+    // provider resolve its own profile. Same-provider climbs keep the pinned profile.
+    if (repromotionTarget.provider !== params.run.provider) {
+      delete repromotedRun.authProfileId;
+      delete repromotedRun.authProfileIdSource;
+    }
+    return repromotedRun;
   }
   const resolveEntrySelectionRun = (): FollowupRun["run"] => {
     const entryRef = resolvePersistedOverrideModelRef({
@@ -1715,6 +1749,13 @@ async function runAgentTurnWithFallbackInternal(
     run: params.followupRun.run,
     entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
     sessionKey: params.sessionKey,
+    resolveRepromotionTarget: buildAutoFallbackRepromotionResolver({
+      cfg: params.followupRun.run.config,
+      agentDir: params.followupRun.run.agentDir,
+      defaultProvider:
+        params.followupRun.run.autoFallbackPrimaryProbe?.provider ??
+        params.followupRun.run.provider,
+    }),
   });
   if (runnableRun !== params.followupRun.run) {
     params.followupRun.run = runnableRun;

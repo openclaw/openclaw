@@ -316,6 +316,7 @@ export function createEmbeddedRunAuthController(params: {
         resolveProfilesUnavailableReason({
           store: params.authStore,
           profileIds,
+          forModel: params.getModelId(),
         }) ?? "unknown"
       );
     }
@@ -526,6 +527,7 @@ export function createEmbeddedRunAuthController(params: {
         ? (resolveProfilesUnavailableReason({
             store: params.authStore,
             profileIds: autoProfileCandidates,
+            forModel: modelId,
           }) ?? "unknown")
         : null;
       const allowTransientCooldownProbe =

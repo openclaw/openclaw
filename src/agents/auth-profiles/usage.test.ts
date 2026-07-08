@@ -282,6 +282,24 @@ describe("isProfileInCooldown", () => {
     });
     expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
   });
+
+  it("keeps a pre-existing unscoped block profile-wide after upgrade (#99810)", () => {
+    // Upgrade compat: blocks persisted before model-scoping carry
+    // blockedModel: undefined. The new model-aware read must still treat them
+    // as profile-wide so an old subscription_limit block is not silently
+    // bypassed for a sibling model after upgrade.
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 120_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    });
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
 });
 
 describe("resolveProfilesUnavailableReason", () => {
@@ -412,6 +430,83 @@ describe("resolveProfilesUnavailableReason", () => {
         now,
       }),
     ).toBe("auth");
+  });
+
+  it("ignores a blockedUntil scoped to a different model when forModel is given", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.5",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBeNull();
+  });
+
+  it("reports rate_limit for a blockedUntil that matches forModel", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.3-codex-spark",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("reports rate_limit for an unscoped blockedUntil regardless of forModel", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("ignores a rate_limit cooldown scoped to a different cooldownModel when forModel is given", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-5.5",
+        failureCounts: { rate_limit: 3 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -950,6 +1045,133 @@ describe("markAuthProfileBlockedUntil", () => {
     expect(store.usageStats).toEqual({});
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
   });
+
+  it("scopes a subscription_limit block to the failing model so other models on the same profile stay usable", async () => {
+    const now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = makeStore({});
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: now + 60 * 60 * 1000,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.5",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedModel).toBe("gpt-5.5");
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+  });
+
+  it("widens to profile-wide when a new model-scoped block lands on top of an already-active unscoped block", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
+    // blockedModel is undefined here to simulate a profile-wide block recorded
+    // before per-model scoping existed (or a non-WHAM profile-wide block).
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: existingBlockedUntil,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.5",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const stats = store.usageStats?.["openai:default"];
+    // The pre-existing unscoped block must not be silently narrowed to just
+    // the incoming model — that would incorrectly unblock whatever the
+    // original unscoped block was protecting.
+    expect(stats?.blockedModel).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
+
+  it("widens to profile-wide when a new block for a different model conflicts with an existing model-scoped block", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedModel: "gpt-5.5",
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: existingBlockedUntil,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.3-codex-spark",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const stats = store.usageStats?.["openai:default"];
+    // Two different models are each independently blocked on this profile now
+    // (gpt-5.5 from the earlier failure, gpt-5.3-codex-spark from this one).
+    // Narrowing blockedModel to either one alone would silently drop coverage
+    // for the other, so the merged block must widen to profile-wide.
+    expect(stats?.blockedModel).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
+
+  it("keeps a repeated block for the same model scoped to just that model", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedModel: "gpt-5.5",
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: existingBlockedUntil,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.5",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedModel).toBe("gpt-5.5");
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+  });
 });
 
 describe("markAuthProfileFailure — detail-less provider failures", () => {
@@ -991,6 +1213,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     now: number;
     reason?: "rate_limit" | "no_error_details" | "unknown";
     useLock?: boolean;
+    modelId?: string;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
     if (params.useLock) {
@@ -1007,6 +1230,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         store: params.store,
         profileId: "openai:default",
         reason: params.reason ?? "rate_limit",
+        modelId: params.modelId,
       });
     } finally {
       dateNowSpy.mockRestore();
@@ -1129,6 +1353,165 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store.usageStats).toBeUndefined();
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("scopes a subscription_limit block to the failing model so other models on the same profile stay usable", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.5" });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedReason).toBe("subscription_limit");
+    expect(stats?.blockedModel).toBe("gpt-5.5");
+
+    // The failing model remains blocked...
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    // ...but a different model sharing the same auth profile (e.g. a
+    // separately-quota'd Codex Spark lane) is not blocked by it.
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+    // Unscoped checks (no forModel) stay conservative and report the profile
+    // as unusable, matching existing display/rotation behavior.
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
+
+  it("reads the codex model's own additional_rate_limits bucket instead of the exhausted default GPT bucket", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    // Default GPT bucket is fully exhausted, but the Codex Spark lane has its
+    // own healthy server-side bucket under additional_rate_limits[].
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+        secondary_window: { used_percent: 100, reset_after_seconds: 28_800 },
+      },
+      additional_rate_limits: [
+        {
+          limit_name: "GPT-5.3-Codex-Spark",
+          rate_limit: {
+            limit_reached: false,
+            primary_window: { used_percent: 5, reset_after_seconds: 9_000 },
+            secondary_window: { used_percent: 16, reset_after_seconds: 201_600 },
+          },
+        },
+      ],
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.3-codex-spark" });
+
+    const stats = store.usageStats?.["openai:default"];
+    // Spark's own bucket is healthy, so no subscription_limit block is written;
+    // it degrades to a short burst cooldown rather than being blocked off the
+    // sibling GPT window.
+    expect(stats?.blockedReason).not.toBe("subscription_limit");
+    expect(stats?.blockedUntil).toBeUndefined();
+    expect(stats?.cooldownUntil).toBe(now + 15_000);
+    // The short burst window clears on its own, unlike the multi-hour
+    // subscription_limit block Spark would inherit off the sibling GPT bucket.
+    expect(isProfileInCooldown(store, "openai:default", now + 15_000, "gpt-5.3-codex-spark")).toBe(
+      false,
+    );
+  });
+
+  it("widens to profile-wide when a new model-scoped block lands on top of an already-active unscoped block", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
+    // blockedModel is undefined here to simulate a profile-wide block recorded
+    // before per-model scoping existed (or a non-WHAM profile-wide block).
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.5" });
+
+    const stats = store.usageStats?.["openai:default"];
+    // The pre-existing unscoped block must not be silently narrowed to just
+    // the incoming model — that would incorrectly unblock whatever the
+    // original unscoped block was protecting.
+    expect(stats?.blockedModel).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
+
+  it("widens to profile-wide when a new block for a different model conflicts with an existing model-scoped block", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedModel: "gpt-5.5",
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.3-codex-spark" });
+
+    const stats = store.usageStats?.["openai:default"];
+    // Two different models are each independently blocked on this profile now
+    // (gpt-5.5 from the earlier failure, gpt-5.3-codex-spark from this one).
+    // Narrowing blockedModel to either one alone would silently drop coverage
+    // for the other, so the merged block must widen to profile-wide.
+    expect(stats?.blockedModel).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
+
+  it("keeps a repeated block for the same model scoped to just that model", async () => {
+    const now = 1_700_000_000_000;
+    const existingBlockedUntil = now + 1 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: existingBlockedUntil,
+        blockedModel: "gpt-5.5",
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.5" });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedModel).toBe("gpt-5.5");
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
   });
 
   it("maps HTTP 401 to a 12h cooldown", async () => {
