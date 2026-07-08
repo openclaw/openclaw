@@ -4255,6 +4255,9 @@ async function runEmbeddedAgentInternal(
               },
               contextManagement:
                 autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
+              ...(attempt.nonDeliverableTerminalTurn
+                ? { nonDeliverableTerminalTurn: true as const }
+                : {}),
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didDeliverSourceReplyViaMessageTool:

@@ -201,6 +201,9 @@ export type EmbeddedAgentRunMeta = {
   toolSummary?: ToolSummaryTrace;
   completion?: CompletionTrace;
   contextManagement?: ContextManagementTrace;
+  /** True when the agent turn was classified as non_deliverable_terminal_turn — no user-visible
+   * payload was produced and no outbound delivery evidence was recorded. */
+  nonDeliverableTerminalTurn?: true;
 };
 
 export type EmbeddedAgentRunResult = {

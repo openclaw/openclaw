@@ -1564,7 +1564,8 @@ export function createFollowupRunner(params: {
       };
       const fallbackPayload = terminalRunFailed
         ? isInteractive &&
-          run.sourceReplyDeliveryMode !== "message_tool_only" &&
+          (run.sourceReplyDeliveryMode !== "message_tool_only" ||
+            runResult.meta?.nonDeliverableTerminalTurn === true) &&
           !hasCommittedDelivery
           ? buildTerminalAgentRunFailureReplyPayload({
               isHeartbeat: opts?.isHeartbeat,
