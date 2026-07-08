@@ -54,6 +54,34 @@ export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package"
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
 const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["run"]);
+const PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
+  "add",
+  "audit",
+  "bin",
+  "config",
+  "dedupe",
+  "deploy",
+  "help",
+  "import",
+  "init",
+  "install",
+  "licenses",
+  "link",
+  "list",
+  "outdated",
+  "patch",
+  "prune",
+  "publish",
+  "rebuild",
+  "remove",
+  "root",
+  "server",
+  "store",
+  "unlink",
+  "update",
+  "view",
+  "why",
+]);
 
 const YARN_OPTIONS_WITH_VALUE = new Set(["--cwd"]);
 const YARN_FLAG_OPTIONS = new Set(["--immutable", "--silent", "-s"]);
@@ -368,7 +396,9 @@ export function resolveKnownPackageManagerExecInvocation(
       const hiddenKnownExec =
         firstSubcommand === null && containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS);
       const implicitExecShorthand =
-        firstSubcommand !== null && !PNPM_SCRIPT_RUN_SUBCOMMANDS.has(firstSubcommand);
+        firstSubcommand !== null &&
+        !PNPM_SCRIPT_RUN_SUBCOMMANDS.has(firstSubcommand) &&
+        !PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand);
       return detectedKnownExec || hiddenKnownExec || implicitExecShorthand
         ? { kind: "unsafe-exec" }
         : { kind: "not-exec" };
