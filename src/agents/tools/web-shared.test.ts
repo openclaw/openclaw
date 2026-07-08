@@ -129,6 +129,24 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mark exact-limit bounded reads as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels and releases bounded response readers after truncation", async () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();
