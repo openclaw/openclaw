@@ -49,14 +49,24 @@ function expectRequestUrl(input: RequestInfo | URL): string {
 function signedHostedCatalogFeed(params?: {
   feed?: OfficialExternalPluginCatalogFeed;
   keyId?: string;
+  privateKeyPem?: string;
 }): {
   body: string;
   publicKeyPem: string;
+  privateKeyPem: string;
 } {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519", {
-    publicKeyEncoding: { type: "spki", format: "pem" },
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-  });
+  const { publicKey, privateKey } =
+    params?.privateKeyPem === undefined
+      ? crypto.generateKeyPairSync("ed25519", {
+          publicKeyEncoding: { type: "spki", format: "pem" },
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        })
+      : {
+          publicKey: crypto
+            .createPublicKey(params.privateKeyPem)
+            .export({ type: "spki", format: "pem" }) as string,
+          privateKey: params.privateKeyPem,
+        };
   const payload = createOfficialExternalPluginCatalogEnvelopePayload(
     params?.feed ?? {
       schemaVersion: 1,
@@ -96,6 +106,7 @@ function signedHostedCatalogFeed(params?: {
   return {
     body: JSON.stringify(envelope),
     publicKeyPem: publicKey,
+    privateKeyPem: privateKey,
   };
 }
 
@@ -668,6 +679,86 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("rejects signed hosted feed rollback before replacing snapshots", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const newer = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:10.000Z",
+        sequence: 10,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v10",
+            kind: "plugin",
+            openclaw: {
+              plugin: { id: "signed-refresh-proof-v10" },
+              install: { sourceRef: "acme-npm", npmSpec: "@openclaw/signed-refresh-proof-v10" },
+            },
+          },
+        ],
+      },
+    });
+    const older = signedHostedCatalogFeed({
+      privateKeyPem: newer.privateKeyPem,
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:09.000Z",
+        sequence: 9,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v9",
+            kind: "plugin",
+            openclaw: {
+              plugin: { id: "signed-refresh-proof-v9" },
+              install: { sourceRef: "acme-npm", npmSpec: "@openclaw/signed-refresh-proof-v9" },
+            },
+          },
+        ],
+      },
+    });
+    const catalogConfig = {
+      feeds: {
+        acme: {
+          url: "https://packages.acme.example/openclaw/feed",
+          verification: {
+            mode: "signed" as const,
+            keys: [{ keyId: "acme-root", publicKey: newer.publicKeyPem }],
+          },
+        },
+      },
+      sources: {
+        "acme-npm": { type: "npm" as const, registry: "https://packages.acme.example/npm/" },
+      },
+    };
+
+    await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(newer.body, { status: 200 })),
+      snapshotStore,
+    });
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(older.body, { status: 200 })),
+      snapshotStore,
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@openclaw/signed-refresh-proof-v10",
+    ]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("signed feed sequence is older");
+      expect(result.feed.sequence).toBe(10);
+    }
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
   it("fails closed when a signed feed profile receives unsigned JSON", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -697,6 +788,48 @@ describe("official external plugin catalog", () => {
                   publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 },
               ],
+            },
+          },
+        },
+      },
+      fetchImpl,
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signed envelope is malformed");
+    }
+  });
+
+  it("preserves signed feed profile verification for direct URL overrides", async () => {
+    const signed = signedHostedCatalogFeed();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            id: "openclaw-official-external-plugins",
+            generatedAt: "2026-06-22T00:00:00.000Z",
+            sequence: 8,
+            entries: [],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
             },
           },
         },

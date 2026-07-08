@@ -370,19 +370,24 @@ function resolveHostedCatalogFeedSource(params: {
 } {
   const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
   const explicitFeedUrl = normalizeOptionalString(params.feedUrl);
+  const explicitProfileName = normalizeOptionalString(params.feedProfile);
   if (explicitFeedUrl) {
     const url = resolveHostedCatalogFeedUrl(explicitFeedUrl);
     if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(url.hostname)) {
       throw new Error("hosted catalog feed URL hostname is not allowed");
     }
+    const profile =
+      explicitProfileName === undefined ? undefined : profileConfig.feeds[explicitProfileName];
+    if (explicitProfileName !== undefined && !profile) {
+      throw new Error(`hosted catalog feed profile "${explicitProfileName}" is not configured`);
+    }
     return {
       url,
       hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
+      ...(profile?.verification ? { verification: profile.verification } : {}),
     };
   }
-  const profileName =
-    normalizeOptionalString(params.feedProfile) ??
-    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+  const profileName = explicitProfileName ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
   const profile = profileConfig.feeds[profileName];
   if (!profile) {
     throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
@@ -776,6 +781,19 @@ async function loadHostedCatalogSnapshotResult(params: {
   };
 }
 
+function isHostedCatalogSignedFeedRollback(params: {
+  candidate: OfficialExternalPluginCatalogFeed;
+  current: OfficialExternalPluginCatalogFeed;
+}): boolean {
+  if (params.candidate.sequence < params.current.sequence) {
+    return true;
+  }
+  if (params.candidate.sequence > params.current.sequence) {
+    return false;
+  }
+  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
+}
+
 function assertSnapshotMatchesRequestValidators(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   ifNoneMatch?: string;
@@ -1042,6 +1060,24 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     });
     if ("source" in parsed) {
       return parsed;
+    }
+    if (snapshotStore && parsed.trust?.mode === "signed") {
+      const currentSnapshot = await snapshotStore.read(url.href);
+      if (currentSnapshot?.trust?.mode === "signed") {
+        const current = await parseHostedCatalogFeedBody({
+          body: currentSnapshot.body,
+          verification: source.verification,
+          verifiedAt: currentSnapshot.trust.verifiedAt,
+        });
+        if (
+          isHostedCatalogSignedFeedRollback({
+            candidate: parsed.feed,
+            current: current.feed,
+          })
+        ) {
+          throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+        }
+      }
     }
     const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
       parseOfficialExternalPluginCatalogEntries(parsed.feed),
