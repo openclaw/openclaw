@@ -272,6 +272,23 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
+    it("cancels when the 409 conflict body is truncated or malformed", async () => {
+      // Simulates an over-cap or malformed 409 body: readResponseTextLimited
+      // stops at the cap, JSON.parse fails on the truncated text, but the 409
+      // status itself means another agent owns this thread — still cancel.
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response('{ "owner": "other-agent" ,', { status: 409 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      // The owner field was unparseable, so the log falls back to "unknown".
+      expect(infoMessage).toContain("owned by unknown");
+    });
+
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
