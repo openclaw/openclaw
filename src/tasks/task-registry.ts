@@ -2415,6 +2415,16 @@ export function listTaskRecords(): TaskRecord[] {
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
+/**
+ * Returns a shallow-cloned, unsorted snapshot of all task records.
+ * Callers that need their own sort order (e.g. by updatedAt) should use this
+ * instead of `listTaskRecords()` to avoid a redundant O(n log n) sort.
+ */
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  ensureTaskRegistryReady();
+  return [...tasks.values()].map(cloneTaskRecord);
+}
+
 export function hasActiveTaskForChildSessionKey(params: {
   sessionKey: string;
   excludeTaskId?: string;

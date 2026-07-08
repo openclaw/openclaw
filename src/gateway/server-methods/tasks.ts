@@ -13,7 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -112,7 +112,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // The registry lists newest-created first; the ledger view pages by last
     // activity so an old long-running task that just finished still surfaces
     // on the first page instead of hiding behind newer-created records.
-    const filtered = listTaskRecords()
+    // Use listTaskRecordsUnsorted() to avoid a redundant O(n log n) sort:
+    // listTaskRecords() sorts by createdAt, but tasks.list needs updatedAt order,
+    // so we do a single filter+sort pass here instead of sorting twice.
+    const filtered = listTaskRecordsUnsorted()
       .filter((task) => {
         if (statusFilter && !statusFilter.has(task.status)) {
           return false;
