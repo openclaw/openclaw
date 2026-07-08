@@ -123,7 +123,7 @@ function isTerminalAvailable(
   }
   return (
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "terminal.open")
+    isGatewayMethodAdvertised(snapshot, "terminal.open") === true
   );
 }
 

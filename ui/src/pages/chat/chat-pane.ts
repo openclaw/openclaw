@@ -575,7 +575,7 @@ class ChatPane extends LitElement {
       config.terminalEnabled &&
       state.connected &&
       hasOperatorAdminAccess(state.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open");
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
     const rootsChanged =
       state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
       state.localMediaPreviewRoots.some(
@@ -611,7 +611,7 @@ class ChatPane extends LitElement {
       this.context.config.current.terminalEnabled &&
       snapshot.connected &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "terminal.open");
+      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const canonicalRouteSessionKey = routeSessionKey
