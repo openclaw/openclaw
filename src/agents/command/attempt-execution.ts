@@ -11,6 +11,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
+import { failQueuedDelegatesCreatedAtOrAfter } from "../../auto-reply/continuation-delegate-store.js";
 import {
   computeRequestCompactionContextUsage,
   releaseQueuedCompactionTolerant,
@@ -540,6 +541,7 @@ export async function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
+  const runStartedAt = Date.now();
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
@@ -1025,6 +1027,27 @@ export async function runAgentAttempt(params: {
   // token parsed from the final payload as well as the tool callback.
   if (continuationEnabled && params.sessionKey) {
     try {
+      const suppressContinuationAfterReplayUnsafeRun =
+        embeddedRunResult.meta?.error?.kind === "incomplete_turn" &&
+        embeddedRunResult.meta?.replayInvalid === true;
+      if (suppressContinuationAfterReplayUnsafeRun) {
+        if (attemptContinueWorkRequests.length > 0) {
+          log.info(
+            `[continuation] Ignoring ${attemptContinueWorkRequests.length} continue_work election(s) because the spawn-init turn was incomplete and replay-unsafe for session ${sanitizeForLog(params.sessionKey)}`,
+          );
+        }
+        const failedDelegateRows = failQueuedDelegatesCreatedAtOrAfter(
+          params.sessionKey,
+          runStartedAt,
+          "Continuation delegate election ignored because the spawn-init turn was incomplete and replay-unsafe.",
+        );
+        if (failedDelegateRows > 0) {
+          log.info(
+            `[continuation] Failed ${failedDelegateRows} queued continue_delegate election(s) because the spawn-init turn was incomplete and replay-unsafe for session ${sanitizeForLog(params.sessionKey)}`,
+          );
+        }
+        return embeddedRunResult;
+      }
       const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
         import("../../auto-reply/continuation/signal.js"),
         import("../../auto-reply/tokens.js"),

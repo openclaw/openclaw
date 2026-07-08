@@ -479,6 +479,42 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(result.payloads?.[0]?.text).toContain("[[CONTINUE_DELEGATE: next hop]]");
   });
 
+  it("suppresses spawn-init continuations after replay-unsafe incomplete turns", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "unsafe spawn-init request", delaySeconds: 30 });
+      return {
+        payloads: [{ text: "Agent could not complete the turn.", isError: true }],
+        meta: {
+          replayInvalid: true,
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not complete the turn.",
+            fallbackSafe: false,
+          },
+          agentMeta: {
+            sessionId: "session-embedded",
+            provider: "anthropic",
+            model: "claude-sonnet-4.7",
+            usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, total: 5 },
+          },
+        },
+      } satisfies EmbeddedAgentRunResult;
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBeUndefined();
+  });
+
   it("lets bracket continue_work use the configured default delay when a tool delay also exists", async () => {
     runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
       const opts = (

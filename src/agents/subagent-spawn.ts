@@ -403,6 +403,23 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (continuationTraceparent) {
     entry.continuationTraceparent = continuationTraceparent;
   }
+  const continuationChainCount = normalizeNonNegativeInteger(patch.continuationChainCount);
+  if (continuationChainCount !== undefined) {
+    entry.continuationChainCount = continuationChainCount;
+  }
+  const continuationChainStartedAt = normalizeNonNegativeInteger(patch.continuationChainStartedAt);
+  if (continuationChainStartedAt !== undefined) {
+    entry.continuationChainStartedAt = continuationChainStartedAt;
+  }
+  const continuationChainTokens = normalizeNonNegativeInteger(patch.continuationChainTokens);
+  if (continuationChainTokens !== undefined) {
+    entry.continuationChainTokens = continuationChainTokens;
+  }
+  const continuationChainId =
+    typeof patch.continuationChainId === "string" ? patch.continuationChainId.trim() : "";
+  if (continuationChainId) {
+    entry.continuationChainId = continuationChainId;
+  }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
   }
@@ -427,6 +444,13 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     }
   }
   return entry;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function loadSubagentConfig() {

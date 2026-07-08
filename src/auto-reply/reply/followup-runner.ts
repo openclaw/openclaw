@@ -58,6 +58,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { failQueuedDelegatesCreatedAtOrAfter } from "../continuation-delegate-store.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import {
   getReplyPayloadMetadata,
@@ -999,9 +1000,14 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
-      // Accumulate every continue_work election fired this turn; capturing only
-      // the last one silently drops the rest (#982).
-      const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
+      // Keep continue_work elections isolated per fallback candidate so only
+      // the selected result can schedule followup work.
+      let selectedContinueWorkRequests: ContinueWorkRequest[] = [];
+      const continueWorkRequestsByResult = new WeakMap<
+        EmbeddedAgentRunResult,
+        ContinueWorkRequest[]
+      >();
+      const runStartedAt = Date.now();
       const fastModeStartedAtMs = Date.now();
       const fastModeAutoProgressState: FastModeAutoProgressState = {
         offAnnounced: false,
@@ -1058,6 +1064,7 @@ export function createFollowupRunner(params: {
                 sessionKey: replySessionKey,
               });
             }
+            const candidateContinueWorkRequests: ContinueWorkRequest[] = [];
             const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
@@ -1399,7 +1406,7 @@ export function createFollowupRunner(params: {
                   runtimeConfig?.agents?.defaults?.continuation?.enabled === true
                     ? {
                         requestContinuation: (request: ContinueWorkRequest) => {
-                          attemptContinueWorkRequests.push(request);
+                          candidateContinueWorkRequests.push(request);
                         },
                       }
                     : undefined,
@@ -1440,6 +1447,7 @@ export function createFollowupRunner(params: {
                 result.meta?.agentMeta?.compactionCount ?? 0,
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+              continueWorkRequestsByResult.set(result, candidateContinueWorkRequests);
               return result;
             } finally {
               autoCompactionCount += attemptCompactionCount;
@@ -1450,6 +1458,7 @@ export function createFollowupRunner(params: {
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         fallbackExhausted = fallbackResult.outcome === "exhausted";
+        selectedContinueWorkRequests = continueWorkRequestsByResult.get(runResult) ?? [];
         const settledLifecycleTerminal =
           pendingLifecycleTerminal?.provider === fallbackProvider &&
           pendingLifecycleTerminal.model === fallbackModel
@@ -1556,6 +1565,33 @@ export function createFollowupRunner(params: {
 
       await drainProgressDeliveries();
 
+      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
+      const suppressContinuationAfterReplayUnsafeTurn =
+        runResult.meta?.error?.kind === "incomplete_turn" && runResult.meta?.replayInvalid === true;
+      if (suppressContinuationAfterReplayUnsafeTurn) {
+        if (selectedContinueWorkRequests.length > 0) {
+          defaultRuntime.log(
+            `[continuation] Ignoring ${selectedContinueWorkRequests.length} continue_work election(s) because the enclosing followup turn was incomplete and replay-unsafe for session ${replySessionKey ?? "unknown"}`,
+          );
+        }
+        if (replySessionKey) {
+          const failedDelegateRows = failQueuedDelegatesCreatedAtOrAfter(
+            replySessionKey,
+            runStartedAt,
+            "Continuation delegate election ignored because the enclosing followup turn was incomplete and replay-unsafe.",
+          );
+          if (failedDelegateRows > 0) {
+            defaultRuntime.log(
+              `[continuation] Failed ${failedDelegateRows} queued continue_delegate election(s) because the enclosing followup turn was incomplete and replay-unsafe for session ${replySessionKey}`,
+            );
+          }
+        }
+      }
+      const continuationSessionKey =
+        continuationEnabled && !suppressContinuationAfterReplayUnsafeTurn
+          ? replySessionKey
+          : undefined;
+
       // Post-turn no-op replay outcome recording (#1138/#1142). Record before any
       // continuation/followup scheduling so a no-op self-rearm turn increments the
       // streak before it can schedule the next same-family wake. Idempotent per runId.
@@ -1589,7 +1625,7 @@ export function createFollowupRunner(params: {
       // (or any followup turn) stay in the queue until the NEXT inbound
       // message arrives to trigger the main-session dispatch
       // (docs/design/continue-work-signal-v2.md §3.2).
-      if (runtimeConfig?.agents?.defaults?.continuation?.enabled === true && sessionKey) {
+      if (continuationSessionKey) {
         const [
           { dispatchToolDelegates },
           { resolveLiveContinuationRuntimeConfig },
@@ -1601,7 +1637,7 @@ export function createFollowupRunner(params: {
         ]);
         const tailUsage = runResult.meta?.agentMeta?.usage;
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
-        const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        const tailEntry = sessionStore?.[continuationSessionKey] ?? activeSessionEntry;
         const chainState = loadContinuationChainState(tailEntry, turnTokens);
         const persistDispatchChainState = async (nextState: typeof chainState): Promise<void> => {
           if (!tailEntry) {
@@ -1624,10 +1660,10 @@ export function createFollowupRunner(params: {
           // explicit chain-state persist the followup-only token chain
           // never reaches disk; cost-cap and `maxChainLength` enforcement
           // see stale values across cache eviction or gateway restart.
-          if (storePath && sessionKey) {
+          if (storePath) {
             try {
               await patchSessionEntry(
-                { storePath, sessionKey },
+                { storePath, sessionKey: continuationSessionKey },
                 () => ({
                   continuationChainCount: nextState.currentChainCount,
                   continuationChainStartedAt: nextState.chainStartedAt,
@@ -1644,16 +1680,16 @@ export function createFollowupRunner(params: {
               // Mirror agent-runner.ts's defensive log: persistence failure
               // must not break the followup reply itself.
               defaultRuntime.error?.(
-                `[followup-runner] failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
+                `[followup-runner] failed to persist continuation chain state for ${continuationSessionKey}: ${String(err)}`,
               );
             }
           }
         };
         const dispatchResult = await dispatchToolDelegates({
-          sessionKey,
+          sessionKey: continuationSessionKey,
           chainState,
           ctx: {
-            sessionKey,
+            sessionKey: continuationSessionKey,
             agentChannel: queued.originatingChannel ?? undefined,
             agentAccountId: queued.originatingAccountId ?? undefined,
             agentTo: queued.originatingTo ?? undefined,
@@ -1684,7 +1720,6 @@ export function createFollowupRunner(params: {
       // --- continue_work processing ---
       // The election is durable TaskFlow state; the dispatcher only arms a
       // maturity timer and can replay it after gateway restart.
-      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
       // One entry per continue_work tool call this turn; each fans out its own
       // wake. Falls back to a single bracket-derived election when the model
       // used [[CONTINUE_WORK]] text instead of the tool (subagent leaf path).
@@ -1692,8 +1727,8 @@ export function createFollowupRunner(params: {
         reason: string;
         delaySeconds?: number;
         traceparent?: string;
-      }[] = attemptContinueWorkRequests;
-      if (effectiveContinueWorkRequests.length === 0 && continuationEnabled && sessionKey) {
+      }[] = continuationSessionKey ? selectedContinueWorkRequests : [];
+      if (effectiveContinueWorkRequests.length === 0 && continuationSessionKey) {
         const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
           import("../continuation/signal.js"),
           import("../tokens.js"),
@@ -1702,7 +1737,7 @@ export function createFollowupRunner(params: {
         const extraction = extractContinuationSignal({
           payloads: continuationPayloads.map((payload) => ({ ...payload })),
           enabled: true,
-          sessionKey,
+          sessionKey: continuationSessionKey,
         });
         if (extraction.signal?.kind === "work") {
           if (extraction.fromBracket) {
@@ -1732,7 +1767,7 @@ export function createFollowupRunner(params: {
           ];
         }
       }
-      if (effectiveContinueWorkRequests.length > 0 && continuationEnabled && sessionKey) {
+      if (effectiveContinueWorkRequests.length > 0 && continuationSessionKey) {
         const [
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
@@ -1745,12 +1780,12 @@ export function createFollowupRunner(params: {
         const continuationConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
         const tailUsage = runResult.meta?.agentMeta?.usage;
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
-        const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        const tailEntry = sessionStore?.[continuationSessionKey] ?? activeSessionEntry;
         const chainState =
           continuationChainStateAfterDelegateDispatch ??
           loadContinuationChainState(tailEntry, turnTokens);
         const scheduleResult = await scheduleContinuationWorkBatch({
-          sessionKey,
+          sessionKey: continuationSessionKey,
           chainState,
           requests: effectiveContinueWorkRequests.map((request) => ({
             reason: request.reason,
@@ -1772,7 +1807,7 @@ export function createFollowupRunner(params: {
         if (scheduleResult.cappedCount > 0 && effectiveContinueWorkRequests.length > 1) {
           enqueueSystemEvent(
             `[continuation] ${scheduleResult.cappedCount} of ${effectiveContinueWorkRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
-            { sessionKey, trusted: true },
+            { sessionKey: continuationSessionKey, trusted: true },
           );
         }
         if (scheduleResult.scheduledCount > 0) {
@@ -1791,7 +1826,7 @@ export function createFollowupRunner(params: {
           if (storePath) {
             try {
               await patchSessionEntry(
-                { storePath, sessionKey },
+                { storePath, sessionKey: continuationSessionKey },
                 () => ({
                   continuationChainCount: scheduleResult.chainState.currentChainCount,
                   continuationChainStartedAt: scheduleResult.chainState.chainStartedAt,
@@ -1805,7 +1840,7 @@ export function createFollowupRunner(params: {
               );
             } catch (err) {
               defaultRuntime.error?.(
-                `[followup-runner] failed to persist continue_work chain state for ${sessionKey}: ${String(err)}`,
+                `[followup-runner] failed to persist continue_work chain state for ${continuationSessionKey}: ${String(err)}`,
               );
             }
           }
