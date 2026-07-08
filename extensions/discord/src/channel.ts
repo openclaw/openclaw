@@ -367,17 +367,17 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
           resolveTarget: async ({ cfg, accountId, input, normalized, preferredKind }) => {
+            const defaultKind =
+              preferredKind === "user" || normalized.startsWith("user:")
+                ? "user"
+                : preferredKind === "channel" ||
+                    preferredKind === "group" ||
+                    normalized.startsWith("channel:")
+                  ? "channel"
+                  : undefined;
             const resolved = await (
               await loadDiscordTargetResolverModule()
-            ).resolveDiscordTarget(
-              input,
-              { cfg, accountId },
-              preferredKind === "user"
-                ? { defaultKind: "user" }
-                : preferredKind === "channel" || preferredKind === "group"
-                  ? { defaultKind: "channel" }
-                  : {},
-            );
+            ).resolveDiscordTarget(input, { cfg, accountId }, defaultKind ? { defaultKind } : {});
             if (!resolved) {
               return null;
             }

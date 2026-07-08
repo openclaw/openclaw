@@ -316,6 +316,63 @@ describe("discordPlugin outbound", () => {
     });
   });
 
+  it("preserves the normalized channel kind for bare current-channel ids", async () => {
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: createCfg(),
+        accountId: "default",
+        input: "1470130713209602050",
+        normalized: "channel:1470130713209602050",
+      }),
+    ).resolves.toEqual({
+      to: "channel:1470130713209602050",
+      kind: "channel",
+      display: "1470130713209602050",
+      source: "normalized",
+    });
+  });
+
+  it("keeps allowlisted bare Discord ids routable as DMs", async () => {
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: {
+                  token: "discord-token",
+                  allowFrom: ["123456789"],
+                },
+              },
+            },
+          },
+        },
+        accountId: "default",
+        input: "123456789",
+        normalized: "channel:123456789",
+      }),
+    ).resolves.toEqual({
+      to: "user:123456789",
+      kind: "user",
+      display: "123456789",
+      source: "directory",
+    });
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {
