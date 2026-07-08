@@ -52,6 +52,8 @@ export const PNPM_FLAG_OPTIONS = new Set([
 
 export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
 
+const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
+
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
 }
@@ -271,7 +273,7 @@ export function resolveKnownPackageManagerExecInvocation(
       });
       return NPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
         ? { kind: "unsafe-exec" }
-        : containsSubcommandToken(argv.slice(1), new Set(["exec"]))
+        : containsSubcommandToken(argv.slice(1), NPM_EXEC_SUBCOMMANDS)
           ? { kind: "unsafe-exec" }
           : { kind: "not-exec" };
     }
@@ -285,12 +287,12 @@ export function resolveKnownPackageManagerExecInvocation(
       if (unwrapped) {
         return { kind: "unwrapped", argv: unwrapped };
       }
-      return ["exec", "dlx", "node"].includes(
-        firstSubcommandAfterOptions(argv, {
-          optionsWithValue: new Set([...PNPM_OPTIONS_WITH_VALUE, ...PNPM_DLX_OPTIONS_WITH_VALUE]),
-          flagOptions: PNPM_FLAG_OPTIONS,
-        }) ?? "",
-      )
+      const firstSubcommand = firstSubcommandAfterOptions(argv, {
+        optionsWithValue: new Set([...PNPM_OPTIONS_WITH_VALUE, ...PNPM_DLX_OPTIONS_WITH_VALUE]),
+        flagOptions: PNPM_FLAG_OPTIONS,
+      });
+      return PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "") ||
+        containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS)
         ? { kind: "unsafe-exec" }
         : { kind: "not-exec" };
     }

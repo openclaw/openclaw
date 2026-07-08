@@ -924,20 +924,55 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
-  it("rejects stale npm allow-always entries when unknown options hide exec", async () => {
+  it.each(["exec", "x"])(
+    "rejects stale npm allow-always entries when unknown options hide %s",
+    async (subcommand) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const npmPath = makeExecutable(dir, "npm");
+      makeExecutable(dir, "sh");
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: `npm --unknown-global-option ${subcommand} sh -c 'id > marker'`,
+        allowlist: [{ pattern: npmPath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentAllowlistEntries).toEqual([null]);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects stale pnpm allow-always entries when unknown options hide exec", async () => {
     if (process.platform === "win32") {
       return;
     }
     const dir = makeTempDir();
-    const npmPath = makeExecutable(dir, "npm");
+    const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
     const result = await evaluateShellAllowlistWithAuthorization({
-      command: "npm --unknown-global-option exec sh -c 'id > marker'",
-      allowlist: [{ pattern: npmPath, source: "allow-always" }],
+      command: "pnpm --unknown-global-option exec sh -c 'id > marker'",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
       safeBins,
       cwd: dir,
       env,
