@@ -229,6 +229,7 @@ const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
+const NATIVE_HOOK_RELAY_SLOW_INVOCATION_MS = 250;
 const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
@@ -258,6 +259,7 @@ type NativeHookRelaySharedState = {
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  metrics: NativeHookRelayMetrics;
 };
 
 type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
@@ -315,6 +317,20 @@ type NativeHookRelayPreToolUseApproval = {
   deferredApproval: DeferredPluginToolApproval;
   originalParamsFingerprint: string;
   resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
+};
+
+type NativeHookRelayEventMetrics = {
+  count: number;
+  totalDurationMs: number;
+  maxDurationMs: number;
+  slowCount: number;
+};
+
+type NativeHookRelayMetrics = {
+  registeredAtMs: number;
+  eventMetrics: Record<NativeHookRelayEvent, NativeHookRelayEventMetrics>;
+  commandRequests: Record<NativeHookRelayEvent, number>;
+  noLocalWorkCommandRequests: Record<NativeHookRelayEvent, number>;
 };
 
 export type NativeHookRelayDeferredApprovalOutcome =
@@ -453,6 +469,7 @@ export function registerNativeHookRelay(
     allowedEvents,
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
+    metrics: createNativeHookRelayMetrics(now),
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
@@ -461,16 +478,15 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-    commandForEvent: (event, options) =>
-      buildNativeHookRelayCommand({
+    commandForEvent: (event, options) => {
+      const hasLocalWork = nativeHookRelayEventHasLocalWork(registration, event);
+      recordNativeHookRelayCommandRequest(registration, event, hasLocalWork);
+      return buildNativeHookRelayCommand({
         provider: params.provider,
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
+        preToolUseUnavailable: event === "pre_tool_use" && !hasLocalWork ? "noop" : undefined,
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
           params.command?.timeoutMs,
@@ -478,7 +494,8 @@ export function registerNativeHookRelay(
         ),
         executable: params.command?.executable,
         nodeExecutable: params.command?.nodeExecutable,
-      }),
+      });
+    },
     renew: (ttlMs) => {
       const current = relays.get(relayId);
       if (current !== registration) {
@@ -506,6 +523,10 @@ function unregisterNativeHookRelay(
 ): void {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
     return;
+  }
+  const registration = relays.get(relayId);
+  if (registration) {
+    logNativeHookRelayMetrics(registration);
   }
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
@@ -629,6 +650,137 @@ function nativeHookRelayEventHasLocalWork(
   return true;
 }
 
+function createNativeHookRelayMetrics(registeredAtMs: number): NativeHookRelayMetrics {
+  return {
+    registeredAtMs,
+    eventMetrics: createNativeHookRelayEventMetricsRecord(),
+    commandRequests: createNativeHookRelayEventCountRecord(),
+    noLocalWorkCommandRequests: createNativeHookRelayEventCountRecord(),
+  };
+}
+
+function createNativeHookRelayEventMetricsRecord(): Record<
+  NativeHookRelayEvent,
+  NativeHookRelayEventMetrics
+> {
+  return {
+    pre_tool_use: createNativeHookRelayEventMetrics(),
+    post_tool_use: createNativeHookRelayEventMetrics(),
+    permission_request: createNativeHookRelayEventMetrics(),
+    before_agent_finalize: createNativeHookRelayEventMetrics(),
+  };
+}
+
+function createNativeHookRelayEventMetrics(): NativeHookRelayEventMetrics {
+  return {
+    count: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+    slowCount: 0,
+  };
+}
+
+function createNativeHookRelayEventCountRecord(): Record<NativeHookRelayEvent, number> {
+  return {
+    pre_tool_use: 0,
+    post_tool_use: 0,
+    permission_request: 0,
+    before_agent_finalize: 0,
+  };
+}
+
+function recordNativeHookRelayCommandRequest(
+  registration: ActiveNativeHookRelayRegistration,
+  event: NativeHookRelayEvent,
+  hasLocalWork: boolean,
+): void {
+  registration.metrics.commandRequests[event] += 1;
+  if (!hasLocalWork) {
+    registration.metrics.noLocalWorkCommandRequests[event] += 1;
+  }
+}
+
+function recordNativeHookRelayInvocationDuration(
+  registration: ActiveNativeHookRelayRegistration,
+  invocation: NativeHookRelayInvocation,
+  durationMs: number,
+): void {
+  const metrics = registration.metrics.eventMetrics[invocation.event];
+  metrics.count += 1;
+  metrics.totalDurationMs += durationMs;
+  metrics.maxDurationMs = Math.max(metrics.maxDurationMs, durationMs);
+  if (durationMs >= NATIVE_HOOK_RELAY_SLOW_INVOCATION_MS) {
+    metrics.slowCount += 1;
+    log.warn("native hook relay invocation was slow", {
+      relayId: registration.relayId,
+      event: invocation.event,
+      agentId: registration.agentId,
+      sessionId: registration.sessionId,
+      sessionKey: registration.sessionKey,
+      runId: registration.runId,
+      toolName: invocation.toolName,
+      toolUseId: invocation.toolUseId,
+      durationMs,
+      thresholdMs: NATIVE_HOOK_RELAY_SLOW_INVOCATION_MS,
+    });
+  }
+}
+
+function logNativeHookRelayMetrics(registration: ActiveNativeHookRelayRegistration): void {
+  const totalInvocations = NATIVE_HOOK_RELAY_EVENTS.reduce(
+    (sum, event) => sum + registration.metrics.eventMetrics[event].count,
+    0,
+  );
+  const totalCommandRequests = NATIVE_HOOK_RELAY_EVENTS.reduce(
+    (sum, event) => sum + registration.metrics.commandRequests[event],
+    0,
+  );
+  if (totalInvocations === 0 && totalCommandRequests === 0) {
+    return;
+  }
+  log.info("native hook relay summary", {
+    relayId: registration.relayId,
+    agentId: registration.agentId,
+    sessionId: registration.sessionId,
+    sessionKey: registration.sessionKey,
+    runId: registration.runId,
+    lifetimeMs: Date.now() - registration.metrics.registeredAtMs,
+    commandRequests: registration.metrics.commandRequests,
+    noLocalWorkCommandRequests: registration.metrics.noLocalWorkCommandRequests,
+    invocations: summarizeNativeHookRelayEventMetrics(registration.metrics.eventMetrics),
+  });
+}
+
+function summarizeNativeHookRelayEventMetrics(
+  metricsByEvent: Record<NativeHookRelayEvent, NativeHookRelayEventMetrics>,
+): Record<
+  NativeHookRelayEvent,
+  { count: number; totalDurationMs: number; maxDurationMs: number; slowCount: number }
+> {
+  return {
+    pre_tool_use: summarizeNativeHookRelayEventMetric(metricsByEvent.pre_tool_use),
+    post_tool_use: summarizeNativeHookRelayEventMetric(metricsByEvent.post_tool_use),
+    permission_request: summarizeNativeHookRelayEventMetric(metricsByEvent.permission_request),
+    before_agent_finalize: summarizeNativeHookRelayEventMetric(
+      metricsByEvent.before_agent_finalize,
+    ),
+  };
+}
+
+function summarizeNativeHookRelayEventMetric(metric: NativeHookRelayEventMetrics): {
+  count: number;
+  totalDurationMs: number;
+  maxDurationMs: number;
+  slowCount: number;
+} {
+  return {
+    count: metric.count,
+    totalDurationMs: metric.totalDurationMs,
+    maxDurationMs: metric.maxDurationMs,
+    slowCount: metric.slowCount,
+  };
+}
+
 export async function invokeNativeHookRelay(
   params: InvokeNativeHookRelayParams,
 ): Promise<NativeHookRelayProcessResponse> {
@@ -674,11 +826,16 @@ export async function invokeNativeHookRelay(
   });
   recordNativeHookRelayInvocation(normalized);
   const startedAt = Date.now();
-  const response = await processNativeHookRelayInvocation({
-    registration,
-    invocation: normalized,
-    adapter: getNativeHookRelayProviderAdapter(provider),
-  });
+  let response: NativeHookRelayProcessResponse;
+  try {
+    response = await processNativeHookRelayInvocation({
+      registration,
+      invocation: normalized,
+      adapter: getNativeHookRelayProviderAdapter(provider),
+    });
+  } finally {
+    recordNativeHookRelayInvocationDuration(registration, normalized, Date.now() - startedAt);
+  }
   if (
     normalized.toolUseId &&
     response.failureDisposition &&
