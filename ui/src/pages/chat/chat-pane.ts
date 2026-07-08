@@ -16,6 +16,7 @@ import {
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -87,6 +88,12 @@ type PaneSessionChangeOptions = { replace?: boolean };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
+const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
+const CHAT_TEXT_ENTRY_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
+const CHAT_SPACE_ACTIVATION_SELECTOR =
+  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
+const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -94,6 +101,12 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
+
+function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
+  return event
+    .composedPath()
+    .some((target) => target instanceof Element && target.matches(selector));
+}
 
 class ChatPane extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
@@ -340,6 +353,26 @@ class ChatPane extends LitElement {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (
+      this.active &&
+      !event.defaultPrevented &&
+      !event.isComposing &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      event.key.length === 1 &&
+      !keyboardEventPathMatches(event, CHAT_TEXT_ENTRY_SELECTOR) &&
+      !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
+      !document.querySelector(CHAT_MODAL_SELECTOR)
+    ) {
+      const composer = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+      if (composer && !composer.disabled && !composer.readOnly) {
+        // Focus during keydown capture so the browser delivers beforeinput/input,
+        // including the first character, through the composer's normal pipeline.
+        composer.focus({ preventScroll: true });
+      }
+    }
+
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }
@@ -569,6 +602,12 @@ class ChatPane extends LitElement {
     if (!state) {
       return;
     }
+    const previousTerminalAvailable = state.terminalAvailable;
+    state.terminalAvailable =
+      config.terminalEnabled &&
+      state.connected &&
+      hasOperatorAdminAccess(state.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
     const rootsChanged =
       state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
       state.localMediaPreviewRoots.some(
@@ -576,6 +615,7 @@ class ChatPane extends LitElement {
       );
     if (
       !rootsChanged &&
+      state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
       state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
       state.chatMessageMaxWidth === config.chatMessageMaxWidth
@@ -599,6 +639,11 @@ class ChatPane extends LitElement {
     state.client = snapshot.client;
     state.connected = snapshot.connected;
     state.hello = snapshot.hello;
+    state.terminalAvailable =
+      this.context.config.current.terminalEnabled &&
+      snapshot.connected &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const canonicalRouteSessionKey = routeSessionKey
