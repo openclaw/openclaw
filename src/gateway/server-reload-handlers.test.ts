@@ -386,7 +386,7 @@ describe("gateway hot reload model state", () => {
           anthropic: {
             baseUrl: "https://api.anthropic.com/v1",
             apiKey: "${ANTHROPIC_API_KEY}",
-            api: "anthropic",
+            api: "anthropic-messages",
             models: [{ id: "claude-opus-4-6" }],
           },
         },
