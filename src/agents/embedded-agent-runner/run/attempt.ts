@@ -2216,6 +2216,7 @@ export async function runEmbeddedAttempt(
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
     let trajectoryTerminalError: string | undefined;
+    let trajectoryTerminalStatus: string | undefined;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     let cleanupYieldAborted = false;
     let repairedRejectedThinkingReplay = false;
@@ -5841,6 +5842,7 @@ export async function runEmbeddedAttempt(
         hasTerminalOutput,
       });
       trajectoryTerminalError = attemptTrajectoryTerminal.terminalError;
+      trajectoryTerminalStatus = attemptTrajectoryTerminal.status;
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
         externalAbort,
@@ -5950,15 +5952,11 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
-      });
       if (trajectoryRecorder && !trajectoryEndRecorded) {
         trajectoryRecorder.recordEvent("session.ended", {
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup",
+          status:
+            trajectoryTerminalStatus ??
+            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
           aborted,
           externalAbort,
           timedOut,
@@ -5971,6 +5969,12 @@ export async function runEmbeddedAttempt(
         });
         trajectoryEndRecorded = true;
       }
+      await flushEmbeddedAttemptTrajectoryRecorder({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        log,
+        trajectoryRecorder,
+      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
