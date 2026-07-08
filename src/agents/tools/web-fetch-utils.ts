@@ -245,13 +245,11 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
       return {
         token: null,
         next: rawTextStart,
-        text: html.slice(start, rawTextStart),
       };
     }
     return {
       token: null,
       next: end + 1,
-      text: html.slice(start, end + 1),
     };
   }
 
@@ -371,7 +369,9 @@ function closeContext(
       );
       return;
     case "heading":
-      parent.parts.push(`\n${"#".repeat(context.level)} ${label}\n`);
+      parent.parts.push(
+        parent.kind === "anchor" ? label : `\n${"#".repeat(context.level)} ${label}\n`,
+      );
       return;
     case "list-item":
       parent.parts.push(`\n- ${label}`);
@@ -437,6 +437,22 @@ function pushContext(
     closeTopContext(stack, state);
   }
   stack.push(context);
+}
+
+function closeOpenAnchorWithText(stack: RenderContext[], state: { title?: string }): boolean {
+  for (let i = stack.length - 1; i > 0; i -= 1) {
+    const context = stack[i];
+    if (context?.kind === "anchor") {
+      if (!normalizeWhitespace(contextText(context))) {
+        return false;
+      }
+      while (stack.length > i) {
+        closeTopContext(stack, state);
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 function closeRawTextTagEnd(html: string, tagName: string, contentStart: number): number {
@@ -530,7 +546,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       continue;
     }
     if (BLOCK_BREAK_TAGS.has(token.name)) {
-      if (closeThroughContext(stack, "anchor", state)) {
+      if (closeOpenAnchorWithText(stack, state)) {
         appendText(stack, " ");
       }
     }
@@ -552,7 +568,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       continue;
     }
     if (/^h[1-6]$/.test(token.name) && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state);
+      closeOpenAnchorWithText(stack, state);
       pushContext(
         stack,
         { kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] },
@@ -561,7 +577,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       continue;
     }
     if (token.name === "li" && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state);
+      closeOpenAnchorWithText(stack, state);
       pushContext(stack, { kind: "list-item", parts: [] }, state);
     }
   }
