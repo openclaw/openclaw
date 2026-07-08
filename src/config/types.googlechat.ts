@@ -75,6 +75,15 @@ export type GoogleChatAccountConfig = {
   serviceAccountRef?: SecretRef;
   /** Service account JSON file path. */
   serviceAccountFile?: string;
+  /**
+   * Use Application Default Credentials for outbound Chat auth instead of an
+   * explicit service account key. When true and no serviceAccount /
+   * serviceAccountRef / serviceAccountFile is set, the channel authenticates
+   * via the ambient ADC chain (e.g. the GCE metadata server / workload
+   * identity), which must be authorized for the Chat app with the
+   * `chat.bot` scope. Ignored when an explicit credential is provided.
+   */
+  serviceAccountAdc?: boolean;
   /** Webhook audience type (app-url or project-number). */
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */
