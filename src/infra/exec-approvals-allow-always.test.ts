@@ -924,6 +924,67 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("rejects stale npm allow-always entries when unknown options hide exec", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const npmPath = makeExecutable(dir, "npm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "npm --unknown-global-option exec sh -c 'id > marker'",
+      allowlist: [{ pattern: npmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("requires bound args for package-manager shell script carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    makeExecutable(dir, "pnpm");
+    const shPath = makeExecutable(dir, "sh");
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `pnpm exec sh ${script}`,
+      allowlist: [{ pattern: shPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("matches package-manager exec allow-always entries by inner executable", async () => {
     if (process.platform === "win32") {
       return;
@@ -953,6 +1014,16 @@ $0 \\"$1\\"" touch {marker}`,
       platform: process.platform,
     });
     expect(inner.allowlistSatisfied).toBe(true);
+
+    const npmInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm --loglevel=silent exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmInner.allowlistSatisfied).toBe(true);
   });
 
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {

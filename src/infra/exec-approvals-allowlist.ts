@@ -479,6 +479,7 @@ function resolveSegmentAllowlistMatch(params: {
     candidatePath && executableResolution
       ? { ...executableResolution, resolvedPath: candidatePath, resolvedRealPath: trustPath }
       : executableResolution;
+  const matchExecutionResolution = resolveExecutionTargetResolution(matchResolution);
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
   const powerShellFileScriptArgv = resolvePowerShellFileScriptArgv({
     segment: allowlistSegment,
@@ -497,7 +498,7 @@ function resolveSegmentAllowlistMatch(params: {
     isPositionalCarrierInvocation,
     allowlistTargetIsExecutionTarget: executableResolutionsReferToSameTarget(
       executableResolution,
-      executionResolution,
+      matchExecutionResolution ?? executionResolution,
     ),
   });
   const shellPositionalArgvCandidatePath =

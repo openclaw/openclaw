@@ -627,6 +627,13 @@ describe("hardenApprovedExecutionPaths", () => {
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 4,
     },
+    {
+      name: "npm loglevel exec tsx file",
+      argv: ["npm", "--loglevel=silent", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
   ];
 
   it("captures mutable runtime operands in approval plans", () => {

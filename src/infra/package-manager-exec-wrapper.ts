@@ -5,6 +5,7 @@ import { parseInlineOptionToken } from "./inline-option-token.js";
 
 export const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "--cache",
+  "--loglevel",
   "--package",
   "--prefix",
   "--script-shell",
@@ -51,6 +52,10 @@ export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package"
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
+}
+
+function containsSubcommandToken(argv: string[], subcommands: ReadonlySet<string>): boolean {
+  return argv.some((token) => subcommands.has(normalizeLowercaseStringOrEmpty(token)));
 }
 
 export function normalizePackageManagerExecToken(token: string): string {
@@ -263,7 +268,9 @@ export function resolveKnownPackageManagerExecInvocation(
         flagOptions: NPM_EXEC_FLAG_OPTIONS,
       }) === "exec"
         ? { kind: "unsafe-exec" }
-        : { kind: "not-exec" };
+        : containsSubcommandToken(argv.slice(1), new Set(["exec"]))
+          ? { kind: "unsafe-exec" }
+          : { kind: "not-exec" };
     }
     case "npx":
     case "bunx": {
