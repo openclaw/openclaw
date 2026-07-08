@@ -6048,6 +6048,7 @@ export async function runEmbeddedAttempt(
       // actual session end including teardown and state persistence.
       // See: https://github.com/openclaw/openclaw/issues/102014
       if (trajectoryRecorder && !trajectoryEndRecorded) {
+        trajectoryRecorder.recordEvent("session.cleanup_completed");
         trajectoryRecorder.recordEvent("session.ended", {
           status:
             trajectoryTerminalStatus ??
