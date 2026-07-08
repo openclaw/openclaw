@@ -266,6 +266,120 @@ describe("memory wiki source sync state", () => {
     await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("does not salvage marker comments inside source content as Notes", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/marker-in-content.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Unsafe Local Import: test",
+        "## Unsafe Local Source",
+        "## Content",
+        "```",
+        "<!-- openclaw:human:start -->",
+        "this is inside the source fence, not Notes",
+        "<!-- openclaw:human:end -->",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "real human annotation",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "unsafe-local",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "unsafe-local",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    const salvagePath = path.join(
+      vaultRoot,
+      ".salvage",
+      `${pagePath.replace(/\//g, "_")}.notes.md`,
+    );
+    const salvaged = await fs.readFile(salvagePath, "utf-8");
+    // Must contain the real Notes block, not the markers inside the fence.
+    expect(salvaged).toContain("real human annotation");
+    expect(salvaged).not.toContain("this is inside the source fence");
+  });
+
+  it("keeps the page when salvage write fails", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/keep-on-write-fail.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```",
+        "generated",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "must survive",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // Create a file where the salvage directory would go so mkdir fails.
+    await fs.mkdir(path.join(vaultRoot, ".salvage"));
+    const salvagePath = path.join(
+      vaultRoot,
+      ".salvage",
+      `${pagePath.replace(/\//g, "_")}.notes.md`,
+    );
+    await fs.writeFile(salvagePath, "block", "utf-8");
+    // Make the salvage path a directory so writeFile fails with EISDIR.
+    await fs.rm(salvagePath);
+    await fs.mkdir(salvagePath);
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    // Salvage write failed — the page must NOT be removed.
+    expect(removed).toBe(0);
+    const stillThere = await fs.readFile(pageAbsPath, "utf-8");
+    expect(stillThere).toContain("must survive");
+  });
+
   it("rejects projected imports that would exceed the source-sync row cap", () => {
     expect(() =>
       assertMemoryWikiSourceSyncStateCapacity({

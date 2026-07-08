@@ -260,9 +260,39 @@ export async function shouldSkipImportedSourceWrite(params: {
 
 const HUMAN_START = "<!-- openclaw:human:start -->";
 const HUMAN_END = "<!-- openclaw:human:end -->";
+const CONTENT_HEADING_RE = /(?:^|\r?\n)## Content\r?\n/u;
 
+/**
+ * Find the end of the fenced code block that follows the `## Content` heading.
+ * Mirrors `afterSourceContentFence` in markdown.ts so the salvage path avoids
+ * treating marker comments inside imported source content as human Notes.
+ */
+function afterContentFence(page: string): number {
+  const heading = CONTENT_HEADING_RE.exec(page);
+  if (!heading) {
+    return 0;
+  }
+  const fenceLineStart = heading.index + heading[0].length;
+  const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];
+  if (!fence) {
+    return fenceLineStart;
+  }
+  const closingFence = new RegExp(`\\r?\\n${fence}(?=\\r?\\n|$)`, "u");
+  const close = closingFence.exec(page.slice(fenceLineStart + fence.length));
+  if (!close) {
+    return fenceLineStart;
+  }
+  return fenceLineStart + fence.length + close.index + close[0].length;
+}
+
+/**
+ * Extract the human Notes block from a wiki page. Only searches after the
+ * `## Content` fenced block so marker comments inside imported source body
+ * do not produce a false positive.
+ */
 function extractHumanNotesBlock(content: string): string | null {
-  const start = content.indexOf(HUMAN_START);
+  const searchFrom = afterContentFence(content);
+  const start = content.indexOf(HUMAN_START, searchFrom);
   if (start === -1) {
     return null;
   }
@@ -288,17 +318,23 @@ export async function pruneImportedSourceEntries(params: {
     // Before removing the page, salvage any human-authored Notes block
     // so legitimate prunes (renamed/deleted workspaces) don't silently
     // destroy durable annotations. See openclaw/openclaw#102230.
+    let notesBlock: string | null = null;
     try {
       const pageContent = await fs.readFile(pageAbsPath, "utf-8");
-      const notes = extractHumanNotesBlock(pageContent);
-      if (notes) {
-        const salvageDir = path.join(params.vaultRoot, ".salvage");
-        await fs.mkdir(salvageDir, { recursive: true });
-        const salvagePath = path.join(salvageDir, `${entry.pagePath.replace(/\//g, "_")}.notes.md`);
-        await fs.writeFile(salvagePath, notes, "utf-8");
-      }
+      notesBlock = extractHumanNotesBlock(pageContent);
     } catch {
       // Page may not exist or be unreadable; proceed with removal anyway.
+    }
+    if (notesBlock) {
+      const salvageDir = path.join(params.vaultRoot, ".salvage");
+      const salvagePath = path.join(salvageDir, `${entry.pagePath.replace(/\//g, "_")}.notes.md`);
+      try {
+        await fs.mkdir(salvageDir, { recursive: true });
+        await fs.writeFile(salvagePath, notesBlock, "utf-8");
+      } catch {
+        // Salvage write failed — keep the page so Notes are not lost.
+        continue;
+      }
     }
     await fs.rm(pageAbsPath, { force: true }).catch(() => undefined);
     delete params.state.entries[syncKey];
