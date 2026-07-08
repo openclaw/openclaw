@@ -91,6 +91,11 @@ describe("codex doctor contract", () => {
     ).toBe(false);
   });
 
+  it("reports the retired on-failure app-server approval policy", () => {
+    expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-failure" })).toBe(true);
+    expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
+  });
+
   it("removes the retired dynamic tools profile without dropping other Codex config", () => {
     const original = {
       plugins: {
@@ -311,5 +316,36 @@ describe("codex doctor contract", () => {
       original.plugins.entries.codex.config.codexPlugins.plugins["google-calendar"]
         .allow_destructive_actions,
     ).toBe("on-request");
+  });
+
+  it("renames the retired app-server on-failure approval policy", () => {
+    const original = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                approvalPolicy: "on-failure",
+                sandbox: "workspace-write",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const result = normalizeCompatibilityConfig({ cfg: original });
+
+    expect(result.changes).toEqual([
+      'Renamed plugins.entries.codex.config.appServer.approvalPolicy="on-failure" to "on-request".',
+    ]);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: {
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      },
+    });
+    expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe("on-failure");
   });
 });

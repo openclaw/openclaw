@@ -143,8 +143,10 @@ const threadBindingSchema = z.object({
     .optional()
     .catch(undefined),
   approvalPolicy: z
-    .enum(["never", "on-request", "on-failure", "untrusted"])
-    .optional()
+    .preprocess(
+      (value) => (value === "on-failure" ? "on-request" : value),
+      z.enum(["never", "on-request", "untrusted"]).optional(),
+    )
     .catch(undefined),
   sandbox: z
     .enum(["read-only", "workspace-write", "danger-full-access"])
