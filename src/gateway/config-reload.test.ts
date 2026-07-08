@@ -237,6 +237,25 @@ describe("buildGatewayReloadPlan", () => {
     });
   });
 
+  it("hot-reloads plugins for acp config changes instead of restarting", () => {
+    const path = "acp.enabled";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("hot-reloads plugins for acp.backend config changes", () => {
+    const path = "acp.backend";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
