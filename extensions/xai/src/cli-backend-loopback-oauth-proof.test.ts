@@ -1,15 +1,19 @@
 // Real-behavior proof: with an OAuth auth context, the xAI plugin registers
 // x_search and code_execution for loopback/CLI-backend tool surfaces.
 import { describe, expect, it } from "vitest";
-import type { AnyAgentTool } from "../../../src/agents/tools/common.js";
 import xaiPlugin from "../index.js";
+
+type ProofTool = {
+  name: string;
+  description: string;
+};
 
 type ToolFactory = (ctx: {
   config?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
   hasAuthForProvider?: (providerId: string) => boolean;
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
-}) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+}) => ProofTool | ProofTool[] | null | undefined;
 
 type ToolRegistration = {
   name: string;
@@ -42,7 +46,7 @@ describe("xAI OAuth CLI-backend loopback tool surface proof", () => {
       resolveApiKeyForProvider: async () => "REDACTED_API_KEY",
     };
 
-    const resolvedTools: AnyAgentTool[] = [];
+    const resolvedTools: ProofTool[] = [];
     for (const registration of registeredTools) {
       const result = registration.factory({
         config: {},
