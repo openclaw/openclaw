@@ -781,14 +781,17 @@ export function createReplyOperation(params: {
     if (replyRunState.activeRunsByKey.get(sessionKey) !== operation) {
       return false;
     }
-    getAttachedBackend(operation)?.cancel("superseded");
-    abortInternally(createAbortError("Reply operation expired as stale"));
+    // Set the terminal result BEFORE cancelling the backend: cancel can
+    // synchronously re-enter abortByUser() from the run loop's abort handler,
+    // which would stamp aborted_by_user and misattribute a watchdog expiry.
     if (!result) {
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
+    getAttachedBackend(operation)?.cancel("superseded");
+    abortInternally(createAbortError("Reply operation expired as stale"));
     diag.warn(
       `reply run stale takeover: forced release sessionKey=${sessionKey} reason=${reason} phase=${phase} result=${formatReplyOperationResult(
         result,
