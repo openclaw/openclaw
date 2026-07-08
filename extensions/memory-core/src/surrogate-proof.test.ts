@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runDreamingSweepPhases } from "extensions/memory-core/src/dreaming-phases.js";
-import { createMemoryCoreTestHarness } from "extensions/memory-core/src/test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryCorePluginConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runDreamingSweepPhases } from "./dreaming-phases.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const PROOF_DAY = "2026-07-08";
