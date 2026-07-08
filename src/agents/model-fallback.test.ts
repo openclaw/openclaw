@@ -2091,6 +2091,61 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
+  it("retries with the switched model after re-throwing LiveSessionModelSwitchError for a non-candidate target (#101676 end-to-end)", async () => {
+    // This test demonstrates the full production retry flow:
+    //   1. runWithModelFallback (primary model) → embedded runner throws
+    //      LiveSessionModelSwitchError for a target NOT in candidates →
+    //      isLiveSessionModelSwitchTargetInCandidates returns false →
+    //      re-throw (new #101676 behavior, not wrapped as FailoverError).
+    //   2. Outer retry loop catches LiveSessionModelSwitchError, switches
+    //      provider/model, and retries with runWithModelFallback.
+    //   3. Second runWithModelFallback call succeeds with the switched model.
+    //
+    // This is the path that agent-runner-execution.ts and agent-command.ts
+    // take in production.  Neither outer-loop test exercises the real
+    // runWithModelFallback because both mock model-fallback.js at module
+    // level.  This test bridges that gap with the real implementation.
+    const cfg = makeCfg();
+    const switchedProvider = "anthropic";
+    const switchedModel = "claude-sonnet-4-6";
+    const switchError = new LiveSessionModelSwitchError({
+      provider: switchedProvider,
+      model: switchedModel,
+    });
+
+    // First attempt: primary model throws LiveSessionModelSwitchError.
+    // The switch target is NOT in the default fallback chain
+    // (only claude-haiku-3-5), so runWithModelFallback must re-throw.
+    const run1 = vi.fn().mockRejectedValue(switchError);
+    const err = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run: run1,
+    }).catch((e: unknown) => e);
+
+    // Guard: the error must reach the "outer retry loop" intact.
+    expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
+    expect((err as LiveSessionModelSwitchError).provider).toBe(switchedProvider);
+    expect((err as LiveSessionModelSwitchError).model).toBe(switchedModel);
+    expect(run1).toHaveBeenCalledTimes(1);
+
+    // Second attempt: outer loop retries with the switched model.
+    const run2 = vi.fn().mockResolvedValue("switched-ok");
+    const result = await runWithModelFallback({
+      cfg,
+      provider: switchedProvider,
+      model: switchedModel,
+      run: run2,
+    });
+
+    // The retry must succeed with the switched model.
+    expect(result.result).toBe("switched-ok");
+    expect(result.provider).toBe(switchedProvider);
+    expect(result.model).toBe(switchedModel);
+    expect(run2).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the configured haiku candidate for retryable provider failures", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
