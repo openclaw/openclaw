@@ -556,6 +556,18 @@ class ChatPane extends LitElement {
     if (select && this.state && select.value !== this.state.sessionKey) {
       select.value = this.state.sessionKey;
     }
+    // The plan pane holds a snapshot taken when it was opened; once the plan
+    // exits (approved/cleared) there is nothing to show, so close the pane
+    // rather than fall through to the generic "no content" detail view.
+    if (this.state?.sidebarContent?.kind === "plan") {
+      const sessionKey = this.state.sessionKey;
+      const activePlan = this.state.sessionsResult?.sessions.find(
+        (row) => row.key === sessionKey,
+      )?.plan;
+      if (!activePlan) {
+        this.state.handleCloseSidebar();
+      }
+    }
   }
 
   override disconnectedCallback() {

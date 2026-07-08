@@ -967,7 +967,14 @@ openclaw-chat-page {
 }
 
 .agent-chat__composer-status-stack:not(
-  :has(.compaction-indicator, .fallback-indicator, .agent-chat__goal)
+  :has(
+    .compaction-indicator,
+    .fallback-indicator,
+    .agent-chat__goal,
+    .agent-chat__plan-chip,
+    openclaw-inline-question,
+    openclaw-inline-plan-approval
+  )
 ) {
   display: none;
 }
