@@ -71,6 +71,20 @@ const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 
+// Code Mode runtime limit bounds (clamp values to these safe ranges).
+const MIN_TIMEOUT_MS = 100;
+const MAX_TIMEOUT_MS = 60_000;
+const MIN_MEMORY_BYTES = 1024 * 1024;
+const MAX_MEMORY_BYTES = 1024 * 1024 * 1024;
+const MIN_OUTPUT_BYTES = 1024;
+const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+const MIN_SNAPSHOT_BYTES = 1024;
+const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+const MIN_PENDING_TOOL_CALLS = 1;
+const MAX_PENDING_TOOL_CALLS = 128;
+const MIN_SNAPSHOT_TTL_SECONDS = 1;
+const MAX_SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
+
 type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
@@ -227,31 +241,35 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
-    timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
+    timeoutMs: clampNumber(
+      readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
+      MIN_TIMEOUT_MS,
+      MAX_TIMEOUT_MS,
+    ),
     memoryLimitBytes: clampNumber(
       readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
-      1024 * 1024,
-      1024 * 1024 * 1024,
+      MIN_MEMORY_BYTES,
+      MAX_MEMORY_BYTES,
     ),
     maxOutputBytes: clampNumber(
       readPositiveInteger(raw.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
-      1024,
-      10 * 1024 * 1024,
+      MIN_OUTPUT_BYTES,
+      MAX_OUTPUT_BYTES,
     ),
     maxSnapshotBytes: clampNumber(
       readPositiveInteger(raw.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES),
-      1024,
-      256 * 1024 * 1024,
+      MIN_SNAPSHOT_BYTES,
+      MAX_SNAPSHOT_BYTES,
     ),
     maxPendingToolCalls: clampNumber(
       readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
-      1,
-      128,
+      MIN_PENDING_TOOL_CALLS,
+      MAX_PENDING_TOOL_CALLS,
     ),
     snapshotTtlSeconds: clampNumber(
       readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
-      1,
-      24 * 60 * 60,
+      MIN_SNAPSHOT_TTL_SECONDS,
+      MAX_SNAPSHOT_TTL_SECONDS,
     ),
     searchDefaultLimit: clampNumber(
       readPositiveInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
@@ -288,25 +306,29 @@ function resolveCodeModeHeadlessConfig(
   const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   return {
     ...base,
-    timeoutMs: clampNumber(readPositiveInteger(overrides?.timeoutMs, base.timeoutMs), 100, 60_000),
+    timeoutMs: clampNumber(
+      readPositiveInteger(overrides?.timeoutMs, base.timeoutMs),
+      MIN_TIMEOUT_MS,
+      MAX_TIMEOUT_MS,
+    ),
     memoryLimitBytes: clampNumber(
       readPositiveInteger(overrides?.memoryLimitBytes, base.memoryLimitBytes),
-      1024 * 1024,
-      1024 * 1024 * 1024,
+      MIN_MEMORY_BYTES,
+      MAX_MEMORY_BYTES,
     ),
     maxOutputBytes: clampNumber(
       readPositiveInteger(overrides?.maxOutputBytes, base.maxOutputBytes),
-      1024,
-      10 * 1024 * 1024,
+      MIN_OUTPUT_BYTES,
+      MAX_OUTPUT_BYTES,
     ),
     maxSnapshotBytes: clampNumber(
       readPositiveInteger(overrides?.maxSnapshotBytes, base.maxSnapshotBytes),
-      1024,
-      256 * 1024 * 1024,
+      MIN_SNAPSHOT_BYTES,
+      MAX_SNAPSHOT_BYTES,
     ),
     maxPendingToolCalls: clampNumber(
       readPositiveInteger(overrides?.maxPendingToolCalls, base.maxPendingToolCalls),
-      1,
+      MIN_PENDING_TOOL_CALLS,
       128,
     ),
   };
