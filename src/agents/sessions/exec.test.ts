@@ -47,6 +47,24 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function findDanglingSurrogates(text: string): string[] {
+  const dangling: string[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i += 1;
+      } else {
+        dangling.push(`high:${code.toString(16)}`);
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      dangling.push(`low:${code.toString(16)}`);
+    }
+  }
+  return dangling;
+}
+
 describe("execCommand", () => {
   beforeEach(() => {
     killProcessTreeMock.mockReset();
@@ -121,6 +139,28 @@ describe("execCommand", () => {
     expect(result.stdoutTruncatedChars).toBe(3);
   });
 
+  it("keeps caller-capped retained output UTF-16 safe", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 2 });
+    child.stdout.emit("data", Buffer.from("A😀B"));
+    child.stderr.emit("data", Buffer.from("C😀D"));
+    wait.resolve(0);
+
+    const result = await resultPromise;
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("B");
+    expect(result.stderr).toBe("D");
+    expect(result.stdoutTruncatedChars).toBe(3);
+    expect(result.stderrTruncatedChars).toBe(3);
+    expect(findDanglingSurrogates(result.stdout)).toEqual([]);
+    expect(findDanglingSurrogates(result.stderr)).toEqual([]);
+  });
+
   it("fails instead of silently truncating default exec output", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();
@@ -129,7 +169,8 @@ describe("execCommand", () => {
     const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp");
-    child.stdout.emit("data", Buffer.from("x".repeat(16 * 1024 * 1024 + 1)));
+    const output = `${"x".repeat(16 * 1024 * 1024 - 1)}😀`;
+    child.stdout.emit("data", Buffer.from(output));
     wait.resolve(0);
 
     const result = await resultPromise;
@@ -141,8 +182,9 @@ describe("execCommand", () => {
     expect(result.code).toBe(1);
     expect(result.killed).toBe(true);
     expect(result.outputLimitExceeded).toBe("stdout");
-    expect(result.stdout.length).toBe(16 * 1024 * 1024);
-    expect(result.stdoutTruncatedChars).toBe(1);
+    expect(result.stdout.length).toBe(16 * 1024 * 1024 - 1);
+    expect(result.stdoutTruncatedChars).toBe(2);
+    expect(findDanglingSurrogates(result.stdout)).toEqual([]);
     expect(result.stderr).toContain("exec stdout exceeded output limit");
   });
 
