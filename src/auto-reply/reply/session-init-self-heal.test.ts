@@ -63,10 +63,10 @@ afterAll(async () => {
   await fs.rm(suiteRoot, { recursive: true, force: true });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   commitConflictControl.forcedConflicts.clear();
   commitConflictControl.commitCalls.clear();
-  sessionMcpTesting.resetSessionMcpRuntimeManager();
+  await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 
 afterEach(() => {
