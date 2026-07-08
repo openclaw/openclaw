@@ -272,10 +272,12 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
-          truncated = true;
+        if (truncated) {
           break;
         }
+        // bytesRead === maxBytes alone is not proof of truncation: the body may
+        // end exactly at the cap. Keep reading so EOF returns a complete result;
+        // any further non-empty chunk hits the remaining<=0 branch above.
       }
     } catch {
       // Best-effort: return whatever we read so far.
