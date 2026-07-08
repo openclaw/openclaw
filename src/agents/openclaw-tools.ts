@@ -476,6 +476,7 @@ export function createOpenClawTools(
       agentAccountId: options?.agentAccountId,
       agentTo: options?.agentTo,
       agentThreadId: options?.agentThreadId,
+      config: resolvedConfig,
     }),
     createGetGoalTool({
       agentSessionKey: options?.agentSessionKey,

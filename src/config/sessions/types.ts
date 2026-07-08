@@ -223,6 +223,21 @@ export type PendingSkillSuggestion = {
   detectedAt: number;
 };
 
+/**
+ * Durable breadcrumb for an in-flight ask_user_question. In-memory pending
+ * questions die with the gateway process on restart; this breadcrumb lets a
+ * startup sweep emit `question.expired` so a surface that rendered the question
+ * (Control UI card, channel prompt) never silently hangs after a restart.
+ */
+export type SessionPendingQuestion = {
+  schemaVersion: 1;
+  /** QuestionManager record id. */
+  id: string;
+  createdAt: number;
+  /** Turn-source channel the question was routed to, for surface targeting. */
+  turnSourceChannel?: string;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -302,6 +317,8 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable breadcrumb for an in-flight ask_user_question (restart expiry-sweep). */
+  pendingQuestion?: SessionPendingQuestion;
   /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
   pendingSkillSuggestion?: PendingSkillSuggestion;
   /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */

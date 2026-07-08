@@ -1236,6 +1236,33 @@ export async function startGatewayServer(
     // and channels even though the tool registers outside any request context.
     const { bindQuestionManagerEmitter } = await import("./server-methods/question.js");
     bindQuestionManagerEmitter({ manager: questionManager, broadcast });
+    // In-memory pending questions died with the previous process; sweep the durable
+    // breadcrumbs so any surface still showing a pre-restart question is dismissed
+    // via question.expired instead of hanging. Best-effort, default store scope.
+    void (async () => {
+      try {
+        const [{ sweepPendingQuestions }, { resolveStorePath }] = await Promise.all([
+          import("../config/sessions/pending-question.js"),
+          import("../config/sessions/paths.js"),
+        ]);
+        await sweepPendingQuestions({
+          storePath: resolveStorePath(cfgAtStart?.session?.store),
+          emitExpired: (breadcrumb) =>
+            broadcast(
+              "question.expired",
+              {
+                id: breadcrumb.pendingQuestion.id,
+                reason: "gateway-restart",
+                ts: Date.now(),
+                turnSourceChannel: breadcrumb.pendingQuestion.turnSourceChannel ?? null,
+              },
+              { dropIfSlow: true },
+            ),
+        });
+      } catch (err) {
+        log.warn?.(`question breadcrumb startup sweep failed: ${String(err)}`);
+      }
+    })();
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,

@@ -8,6 +8,12 @@
  * global QuestionManager until any surface resolves it (or it expires).
  */
 import { Type } from "typebox";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import {
+  clearPendingQuestion,
+  recordPendingQuestion,
+} from "../../config/sessions/pending-question.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalQuestionManager } from "../../gateway/question-manager.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AgentHarnessUserInputQuestion } from "../harness/user-input-bridge.js";
@@ -77,6 +83,8 @@ export type AskUserQuestionToolOptions = {
   agentTo?: string;
   agentAccountId?: string;
   agentThreadId?: string | number;
+  /** Used to resolve the session store path for the durable restart-sweep breadcrumb. */
+  config?: OpenClawConfig;
 };
 
 type RawOption = { label: string; description?: string };
@@ -195,7 +203,7 @@ export function createAskUserQuestionTool(options: AskUserQuestionToolOptions = 
       // (in-process) deployment. Caveat: a remote/out-of-process agent runtime would
       // not see this singleton — such a topology must route through a gateway
       // request/wait RPC (mirroring exec.approval.request) before it is supported.
-      const { wait } = getGlobalQuestionManager().register({
+      const { record, wait } = getGlobalQuestionManager().register({
         sessionKey,
         agentId: options.sessionAgentId ?? null,
         turnSourceChannel: options.agentChannel ?? null,
@@ -205,12 +213,37 @@ export function createAskUserQuestionTool(options: AskUserQuestionToolOptions = 
         questions,
       });
 
-      const answers = await wait;
-      if (!answers) {
-        // Expired without an answer (gateway shutdown/restart or explicit expiry).
-        return jsonResult({ status: "expired", answers: {} });
+      // Persist a durable breadcrumb so a gateway restart can sweep-expire the
+      // pending question and dismiss any surface still showing it. Best-effort:
+      // a store failure must not break the (already-registered) question.
+      const breadcrumbScope = sessionKey
+        ? {
+            sessionKey,
+            storePath: resolveStorePath(options.config?.session?.store, {
+              agentId: options.sessionAgentId,
+            }),
+          }
+        : undefined;
+      if (breadcrumbScope) {
+        await recordPendingQuestion(breadcrumbScope, {
+          id: record.id,
+          createdAt: record.createdAtMs,
+          turnSourceChannel: options.agentChannel ?? null,
+        }).catch(() => {});
       }
-      return jsonResult({ status: "answered", answers });
+
+      try {
+        const answers = await wait;
+        if (!answers) {
+          // Expired without an answer (gateway shutdown/restart or explicit expiry).
+          return jsonResult({ status: "expired", answers: {} });
+        }
+        return jsonResult({ status: "answered", answers });
+      } finally {
+        if (breadcrumbScope) {
+          await clearPendingQuestion(breadcrumbScope, record.id).catch(() => {});
+        }
+      }
     },
   };
 }
