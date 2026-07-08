@@ -26,6 +26,7 @@ import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,
 } from "./approval-native.types.js";
+import type { ChannelLoginMethod, ChannelLoginMethodKind } from "./channel-login-method.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
@@ -225,13 +226,6 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
 
 export type ChannelGatewayContextV2<ResolvedAccount = unknown> =
   ChannelGatewayContext<ResolvedAccount> & { scheduler: PluginServiceSchedulerV1 };
-
-export type ChannelLoginMethod = {
-  kind: "phone-number";
-  phoneNumber: string;
-};
-
-export type ChannelLoginMethodKind = ChannelLoginMethod["kind"];
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   apiVersion?: 1;
