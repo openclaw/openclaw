@@ -83,6 +83,65 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+// Partition arr[left..right] around a pivot value via Lomuto scheme.  Returns
+// the final index of the pivot so the caller knows which side to recurse into.
+function partition<T>(
+  arr: T[],
+  left: number,
+  right: number,
+  compare: (a: T, b: T) => number,
+): number {
+  const pivotIdx = left + Math.floor(Math.random() * (right - left + 1));
+  [arr[pivotIdx], arr[right]] = [arr[right], arr[pivotIdx]];
+  const pivotVal = arr[right];
+  let storeIdx = left;
+  for (let i = left; i < right; i++) {
+    if (compare(arr[i], pivotVal) < 0) {
+      [arr[i], arr[storeIdx]] = [arr[storeIdx], arr[i]];
+      storeIdx++;
+    }
+  }
+  [arr[storeIdx], arr[right]] = [arr[right], arr[storeIdx]];
+  return storeIdx;
+}
+
+// Quickselect: reorder arr so the first k elements are the "smallest" according
+// to `compare` (elements 0..k-1 ≤ element k ≤ elements k+1..n-1).  O(n)
+// expected time; useful as a precursor to sorting only the top K.
+function quickselect<T>(arr: T[], k: number, compare: (a: T, b: T) => number): void {
+  let left = 0;
+  let right = arr.length - 1;
+  while (left < right) {
+    const pivot = partition(arr, left, right, compare);
+    if (pivot === k) {
+      break;
+    }
+    if (pivot < k) {
+      left = pivot + 1;
+    } else {
+      right = pivot - 1;
+    }
+  }
+}
+
+// Select the top K elements and fully sort them.  When k ≪ n this costs
+// O(n + k log k) instead of the O(n log n) a full sort would require.
+function partialSortTopK<T>(arr: T[], k: number, compare: (a: T, b: T) => number): T[] {
+  if (k <= 0) {
+    return [];
+  }
+  if (k >= arr.length) {
+    return arr.sort(compare);
+  }
+  quickselect(arr, k - 1, compare);
+  // Sort just the top-K window in-place.
+  const top = arr.slice(0, k).sort(compare);
+  for (let i = 0; i < k; i++) {
+    arr[i] = top[i];
+  }
+  return arr;
+}
+
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
@@ -109,25 +168,26 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
+    const tasksOrderedByUpdated = (left: TaskRecord, right: TaskRecord) => {
+      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+      if (updatedDiff !== 0) {
+        return updatedDiff;
+      }
+      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+    };
     // The registry lists newest-created first; the ledger view pages by last
     // activity so an old long-running task that just finished still surfaces
     // on the first page instead of hiding behind newer-created records.
-    const filtered = listTaskRecords()
-      .filter((task) => {
-        if (statusFilter && !statusFilter.has(task.status)) {
-          return false;
-        }
-        return (
-          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
-        );
-      })
-      .toSorted((left, right) => {
-        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-        if (updatedDiff !== 0) {
-          return updatedDiff;
-        }
-        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
-      });
+    const filtered = listTaskRecords().filter((task) => {
+      if (statusFilter && !statusFilter.has(task.status)) {
+        return false;
+      }
+      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
+    });
+    // Only sort what the client needs: cursor+limit top items by last-updated
+    // activity.  On busy gateways this avoids a full O(n log n) sort on every
+    // Control UI poll (see #101716).
+    partialSortTopK(filtered, cursor + limit, tasksOrderedByUpdated);
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
     respond(true, {
