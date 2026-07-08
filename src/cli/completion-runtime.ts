@@ -273,6 +273,8 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       profilePath = resolveCompletionProfilePath("powershell");
       sourceLine = formatCompletionSourceLine("powershell", cachePath);
       break;
+    default:
+      throw new Error(`Unsupported shell: ${shell}`);
   }
 
   try {

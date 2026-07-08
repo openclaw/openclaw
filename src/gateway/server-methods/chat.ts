@@ -4747,6 +4747,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                 });
               }
               break;
+            default:
+              // Unknown deliver reply kinds are silently dropped.
+              break;
           }
         },
       });

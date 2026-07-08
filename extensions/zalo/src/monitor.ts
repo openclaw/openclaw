@@ -338,6 +338,9 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
         `[${account.accountId}] Received unsupported message type from ${message.from.id}`,
       );
       break;
+    default:
+      logVerbose(core, runtime, `[${account.accountId}] Unknown Zalo event type: ${event_name}`);
+      break;
   }
 }
 
