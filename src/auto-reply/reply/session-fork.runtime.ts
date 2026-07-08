@@ -75,6 +75,18 @@ async function estimateParentTranscriptTokensFromBytes(params: {
   }
 }
 
+/**
+ * Fast, stat-only token estimate used as a bounded fallback when the full
+ * token resolution exceeds its deadline. Reads only file metadata, so it stays
+ * bounded even for multi-hundred-MB transcripts and never enters a full read.
+ */
+export async function estimateParentForkTokensFromSizeRuntime(params: {
+  parentEntry: StoreSessionEntry;
+  storePath: string;
+}): Promise<number | undefined> {
+  return estimateParentTranscriptTokensFromBytes(params);
+}
+
 /** Resolves the best available token count for a parent session before forking. */
 export async function resolveParentForkTokenCountRuntime(params: {
   parentEntry: StoreSessionEntry;

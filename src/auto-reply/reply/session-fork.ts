@@ -25,6 +25,12 @@ export type ParentForkDecision =
       maxTokens: number;
       parentTokens: number;
       message: string;
+    }
+  | {
+      status: "skip";
+      reason: "parent-size-unresolved";
+      maxTokens: number;
+      message: string;
     };
 
 type ParentForkDecisionParams = {
@@ -102,6 +108,13 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
+function formatParentForkSizeUnresolvedMessage(): string {
+  return (
+    "Parent context size could not be resolved in time to fork safely; " +
+    "starting with isolated context instead."
+  );
+}
+
 function resolveParentForkStorePath(params: {
   agentId?: string;
   config?: OpenClawConfig;
@@ -124,10 +137,23 @@ export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = await resolveParentForkTokenCount({
+  const resolution = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
     storePath: resolveParentForkStorePath(params),
   });
+  if (resolution.status === "unresolved") {
+    // The parent size could not be resolved within the deadline, even from a
+    // fast size probe. Skip the fork and start with isolated context rather
+    // than enter an unbounded parent transcript read that could stall session
+    // creation indefinitely (#101718).
+    return {
+      status: "skip",
+      reason: "parent-size-unresolved",
+      maxTokens,
+      message: formatParentForkSizeUnresolvedMessage(),
+    };
+  }
+  const parentTokens = resolution.tokens;
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -291,17 +317,45 @@ export async function forkSessionEntryFromParent(
   );
 }
 
+/**
+ * Parent forking must never block session creation, but it also must not fork a
+ * parent whose size was never confirmed (that would enter an unbounded fork
+ * transcript read). The full resolution can read up to ~1MB of transcript tail
+ * — or the whole transcript index when leaf-control is invalid — so it is raced
+ * against a deadline. On timeout we fall back to a fast, stat-only byte estimate
+ * (bounded even for multi-hundred-MB files) so an oversized parent is still
+ * skipped; only when even that probe cannot answer in time do we treat the
+ * parent as unresolved and skip conservatively (#101718).
+ */
 const PARENT_FORK_TOKEN_TIMEOUT_MS = 2_000;
+const PARENT_FORK_SIZE_PROBE_TIMEOUT_MS = 1_000;
+const PARENT_FORK_TOKEN_TIMEOUT = Symbol("parent-fork-token-timeout");
+
+type ParentForkTokenResolution =
+  | { status: "resolved"; tokens: number | undefined }
+  | { status: "unresolved" };
+
+function resolveAfter<T>(value: T, ms: number): Promise<T> {
+  return new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+}
 
 async function resolveParentForkTokenCount(params: {
   parentEntry: SessionEntry;
   storePath: string;
-}): Promise<number | undefined> {
+}): Promise<ParentForkTokenResolution> {
   const runtime = await loadSessionForkRuntime();
-  return Promise.race([
+  const resolved = await Promise.race([
     runtime.resolveParentForkTokenCountRuntime(params),
-    new Promise<undefined>((resolve) =>
-      setTimeout(() => resolve(undefined), PARENT_FORK_TOKEN_TIMEOUT_MS),
-    ),
+    resolveAfter(PARENT_FORK_TOKEN_TIMEOUT, PARENT_FORK_TOKEN_TIMEOUT_MS),
   ]);
+  if (resolved !== PARENT_FORK_TOKEN_TIMEOUT) {
+    return { status: "resolved", tokens: resolved };
+  }
+  const estimate = await Promise.race([
+    runtime.estimateParentForkTokensFromSizeRuntime(params),
+    resolveAfter<number | undefined>(undefined, PARENT_FORK_SIZE_PROBE_TIMEOUT_MS),
+  ]);
+  return typeof estimate === "number"
+    ? { status: "resolved", tokens: estimate }
+    : { status: "unresolved" };
 }
