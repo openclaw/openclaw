@@ -1198,7 +1198,7 @@ $0 \\"$1\\"" touch {marker}`,
       requiresExecApproval({
         ask: "on-miss",
         security: "allowlist",
-        analysisOk: denied.analysisOk,
+        analysisOk: extraArgAnalysis.ok,
         allowlistSatisfied: denied.allowlistSatisfied,
       }),
     ).toBe(true);
