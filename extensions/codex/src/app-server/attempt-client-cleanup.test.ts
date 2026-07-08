@@ -50,6 +50,7 @@ describe("Codex app-server attempt client cleanup", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       reason: "turn_terminal_idle_timeout",
+      suspectPhysicalClient: true,
     });
 
     expect(request).toHaveBeenCalledWith(
