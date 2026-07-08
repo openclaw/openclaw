@@ -176,6 +176,7 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   private buffer = "";
   private readonly proc: ChildProcessWithoutNullStreams;
   private readonly stderrTail: string[] = [];
+  private closing = false;
 
   constructor(endpoint: Extract<CodexSupervisorEndpoint, { transport: "stdio-proxy" }>) {
     super();
@@ -222,6 +223,10 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   }
 
   async close(): Promise<void> {
+    if (this.closing) {
+      return;
+    }
+    this.closing = true;
     this.proc.stdin.end();
     this.proc.kill("SIGTERM");
   }
