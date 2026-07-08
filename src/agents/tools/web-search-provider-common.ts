@@ -232,7 +232,7 @@ function isValidIsoDate(value: string): boolean {
 
 export function isoToPerplexityDate(iso: string): string | undefined {
   const match = iso.match(ISO_DATE_PATTERN);
-  if (!match) {
+  if (!match || !isValidIsoDate(iso)) {
     return undefined;
   }
   const [, year, month, day] = match;

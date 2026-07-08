@@ -87,6 +87,7 @@ describe("web_search date normalization", () => {
 
   it("rejects invalid ISO dates", () => {
     expect(isoToPerplexityDate("1/15/2024")).toBeUndefined();
+    expect(isoToPerplexityDate("2024-02-30")).toBeUndefined();
     expect(isoToPerplexityDate("invalid")).toBeUndefined();
   });
 });
