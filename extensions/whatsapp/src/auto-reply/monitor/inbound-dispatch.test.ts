@@ -21,11 +21,13 @@ type CapturedDispatchParams = {
       payload: CapturedReplyPayload,
       info: { kind: "tool" | "block" | "final" },
     ) => Promise<unknown>;
+    onReplyStart?: () => Promise<void>;
     onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
     onSettled?: () => Promise<unknown>;
   };
   replyOptions?: {
     disableBlockStreaming?: boolean;
+    onToolStart?: (payload: { name?: string }) => Promise<void>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     suppressTyping?: boolean;
   };
@@ -221,6 +223,10 @@ function getCapturedOnError() {
 
 function getCapturedOnSettled() {
   return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.onSettled;
+}
+
+function getCapturedOnReplyStart() {
+  return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.onReplyStart;
 }
 
 function getCapturedReplyOptions() {
@@ -1357,20 +1363,119 @@ describe("whatsapp inbound dispatch", () => {
     expectRememberSentContextFields(rememberSentText, undefined, {});
   });
 
-  it("passes sendComposing through as the reply typing callback", async () => {
+  it("calls sendComposing from the reply typing callback", async () => {
     const sendComposing = vi.fn(async () => undefined);
 
     await dispatchBufferedReply({
       msg: makeMsg({ platform: { sendComposing } }),
     });
 
-    expect(
-      (
-        capturedDispatchParams as {
-          dispatcherOptions?: { onReplyStart?: unknown };
-        }
-      )?.dispatcherOptions?.onReplyStart,
-    ).toBe(sendComposing);
+    await getCapturedOnReplyStart()?.();
+
+    expect(sendComposing).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends opt-in throttled progress after the configured initial delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+        async (params: CapturedDispatchParams) => {
+          capturedDispatchParams = params;
+          await params.dispatcherOptions?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(29_999);
+          expect(deliverReply).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+        },
+      );
+
+      await dispatchBufferedReply({
+        cfg: {
+          channels: {
+            whatsapp: {
+              blockStreaming: true,
+              progressMessages: {
+                enabled: true,
+                initialDelayMs: 30_000,
+                intervalMs: 45_000,
+                maxMessages: 3,
+              },
+            },
+          },
+        } as never,
+        deliverReply,
+      });
+
+      expect(deliverReply).toHaveBeenCalledTimes(1);
+      expectReplyResultFields(deliverReply, {
+        text: "I'm still analyzing this and will update you when it's ready.",
+      });
+      expect(requireLastMockArg(deliverReply, 0, "progress params").skipLog).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not send progress when progressMessages is not enabled", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+        async (params: CapturedDispatchParams) => {
+          capturedDispatchParams = params;
+          await params.dispatcherOptions?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(90_000);
+          return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+        },
+      );
+
+      await dispatchBufferedReply({ deliverReply });
+
+      expect(deliverReply).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels pending progress before final delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+        async (params: CapturedDispatchParams) => {
+          capturedDispatchParams = params;
+          await params.dispatcherOptions?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(29_000);
+          await params.dispatcherOptions?.deliver?.({ text: "final payload" }, { kind: "final" });
+          await vi.advanceTimersByTimeAsync(60_000);
+          return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+        },
+      );
+
+      await dispatchBufferedReply({
+        cfg: {
+          channels: {
+            whatsapp: {
+              blockStreaming: true,
+              progressMessages: {
+                enabled: true,
+                initialDelayMs: 30_000,
+                intervalMs: 45_000,
+                maxMessages: 3,
+              },
+            },
+          },
+        } as never,
+        deliverReply,
+      });
+
+      expect(deliverReply).toHaveBeenCalledTimes(1);
+      expectReplyResultFields(deliverReply, { text: "final payload" });
+      expect(requireLastMockArg(deliverReply, 0, "final params").skipLog).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("logs delivery failures from the shared dispatcher with WhatsApp context", async () => {
