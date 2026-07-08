@@ -155,6 +155,9 @@ describe("qa suite runtime agent process helpers", () => {
 
   it("rejects and kills the qa cli when stdout emits an error", async () => {
     const child = createSpawnedProcess();
+    child.kill.mockImplementation(() => {
+      child.emit("close", 0);
+    });
     spawnMock.mockReturnValue(child);
 
     const pending = runQaCli(
@@ -174,7 +177,6 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stdout.emit("error", new Error("pipe broke"));
-    child.emit("close", 0);
 
     await assertion;
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
@@ -182,6 +184,9 @@ describe("qa suite runtime agent process helpers", () => {
 
   it("rejects and kills the qa cli when stderr emits an error", async () => {
     const child = createSpawnedProcess();
+    child.kill.mockImplementation(() => {
+      child.emit("close", 0);
+    });
     spawnMock.mockReturnValue(child);
 
     const pending = runQaCli(
@@ -202,7 +207,6 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stderr.emit("error", new Error("pipe broke"));
-    child.emit("close", 0);
 
     await assertion;
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");

@@ -274,25 +274,30 @@ async function runQaCli(
     let settled = false;
     const settleOnce = (settle: () => void) => {
       if (settled) {
-        return;
+        return false;
       }
       settled = true;
       clearTimeout(timeout);
       settle();
+      return true;
     };
     const rejectOutputStreamError = (streamName: "stdout" | "stderr", error: unknown) => {
-      signalQaCliProcessTree(child, "SIGKILL");
-      settleOnce(() => {
+      const didSettle = settleOnce(() => {
         reject(new Error(`qa cli ${streamName} error: ${formatErrorMessage(error)}`));
       });
+      if (didSettle) {
+        signalQaCliProcessTree(child, "SIGKILL");
+      }
     };
     const timeout = setTimeout(() => {
-      signalQaCliProcessTree(child, "SIGKILL");
-      settleOnce(() => {
+      const didSettle = settleOnce(() => {
         reject(
           new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
         );
       });
+      if (didSettle) {
+        signalQaCliProcessTree(child, "SIGKILL");
+      }
     }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
     child.stdout.once("error", (error) => rejectOutputStreamError("stdout", error));
