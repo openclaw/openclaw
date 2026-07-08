@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
-export type NativeI18nSurface = "android" | "apple";
+type NativeI18nSurface = "android" | "apple";
 
 export const NATIVE_I18N_LOCALES = [
   "zh-CN",

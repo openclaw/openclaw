@@ -4,7 +4,7 @@ import { property, query } from "lit/decorators.js";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
 
-export type FilePreviewModalFile = {
+type FilePreviewModalFile = {
   path: string;
   size: string;
   contents: string;

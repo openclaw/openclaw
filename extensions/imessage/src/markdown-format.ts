@@ -29,9 +29,9 @@
  * plain-text emoji/punctuation that happens to look like markdown.
  */
 
-export type IMessageFormatStyle = "bold" | "italic" | "underline" | "strikethrough";
+type IMessageFormatStyle = "bold" | "italic" | "underline" | "strikethrough";
 
-export type IMessageFormatRange = {
+type IMessageFormatRange = {
   start: number;
   length: number;
   styles: IMessageFormatStyle[];

@@ -23,7 +23,7 @@ import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import type { DiscordAllowedMentions } from "../send.shared.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
-export type DiscordThreadBindingLookupRecord = {
+type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
   threadId: string;

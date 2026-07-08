@@ -7,13 +7,13 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
-export type IMessageRpcError = {
+type IMessageRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type IMessageRpcResponse<T> = {
+type IMessageRpcResponse<T> = {
   jsonrpc?: string;
   id?: string | number | null;
   result?: T;
@@ -22,12 +22,12 @@ export type IMessageRpcResponse<T> = {
   params?: unknown;
 };
 
-export type IMessageRpcNotification = {
+type IMessageRpcNotification = {
   method: string;
   params?: unknown;
 };
 
-export type IMessageRpcClientOptions = {
+type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
   runtime?: RuntimeEnv;

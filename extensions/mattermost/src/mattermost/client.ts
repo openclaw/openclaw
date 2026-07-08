@@ -70,7 +70,7 @@ export const MattermostPostSchema = z
 
 export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
-export type MattermostFileInfo = {
+type MattermostFileInfo = {
   id: string;
   name?: string | null;
   mime_type?: string | null;
@@ -615,7 +615,7 @@ export async function createMattermostPost(
   });
 }
 
-export type MattermostTeam = {
+type MattermostTeam = {
   id: string;
   name?: string | null;
   display_name?: string | null;

@@ -4,8 +4,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type MobileReleasePlatform = "ios" | "android";
-export type MobileReleaseCommand = "preflight" | "record" | "resolve";
+type MobileReleasePlatform = "ios" | "android";
+type MobileReleaseCommand = "preflight" | "record" | "resolve";
 
 type GitDeps = {
   execFileSync?: typeof execFileSync;

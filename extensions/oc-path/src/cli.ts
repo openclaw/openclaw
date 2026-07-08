@@ -38,7 +38,7 @@ export type OutputRuntimeEnv = {
   exit(code: number): void;
 };
 
-export interface PathCommandOptions {
+interface PathCommandOptions {
   readonly json?: boolean;
   readonly human?: boolean;
   readonly valueJson?: boolean;

@@ -12,17 +12,17 @@ const KNIP_VERSION = "6.8.0";
 /**
  * Timeout for the unused-file knip child process.
  */
-export const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
+const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
 /**
  * Grace period before force-killing a timed-out knip child process.
  */
-export const KNIP_KILL_GRACE_MS = 5_000;
+const KNIP_KILL_GRACE_MS = 5_000;
 const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;
 const KNIP_POST_FORCE_KILL_WAIT_MS = 1_000;
 /**
  * Heartbeat interval used while knip runs without output.
  */
-export const KNIP_HEARTBEAT_MS = 60_000;
+const KNIP_HEARTBEAT_MS = 60_000;
 /**
  * Maximum buffered knip output retained for diagnostics.
  */

@@ -117,13 +117,13 @@ type PendingChromeMcpSessionLease = {
 };
 
 /** Minimal process info used when cleaning up MCP child process trees. */
-export type ChromeMcpProcessInfo = {
+type ChromeMcpProcessInfo = {
   pid: number;
   ppid: number;
 };
 
 /** Injectable process cleanup dependencies for platform-specific tests. */
-export type ChromeMcpProcessCleanupDeps = {
+type ChromeMcpProcessCleanupDeps = {
   listProcesses?: () => Promise<ChromeMcpProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;

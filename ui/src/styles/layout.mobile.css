@@ -93,6 +93,7 @@
 @media (max-width: 1100px) {
   .shell,
   .shell--nav-collapsed {
+    --shell-topbar-height: 58px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
     grid-template-areas:
@@ -145,6 +146,50 @@
   .shell--nav-drawer-open .shell-nav-backdrop {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+     the desktop rail toggle makes no sense once the sidebar is a drawer. */
+  .topbar .topbar-nav-toggle {
+    display: inline-flex;
+  }
+
+  .topbar {
+    display: flex;
+  }
+
+  .topnav-shell {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    gap: 10px;
+  }
+
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
+  }
+
+  .sidebar-brand__actions {
+    display: none;
   }
 
   .sidebar,
@@ -233,26 +278,83 @@
 
   /* Topbar */
   .topbar {
+    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
   .topnav-shell {
-    flex-wrap: wrap;
     gap: 10px;
   }
 
   .topnav-shell__actions {
     min-width: 0;
-    flex: 1 1 auto;
     justify-content: flex-end;
-    gap: 10px;
-    align-items: center;
   }
 
   .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topnav-shell .dashboard-header {
     display: none;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topbar .topbar-nav-toggle {
+    display: inline-flex;
+  }
+
+  .topbar-status {
+    gap: 6px;
+    width: auto;
+    flex-wrap: nowrap;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
+  }
+
+  .topbar-theme-mode {
+    display: none;
+  }
+
+  .sidebar-mode-switch {
+    display: block;
+  }
+
+  .sidebar-mode-switch .topbar-theme-mode {
+    display: inline-flex;
     width: 100%;
+    justify-content: center;
+  }
+
+  .topbar-status .pill {
+    padding: 4px 8px;
+    font-size: 12px; /* was 11px */
+    gap: 4px;
+  }
+
+  .topbar-status .pill .mono {
+    display: none;
+  }
+
+  .topbar-status .pill span:nth-child(2) {
+    display: none;
   }
 
   .shell-nav,

@@ -104,6 +104,32 @@
   flex: 1;
 }
 
+.topbar-brand {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.topbar-brand__logo {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+}
+
+.topbar-brand__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .topnav-shell .dashboard-header {
   display: flex;
   align-items: center;
@@ -173,8 +199,94 @@
   }
 }
 
-/* Quiet ghost buttons: the tiny top bar carries navigation chrome only, so
-   its controls stay borderless and muted until hovered. */
+.topbar .nav-collapse-toggle {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 0;
+}
+
+.topbar .nav-collapse-toggle__icon {
+  width: 20px;
+  height: 20px;
+}
+
+.topbar .nav-collapse-toggle__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-status .pill {
+  padding: 6px 10px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.topbar-status .pill .mono {
+  display: flex;
+  align-items: center;
+  line-height: 1;
+  margin-top: 0px;
+}
+
+.topbar-status .statusDot {
+  width: 6px;
+  height: 6px;
+}
+
+.topbar-status .theme-orb__trigger {
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+}
+
+.topbar-search {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+  min-width: 200px;
+}
+
+.topbar-search:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.topbar-search:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-search svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .topbar-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -213,6 +325,10 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.topbar .topbar-nav-toggle {
+  display: none;
 }
 
 /* ===========================================
@@ -261,6 +377,91 @@
   box-shadow: none;
 }
 
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand__identity {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-brand__logo {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  flex: 0 0 auto;
+}
+
+.sidebar-brand__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-brand__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.sidebar-brand__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-brand__icon:hover:not(:disabled),
+.sidebar-brand__icon:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.sidebar-brand__icon:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-brand__icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-brand__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar--collapsed {
   width: var(--shell-nav-rail-width);
   min-width: var(--shell-nav-rail-width);
@@ -305,91 +506,6 @@
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-/* Command palette entry: reads as a search field so it is discoverable, but
-   it is a button — the palette owns the real input. */
-.sidebar-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: calc(100% - 16px);
-  min-height: 32px;
-  margin: 0 8px 10px;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-search:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--border-strong) 88%, transparent);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.sidebar-search:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-search:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-search__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-}
-
-.sidebar-search__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-search__label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-search__kbd {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: 10.5px;
-  color: color-mix(in srgb, var(--muted) 88%, transparent);
-}
-
-.sidebar--collapsed .sidebar-search {
-  justify-content: center;
-  width: 44px;
-  min-height: 36px;
-  margin: 0 auto 10px;
-  padding: 0;
 }
 
 .sidebar-nav {
@@ -1195,6 +1311,23 @@
   padding: 12px 8px 10px;
 }
 
+.sidebar--collapsed .sidebar-brand {
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 5px 0 14px;
+}
+
+.sidebar--collapsed .sidebar-brand__identity {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+.sidebar--collapsed .sidebar-brand__actions {
+  flex-direction: column;
+}
+
 .sidebar--collapsed .sidebar-nav {
   padding: 0;
 }
@@ -1249,19 +1382,10 @@
   display: none;
 }
 
-/* Rail active state stays flat: it inherits the accent-subtle background from
-   .nav-item--active and only adds the accent bar. Gradients/drop shadows made
-   the rail look like a floating card, especially in light mode. */
+/* Rail active state stays flat and uses only the inherited active background. */
 .sidebar--collapsed .nav-item--active::before,
 .sidebar--collapsed .nav-item.active::before {
-  content: "";
-  position: absolute;
-  left: 8px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 86%, transparent);
+  content: none;
 }
 
 /* Single compact icon row: status dot, then utility icons right-aligned.
@@ -1370,20 +1494,12 @@
   display: none;
 }
 
-/* Color mode segmented toggle, sidebar footer edition: quiet enough to sit
-   between plain icon buttons (no pill chrome until a segment is active). */
 .sidebar-mode-switch {
   display: inline-flex;
   margin-left: 2px;
 }
 
 .theme-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.theme-mode-toggle__btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1401,25 +1517,19 @@
     border-color var(--duration-fast) ease;
 }
 
-.theme-mode-toggle__btn:hover {
+.theme-mode-toggle:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.theme-mode-toggle__btn:focus-visible {
+.theme-mode-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.theme-mode-toggle__btn--active {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.theme-mode-toggle__btn svg {
-  width: 14px;
-  height: 14px;
+.theme-mode-toggle svg {
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.75px;
@@ -1427,13 +1537,8 @@
   stroke-linejoin: round;
 }
 
-/* Rail mode: the footer stacks vertically, so the segments do too. */
 .sidebar--collapsed .sidebar-mode-switch {
   margin-left: 0;
-}
-
-.sidebar--collapsed .theme-mode-toggle {
-  flex-direction: column;
 }
 
 .shell--nav-collapsed .shell-nav {
