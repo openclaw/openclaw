@@ -46,6 +46,11 @@ type ReadTagResult = {
   next: number;
 };
 
+type TagEndResult = {
+  end: number;
+  rawTextStart?: number;
+};
+
 // Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
 // renderer share one entity contract — the divergent hand-rolled copy here was what truncated astral
 // entities. A single left-to-right pass also avoids double-decoding "&amp;#39;" into "'", because the
@@ -151,15 +156,16 @@ function startsLikeHtmlTag(html: string, start: number): boolean {
   return next === "!" || next === "?" || next === "/" || isTagNameStartChar(next ?? "");
 }
 
-function findTagEnd(html: string, start: number): number {
+function findTagEnd(html: string, start: number): TagEndResult {
   let quote: string | null = null;
   let afterEquals = false;
+  let rawTextStartInQuote: number | undefined;
   for (let i = start + 1; i < html.length; i += 1) {
     const ch = html[i];
-    if (readRawTextOpenTagName(html, i)) {
-      return -1;
-    }
     if (quote) {
+      if (rawTextStartInQuote === undefined && readRawTextOpenTagName(html, i)) {
+        rawTextStartInQuote = i;
+      }
       if (ch === quote) {
         quote = null;
       }
@@ -174,14 +180,17 @@ function findTagEnd(html: string, start: number): number {
       continue;
     }
     afterEquals = false;
+    if (readRawTextOpenTagName(html, i)) {
+      return { end: -1, rawTextStart: i };
+    }
     if (ch === ">") {
-      return i;
+      return { end: i };
     }
     if (ch === "=") {
       afterEquals = true;
     }
   }
-  return -1;
+  return { end: -1, rawTextStart: rawTextStartInQuote };
 }
 
 function isSelfClosingTagRaw(raw: string): boolean {
@@ -228,8 +237,15 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
     };
   }
 
-  const end = findTagEnd(html, start);
+  const tagEnd = findTagEnd(html, start);
+  const end = tagEnd.end;
   if (end === -1) {
+    if (tagEnd.rawTextStart !== undefined) {
+      return {
+        token: null,
+        next: tagEnd.rawTextStart,
+      };
+    }
     return null;
   }
 
@@ -497,7 +513,7 @@ function closeRawTextTagEnd(html: string, tagName: string, contentStart: number)
 
 function skipRawTextElement(html: string, start: number, tagName: string): number {
   const openerEnd = findTagEnd(html, start);
-  const contentStart = openerEnd === -1 ? start + tagName.length + 1 : openerEnd + 1;
+  const contentStart = openerEnd.end === -1 ? start + tagName.length + 1 : openerEnd.end + 1;
   return closeRawTextTagEnd(html, tagName, contentStart);
 }
 
