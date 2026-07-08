@@ -208,6 +208,20 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
   });
 
+  it("reports malformed --params JSON before invoking the node", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "node.invoke" }),
+    );
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON");
+  });
+
   it("invokes system.notify with provided fields", async () => {
     const invoke = await runNodesCommand([
       "nodes",

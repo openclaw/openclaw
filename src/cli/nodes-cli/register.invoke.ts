@@ -43,7 +43,13 @@ export function registerNodesInvokeCommands(nodes: Command) {
               `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
             );
           }
-          const params = JSON.parse(opts.params ?? "{}") as unknown;
+          let params: unknown;
+          try {
+            params = JSON.parse(opts.params ?? "{}") as unknown;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`--params must be valid JSON: ${message}`, { cause: error });
+          }
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.invokeTimeout,
             "--invoke-timeout",
