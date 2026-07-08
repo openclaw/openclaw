@@ -1,18 +1,19 @@
 // Google API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacyConfigRule = {
-  path: string[];
+  path: Array<string | number>;
   message: string;
   match: (value: unknown) => boolean;
 };
 
 export const legacyConfigRules: LegacyConfigRule[] = [];
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
 
 /**
  * Normalize legacy Google provider config to satisfy the current catalog schema.
@@ -28,46 +29,50 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   changes: string[];
 } {
   const changes: string[] = [];
-  const rawModels = cfg.models;
-  if (!isRecord(rawModels)) {
+  const rawModels = asRecord(cfg.models);
+  if (!rawModels) {
     return { config: cfg, changes };
   }
-  const rawProviders = rawModels.providers;
-  if (!isRecord(rawProviders)) {
+  const rawProviders = asRecord(rawModels.providers);
+  if (!rawProviders) {
     return { config: cfg, changes };
   }
-  const rawGoogle = rawProviders.google;
-  if (!isRecord(rawGoogle)) {
+  const rawGoogle = asRecord(rawProviders.google);
+  if (!rawGoogle) {
     return { config: cfg, changes };
   }
 
-  let googleChanged = false;
-  const nextGoogle = { ...rawGoogle } as Record<string, unknown>;
+  const nextConfig = structuredClone(cfg);
+  const nextModels = asRecord(nextConfig.models) ?? {};
+  nextConfig.models = nextModels as OpenClawConfig["models"];
+  const nextProviders = asRecord(nextModels.providers) ?? {};
+  nextModels.providers = nextProviders;
+  const nextGoogle = asRecord(nextProviders.google) ?? {};
+  nextProviders.google = nextGoogle;
 
   // Backfill api if missing.
-  if (typeof nextGoogle.api !== "string" || !nextGoogle.api.trim()) {
+  if (!isString(nextGoogle.api) || !nextGoogle.api.trim()) {
     nextGoogle.api = "google-generative-ai";
-    googleChanged = true;
     changes.push("Set models.providers.google.api = google-generative-ai (was missing).");
   }
 
   // Coerce model input modalities and cost.cacheWrite.
-  if (Array.isArray(nextGoogle.models)) {
-    const nextGoogleModels = nextGoogle.models.map((model, index) => {
-      if (!isRecord(model)) {
+  const models = nextGoogle.models;
+  if (Array.isArray(models)) {
+    const nextModelsArr = models.map((model, index) => {
+      const m = asRecord(model);
+      if (!m) {
         return model;
       }
-      let modelChanged = false;
-      const nextModel = { ...model } as Record<string, unknown>;
+      const nextModel = { ...m } as Record<string, unknown>;
 
       // Coerce input to ["text", "image"] (remove audio, video).
       if (Array.isArray(nextModel.input)) {
         const filtered = (nextModel.input as string[]).filter(
-          (m: string) => m === "text" || m === "image",
+          (v: string) => v === "text" || v === "image",
         );
         if (filtered.length !== (nextModel.input as string[]).length) {
           nextModel.input = filtered;
-          modelChanged = true;
           changes.push(
             `Coerced models.providers.google.models[${index}].input to [text, image] (removed unsupported modalities).`,
           );
@@ -75,46 +80,27 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       }
 
       // Backfill cost.cacheWrite.
-      if (isRecord(nextModel.cost)) {
-        const cost = { ...nextModel.cost } as Record<string, unknown>;
-        if (!("cacheWrite" in cost) || typeof cost.cacheWrite !== "number") {
-          cost.cacheWrite = 0;
-          modelChanged = true;
-          changes.push(
-            `Added models.providers.google.models[${index}].cost.cacheWrite = 0 (was missing).`,
-          );
-        }
-        if (modelChanged) {
-          nextModel.cost = cost;
-        }
+      const cost = asRecord(nextModel.cost);
+      if (cost && (!("cacheWrite" in cost) || typeof cost.cacheWrite !== "number")) {
+        cost.cacheWrite = 0;
+        changes.push(
+          `Added models.providers.google.models[${index}].cost.cacheWrite = 0 (was missing).`,
+        );
       }
 
-      return modelChanged ? nextModel : model;
+      return nextModel;
     });
 
-    if (nextGoogleModels.some((m, i) => m !== nextGoogle.models[i])) {
-      nextGoogle.models = nextGoogleModels;
-      googleChanged = true;
+    if (nextModelsArr.some((m, i) => m !== models[i])) {
+      nextGoogle.models = nextModelsArr;
     }
   }
 
-  if (!googleChanged) {
+  if (!changes.length) {
     return { config: cfg, changes };
   }
 
-  return {
-    config: {
-      ...cfg,
-      models: {
-        ...rawModels,
-        providers: {
-          ...rawProviders,
-          google: nextGoogle,
-        },
-      },
-    } as OpenClawConfig,
-    changes,
-  };
+  return { config: nextConfig, changes };
 }
 
 export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
