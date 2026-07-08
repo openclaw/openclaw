@@ -87,6 +87,7 @@ describe("google setup entry", () => {
   it("registers setup runtime providers declared by the manifest", () => {
     const providerIds: string[] = [];
     const cliBackendIds: string[] = [];
+    let configMigrationCount = 0;
 
     setupEntry.register({
       registerProvider(provider: ProviderPlugin) {
@@ -95,10 +96,14 @@ describe("google setup entry", () => {
       registerCliBackend(backend: CliBackendPlugin) {
         cliBackendIds.push(backend.id);
       },
+      registerConfigMigration() {
+        configMigrationCount += 1;
+      },
     } as never);
 
     expect(providerIds).toEqual(["google-vertex"]);
     expect(cliBackendIds).toEqual(["google-gemini-cli"]);
+    expect(configMigrationCount).toBe(1);
   });
 });
 

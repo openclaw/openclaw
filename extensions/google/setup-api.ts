@@ -1,6 +1,7 @@
 // Google API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { migrateGoogleLegacyProviderConfig } from "./config-compat.js";
 import { createGoogleVertexProvider } from "./provider-contract-api.js";
 
 export default definePluginEntry({
@@ -10,5 +11,6 @@ export default definePluginEntry({
   register(api) {
     api.registerProvider(createGoogleVertexProvider());
     api.registerCliBackend(buildGoogleGeminiCliBackend());
+    api.registerConfigMigration((config) => migrateGoogleLegacyProviderConfig(config));
   },
 });

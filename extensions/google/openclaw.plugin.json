@@ -695,6 +695,7 @@
     }
   },
   "configContracts": {
+    "compatibilityMigrationPaths": ["models.providers.google", "models.providers.google-vertex"],
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
