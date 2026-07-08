@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 installSlackBlockTestMocks();
-const { sendMessageSlack } = await import("./send.js");
+const { detectSlackProgressChromeReaction, sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type SlackMissingScopeError = Error & {
@@ -44,6 +44,52 @@ function buildMissingScopeError(overrides?: {
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
+  });
+
+  it("converts progress chrome text to a thread reaction instead of chat.postMessage", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", ":hammer_and_wrench: `pnpm test`", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.channelId).toBe("C123");
+  });
+
+  it("fails closed on progress chrome text without a reaction target", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", ":writing_hand: Write: MEMORY.md", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+    expect(result.channelId).toBe("C123");
+  });
+
+  it("does not classify semantic Slack replies as progress chrome", () => {
+    expect(
+      detectSlackProgressChromeReaction(
+        ":hammer_and_wrench: I fixed the deployment issue and verified production.",
+      ),
+    ).toBeUndefined();
+    expect(
+      detectSlackProgressChromeReaction(":email: Message sent to the client."),
+    ).toBeUndefined();
   });
 
   it("retries without identity when needed contains chat:write.customize", async () => {

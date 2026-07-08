@@ -31,6 +31,13 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
 };
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const PROGRESS_CHROME_REACTION_BY_EMOJI = new Map<string, string>([
+  ["hammer_and_wrench", "hammer_and_wrench"],
+  ["writing_hand", "writing_hand"],
+  ["email", "email"],
+  ["mag", "mag"],
+  ["floppy_disk", "floppy_disk"],
+]);
 const slackDmChannelCache = new Map<string, string>();
 const slackSendQueues = new Map<string, Promise<void>>();
 
@@ -97,6 +104,48 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
     ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
+}
+
+export function detectSlackProgressChromeReaction(text: string): string | undefined {
+  const trimmed = text.trim();
+  const match = /^:([a-z0-9_+-]+):\s+([\s\S]*)$/i.exec(trimmed);
+  if (!match) {
+    return undefined;
+  }
+  const emoji = match[1]?.toLowerCase();
+  const body = match[2]?.trim() ?? "";
+  const reaction = emoji ? PROGRESS_CHROME_REACTION_BY_EMOJI.get(emoji) : undefined;
+  if (!reaction || !body) {
+    return undefined;
+  }
+
+  const hasBacktickCommand = /`[^`\n]{1,240}`/.test(body);
+  const hasProgressLabel =
+    /^(?:write|read|edit|update|message|email|search|save|run|exec|bash|cmd)(?:\s*:|\s+`)/i.test(
+      body,
+    );
+  const lineCount = body.split(/\r?\n/).filter((line) => line.trim()).length;
+  const hasSentencePunctuation = /[.!?](?:\s|$)/.test(body);
+  const wordCount = (body.match(/[A-Za-z0-9_/-]+/g) ?? []).length;
+
+  if ((hasBacktickCommand || hasProgressLabel) && lineCount <= 2 && !hasSentencePunctuation) {
+    return reaction;
+  }
+  if (hasBacktickCommand && wordCount <= 12 && lineCount <= 3) {
+    return reaction;
+  }
+  return undefined;
+}
+
+function hasSlackPlatformError(err: unknown, code: string): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const data = (err as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+  return (data as { error?: unknown }).error === code;
 }
 
 async function postSlackMessageBestEffort(params: {
@@ -407,6 +456,32 @@ async function sendMessageSlackQueued(params: {
     accountId: account.accountId,
     token,
   });
+  if (!blocks && !opts.mediaUrl) {
+    const progressReaction = detectSlackProgressChromeReaction(trimmedMessage);
+    if (progressReaction) {
+      if (opts.threadTs) {
+        try {
+          await client.reactions.add({
+            channel: channelId,
+            timestamp: opts.threadTs,
+            name: progressReaction,
+          });
+          logVerbose("slack send: converted progress chrome payload to reaction");
+        } catch (err) {
+          if (!hasSlackPlatformError(err, "already_reacted")) {
+            throw err;
+          }
+          logVerbose("slack send: progress chrome reaction already present");
+        }
+      } else {
+        logVerbose("slack send: suppressed progress chrome payload without reaction target");
+      }
+      return {
+        messageId: "suppressed",
+        channelId,
+      };
+    }
+  }
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
