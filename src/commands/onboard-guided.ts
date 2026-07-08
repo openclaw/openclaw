@@ -378,7 +378,16 @@ async function runGuidedOnboardingFlow(
       deps.launchTui ??
       (async () => {
         const { launchTuiCli } = await import("../tui/tui-launch.js");
-        await launchTuiCli({ deliver: false });
+        const { restoreTerminalState } =
+          await import("../../packages/terminal-core/src/restore.js");
+        // Mirror the classic finalize handoff (setup.finalize.ts): the TUI must
+        // not inherit the wizard prompter's raw/paused terminal state.
+        restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
+        try {
+          await launchTuiCli({ deliver: false });
+        } finally {
+          restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
+        }
       });
     await launchTui();
     return;
