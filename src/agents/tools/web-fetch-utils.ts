@@ -128,6 +128,15 @@ function readRawTextOpenTagName(html: string, start: number): string | undefined
   return undefined;
 }
 
+function findRawTextOpenTagStart(html: string, start: number, end: number): number {
+  for (let i = start; i < end; i += 1) {
+    if (readRawTextOpenTagName(html, i)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function findTagEnd(html: string, start: number): number {
   let quote: string | null = null;
   for (let i = start + 1; i < html.length; i += 1) {
@@ -179,6 +188,14 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
     pos += 1;
   }
   if (pos === nameStart) {
+    const rawTextStart = findRawTextOpenTagStart(html, start + 1, end + 1);
+    if (rawTextStart !== -1) {
+      return {
+        token: null,
+        next: rawTextStart,
+        text: html.slice(start, rawTextStart),
+      };
+    }
     return {
       token: null,
       next: end + 1,
@@ -444,17 +461,27 @@ export function markdownToText(markdown: string): string {
   let text = markdown;
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
   text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
-  while (text.includes("```")) {
-    const open = text.indexOf("```");
+  let unfenced = "";
+  let pos = 0;
+  while (pos < text.length) {
+    const open = text.indexOf("```", pos);
+    if (open === -1) {
+      unfenced += text.slice(pos);
+      break;
+    }
+    unfenced += text.slice(pos, open);
     const afterOpen = open + 3;
     const close = text.indexOf("```", afterOpen);
     if (close === -1) {
+      unfenced += text.slice(open);
       break;
     }
     const firstLineEnd = text.indexOf("\n", afterOpen);
     const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    text = `${text.slice(0, open)}${text.slice(contentStart, close)}${text.slice(close + 3)}`;
+    unfenced += text.slice(contentStart, close);
+    pos = close + 3;
   }
+  text = unfenced;
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^\s*[-*+]\s+/gm, "");
