@@ -297,9 +297,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("keeps yarn run shell carriers one-shot", async () => {
+  it("keeps yarn run as a script-runner command instead of delegated exec", async () => {
     const dir = makeTempDir();
-    for (const executable of ["yarn", "sh", "echo"]) {
+    const yarnPath = makeExecutable(dir, "yarn");
+    for (const executable of ["sh", "echo"]) {
       makeExecutable(dir, executable);
     }
     const env = makePathEnv(dir);
@@ -316,8 +317,9 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: yarnPath })],
     });
   });
 

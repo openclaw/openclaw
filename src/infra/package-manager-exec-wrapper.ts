@@ -58,7 +58,7 @@ const YARN_OPTIONS_WITH_VALUE = new Set(["--cwd"]);
 const YARN_FLAG_OPTIONS = new Set(["--immutable", "--silent", "-s"]);
 const YARN_DLX_OPTIONS_WITH_VALUE = new Set(["--package", "-p"]);
 const YARN_DLX_FLAG_OPTIONS = new Set(["--quiet", "-q"]);
-const YARN_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "run"]);
+const YARN_EXEC_SUBCOMMANDS = new Set(["exec", "dlx"]);
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);

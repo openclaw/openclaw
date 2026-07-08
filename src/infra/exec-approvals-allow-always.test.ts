@@ -1094,6 +1094,7 @@ $0 \\"$1\\"" touch {marker}`,
   it.each([
     { command: "npm run test -- x", executable: "npm" },
     { command: "pnpm run build -- node", executable: "pnpm" },
+    { command: "yarn run build -- node", executable: "yarn" },
   ])(
     "keeps exec-like arguments on known non-exec package-manager subcommands allowlisted: $command",
     async ({ command, executable }) => {
