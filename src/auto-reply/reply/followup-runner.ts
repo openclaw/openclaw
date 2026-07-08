@@ -1734,7 +1734,10 @@ export function createFollowupRunner(params: {
         }
       }
 
-      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+      if (
+        run.sourceReplyDeliveryMode === "message_tool_only" &&
+        !runResult.meta?.nonDeliverableTerminalTurn
+      ) {
         logVerbose(
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );

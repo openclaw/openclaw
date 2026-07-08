@@ -246,6 +246,8 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** True when the attempt ended as a non-deliverable terminal turn (no committed delivery evidence). */
+  nonDeliverableTerminalTurn?: true;
   replayMetadata: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
