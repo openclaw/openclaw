@@ -9,7 +9,7 @@ import {
 } from "../channels/account-summary.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
@@ -31,7 +31,7 @@ type ChannelAccountEntry = {
   account: unknown;
   enabled: boolean;
   configured: boolean;
-  snapshot: ChannelAccountSnapshot;
+  snapshot: ChannelAccountStatus;
 };
 
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
@@ -168,7 +168,7 @@ export async function buildChannelSummary(
           cfg: effective,
           defaultAccountId,
           snapshot:
-            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountStatus),
         })
       : undefined;
 

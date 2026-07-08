@@ -6,7 +6,7 @@ import {
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
+import type { ChannelAccountStatus } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TwitchAccountConfig } from "./types.js";
 
@@ -89,7 +89,7 @@ describe("twitch startAccount lifecycle", () => {
 
   it("clears running status when monitor startup fails", async () => {
     hoisted.monitorTwitchProvider.mockRejectedValue(new Error("irc join failed"));
-    const patches: ChannelAccountSnapshot[] = [];
+    const patches: ChannelAccountStatus[] = [];
 
     const task = requireStartAccount()(
       createStartAccountContext({

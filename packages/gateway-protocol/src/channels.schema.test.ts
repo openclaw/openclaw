@@ -71,4 +71,25 @@ describe("ChannelsStatusResultSchema", () => {
       }),
     ).toBe(true);
   });
+
+  it("rejects credential-shaped and undeclared account status fields", () => {
+    const result = {
+      ts: Date.now(),
+      channelOrder: ["line"],
+      channelLabels: { line: "LINE" },
+      channels: { line: { configured: true } },
+      channelAccounts: {
+        line: [
+          {
+            accountId: "default",
+            configured: true,
+            channelAccessToken: "secret-token",
+          },
+        ],
+      },
+      channelDefaultAccountId: { line: "default" },
+    };
+
+    expect(validate.Check(result)).toBe(false);
+  });
 });

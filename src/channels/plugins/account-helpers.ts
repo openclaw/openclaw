@@ -15,7 +15,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
-import type { ChannelAccountSnapshot } from "./types.core.js";
+import type { ChannelAccountStatus } from "./types.core.js";
 
 /**
  * Creates reusable account id listing and default-account resolution helpers for a channel.
@@ -248,7 +248,7 @@ export function describeAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;
   extra?: Record<string, unknown> | undefined;
-}): ChannelAccountSnapshot {
+}): ChannelAccountStatus {
   return {
     accountId: params.account.accountId ?? DEFAULT_ACCOUNT_ID,
     name: normalizeOptionalString(params.account.name),
@@ -266,7 +266,7 @@ export function describeWebhookAccountSnapshot(params: {
   configured?: boolean | undefined;
   mode?: string | undefined;
   extra?: Record<string, unknown> | undefined;
-}): ChannelAccountSnapshot {
+}): ChannelAccountStatus {
   return describeAccountSnapshot({
     account: params.account,
     configured: params.configured,

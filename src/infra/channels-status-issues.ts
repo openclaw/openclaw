@@ -1,7 +1,7 @@
 // Collects channel account status issues for diagnostics.
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountStatus,
   ChannelId,
   ChannelStatusIssue,
 } from "../channels/plugins/types.public.js";
@@ -11,7 +11,7 @@ import {
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
 
-function resolveIssueAccountId(account: ChannelAccountSnapshot): string {
+function resolveIssueAccountId(account: ChannelAccountStatus): string {
   return typeof account.accountId === "string" && account.accountId.trim()
     ? account.accountId
     : "default";
@@ -19,7 +19,7 @@ function resolveIssueAccountId(account: ChannelAccountSnapshot): string {
 
 function collectGenericRuntimeStatusIssues(
   channel: ChannelId,
-  accounts: ChannelAccountSnapshot[],
+  accounts: ChannelAccountStatus[],
 ): ChannelStatusIssue[] {
   const now = Date.now();
   const issues: ChannelStatusIssue[] = [];
@@ -92,7 +92,7 @@ export function collectChannelStatusIssues(payload: Record<string, unknown>): Ch
     if (!Array.isArray(raw)) {
       continue;
     }
-    const accounts = raw as ChannelAccountSnapshot[];
+    const accounts = raw as ChannelAccountStatus[];
     issues.push(...collectGenericRuntimeStatusIssues(plugin.id, accounts));
     const collect = plugin.status?.collectStatusIssues;
     if (collect) {

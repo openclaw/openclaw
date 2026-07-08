@@ -8,6 +8,7 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { ChannelAccountSnapshot as ProtocolChannelAccountStatus } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -140,77 +141,17 @@ export type ChannelMeta = {
   preferOver?: readonly string[];
 };
 
-/** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
+/** Canonical credential-free snapshot returned by channel status surfaces. */
+export type ChannelAccountStatus = ProtocolChannelAccountStatus;
+
+/** Plugin/runtime contribution normalized before it reaches public status output. */
+export type ChannelAccountSnapshotInput = Omit<Partial<ChannelAccountStatus>, "accountId"> & {
   accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
-  statusState?: string;
-  linked?: boolean;
-  running?: boolean;
-  connected?: boolean;
-  restartPending?: boolean;
-  reconnectAttempts?: number;
-  lastConnectedAt?: number | null;
-  lastDisconnect?:
-    | string
-    | {
-        at: number;
-        status?: number;
-        error?: string;
-        loggedOut?: boolean;
-      }
-    | null;
-  lastMessageAt?: number | null;
-  lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
-  lastError?: string | null;
-  healthState?: string;
-  terminalDisconnect?: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  mode?: string;
-  dmPolicy?: string;
-  allowFrom?: string[];
-  tokenSource?: string;
-  botTokenSource?: string;
-  appTokenSource?: string;
-  userTokenSource?: string;
-  signingSecretSource?: string;
-  tokenStatus?: string;
-  botTokenStatus?: string;
-  appTokenStatus?: string;
-  signingSecretStatus?: string;
-  userTokenStatus?: string;
-  identity?: string;
-  credentialSource?: string;
-  secretSource?: string;
-  audienceType?: string;
-  audience?: string;
-  webhookPath?: string;
-  webhookUrl?: string;
-  baseUrl?: string;
-  allowUnmentionedGroups?: boolean;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  audit?: unknown;
-  application?: unknown;
-  bot?: unknown;
-  publicKey?: string | null;
-  profile?: unknown;
-  channelAccessToken?: string;
-  channelSecret?: string;
+  [key: string]: unknown;
 };
+
+/** @deprecated Use ChannelAccountStatus for output or ChannelAccountSnapshotInput for input. */
+export type ChannelAccountSnapshot = ChannelAccountSnapshotInput;
 
 export type ChannelLogSink = {
   info: (msg: string) => void;

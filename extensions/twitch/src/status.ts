@@ -7,7 +7,7 @@
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import { getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
-import type { ChannelAccountSnapshot } from "./types.js";
+import type { ChannelAccountStatus } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 /**
@@ -28,7 +28,7 @@ import { isAccountConfigured } from "./utils/twitch.js";
  * }
  */
 export function collectTwitchStatusIssues(
-  accounts: ChannelAccountSnapshot[],
+  accounts: ChannelAccountStatus[],
   getCfg?: () => unknown,
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];

@@ -162,12 +162,11 @@ export const tlonPlugin = createChatChannelPlugin({
           return [];
         });
       },
-      buildChannelSummary: ({ snapshot }) => {
-        const s = snapshot as { configured?: boolean; ship?: string; url?: string };
+      buildChannelSummary: ({ account, snapshot }) => {
         return {
-          configured: s.configured ?? false,
-          ship: s.ship ?? null,
-          url: s.url ?? null,
+          configured: snapshot.configured ?? false,
+          ship: account.ship ?? null,
+          url: account.url ?? null,
         };
       },
       probeAccount: async ({ account }) => {
@@ -181,10 +180,6 @@ export const tlonPlugin = createChatChannelPlugin({
         name: account.name ?? undefined,
         enabled: account.enabled,
         configured: account.configured,
-        extra: {
-          ship: account.ship,
-          url: account.url,
-        },
       }),
     }),
     gateway: {

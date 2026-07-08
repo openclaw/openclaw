@@ -3,14 +3,14 @@
  */
 import { expect, vi } from "vitest";
 import type { ChannelGatewayContext } from "../../channels/plugins/types.adapters.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshotInput } from "../../channels/plugins/types.public.js";
 import { createStartAccountContext } from "./start-account-context.js";
 
 export function startAccountAndTrackLifecycle<TAccount extends { accountId: string }>(params: {
   startAccount: (ctx: ChannelGatewayContext<TAccount>) => Promise<unknown>;
   account: TAccount;
 }) {
-  const patches: ChannelAccountSnapshot[] = [];
+  const patches: ChannelAccountSnapshotInput[] = [];
   const abort = new AbortController();
   const task = params.startAccount(
     createStartAccountContext({
@@ -50,8 +50,8 @@ export function waitForStartedMocks(...mocks: Array<ReturnType<typeof vi.fn>>) {
 }
 
 export function expectLifecyclePatch(
-  patches: ChannelAccountSnapshot[],
-  expected: Partial<ChannelAccountSnapshot>,
+  patches: ChannelAccountSnapshotInput[],
+  expected: Partial<ChannelAccountSnapshotInput>,
 ) {
   expect(patches).toContainEqual(expect.objectContaining(expected));
 }

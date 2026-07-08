@@ -3,7 +3,7 @@
  */
 import { vi } from "vitest";
 import type { ChannelGatewayContext } from "../../channels/plugins/types.adapters.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshotInput } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
@@ -14,9 +14,9 @@ export function createStartAccountContext<TAccount extends { accountId: string }
   abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
-  statusPatchSink?: (next: ChannelAccountSnapshot) => void;
+  statusPatchSink?: (next: ChannelAccountSnapshotInput) => void;
 }): ChannelGatewayContext<TAccount> {
-  const snapshot: ChannelAccountSnapshot = {
+  const snapshot: ChannelAccountSnapshotInput = {
     accountId: params.account.accountId,
     configured: true,
     enabled: true,

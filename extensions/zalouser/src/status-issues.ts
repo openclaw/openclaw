@@ -1,6 +1,6 @@
 // Zalouser plugin module implements status issues behavior.
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountStatus,
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -21,7 +21,7 @@ const ZALOUSER_STATUS_FIELDS = [
 ] as const;
 
 export function collectZalouserStatusIssues(
-  accounts: ChannelAccountSnapshot[],
+  accounts: ChannelAccountStatus[],
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {

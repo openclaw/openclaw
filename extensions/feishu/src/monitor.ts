@@ -24,7 +24,7 @@ type MonitorFeishuOpts = {
  * so the feishu plugin does not need to depend on a specific channel runtime.
  *
  * We use a structural Partial<{...}> to keep the sink type lightweight and
- * decoupled from the ChannelAccountSnapshot type. The runtime accepts any
+ * decoupled from the ChannelAccountStatus type. The runtime accepts any
  * subset of these fields.
  */
 export type FeishuStatusSink = (patch: {

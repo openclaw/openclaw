@@ -12,9 +12,9 @@
 
 import { describe, expect, it } from "vitest";
 import { collectTwitchStatusIssues } from "./status.js";
-import type { ChannelAccountSnapshot } from "./types.js";
+import type { ChannelAccountStatus } from "./types.js";
 
-function createSnapshot(overrides: Partial<ChannelAccountSnapshot> = {}): ChannelAccountSnapshot {
+function createSnapshot(overrides: Partial<ChannelAccountStatus> = {}): ChannelAccountStatus {
   return {
     accountId: "default",
     configured: true,
@@ -59,7 +59,7 @@ function neverConnectedIssue(): ReturnType<typeof collectTwitchStatusIssues>[num
 describe("status", () => {
   describe("collectTwitchStatusIssues", () => {
     it("should detect unconfigured accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ configured: false })];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot({ configured: false })];
 
       const issues = collectTwitchStatusIssues(snapshots);
 
@@ -73,7 +73,7 @@ describe("status", () => {
     });
 
     it("should detect disabled accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ enabled: false })];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot({ enabled: false })];
 
       const issues = collectTwitchStatusIssues(snapshots);
 
@@ -87,7 +87,7 @@ describe("status", () => {
     });
 
     it("should detect missing clientId when account configured (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot()];
       const mockCfg = createSimpleTwitchConfig({
         username: "testbot",
         accessToken: "oauth:test123",
@@ -109,7 +109,7 @@ describe("status", () => {
     });
 
     it("should warn about oauth: prefix in token (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot()];
       const mockCfg = createSimpleTwitchConfig({
         username: "testbot",
         accessToken: "oauth:test123", // has prefix
@@ -131,7 +131,7 @@ describe("status", () => {
     });
 
     it("should detect clientSecret without refreshToken (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot()];
       const mockCfg = createSimpleTwitchConfig({
         username: "testbot",
         accessToken: "oauth:test123",
@@ -162,7 +162,7 @@ describe("status", () => {
     });
 
     it("should detect empty allowFrom array (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot()];
       const mockCfg = createSimpleTwitchConfig({
         username: "testbot",
         accessToken: "test123",
@@ -185,7 +185,7 @@ describe("status", () => {
     });
 
     it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const snapshots: ChannelAccountStatus[] = [createSnapshot()];
       const mockCfg = createSimpleTwitchConfig({
         username: "testbot",
         accessToken: "test123",
@@ -209,7 +209,7 @@ describe("status", () => {
     });
 
     it("should detect runtime errors", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
+      const snapshots: ChannelAccountStatus[] = [
         createSnapshot({ lastError: "Connection timeout" }),
       ];
 
@@ -228,7 +228,7 @@ describe("status", () => {
     });
 
     it("should detect accounts that never connected", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
+      const snapshots: ChannelAccountStatus[] = [
         createSnapshot({
           lastStartAt: undefined,
           lastInboundAt: undefined,
@@ -250,7 +250,7 @@ describe("status", () => {
     it("should detect long-running connections", () => {
       const oldDate = Date.now() - 8 * 24 * 60 * 60 * 1000; // 8 days ago
 
-      const snapshots: ChannelAccountSnapshot[] = [
+      const snapshots: ChannelAccountStatus[] = [
         createSnapshot({
           running: true,
           lastStartAt: oldDate,
@@ -275,7 +275,7 @@ describe("status", () => {
     });
 
     it("should skip non-Twitch accounts gracefully", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
+      const snapshots: ChannelAccountStatus[] = [
         {
           accountId: "unknown",
           configured: false,

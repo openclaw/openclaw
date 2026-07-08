@@ -5,6 +5,7 @@ export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 export type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 export type {
   BaseProbeResult,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

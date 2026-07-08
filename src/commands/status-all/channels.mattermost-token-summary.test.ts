@@ -1,6 +1,6 @@
 // Mattermost token summary tests cover status-all credential source counting and safe display output.
 import { describe, expect, it } from "vitest";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../../channels/plugins/types.public.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,
@@ -8,7 +8,7 @@ import {
 
 function tokenRow(params: {
   account: Record<string, unknown>;
-  snapshot?: Partial<ChannelAccountSnapshot>;
+  snapshot?: Partial<ChannelAccountStatus>;
   enabled?: boolean;
 }): ChannelAccountTokenSummaryRow {
   return {
@@ -17,7 +17,7 @@ function tokenRow(params: {
     snapshot: {
       accountId: "primary",
       ...params.snapshot,
-    } as ChannelAccountSnapshot,
+    } as ChannelAccountStatus,
   };
 }
 

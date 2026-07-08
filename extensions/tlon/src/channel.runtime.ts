@@ -1,6 +1,5 @@
 // Tlon plugin module implements channel behavior.
 import crypto from "node:crypto";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -253,9 +252,7 @@ export async function startTlonGatewayAccount(
   const account = ctx.account;
   ctx.setStatus({
     accountId: account.accountId,
-    ship: account.ship,
-    url: account.url,
-  } as ChannelAccountSnapshot);
+  });
   ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
   return monitorTlonProvider({
     runtime: ctx.runtime,

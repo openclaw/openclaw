@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import { InputFile } from "grammy";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
@@ -317,7 +317,7 @@ export async function startTelegramWebhook(opts: {
   webhookCertPath?: string;
   webhookRegistrationRetryPolicy?: BackoffPolicy;
   spoolDir?: string;
-  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  setStatus?: (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";

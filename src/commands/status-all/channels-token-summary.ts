@@ -5,13 +5,13 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../../channels/plugins/types.public.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
 
 export type ChannelAccountTokenSummaryRow = {
   account: unknown;
   enabled: boolean;
-  snapshot: ChannelAccountSnapshot;
+  snapshot: ChannelAccountStatus;
 };
 
 /** Collapses credential sources into a stable count label such as `env×2+file`. */

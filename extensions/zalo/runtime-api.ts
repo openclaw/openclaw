@@ -11,6 +11,7 @@ export {
   buildSecretInputSchema,
   buildSingleChannelSecretPromptState,
   buildTokenChannelStatusSummary,
+  type ChannelAccountStatus,
   type ChannelAccountSnapshot,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,

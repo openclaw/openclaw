@@ -165,7 +165,9 @@ export type { ReplyPayload } from "./reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
   BaseProbeResult,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
   ChannelGroupContext,
   ChannelMessageActionName,
   ChannelMeta,

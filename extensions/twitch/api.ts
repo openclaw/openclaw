@@ -1,5 +1,6 @@
 // Twitch API module exposes the plugin public contract.
 export {
+  type ChannelAccountStatus,
   type ChannelAccountSnapshot,
   type ChannelCapabilities,
   type ChannelGatewayContext,

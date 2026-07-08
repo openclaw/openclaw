@@ -3,6 +3,7 @@
 
 export type {
   BaseProbeResult,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelGroupContext,

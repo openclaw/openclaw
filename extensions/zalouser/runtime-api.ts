@@ -13,6 +13,7 @@ export { setZalouserRuntime } from "./src/runtime.js";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type {
   BaseProbeResult,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelGroupContext,

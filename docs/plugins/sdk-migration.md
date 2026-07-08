@@ -412,6 +412,21 @@ SDK.
   </Step>
 </Steps>
 
+## Channel status type migration
+
+Channel status output and plugin/runtime contributions now use separate types:
+
+- Use `ChannelAccountStatus` for credential-free snapshots returned by status
+  commands and Gateway clients.
+- Use `ChannelAccountSnapshotInput` for `buildAccountSnapshot`,
+  `defaultRuntime`, and channel runtime `getStatus`/`setStatus` values.
+- `ChannelAccountSnapshot` is a deprecated compatibility alias for
+  `ChannelAccountSnapshotInput`. Migrate to an explicit type before the next
+  major-version cleanup.
+
+Both modern types are available from `plugin-sdk/channel-contract`; status
+helper consumers can also import them from `plugin-sdk/status-helpers`.
+
 ## Import path reference
 
 The public package export map is the source of truth for importable SDK

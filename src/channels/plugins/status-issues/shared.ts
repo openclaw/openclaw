@@ -5,7 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../../utils.js";
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
+import type { ChannelAccountStatus, ChannelStatusIssue } from "../types.public.js";
 export { isRecord };
 
 /**
@@ -67,8 +67,8 @@ export function resolveEnabledConfiguredAccountId(account: {
 export function collectIssuesForEnabledAccounts<
   T extends { accountId?: unknown; enabled?: unknown },
 >(params: {
-  accounts: ChannelAccountSnapshot[];
-  readAccount: (value: ChannelAccountSnapshot) => T | null;
+  accounts: ChannelAccountStatus[];
+  readAccount: (value: ChannelAccountStatus) => T | null;
   collectIssues: (params: { account: T; accountId: string; issues: ChannelStatusIssue[] }) => void;
 }): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];

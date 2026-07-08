@@ -1,7 +1,7 @@
 // Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
   ChannelAccountState,
   ChannelSetupInput,
 } from "../../channels/plugins/types.core.js";
@@ -176,7 +176,7 @@ type ChannelStatusContractCase<Probe> = {
   name: string;
   cfg: OpenClawConfig;
   accountId?: string;
-  runtime?: ChannelAccountSnapshot;
+  runtime?: ChannelAccountSnapshotInput;
   probe?: Probe;
   beforeTest?: () => void;
   expectedState?: ChannelAccountState;
@@ -184,7 +184,7 @@ type ChannelStatusContractCase<Probe> = {
     configured: boolean;
     enabled: boolean;
   };
-  assertSnapshot?: (snapshot: ChannelAccountSnapshot) => void;
+  assertSnapshot?: (snapshot: ChannelAccountSnapshotInput) => void;
   assertSummary?: (summary: Record<string, unknown>) => void;
 };
 

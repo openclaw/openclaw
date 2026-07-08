@@ -492,6 +492,20 @@ status adapter, and channel secret target metadata needed for those
 summaries. Do not start clients, listeners, or transport runtimes from the
 setup entry.
 
+### Status contracts
+
+Use `ChannelAccountStatus` for credential-free snapshots returned by status
+commands and Gateway clients. Plugin status hooks, `defaultRuntime`, and
+`getStatus`/`setStatus` use `ChannelAccountSnapshotInput` because those values
+are contributions that core projects through the public status schema before
+delivery.
+
+`ChannelAccountSnapshot` remains as a deprecated alias for contribution input
+during the migration window. New plugins should import the explicit type they
+need from `openclaw/plugin-sdk/channel-contract` or
+`openclaw/plugin-sdk/status-helpers`; do not put raw credential values in
+`ChannelAccountStatus`.
+
 Keep the main channel entry import path narrow too. Discovery can evaluate
 the entry and the channel plugin module to register capabilities without
 activating the channel. Files such as `channel-plugin-api.ts` should export

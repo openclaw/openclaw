@@ -638,14 +638,25 @@ export const ChannelsStatusParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
-/**
- * Per-account status snapshot for channel docking.
- *
- * This is intentionally schema-light so new channel-specific metadata can ship
- * without a gateway protocol update; known fields stay documented for UI use.
- */
-const ChannelAccountSnapshotSchema = Type.Object(
-  {
+const CredentialStatusSchema = Type.Union([
+  Type.Literal("available"),
+  Type.Literal("configured_unavailable"),
+  Type.Literal("missing"),
+]);
+const NullableTimestampSchema = Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]);
+const ChannelLastDisconnectSchema = Type.Union([
+  Type.String(),
+  closedObject({
+    at: Type.Integer({ minimum: 0 }),
+    status: Type.Optional(Type.Integer()),
+    error: Type.Optional(Type.String()),
+    loggedOut: Type.Optional(Type.Boolean()),
+  }),
+  Type.Null(),
+]);
+
+/** Canonical credential-free per-account status snapshot for channel docking. */
+export const ChannelAccountSnapshotSchema = closedObject({
     accountId: NonEmptyString,
     name: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
@@ -654,24 +665,45 @@ const ChannelAccountSnapshotSchema = Type.Object(
     running: Type.Optional(Type.Boolean()),
     connected: Type.Optional(Type.Boolean()),
     reconnectAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastConnectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastError: Type.Optional(Type.String()),
+    statusState: Type.Optional(Type.String()),
+    restartPending: Type.Optional(Type.Boolean()),
+    lastConnectedAt: Type.Optional(NullableTimestampSchema),
+    lastDisconnect: Type.Optional(ChannelLastDisconnectSchema),
+    lastMessageAt: Type.Optional(NullableTimestampSchema),
+    lastEventAt: Type.Optional(NullableTimestampSchema),
+    lastError: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     healthState: Type.Optional(Type.String()),
-    lastStartAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    terminalDisconnect: Type.Optional(Type.Boolean()),
+    lastStartAt: Type.Optional(NullableTimestampSchema),
+    lastStopAt: Type.Optional(NullableTimestampSchema),
+    lastInboundAt: Type.Optional(NullableTimestampSchema),
+    lastOutboundAt: Type.Optional(NullableTimestampSchema),
+    lastTransportActivityAt: Type.Optional(NullableTimestampSchema),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunActivityAt: Type.Optional(NullableTimestampSchema),
+    activeRunStartedAt: Type.Optional(NullableTimestampSchema),
+    lastProbeAt: Type.Optional(NullableTimestampSchema),
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),
     allowFrom: Type.Optional(Type.Array(Type.String())),
     tokenSource: Type.Optional(Type.String()),
     botTokenSource: Type.Optional(Type.String()),
     appTokenSource: Type.Optional(Type.String()),
+    userTokenSource: Type.Optional(Type.String()),
+    signingSecretSource: Type.Optional(Type.String()),
+    tokenStatus: Type.Optional(CredentialStatusSchema),
+    botTokenStatus: Type.Optional(CredentialStatusSchema),
+    appTokenStatus: Type.Optional(CredentialStatusSchema),
+    signingSecretStatus: Type.Optional(CredentialStatusSchema),
+    userTokenStatus: Type.Optional(CredentialStatusSchema),
+    identity: Type.Optional(Type.String()),
+    credentialSource: Type.Optional(Type.String()),
+    secretSource: Type.Optional(Type.String()),
+    audienceType: Type.Optional(Type.String()),
+    audience: Type.Optional(Type.String()),
+    webhookPath: Type.Optional(Type.String()),
+    webhookUrl: Type.Optional(Type.String()),
     baseUrl: Type.Optional(Type.String()),
     allowUnmentionedGroups: Type.Optional(Type.Boolean()),
     cliPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -680,12 +712,13 @@ const ChannelAccountSnapshotSchema = Type.Object(
     probe: Type.Optional(Type.Unknown()),
     audit: Type.Optional(Type.Unknown()),
     application: Type.Optional(Type.Unknown()),
-  },
-  { additionalProperties: true },
-);
+    bot: Type.Optional(Type.Unknown()),
+    publicKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    profile: Type.Optional(Type.Unknown()),
+  });
 
 /** UI label and icon metadata for one channel. */
-const ChannelUiMetaSchema = closedObject({
+export const ChannelUiMetaSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   detailLabel: NonEmptyString,
@@ -693,7 +726,7 @@ const ChannelUiMetaSchema = closedObject({
 });
 
 /** Event-loop health snapshot included with channel status responses. */
-const ChannelEventLoopHealthSchema = closedObject({
+export const ChannelEventLoopHealthSchema = closedObject({
   degraded: Type.Boolean(),
   reasons: Type.Array(
     Type.Union([
@@ -801,6 +834,8 @@ export type TtsSpeakParams = Static<typeof TtsSpeakParamsSchema>;
 export type TtsSpeakResult = Static<typeof TtsSpeakResultSchema>;
 export type ChannelsStatusParams = Static<typeof ChannelsStatusParamsSchema>;
 export type ChannelsStatusResult = Static<typeof ChannelsStatusResultSchema>;
+export type ChannelAccountSnapshot = Static<typeof ChannelAccountSnapshotSchema>;
+export type ChannelUiMeta = Static<typeof ChannelUiMetaSchema>;
 export type ChannelsStartParams = Static<typeof ChannelsStartParamsSchema>;
 export type ChannelsStopParams = Static<typeof ChannelsStopParamsSchema>;
 export type ChannelsLogoutParams = Static<typeof ChannelsLogoutParamsSchema>;

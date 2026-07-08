@@ -1,10 +1,14 @@
 // Status helpers normalize plugin health and setup state into user-facing status summaries.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+import type { ChannelAccountSnapshotInput } from "../channels/plugins/types.core.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+export type {
+  ChannelAccountStatus,
+  ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
+} from "../channels/plugins/types.core.js";
 export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
@@ -58,7 +62,7 @@ type ComputedAccountStatusBase = {
 type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
   account: ResolvedAccount;
   cfg: OpenClawConfig;
-  runtime?: ChannelAccountSnapshot;
+  runtime?: ChannelAccountSnapshotInput;
   probe?: Probe;
   audit?: Audit;
 };

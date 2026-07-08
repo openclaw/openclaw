@@ -9,7 +9,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
-import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
+import type { ChannelAccountStatus } from "./plugins/types.core.js";
 
 type CredentialUnavailableDiagnostic = {
   code: "CREDENTIAL_FILE_UNAVAILABLE";
@@ -39,7 +39,7 @@ export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
 }
 
 /** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
-export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
+export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountStatus>>(
   snapshot: T,
 ): T {
   return redactChannelStatusSummaryBaseUrl(snapshot);
@@ -180,7 +180,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<
-  Partial<ChannelAccountSnapshot>,
+  Partial<ChannelAccountStatus>,
   | "tokenSource"
   | "botTokenSource"
   | "appTokenSource"
@@ -233,7 +233,7 @@ export function projectCredentialSnapshotFields(
  */
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
-): Partial<ChannelAccountSnapshot> {
+): Partial<ChannelAccountStatus> {
   const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
@@ -249,6 +249,12 @@ export function projectSafeChannelAccountSnapshotFields(
 
   return {
     ...(name ? { name } : {}),
+    ...(readBoolean(record, "enabled") !== undefined
+      ? { enabled: readBoolean(record, "enabled") }
+      : {}),
+    ...(readBoolean(record, "configured") !== undefined
+      ? { configured: readBoolean(record, "configured") }
+      : {}),
     ...(readBoolean(record, "linked") !== undefined
       ? { linked: readBoolean(record, "linked") }
       : {}),
@@ -267,8 +273,26 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNullableNumber(record, "lastConnectedAt") !== undefined
       ? { lastConnectedAt: readNullableNumber(record, "lastConnectedAt") }
       : {}),
-    ...(readNumber(record, "lastInboundAt") !== undefined
-      ? { lastInboundAt: readNumber(record, "lastInboundAt") }
+    ...(typeof record.lastDisconnect === "string" || record.lastDisconnect === null
+      ? { lastDisconnect: record.lastDisconnect }
+      : isRecord(record.lastDisconnect) && typeof record.lastDisconnect.at === "number"
+        ? {
+            lastDisconnect: {
+              at: record.lastDisconnect.at,
+              ...(typeof record.lastDisconnect.status === "number"
+                ? { status: record.lastDisconnect.status }
+                : {}),
+              ...(normalizeOptionalString(record.lastDisconnect.error)
+                ? { error: normalizeOptionalString(record.lastDisconnect.error) }
+                : {}),
+              ...(readBoolean(record.lastDisconnect, "loggedOut") !== undefined
+                ? { loggedOut: readBoolean(record.lastDisconnect, "loggedOut") }
+                : {}),
+            },
+          }
+        : {}),
+    ...(readNullableNumber(record, "lastInboundAt") !== undefined
+      ? { lastInboundAt: readNullableNumber(record, "lastInboundAt") }
       : {}),
     ...(readNullableNumber(record, "lastOutboundAt") !== undefined
       ? { lastOutboundAt: readNullableNumber(record, "lastOutboundAt") }
@@ -279,8 +303,8 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNullableNumber(record, "lastEventAt") !== undefined
       ? { lastEventAt: readNullableNumber(record, "lastEventAt") }
       : {}),
-    ...(readNumber(record, "lastTransportActivityAt") !== undefined
-      ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
+    ...(readNullableNumber(record, "lastTransportActivityAt") !== undefined
+      ? { lastTransportActivityAt: readNullableNumber(record, "lastTransportActivityAt") }
       : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
@@ -303,6 +327,24 @@ export function projectSafeChannelAccountSnapshotFields(
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
+    ...(normalizeOptionalString(record.userTokenSource)
+      ? { userTokenSource: normalizeOptionalString(record.userTokenSource) }
+      : {}),
+    ...(normalizeOptionalString(record.identity)
+      ? { identity: normalizeOptionalString(record.identity) }
+      : {}),
+    ...(normalizeOptionalString(record.credentialSource)
+      ? { credentialSource: normalizeOptionalString(record.credentialSource) }
+      : {}),
+    ...(normalizeOptionalString(record.secretSource)
+      ? { secretSource: normalizeOptionalString(record.secretSource) }
+      : {}),
+    ...(normalizeOptionalString(record.audienceType)
+      ? { audienceType: normalizeOptionalString(record.audienceType) }
+      : {}),
+    ...(normalizeOptionalString(record.audience)
+      ? { audience: normalizeOptionalString(record.audience) }
+      : {}),
     // Base URLs are useful diagnostics, but embedded credentials must not cross this boundary.
     ...(baseUrl ? { baseUrl: stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl)) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined

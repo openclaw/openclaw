@@ -11,7 +11,7 @@ import {
   buildChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import {
@@ -80,7 +80,7 @@ export async function formatConfigChannelsStatusLines(
     if (!accountIds.length) {
       continue;
     }
-    const snapshots: ChannelAccountSnapshot[] = [];
+    const snapshots: ChannelAccountStatus[] = [];
     for (const accountId of accountIds) {
       const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
         plugin,

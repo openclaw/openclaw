@@ -6,7 +6,7 @@
  */
 
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountStatus,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
@@ -91,7 +91,7 @@ export interface TwitchChatMessage {
 
 // Re-export core types for convenience
 export type {
-  ChannelAccountSnapshot,
+  ChannelAccountStatus,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,

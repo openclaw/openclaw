@@ -1,5 +1,5 @@
 // Channel lifecycle core contracts define account lifecycle snapshots and sync hooks.
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+import type { ChannelAccountSnapshotInput } from "../channels/plugins/types.core.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 
@@ -41,8 +41,8 @@ export type ChannelRunQueueParams = {
 /** Bind a fixed account id into a status writer so lifecycle code can emit partial snapshots. */
 export function createAccountStatusSink(params: {
   accountId: string;
-  setStatus: (next: ChannelAccountSnapshot) => void;
-}): (patch: Omit<ChannelAccountSnapshot, "accountId">) => void {
+  setStatus: (next: ChannelAccountSnapshotInput) => void;
+}): (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void {
   return (patch) => {
     params.setStatus({ accountId: params.accountId, ...patch });
   };

@@ -2,6 +2,7 @@
 export {
   type BaseProbeResult,
   type BaseTokenResolution,
+  type ChannelAccountStatus,
   type ChannelAccountSnapshot,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
