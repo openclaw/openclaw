@@ -50,6 +50,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
+  DEFAULT_MAX_BYTES,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
@@ -75,6 +76,14 @@ import type {
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
+
+// Image entries may shrink oversized originals before provider execution; keep
+// the source read bounded, then enforce the provider maxBytes after compression.
+const IMAGE_PRE_COMPRESSION_MAX_BYTES = DEFAULT_MAX_BYTES.video;
+
+function resolveImagePreCompressionMaxBytes(maxBytes: number): number {
+  return Math.max(maxBytes, IMAGE_PRE_COMPRESSION_MAX_BYTES);
+}
 
 function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
@@ -735,6 +744,20 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+function assertMediaMaxBytes(params: {
+  size: number;
+  maxBytes: number;
+  attachmentIndex: number;
+}): void {
+  if (params.size <= params.maxBytes) {
+    return;
+  }
+  throw new MediaUnderstandingSkipError(
+    "maxBytes",
+    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+  );
+}
+
 /**
  * Build an actionable hint suffix for "provider not available" errors.
  *
@@ -819,7 +842,7 @@ export async function runProviderEntry(params: {
     }
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
-      maxBytes,
+      maxBytes: resolveImagePreCompressionMaxBytes(maxBytes),
       timeoutMs,
     });
     const normalizedMedia = await normalizeImageDescriptionInput({
@@ -834,6 +857,11 @@ export async function runProviderEntry(params: {
       }),
       mime: media.mime,
       maxBytes,
+    });
+    assertMediaMaxBytes({
+      size: normalizedMedia.buffer.length,
+      maxBytes,
+      attachmentIndex: params.attachmentIndex,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);

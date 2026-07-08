@@ -262,8 +262,9 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     fileName: image.fileName,
     imageCompression: await resolveImageDescriptionCompressionPolicy({
       cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
+      ...(params.modelCandidates
+        ? { modelCandidates: params.modelCandidates }
+        : { provider: params.provider, model: params.model }),
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     }),

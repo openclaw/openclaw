@@ -341,6 +341,7 @@ describe("runCapability image skip", () => {
       },
       async ({ ctx, media, cache }) => {
         const cfg = {} as OpenClawConfig;
+        const getBufferSpy = vi.spyOn(cache, "getBuffer");
 
         const result = await runCapability({
           capability: "image",
@@ -365,6 +366,11 @@ describe("runCapability image skip", () => {
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
+        expect(getBufferSpy).toHaveBeenCalledWith({
+          attachmentIndex: 0,
+          maxBytes: 50 * 1024 * 1024,
+          timeoutMs: 60_000,
+        });
         expect(result.decision.outcome).toBe("success");
         expect(requireCapabilityOutput(result, 0)).toEqual({
           kind: "image.description",
