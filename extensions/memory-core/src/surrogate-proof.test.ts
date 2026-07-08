@@ -39,7 +39,9 @@ function hasLoneSurrogate(str: string): boolean {
     const code = str.charCodeAt(i);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = str.charCodeAt(i + 1);
-      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return true;
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
       i++;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       return true;
