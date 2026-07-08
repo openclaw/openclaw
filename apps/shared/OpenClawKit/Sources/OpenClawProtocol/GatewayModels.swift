@@ -642,6 +642,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let accountid: String?
     public let requesteraccountid: String?
     public let requestersenderid: String?
+    public let effectivegatewayclientscopes: [String]?
     public let senderisowner: Bool?
     public let sessionkey: String?
     public let sessionid: String?
@@ -657,6 +658,7 @@ public struct MessageActionParams: Codable, Sendable {
         accountid: String?,
         requesteraccountid: String? = nil,
         requestersenderid: String?,
+        effectivegatewayclientscopes: [String]?,
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
@@ -671,6 +673,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.accountid = accountid
         self.requesteraccountid = requesteraccountid
         self.requestersenderid = requestersenderid
+        self.effectivegatewayclientscopes = effectivegatewayclientscopes
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
         self.sessionid = sessionid
@@ -687,6 +690,7 @@ public struct MessageActionParams: Codable, Sendable {
         case accountid = "accountId"
         case requesteraccountid = "requesterAccountId"
         case requestersenderid = "requesterSenderId"
+        case effectivegatewayclientscopes = "effectiveGatewayClientScopes"
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
         case sessionid = "sessionId"
