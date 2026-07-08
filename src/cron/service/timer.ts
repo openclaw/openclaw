@@ -1640,6 +1640,16 @@ function isRunnableJob(params: {
     return false;
   }
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
+    // Skip catchup for jobs that already ran successfully within the current
+    // schedule window (e.g. a 09:10 daily reminder should not fire again after
+    // an 11:00 gateway restart when lastRunStatus=ok).
+    if (
+      lastRunStatus === "ok" &&
+      typeof job.state.lastRunAtMs === "number" &&
+      job.state.lastRunAtMs >= next
+    ) {
+      return false;
+    }
     return true;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {

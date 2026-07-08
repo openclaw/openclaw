@@ -719,4 +719,59 @@ describe("CronService restart catch-up", () => {
 
     await store.cleanup();
   });
+
+  it("skips catchup for overdue cron jobs already completed with lastRunStatus=ok within the current schedule window", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T11:00:00.000Z");
+    const lastRunAt = Date.parse("2025-12-13T09:10:00.000Z");
+    const nextRunAt = Date.parse("2025-12-13T09:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "daily-ok-no-catchup",
+        name: "daily reminder",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: lastRunAt,
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "daily digest" },
+        state: {
+          nextRunAtMs: nextRunAt,
+          lastRunAtMs: lastRunAt,
+          lastRunStatus: "ok",
+        },
+      },
+    ]);
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      deps: {
+        log: noopLogger,
+        nowMs: () => startNow,
+        enqueueSystemEvent,
+        requestHeartbeat,
+      },
+    });
+
+    try {
+      await runMissedJobs(state);
+
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+
+      const listedJobs = state.store?.jobs ?? [];
+      const job = listedJobs.find((j) => j.id === "daily-ok-no-catchup");
+      expect(job).toBeDefined();
+      expect(job?.state.lastRunStatus).toBe("ok");
+
+      await store.cleanup();
+    } finally {
+      state.stopped = true;
+      await store.cleanup();
+    }
+  });
 });
