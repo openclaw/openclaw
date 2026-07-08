@@ -258,6 +258,21 @@ export async function shouldSkipImportedSourceWrite(params: {
     .catch(() => false);
 }
 
+const HUMAN_START = "<!-- openclaw:human:start -->";
+const HUMAN_END = "<!-- openclaw:human:end -->";
+
+function extractHumanNotesBlock(content: string): string | null {
+  const start = content.indexOf(HUMAN_START);
+  if (start === -1) {
+    return null;
+  }
+  const end = content.lastIndexOf(HUMAN_END);
+  if (end < start) {
+    return null;
+  }
+  return content.slice(start, end + HUMAN_END.length);
+}
+
 export async function pruneImportedSourceEntries(params: {
   vaultRoot: string;
   group: MemoryWikiImportedSourceGroup;
@@ -270,6 +285,21 @@ export async function pruneImportedSourceEntries(params: {
       continue;
     }
     const pageAbsPath = path.join(params.vaultRoot, entry.pagePath);
+    // Before removing the page, salvage any human-authored Notes block
+    // so legitimate prunes (renamed/deleted workspaces) don't silently
+    // destroy durable annotations. See openclaw/openclaw#102230.
+    try {
+      const pageContent = await fs.readFile(pageAbsPath, "utf-8");
+      const notes = extractHumanNotesBlock(pageContent);
+      if (notes) {
+        const salvageDir = path.join(params.vaultRoot, ".salvage");
+        await fs.mkdir(salvageDir, { recursive: true });
+        const salvagePath = path.join(salvageDir, `${entry.pagePath.replace(/\//g, "_")}.notes.md`);
+        await fs.writeFile(salvagePath, notes, "utf-8");
+      }
+    } catch {
+      // Page may not exist or be unreadable; proceed with removal anyway.
+    }
     await fs.rm(pageAbsPath, { force: true }).catch(() => undefined);
     delete params.state.entries[syncKey];
     removedCount += 1;

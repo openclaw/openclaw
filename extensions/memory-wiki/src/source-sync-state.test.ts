@@ -13,6 +13,7 @@ import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
   MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+  pruneImportedSourceEntries,
   readLegacyMemoryWikiSourceSyncState,
   readMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
@@ -149,6 +150,120 @@ describe("memory wiki source sync state", () => {
     await expect(
       writeMemoryWikiSourceSyncState(vaultRoot, { version: 1, entries }, store),
     ).rejects.toThrow("Memory Wiki source sync state exceeds SQLite entry limit");
+  });
+
+  it("salvages human Notes before pruning an imported page", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/salvage-test.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Bridge Source",
+        "## Content",
+        "```",
+        "generated content",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "my durable annotations",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    expect(removed).toBe(1);
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const salvagePath = path.join(
+      vaultRoot,
+      ".salvage",
+      `${pagePath.replace(/\//g, "_")}.notes.md`,
+    );
+    const salvaged = await fs.readFile(salvagePath, "utf-8");
+    expect(salvaged).toContain("<!-- openclaw:human:start -->");
+    expect(salvaged).toContain("my durable annotations");
+    expect(salvaged).toContain("<!-- openclaw:human:end -->");
+  });
+
+  it("does not create salvage files for pages without human Notes", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/no-notes.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(pageAbsPath, "# Memory Bridge\n\n## Content\n\nNo notes here.\n", "utf-8");
+
+    await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    const salvageDir = path.join(vaultRoot, ".salvage");
+    await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prunes pages even when the page file is already missing", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/missing.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    expect(removed).toBe(1);
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects projected imports that would exceed the source-sync row cap", () => {
