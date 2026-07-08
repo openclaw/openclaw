@@ -899,6 +899,38 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Sample Page");
   });
 
+  it("ignores fake body tags in declarations before the real body", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html [ <body>Fake declaration body</body> ]>",
+              "<html><head><title>Sample Page</title></head>",
+              "<body><main><p>Real declaration-safe body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-declaration" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real declaration-safe body marker 82685 content.");
+    expect(details.text).not.toContain("Fake declaration body");
+    expect(details.title).toContain("Sample Page");
+  });
+
   it("ignores fake body tags in legacy raw-text containers with malformed end tags", async () => {
     for (const tagName of ["iframe", "xmp", "noembed", "noframes"] as const) {
       extractReadableContentMock.mockResolvedValue({

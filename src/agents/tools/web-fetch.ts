@@ -272,6 +272,11 @@ function readHtmlTag(html: string, start: number): HtmlTagRead | null {
   };
 }
 
+function skipHtmlToken(html: string, start: number): number {
+  const end = findHtmlTagEnd(html, start);
+  return end < 0 ? start + 1 : end + 1;
+}
+
 function findRawTextElementEnd(html: string, tagName: string, from: number): number {
   const closeMatch = new RegExp(`</\\s*${tagName}\\b[^>]*>`, "i").exec(html.slice(from));
   return closeMatch ? from + closeMatch.index + closeMatch[0].length : html.length;
@@ -291,7 +296,7 @@ function findNestedElementEnd(html: string, tagName: string, from: number): numb
     }
     const tag = readHtmlTag(html, tagStart);
     if (!tag) {
-      cursor = tagStart + 1;
+      cursor = skipHtmlToken(html, tagStart);
       continue;
     }
     if (tag.closing) {
@@ -345,7 +350,7 @@ function findDocumentBodyClose(html: string, from: number): number {
     }
     const tag = readHtmlTag(html, tagStart);
     if (!tag) {
-      cursor = tagStart + 1;
+      cursor = skipHtmlToken(html, tagStart);
       continue;
     }
     if (tag.closing && tag.tagName === "body") {
@@ -376,7 +381,7 @@ function extractHtmlBody(html: string): string | undefined {
     }
     const tag = readHtmlTag(html, tagStart);
     if (!tag) {
-      cursor = tagStart + 1;
+      cursor = skipHtmlToken(html, tagStart);
       continue;
     }
     if (!tag.closing && tag.tagName === "body") {
