@@ -7,7 +7,7 @@ import {
 
 export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
-const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENVELOPE_SIGNING_CONTEXT = "openclaw.feed-envelope.v1";
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES = 16;
 
 export type OfficialExternalPluginCatalogEnvelopeSignature = {
   keyId?: string;
@@ -54,11 +54,7 @@ export function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: 
   payloadType: string;
   payload: string;
 }): string {
-  return [
-    OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENVELOPE_SIGNING_CONTEXT,
-    params.payloadType,
-    params.payload,
-  ].join(".");
+  return dssePreAuthenticationEncoding(params.payloadType, params.payload);
 }
 
 export function verifyOfficialExternalPluginCatalogSignedEnvelope(
@@ -164,11 +160,25 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   if (parsedSignatures.length === 0) {
     return null;
   }
+  if (parsedSignatures.length > OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES) {
+    return null;
+  }
+  const keyIds = new Set<string>();
+  for (const signature of parsedSignatures) {
+    if (keyIds.has(signature.keyId)) {
+      return null;
+    }
+    keyIds.add(signature.keyId);
+  }
   return {
     payloadType,
     payload,
     signatures: parsedSignatures,
   };
+}
+
+function dssePreAuthenticationEncoding(payloadType: string, payload: string): string {
+  return `DSSEv1 ${payloadType.length} ${payloadType} ${payload.length} ${payload}`;
 }
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(

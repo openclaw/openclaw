@@ -81,6 +81,15 @@ function signedEnvelope(params?: {
 }
 
 describe("official external plugin catalog signed envelopes", () => {
+  it("uses DSSE pre-authentication encoding for signature input", () => {
+    expect(
+      createOfficialExternalPluginCatalogEnvelopeSigningInput({
+        payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+        payload: "abc",
+      }),
+    ).toBe("DSSEv1 49 openclaw.official-external-plugin-catalog-feed.v1 3 abc");
+  });
+
   it("verifies a signed ClawHub feed envelope with a trusted PEM key", () => {
     const { envelope, publicKeyPem } = signedEnvelope();
 
@@ -148,6 +157,51 @@ describe("official external plugin catalog signed envelopes", () => {
     expect(result).toMatchObject({
       ok: false,
       error: "invalid-signature",
+    });
+  });
+
+  it("rejects duplicate key ids before signature verification", () => {
+    const { envelope, publicKeyPem } = signedEnvelope();
+    const [signature] = envelope.signatures ?? [];
+    expect(signature).toBeDefined();
+
+    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      {
+        ...envelope,
+        signatures: [signature!, signature!],
+      },
+      {
+        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "invalid-envelope",
+    });
+  });
+
+  it("rejects excessive signature entries before signature verification", () => {
+    const { envelope, publicKeyPem } = signedEnvelope();
+    const [signature] = envelope.signatures ?? [];
+    expect(signature).toBeDefined();
+
+    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      {
+        ...envelope,
+        signatures: Array.from({ length: 17 }, (_, index) => ({
+          ...signature!,
+          keyId: `key-${index}`,
+        })),
+      },
+      {
+        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "invalid-envelope",
     });
   });
 
