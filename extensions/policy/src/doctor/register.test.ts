@@ -1820,9 +1820,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.changes).toEqual([
       "Review required: set gateway.bind=loopback for policy conformance.",
     ]);
-    expect(result.warnings).toEqual([
-      "Review required: set gateway.bind=loopback for policy conformance.",
-    ]);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",
@@ -1862,9 +1860,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.changes).toEqual([
       "Review required: set gateway.bind=loopback for policy conformance.",
     ]);
-    expect(result.warnings).toEqual([
-      "Review required: set gateway.bind=loopback for policy conformance.",
-    ]);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",
@@ -1903,9 +1899,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.changes).toEqual([
       "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
     ]);
-    expect(result.warnings).toEqual([
-      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
-    ]);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",
@@ -1943,9 +1937,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.changes).toEqual([
       "Review required: set agent sandbox workspace access to an allowed policy value for policy conformance.",
     ]);
-    expect(result.warnings).toEqual([
-      "Review required: set agent sandbox workspace access to an allowed policy value for policy conformance.",
-    ]);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",
@@ -2023,7 +2015,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect(result.status).toBe("skipped");
       expect(result.reason).toBe("policy repair requires review before changing config");
       expect(result.changes).toEqual([entry.change]);
-      expect(result.warnings).toEqual([entry.change]);
+      expect(result.warnings).toEqual([]);
       expect(result.effects).toEqual([
         {
           kind: "config",
@@ -2074,7 +2066,7 @@ describe("registerPolicyDoctorChecks", () => {
       "Review required: add message to agents.list.#0.tools.alsoAllow for policy conformance.",
       "Review required: add message to tools.alsoAllow for policy conformance.",
     ]);
-    expect(result.warnings).toEqual(result.changes);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",
@@ -2140,7 +2132,7 @@ describe("registerPolicyDoctorChecks", () => {
       "Review required: remove shell from agents.list.#0.tools.alsoAllow for policy conformance.",
       "Review required: remove cron from tools.alsoAllow for policy conformance.",
     ]);
-    expect(result.warnings).toEqual(result.changes);
+    expect(result.warnings).toEqual([]);
     expect(result.effects).toEqual([
       {
         kind: "config",

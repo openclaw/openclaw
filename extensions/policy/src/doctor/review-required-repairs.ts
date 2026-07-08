@@ -64,7 +64,7 @@ export function previewPolicyReviewRequiredRepair(
     status: "skipped",
     reason: "policy repair requires review before changing config",
     changes: uniqueStrings(previews.map((preview) => preview.change)),
-    warnings: uniqueStrings(previews.map((preview) => preview.change)),
+    warnings: [],
     effects: uniqueEffects(previews.map((preview) => preview.effect)),
   });
 }
