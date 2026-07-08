@@ -63,7 +63,7 @@ const discordSendMocks = {
   fetchRoleInfoDiscord: vi.fn(async () => []),
   fetchVoiceStatusDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
-  listGuildChannelsDiscord: vi.fn(async () => []),
+  listGuildChannelsDiscord: vi.fn(async (): Promise<DiscordChannelInfoTest[]> => []),
   listGuildEmojisDiscord: vi.fn(async () => []),
   listPinsDiscord: vi.fn(async () => ({})),
   listScheduledEventsDiscord: vi.fn(async () => []),
@@ -185,6 +185,7 @@ function handleMessagingAction(
     };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    conversationReadOrigin?: "delegated" | "direct-operator";
   },
 ) {
   return handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
@@ -195,7 +196,10 @@ function handleGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
-  options?: { mediaLocalRoots?: readonly string[] },
+  options?: {
+    mediaLocalRoots?: readonly string[];
+    conversationReadOrigin?: "delegated" | "direct-operator";
+  },
 ) {
   return handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
 }
@@ -579,6 +583,259 @@ describe("handleDiscordMessagingAction", () => {
         { channelId: "444", messageId: "M1" },
         enableAllActions,
         cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("lets a direct operator read an unconfigured Discord channel", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      guild_id: "111",
+      name: "operator-target",
+      type: ChannelType.GuildText,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await handleMessagingAction(
+      "reactions",
+      { channelId: "444", messageId: "M1" },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(fetchReactionsDiscord).toHaveBeenCalledWith("444", "M1", {
+      cfg,
+      accountId: "default",
+      limit: undefined,
+    });
+  });
+
+  it.each([
+    {
+      name: "disabled group scope",
+      cfg: {
+        channels: {
+          discord: {
+            token: "token",
+            groupPolicy: "disabled",
+          },
+        },
+      } as OpenClawConfig,
+      channel: {
+        id: "444",
+        guild_id: "111",
+        name: "blocked",
+        type: ChannelType.GuildText,
+      },
+    },
+    {
+      name: "explicitly disabled channel",
+      cfg: discordAllowlistCfg({
+        "111": {
+          channels: {
+            "444": { enabled: false },
+          },
+        },
+      }),
+      channel: {
+        id: "444",
+        guild_id: "111",
+        name: "blocked",
+        type: ChannelType.GuildText,
+      },
+    },
+    {
+      name: "disabled direct-message scope",
+      cfg: {
+        channels: {
+          discord: {
+            token: "token",
+            groupPolicy: "open",
+            dm: { enabled: false, policy: "disabled" },
+          },
+        },
+      } as OpenClawConfig,
+      channel: {
+        id: "444",
+        type: ChannelType.DM,
+      },
+    },
+    {
+      name: "disabled group direct-message scope",
+      cfg: {
+        channels: {
+          discord: {
+            token: "token",
+            groupPolicy: "open",
+            dm: { enabled: true, policy: "pairing", groupEnabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      channel: {
+        id: "444",
+        name: "qa-group",
+        type: ChannelType.GroupDM,
+      },
+    },
+    {
+      name: "group direct-message target outside its allowlist",
+      cfg: {
+        channels: {
+          discord: {
+            token: "token",
+            groupPolicy: "open",
+            dm: {
+              enabled: true,
+              policy: "pairing",
+              groupEnabled: true,
+              groupChannels: ["allowed-group"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      channel: {
+        id: "444",
+        name: "blocked-group",
+        type: ChannelType.GroupDM,
+      },
+    },
+  ])("keeps $name blocked for direct operators", async ({ cfg, channel }) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce(channel);
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("lets a direct operator read an enabled, allowlisted Discord group DM", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      name: "allowed-group",
+      type: ChannelType.GroupDM,
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "disabled",
+          dm: {
+            enabled: false,
+            policy: "disabled",
+            groupEnabled: true,
+            groupChannels: ["allowed-group"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction(
+      "reactions",
+      { channelId: "444", messageId: "M1" },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(fetchReactionsDiscord).toHaveBeenCalledWith("444", "M1", {
+      cfg,
+      accountId: "default",
+      limit: undefined,
+    });
+  });
+
+  it("fails closed across disabled Discord scopes when target metadata is unavailable", async () => {
+    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "disabled",
+          dm: { enabled: true, policy: "pairing" },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when Discord metadata cannot distinguish a disabled group DM", async () => {
+    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "open",
+          dm: {
+            enabled: true,
+            policy: "pairing",
+            groupEnabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fails closed around explicit disabled channels when target metadata is unavailable", async () => {
+    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "open",
+          dm: { enabled: true, policy: "pairing" },
+          guilds: {
+            "111": {
+              channels: {
+                blocked: { enabled: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
       ),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(fetchReactionsDiscord).not.toHaveBeenCalled();
@@ -1200,6 +1457,29 @@ describe("handleDiscordMessagingAction", () => {
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
+  it("requires explicit Discord search targets when a direct operator has disabled channels", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          blocked: { enabled: false },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "searchMessages",
+        { guildId: "111", content: "hello" },
+        enableAllActions,
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
+      ),
+    ).rejects.toThrow(
+      "Discord message search requires channelId or channelIds so each read target can be authorized.",
+    );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
+  });
+
   it("fails closed for Discord guild-wide searches when provider config is missing", async () => {
     const cfg = {} as OpenClawConfig;
 
@@ -1788,6 +2068,86 @@ describe("handleDiscordGuildAction", () => {
     await handleGuildAction("roleInfo", { guildId: "111" }, enableAllActions, cfg);
 
     expect(fetchRoleInfoDiscord).toHaveBeenCalledWith("111", { cfg });
+  });
+
+  it("lets a direct operator read metadata for an unconfigured Discord guild", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "*": { enabled: true },
+        },
+      },
+    });
+
+    await handleGuildAction("roleInfo", { guildId: "333" }, enableAllActions, cfg, {
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(fetchRoleInfoDiscord).toHaveBeenCalledWith("333", { cfg });
+  });
+
+  it("omits explicitly disabled channels from a direct operator channel list", async () => {
+    const channels = [
+      { id: "222", name: "configured", type: ChannelType.GuildText },
+      { id: "333", name: "disabled", type: ChannelType.GuildText },
+      { id: "444", name: "unconfigured", type: ChannelType.GuildText },
+    ];
+    listGuildChannelsDiscord.mockResolvedValueOnce(channels);
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+          disabled: { enabled: false },
+        },
+      },
+    });
+
+    const result = await handleGuildAction(
+      "channelList",
+      { guildId: "111" },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      channels: [channels[0], channels[2]],
+    });
+  });
+
+  it("omits descendants of disabled parents from a direct operator channel list", async () => {
+    const channels = [
+      { id: "222", name: "private", type: ChannelType.GuildCategory },
+      {
+        id: "333",
+        name: "private-child",
+        parent_id: "222",
+        type: ChannelType.GuildText,
+      },
+      { id: "444", name: "public", type: ChannelType.GuildText },
+    ];
+    listGuildChannelsDiscord.mockResolvedValueOnce(channels);
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          private: { enabled: false },
+        },
+      },
+    });
+
+    const result = await handleGuildAction(
+      "channelList",
+      { guildId: "111" },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      channels: [channels[2]],
+    });
   });
 
   it("rejects Discord channel info reads for non-allowlisted target channels", async () => {

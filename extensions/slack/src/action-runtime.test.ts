@@ -22,6 +22,9 @@ const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const resolveSlackConversationName = vi.fn(
   async (..._args: unknown[]): Promise<string | undefined> => undefined,
 );
+const resolveSlackChannelType = vi.fn(
+  async (..._args: unknown[]): Promise<"channel" | "group" | "dm" | "unknown"> => "channel",
+);
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
@@ -217,6 +220,7 @@ describe("handleSlackAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
+    resolveSlackChannelType.mockReset().mockResolvedValue("channel");
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
       deleteSlackMessage,
       downloadSlackFile,
@@ -232,6 +236,7 @@ describe("handleSlackAction", () => {
       removeOwnSlackReactions,
       removeSlackReaction,
       resolveSlackConversationName,
+      resolveSlackChannelType,
       sendSlackMessage,
       unpinSlackMessage,
     });
@@ -353,6 +358,147 @@ describe("handleSlackAction", () => {
 
     await expect(
       handleSlackAction({ action: "reactions", channelId: "C_OTHER", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
+  it("lets a direct operator read an unconfigured Slack channel", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await handleSlackAction(
+      {
+        action: "reactions",
+        channelId: "C_OTHER",
+        messageId: "123.456",
+      },
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(listSlackReactions).toHaveBeenCalledWith("C_OTHER", "123.456", { cfg });
+    expect(resolveSlackConversationName).not.toHaveBeenCalled();
+  });
+
+  it("keeps name-disabled Slack channels blocked for direct operators", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("blocked-channel");
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#blocked-channel": { enabled: false },
+      },
+    });
+
+    await expect(
+      handleSlackAction(
+        {
+          action: "reactions",
+          channelId: "C_BLOCKED",
+          messageId: "123.456",
+        },
+        cfg,
+        { conversationReadOrigin: "direct-operator" },
+      ),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C_BLOCKED", { cfg });
+    expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
+  it("lets a direct operator read a DM when group reads are disabled", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "disabled",
+      dmPolicy: "pairing",
+    });
+
+    await handleSlackAction(
+      {
+        action: "reactions",
+        channelId: "D_OTHER",
+        messageId: "123.456",
+      },
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(listSlackReactions).toHaveBeenCalledWith("D_OTHER", "123.456", { cfg });
+  });
+
+  it("lets a direct operator read an enabled Slack group DM", async () => {
+    resolveSlackChannelType.mockResolvedValueOnce("group");
+    const cfg = slackConfig({
+      groupPolicy: "disabled",
+      dm: {
+        groupEnabled: true,
+        groupChannels: ["G_ALLOWED"],
+      },
+    });
+
+    await handleSlackAction(
+      {
+        action: "reactions",
+        channelId: "G_ALLOWED",
+        messageId: "123.456",
+      },
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(listSlackReactions).toHaveBeenCalledWith("G_ALLOWED", "123.456", { cfg });
+  });
+
+  it.each([
+    {
+      name: "disabled scope",
+      overrides: { groupPolicy: "disabled" },
+      channelId: "C_OTHER",
+      channelType: undefined,
+    },
+    {
+      name: "explicitly disabled channel",
+      overrides: {
+        groupPolicy: "allowlist",
+        channels: { C_BLOCKED: { enabled: false } },
+      },
+      channelId: "C_BLOCKED",
+      channelType: undefined,
+    },
+    {
+      name: "disabled DM scope",
+      overrides: {
+        groupPolicy: "open",
+        dmPolicy: "disabled",
+      },
+      channelId: "D_BLOCKED",
+      channelType: undefined,
+    },
+    {
+      name: "disabled group DM scope",
+      overrides: {
+        groupPolicy: "open",
+        dm: { groupEnabled: false },
+      },
+      channelId: "G_BLOCKED",
+      channelType: "group" as const,
+    },
+  ])("keeps $name blocked for direct operators", async ({ overrides, channelId, channelType }) => {
+    if (channelType) {
+      resolveSlackChannelType.mockResolvedValueOnce(channelType);
+    }
+    await expect(
+      handleSlackAction(
+        {
+          action: "reactions",
+          channelId,
+          messageId: "123.456",
+        },
+        slackConfig(overrides),
+        { conversationReadOrigin: "direct-operator" },
+      ),
     ).rejects.toThrow("Slack read target channel is not allowed.");
     expect(listSlackReactions).not.toHaveBeenCalled();
   });

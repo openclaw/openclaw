@@ -19,7 +19,10 @@ import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
+import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+
+export type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
@@ -716,6 +719,11 @@ export type ChannelMessageActionContext = {
   requesterSenderId?: string | null;
   /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
+  /**
+   * Server-owned origin for this operation. Missing values are delegated.
+   * Plugins must use it only for conversation-read visibility policy.
+   */
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;

@@ -6,6 +6,7 @@ import {
   assertFeishuChatReadAllowed,
   canEnumerateAllFeishuGroups,
   canEnumerateAllFeishuPeers,
+  resolveFeishuChatReadPreliminaryAuthorization,
 } from "./read-policy.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -295,5 +296,72 @@ describe("Feishu read policy", () => {
         },
       }),
     ).toThrow("Feishu read target is not allowed.");
+  });
+
+  it("lets a direct operator read an unconfigured group or DM", () => {
+    const account = createAccount();
+    const ctx = { conversationReadOrigin: "direct-operator" as const };
+
+    expect(
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_group",
+        chatType: "group",
+        ctx,
+      }),
+    ).toBe("oc_group");
+    expect(
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_dm",
+        chatType: "p2p",
+        ctx,
+      }),
+    ).toBe("oc_dm");
+  });
+
+  it("keeps disabled group targets blocked for direct operators", () => {
+    const account = createAccount();
+    account.config = {
+      ...account.config,
+      groups: { oc_blocked: { enabled: false } },
+    };
+
+    expect(() =>
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_blocked",
+        chatType: "group",
+        ctx: { conversationReadOrigin: "direct-operator" },
+      }),
+    ).toThrow("Feishu read target is not allowed.");
+  });
+
+  it("requires metadata only when an unknown target has mixed scope policy", () => {
+    const account = createAccount();
+    account.config = {
+      ...account.config,
+      allowFrom: ["*"],
+    };
+
+    expect(
+      resolveFeishuChatReadPreliminaryAuthorization({
+        cfg,
+        account,
+        chatId: "oc_unknown",
+        ctx: {},
+      }),
+    ).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
+    expect(
+      resolveFeishuChatReadPreliminaryAuthorization({
+        cfg,
+        account,
+        chatId: "oc_unknown",
+        ctx: { conversationReadOrigin: "direct-operator" },
+      }),
+    ).toEqual({ chatId: "oc_unknown", decision: "allow" });
   });
 });

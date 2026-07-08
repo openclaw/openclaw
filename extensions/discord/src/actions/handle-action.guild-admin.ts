@@ -31,6 +31,7 @@ type Ctx = Pick<
   | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "conversationReadOrigin"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -68,6 +69,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "memberInfo", accountId: accountId ?? undefined, guildId, userId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -78,6 +80,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "roleInfo", accountId: accountId ?? undefined, guildId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -88,6 +91,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "emojiList", accountId: accountId ?? undefined, guildId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -173,6 +177,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "channelInfo", accountId: accountId ?? undefined, channelId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -183,6 +188,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "channelList", accountId: accountId ?? undefined, guildId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -310,6 +316,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "voiceStatus", accountId: accountId ?? undefined, guildId, userId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -320,6 +327,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     return await handleDiscordAction(
       { action: "eventList", accountId: accountId ?? undefined, guildId },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -403,6 +411,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         limit,
       },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 
@@ -467,6 +476,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         limit: readPositiveIntegerParam(actionParams, "limit"),
       },
       cfg,
+      { conversationReadOrigin: ctx.conversationReadOrigin },
     );
   }
 

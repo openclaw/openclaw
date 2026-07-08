@@ -83,17 +83,36 @@ describe("AgentParamsSchema", () => {
 });
 
 describe("MessageActionParamsSchema", () => {
+  const baseParams = {
+    channel: "matrix",
+    action: "read",
+    params: {},
+    idempotencyKey: "idem-1",
+  };
+
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects caller-supplied current chat classification", () => {
     expect(
       Value.Check(MessageActionParamsSchema, {
-        channel: "matrix",
-        action: "read",
-        params: {},
+        ...baseParams,
         toolContext: {
           currentChannelId: "!room:example.org",
           currentChatType: "direct",
         },
-        idempotencyKey: "idem-1",
       }),
     ).toBe(false);
   });

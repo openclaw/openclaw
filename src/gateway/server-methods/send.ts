@@ -16,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -53,6 +54,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -177,6 +179,7 @@ function resolveGatewayInflightRequest(params: {
   prefix: "message.action" | "poll" | "send";
   idempotencyKey: string;
   respond: RespondFn;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 }):
   | {
       kind: "ready";
@@ -189,7 +192,10 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const dedupeKey = `${params.prefix}:${idem}`;
+  const dedupeKey =
+    params.prefix === "message.action"
+      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
+      : `${params.prefix}:${idem}`;
   const inflight = resolveGatewayInflightMap({
     context: params.context,
     dedupeKey,
@@ -529,6 +535,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
       toolContext?: MessageActionToolContext;
+      conversationReadOrigin?: "direct-operator";
       idempotencyKey: string;
     };
     const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
@@ -536,11 +543,16 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, trustedContext.error);
       return;
     }
+    const conversationReadOrigin = resolveGatewayConversationReadOrigin({
+      client,
+      requestedOrigin: request.conversationReadOrigin,
+    });
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
       respond,
+      conversationReadOrigin,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -600,6 +612,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true
             : false,
+          conversationReadOrigin,
           sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,

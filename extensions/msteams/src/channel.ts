@@ -1112,6 +1112,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             }
             const graphTeamId = await assertMSTeamsTeamEnumerationAllowed({
               cfg: ctx.cfg,
+              ctx,
               teamId,
             });
             const { listChannelsMSTeams } = await loadMSTeamsChannelRuntime();

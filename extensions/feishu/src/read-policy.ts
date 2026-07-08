@@ -16,16 +16,18 @@ import {
 import { detectIdType, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
-type FeishuReadContext =
-  | Pick<
-      ChannelMessageActionContext,
-      "accountId" | "requesterAccountId" | "requesterSenderId" | "toolContext"
-    >
-  | OpenClawPluginToolContext;
+type FeishuActionReadContext = Pick<
+  ChannelMessageActionContext,
+  | "accountId"
+  | "conversationReadOrigin"
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "toolContext"
+>;
 
-function isActionContext(
-  ctx: FeishuReadContext,
-): ctx is Pick<ChannelMessageActionContext, "accountId" | "requesterAccountId" | "toolContext"> {
+type FeishuReadContext = FeishuActionReadContext | OpenClawPluginToolContext;
+
+function isActionContext(ctx: FeishuReadContext): ctx is FeishuActionReadContext {
   return "toolContext" in ctx;
 }
 
@@ -42,6 +44,7 @@ function readContextFields(ctx: FeishuReadContext): {
   currentProvider?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  directOperator: boolean;
 } {
   if (isActionContext(ctx)) {
     return {
@@ -50,6 +53,7 @@ function readContextFields(ctx: FeishuReadContext): {
       currentProvider: normalizeOptionalString(ctx.toolContext?.currentChannelProvider),
       requesterAccountId: normalizeOptionalString(ctx.requesterAccountId),
       requesterSenderId: normalizeOptionalString(ctx.requesterSenderId),
+      directOperator: ctx.conversationReadOrigin === "direct-operator",
     };
   }
   return {
@@ -58,6 +62,7 @@ function readContextFields(ctx: FeishuReadContext): {
     currentProvider: normalizeOptionalString(ctx.messageChannel ?? ctx.deliveryContext?.channel),
     requesterAccountId: normalizeOptionalString(ctx.deliveryContext?.accountId),
     requesterSenderId: normalizeOptionalString(ctx.requesterSenderId),
+    directOperator: ctx.conversationReadOrigin === "direct-operator",
   };
 }
 
@@ -117,6 +122,17 @@ export function isFeishuGroupReadAllowed(
   );
 }
 
+export function isFeishuGroupReadEnabled(
+  cfg: OpenClawConfig,
+  account: ResolvedFeishuAccount,
+  chatId: string,
+): boolean {
+  if (resolveFeishuReadGroupPolicy(cfg, account) === "disabled") {
+    return false;
+  }
+  return resolveFeishuGroupConfig({ cfg: account.config, groupId: chatId })?.enabled !== false;
+}
+
 function isDmUniversallyAllowed(account: ResolvedFeishuAccount): boolean {
   // Feishu's canonical schema has no disabled DM mode; channel/account enabled owns shutdown.
   // Account overrides merge field-by-field, so only an allowFrom wildcard proves
@@ -133,6 +149,25 @@ export function assertFeishuChatReadAllowed(params: {
   chatType?: FeishuChatType;
   ctx: FeishuReadContext;
 }): string {
+  const authorization = resolveFeishuChatReadPreliminaryAuthorization(params);
+  if (authorization.decision !== "allow") {
+    throw new ToolAuthorizationError("Feishu read target is not allowed.");
+  }
+  return authorization.chatId;
+}
+
+export type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
+
+export function resolveFeishuChatReadPreliminaryAuthorization(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  chatType?: FeishuChatType;
+  ctx: FeishuReadContext;
+}): {
+  chatId: string;
+  decision: FeishuChatReadPreliminaryDecision;
+} {
   const chatId = normalizeChatId(params.chatId);
   const resolvedChatType = normalizeFeishuChatType(params.chatType);
   const knownGroup =
@@ -144,16 +179,21 @@ export function assertFeishuChatReadAllowed(params: {
       }));
   const knownDm = resolvedChatType === "p2p";
   const current = isCurrentChat({ account: params.account, chatId, ctx: params.ctx });
-  const allowed = knownGroup
-    ? isFeishuGroupReadAllowed(params.cfg, params.account, chatId, current)
-    : knownDm
-      ? current || isDmUniversallyAllowed(params.account)
-      : isFeishuGroupReadAllowed(params.cfg, params.account, chatId, current) &&
-        (current || isDmUniversallyAllowed(params.account));
-  if (!allowed) {
-    throw new ToolAuthorizationError("Feishu read target is not allowed.");
+  const directOperator = readContextFields(params.ctx).directOperator;
+  const groupAllowed = directOperator
+    ? isFeishuGroupReadEnabled(params.cfg, params.account, chatId)
+    : isFeishuGroupReadAllowed(params.cfg, params.account, chatId, current);
+  const dmAllowed = directOperator || current || isDmUniversallyAllowed(params.account);
+  if (knownGroup) {
+    return { chatId, decision: groupAllowed ? "allow" : "deny" };
   }
-  return chatId;
+  if (knownDm) {
+    return { chatId, decision: dmAllowed ? "allow" : "deny" };
+  }
+  if (groupAllowed === dmAllowed) {
+    return { chatId, decision: groupAllowed ? "allow" : "deny" };
+  }
+  return { chatId, decision: "needs-metadata" };
 }
 
 export type FeishuChatMemberReadAuthorization =

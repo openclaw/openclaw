@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
 import { createDiscordActionGate } from "../accounts.js";
 import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
@@ -66,6 +67,7 @@ export async function handleDiscordAction(
     };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });

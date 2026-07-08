@@ -1,9 +1,12 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   ToolAuthorizationError,
 } from "../runtime-api.js";
 import type { CoreConfig } from "../types.js";
+import { resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixAccount } from "./accounts.js";
 import { withResolvedActionClient } from "./actions/client.js";
 import type { MatrixActionClientOpts } from "./actions/types.js";
@@ -23,6 +26,7 @@ export type MatrixReadContext = {
   currentChannelProvider?: string | null;
   currentChatType?: "direct" | "group" | "channel" | null;
   requesterAccountId?: string | null;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
 function normalizeRoomId(raw?: string | null): string {
@@ -131,6 +135,18 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
       roomId,
       aliases,
     });
+    const baseConfig = resolveMatrixBaseConfig(params.cfg);
+    const baseRoom = resolveMatrixRoomConfig({
+      rooms: baseConfig.groups ?? baseConfig.rooms,
+      roomId,
+      aliases,
+    });
+    const baseRoomAccount = baseRoom.config?.account;
+    const explicitlyScopedToAnotherAccount =
+      room.config === undefined &&
+      baseRoom.matchSource === "direct" &&
+      typeof baseRoomAccount === "string" &&
+      normalizeAccountId(baseRoomAccount) !== account.accountId;
     const current = isCurrentRoom({
       accountId: account.accountId,
       context: params.context,
@@ -166,24 +182,35 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
     const accountMatches = !room.config?.account || room.config.account === account.accountId;
-    const blockedByRoomConfig = room.config !== undefined && (!room.allowed || !accountMatches);
+    const blockedByRoomConfig =
+      explicitlyScopedToAnotherAccount ||
+      (room.config !== undefined && (!room.allowed || !accountMatches));
+    const directOperator = params.context?.conversationReadOrigin === "direct-operator";
     const allowed = blockedByRoomConfig
       ? false
-      : classification.kind === "direct"
-        ? account.config.dm?.enabled !== false &&
-          dmPolicy !== "disabled" &&
-          (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
-        : classification.kind === "group"
-          ? groupPolicy !== "disabled" &&
-            (current || groupPolicy === "open" || room.config !== undefined)
-          : current
-            ? groupPolicy !== "disabled" &&
+      : directOperator
+        ? classification.kind === "direct"
+          ? account.config.dm?.enabled !== false && dmPolicy !== "disabled"
+          : classification.kind === "group"
+            ? groupPolicy !== "disabled"
+            : groupPolicy !== "disabled" &&
               dmPolicy !== "disabled" &&
               account.config.dm?.enabled !== false
-            : groupPolicy === "open" &&
-              dmPolicy !== "disabled" &&
-              account.config.dm?.enabled !== false &&
-              hasWildcardEntry(account.config.dm?.allowFrom);
+        : classification.kind === "direct"
+          ? account.config.dm?.enabled !== false &&
+            dmPolicy !== "disabled" &&
+            (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
+          : classification.kind === "group"
+            ? groupPolicy !== "disabled" &&
+              (current || groupPolicy === "open" || room.config !== undefined)
+            : current
+              ? groupPolicy !== "disabled" &&
+                dmPolicy !== "disabled" &&
+                account.config.dm?.enabled !== false
+              : groupPolicy === "open" &&
+                dmPolicy !== "disabled" &&
+                account.config.dm?.enabled !== false &&
+                hasWildcardEntry(account.config.dm?.allowFrom);
     if (!allowed) {
       throw new ToolAuthorizationError("Matrix read target is not allowed.");
     }

@@ -405,7 +405,11 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       const pinCall = readPluginCall(handleAction, 0);
-      expectRecordFields(pinCall, { action: "pin" }, "pin call");
+      expectRecordFields(
+        pinCall,
+        { action: "pin", conversationReadOrigin: "delegated" },
+        "pin call",
+      );
       expectRecordFields(
         readRecordField(pinCall, "params", "pin call params"),
         { messageId: "om_123" },
@@ -442,6 +446,7 @@ describe("runMessageAction plugin dispatch", () => {
           defaultAccountId: "ops",
           requesterAccountId: "ops",
           requesterSenderId: "trusted-user",
+          conversationReadOrigin: "direct-operator",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
@@ -463,6 +468,7 @@ describe("runMessageAction plugin dispatch", () => {
             accountId: "ops",
             requesterAccountId: "ops",
             requesterSenderId: "trusted-user",
+            conversationReadOrigin: "direct-operator",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",
             inboundEventKind: "room_event",
@@ -741,6 +747,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(gatewayCall.agentRuntimeIdentityToken).toBe("agent-runtime-token");
       expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledTimes(1);
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expect(gatewayParams).not.toHaveProperty("conversationReadOrigin");
       expectRecordFields(
         gatewayParams,
         {
@@ -1027,6 +1034,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         } as OpenClawConfig,
         action: "send",
+        conversationReadOrigin: "direct-operator",
         params: {
           channel: "gatewaychat",
           target: "user-123",
@@ -1050,6 +1058,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           channel: "gatewaychat",
           action: "send",
+          conversationReadOrigin: "direct-operator",
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",

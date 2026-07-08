@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -231,7 +235,10 @@ function createDeferred<T>() {
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: {
-    connect?: { scopes?: string[] };
+    connect?: {
+      scopes?: string[];
+      client?: { id: string; mode: string };
+    };
     internal?: {
       agentRuntimeIdentity?: {
         kind: "agentRuntime";
@@ -295,6 +302,17 @@ async function runMessageActionRequest(
     isWebchatConnect: () => false,
   });
   return { respond };
+}
+
+function directCliClient() {
+  return {
+    connect: {
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    },
+  };
 }
 
 function agentRuntimeClient(sessionKey: string, agentId = "main") {
@@ -734,6 +752,91 @@ describe("gateway send mirroring", () => {
     expect(secondCall?.[2]).toBeUndefined();
     expect(secondCall?.[3]?.channel).toBe("slack");
     expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("does not share message.action idempotency results across authority origins", async () => {
+    const context = makeContext();
+    const directRespond = vi.fn();
+    const delegatedRespond = vi.fn();
+    const firstDeferred = createDeferred<{ details: { action: string } }>();
+    const secondDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction
+      .mockReturnValueOnce(firstDeferred.promise)
+      .mockReturnValueOnce(secondDeferred.promise);
+    const params = {
+      channel: "slack",
+      action: "read",
+      params: { channelId: "C1", limit: 1 },
+      idempotencyKey: "idem-action-mixed-authority",
+    };
+
+    const directRequest = sendHandlers["message.action"]({
+      params: {
+        ...params,
+        conversationReadOrigin: "direct-operator",
+      } as never,
+      respond: directRespond,
+      context,
+      req: { type: "req", id: "direct", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const delegatedRequest = sendHandlers["message.action"]({
+      params: params as never,
+      respond: delegatedRespond,
+      context,
+      req: { type: "req", id: "delegated", method: "message.action" },
+      client: directCliClient() as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
+      conversationReadOrigin: "direct-operator",
+    });
+    expect(mocks.dispatchChannelMessageAction.mock.calls[1]?.[0]).toMatchObject({
+      conversationReadOrigin: "delegated",
+    });
+
+    firstDeferred.resolve({ details: { action: "direct" } });
+    secondDeferred.resolve({ details: { action: "delegated" } });
+    await Promise.all([directRequest, delegatedRequest]);
+    expect(firstRespondCall(directRespond)?.[1]).toEqual({ action: "direct" });
+    expect(firstRespondCall(delegatedRespond)?.[1]).toEqual({ action: "delegated" });
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("keeps an agent runtime delegated even with a direct-operator marker", async () => {
+    const sessionKey = "agent:main:slack:channel:C1";
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+      details: { action: "handled" },
+    });
+
+    await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "read",
+        params: { channelId: "C1", limit: 1 },
+        sessionKey,
+        agentId: "main",
+        conversationReadOrigin: "direct-operator",
+        idempotencyKey: "idem-agent-cli-identity",
+      },
+      {
+        ...directCliClient(),
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
+          },
+        },
+      },
+    );
+
+    expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
   });
 
   it("dedupes concurrent send requests while inflight", async () => {

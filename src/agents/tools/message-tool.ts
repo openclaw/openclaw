@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -963,6 +964,7 @@ type MessageToolOptions = {
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
 type MessageToolDiscoveryParams = {
@@ -1515,22 +1517,29 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
-      const gateway = {
-        url: gatewayResolved.url,
-        token: gatewayResolved.token,
-        timeoutMs: gatewayResolved.timeoutMs,
-        clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        clientDisplayName: "agent",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        resolveAgentRuntimeIdentityToken: () =>
-          resolveMessageActionAgentRuntimeIdentityToken({
-            opts: gatewayOpts,
-            target: gatewayResolved.target,
-            turnCapability: options?.messageActionTurnCapability,
-            runId: options?.runId,
-            sessionId: options?.sessionId,
-          }),
-      };
+      // Direct tool invocations already execute inside the authenticated
+      // Gateway request. Keep their authority operation-local by dispatching
+      // channel actions in-process instead of laundering it through a new
+      // backend connection.
+      const gateway =
+        options?.conversationReadOrigin === "direct-operator"
+          ? undefined
+          : {
+              url: gatewayResolved.url,
+              token: gatewayResolved.token,
+              timeoutMs: gatewayResolved.timeoutMs,
+              clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              clientDisplayName: "agent",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              resolveAgentRuntimeIdentityToken: () =>
+                resolveMessageActionAgentRuntimeIdentityToken({
+                  opts: gatewayOpts,
+                  target: gatewayResolved.target,
+                  turnCapability: options?.messageActionTurnCapability,
+                  runId: options?.runId,
+                  sessionId: options?.sessionId,
+                }),
+            };
       const hasCurrentMessageId =
         typeof options?.currentMessageId === "number" ||
         (typeof options?.currentMessageId === "string" &&
@@ -1599,6 +1608,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             toolContext: trustedTurnContext?.toolContext,
           },
           senderIsOwner: options?.senderIsOwner,
+          conversationReadOrigin: options?.conversationReadOrigin,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,

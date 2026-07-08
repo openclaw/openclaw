@@ -134,6 +134,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   defaultAccountId?: string;
   gateway?: {
     timeoutMs?: unknown;
@@ -815,6 +816,24 @@ describe("message tool secret scoping", () => {
 
     expect(input?.inboundAudio).toBe(true);
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("keeps direct operator authority on the in-process action only", async () => {
+    mockSendResult();
+
+    const direct = await executeSend({
+      action: { message: "direct" },
+      toolOptions: { conversationReadOrigin: "direct-operator" },
+    });
+    const delegated = await executeSend({
+      action: { message: "delegated" },
+      toolOptions: { conversationReadOrigin: "delegated" },
+    });
+
+    expect(direct?.conversationReadOrigin).toBe("direct-operator");
+    expect(direct?.gateway).toBeUndefined();
+    expect(delegated?.conversationReadOrigin).toBe("delegated");
+    expect(delegated?.gateway).toMatchObject({ timeoutMs: expect.any(Number) });
   });
 
   it("reads steered inbound audio when the message action runs", async () => {

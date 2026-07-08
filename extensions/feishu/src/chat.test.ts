@@ -27,6 +27,7 @@ describe("registerFeishuChatTools", () => {
       deliveryTo?: string;
       nativeChannelId?: string;
       requesterSenderId?: string;
+      conversationReadOrigin?: "delegated" | "direct-operator";
     } = {},
   ) {
     const registered = registerTool.mock.calls[0]?.[0];
@@ -41,6 +42,7 @@ describe("registerFeishuChatTools", () => {
           },
           nativeChannelId: context.nativeChannelId,
           requesterSenderId: context.requesterSenderId,
+          conversationReadOrigin: context.conversationReadOrigin,
         })
       : registered;
   }
@@ -386,6 +388,80 @@ describe("registerFeishuChatTools", () => {
 
     expect(result.details.error).toContain("limited to the current sender");
     expect(contactUserGetMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["info", "members", "member_info"] as const)(
+    "rejects a blocked %s target before reading provider metadata",
+    async (action) => {
+      const registerTool = vi.fn();
+      registerFeishuChatTools(
+        createChatToolApi({
+          config: {
+            channels: {
+              feishu: {
+                enabled: true,
+                appId: "app_id",
+                appSecret: "app_secret", // pragma: allowlist secret
+                tools: { chat: true },
+                groupPolicy: "allowlist",
+                groups: { oc_allowed: {}, oc_blocked: { enabled: false } },
+              },
+            },
+          },
+          registerTool,
+        }),
+      );
+      const tool = resolveRegisteredTool(registerTool);
+      const input = {
+        action,
+        chat_id: "oc_blocked",
+        ...(action === "member_info" ? { member_id: "ou_member" } : {}),
+      };
+
+      const result = await tool.execute(`tc_blocked_${action}`, input);
+
+      expect(result.details.error).toContain("Feishu read target is not allowed.");
+      expect(chatGetMock).not.toHaveBeenCalled();
+      expect(chatMembersGetMock).not.toHaveBeenCalled();
+      expect(contactUserGetMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets a direct operator read an unconfigured group", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: true },
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+    const tool = resolveRegisteredTool(registerTool, {
+      conversationReadOrigin: "direct-operator",
+    });
+    chatGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { chat_mode: "group", name: "operator target" },
+    });
+
+    const result = await tool.execute("tc_direct_operator", {
+      action: "info",
+      chat_id: "oc_unconfigured",
+    });
+
+    expect(result.details).toMatchObject({
+      chat_id: "oc_unconfigured",
+      name: "operator target",
+    });
   });
 
   it("routes chat reads through the contextual Feishu account", async () => {

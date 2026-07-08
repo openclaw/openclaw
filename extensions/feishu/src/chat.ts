@@ -12,6 +12,7 @@ import { formatFeishuApiError } from "./comment-shared.js";
 import {
   assertFeishuChatReadAllowed,
   authorizeFeishuChatMemberRead,
+  resolveFeishuChatReadPreliminaryAuthorization,
   type FeishuChatMemberReadAuthorization,
 } from "./read-policy.js";
 import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
@@ -79,6 +80,38 @@ function authorizeFeishuChatInfo(params: {
     chatType: resolveFeishuChatType(params.chat),
     ctx: params.ctx,
   });
+}
+
+async function getAuthorizedFeishuChatInfo(params: {
+  client: Lark.Client;
+  cfg: NonNullable<OpenClawPluginApi["config"]>;
+  account: ReturnType<typeof resolveFeishuToolAccount>;
+  chatId: string;
+  ctx: OpenClawPluginToolContext;
+}) {
+  const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: params.chatId,
+    ctx: params.ctx,
+  });
+  if (preliminary.decision === "deny") {
+    assertFeishuChatReadAllowed({
+      cfg: params.cfg,
+      account: params.account,
+      chatId: preliminary.chatId,
+      ctx: params.ctx,
+    });
+  }
+  const chat = await getChatInfo(params.client, preliminary.chatId);
+  authorizeFeishuChatInfo({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: preliminary.chatId,
+    chat,
+    ctx: params.ctx,
+  });
+  return chat;
 }
 
 export async function getChatMembers(
@@ -228,7 +261,13 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 return json({ error: "chat_id is required for action members" });
               }
               {
-                const chat = await getChatInfo(client, p.chat_id);
+                const chat = await getAuthorizedFeishuChatInfo({
+                  client,
+                  cfg,
+                  account,
+                  chatId: p.chat_id,
+                  ctx: toolContext,
+                });
                 const authorization = authorizeFeishuChatMemberRead({
                   cfg,
                   account,
@@ -255,12 +294,11 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 return json({ error: "chat_id is required for action info" });
               }
               {
-                const chat = await getChatInfo(client, p.chat_id);
-                authorizeFeishuChatInfo({
+                const chat = await getAuthorizedFeishuChatInfo({
+                  client,
                   cfg,
                   account,
                   chatId: p.chat_id,
-                  chat,
                   ctx: toolContext,
                 });
                 return json(chat);
@@ -273,7 +311,13 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 return json({ error: "chat_id is required for action member_info" });
               }
               {
-                const chat = await getChatInfo(client, p.chat_id);
+                const chat = await getAuthorizedFeishuChatInfo({
+                  client,
+                  cfg,
+                  account,
+                  chatId: p.chat_id,
+                  ctx: toolContext,
+                });
                 const authorization = authorizeFeishuChatMemberRead({
                   cfg,
                   account,

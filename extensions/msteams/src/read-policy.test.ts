@@ -345,4 +345,91 @@ describe("Microsoft Teams read policy", () => {
       }),
     ).resolves.toBe("11111111-1111-1111-1111-111111111111");
   });
+
+  it("lets a direct operator read stable unconfigured channel and DM targets", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const directCtx = {
+      ...ctx,
+      conversationReadOrigin: "direct-operator" as const,
+    };
+
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg,
+        ctx: directCtx,
+        target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
+      }),
+    ).resolves.toBe("11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2");
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg,
+        ctx: directCtx,
+        target: "user:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      }),
+    ).resolves.toBe("user:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+  });
+
+  it("keeps disabled Teams scopes blocked for direct operators", async () => {
+    const directCtx = {
+      ...ctx,
+      conversationReadOrigin: "direct-operator" as const,
+    };
+
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "disabled",
+              dmPolicy: "open",
+            },
+          },
+        } as OpenClawConfig,
+        ctx: directCtx,
+        target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "open",
+              dmPolicy: "disabled",
+            },
+          },
+        } as OpenClawConfig,
+        ctx: directCtx,
+        target: "user:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+  });
+
+  it("lets a direct operator enumerate an unconfigured stable team", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      assertMSTeamsTeamEnumerationAllowed({
+        cfg,
+        ctx: {
+          ...ctx,
+          conversationReadOrigin: "direct-operator",
+        },
+        teamId: "11111111-1111-1111-1111-111111111111",
+      }),
+    ).resolves.toBe("11111111-1111-1111-1111-111111111111");
+  });
 });

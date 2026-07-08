@@ -15,7 +15,7 @@ import {
 
 type MSTeamsReadContext = Pick<
   ChannelMessageActionContext,
-  "accountId" | "requesterAccountId" | "toolContext"
+  "accountId" | "conversationReadOrigin" | "requesterAccountId" | "toolContext"
 >;
 
 function normalizeTarget(raw?: string | null): string {
@@ -98,6 +98,31 @@ async function resolveAllowedDmTarget(
         (entry) => entry.resolved && entry.id?.toLowerCase() === resolvedTarget.id?.toLowerCase(),
       );
     return allowed ? `user:${resolvedTarget.id}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveDirectDmTarget(
+  cfg: OpenClawConfig,
+  target: string,
+): Promise<string | undefined> {
+  if (cfg.channels?.msteams?.dmPolicy === "disabled") {
+    return undefined;
+  }
+  const userId = normalizeUserTarget(target);
+  if (!userId) {
+    return undefined;
+  }
+  if (isStableUserId(userId)) {
+    return `user:${userId}`;
+  }
+  if (!isDangerousNameMatchingEnabled(cfg.channels?.msteams)) {
+    return undefined;
+  }
+  try {
+    const [resolved] = await resolveMSTeamsUserAllowlist({ cfg, entries: [userId] });
+    return resolved?.resolved && resolved.id ? `user:${resolved.id}` : undefined;
   } catch {
     return undefined;
   }
@@ -263,37 +288,50 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   const isDm = /^user:/i.test(target);
   const isChat = looksLikeMSTeamsConversationId(target);
   const current = isCurrentMSTeamsReadTarget({ ctx: params.ctx, target });
+  const directOperator = params.ctx.conversationReadOrigin === "direct-operator";
   const currentChatType = params.ctx.toolContext?.currentChatType;
-  const allowedTarget = current
+  const allowedTarget = directOperator
     ? isChannel
       ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
-        ? target
+        ? await resolveStableChannelTarget(params.cfg, target)
         : undefined
       : isDm
-        ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+        ? await resolveDirectDmTarget(params.cfg, target)
+        : isChat &&
+            resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
+            params.cfg.channels?.msteams?.dmPolicy !== "disabled"
           ? target
           : undefined
-        : currentChatType === "direct"
+    : current
+      ? isChannel
+        ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+          ? target
+          : undefined
+        : isDm
           ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
             ? target
             : undefined
-          : currentChatType === "group" || currentChatType === "channel"
-            ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+          : currentChatType === "direct"
+            ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
               ? target
               : undefined
-            : resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
-                params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+            : currentChatType === "group" || currentChatType === "channel"
+              ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+                ? target
+                : undefined
+              : resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
+                  params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+                ? target
+                : undefined
+      : isChannel
+        ? await resolveAllowedChannelTarget(params.cfg, target)
+        : isDm
+          ? await resolveAllowedDmTarget(params.cfg, target)
+          : isChat
+            ? bothUnknownScopesAllowed(params.cfg)
               ? target
               : undefined
-    : isChannel
-      ? await resolveAllowedChannelTarget(params.cfg, target)
-      : isDm
-        ? await resolveAllowedDmTarget(params.cfg, target)
-        : isChat
-          ? bothUnknownScopesAllowed(params.cfg)
-            ? target
-            : undefined
-          : false;
+            : false;
   if (!allowedTarget) {
     throw new ToolAuthorizationError("Microsoft Teams read target is not allowed.");
   }
@@ -302,6 +340,7 @@ export async function assertMSTeamsReadTargetAllowed(params: {
 
 export async function assertMSTeamsTeamEnumerationAllowed(params: {
   cfg: OpenClawConfig;
+  ctx?: MSTeamsReadContext;
   teamId: string;
 }): Promise<string> {
   const teams = params.cfg.channels?.msteams;
@@ -330,6 +369,9 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
     throw new ToolAuthorizationError(
       "Microsoft Teams channel list requires access to every channel in the team.",
     );
+  }
+  if (params.ctx?.conversationReadOrigin === "direct-operator") {
+    return stableTeamId;
   }
   let allowed = directRoute.allowlistConfigured ? directRoute.allowed : groupPolicy === "open";
   if (!allowed && teams?.teams) {

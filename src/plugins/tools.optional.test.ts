@@ -2175,6 +2175,63 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["direct-operator", "delegated"],
+    ["delegated", "direct-operator"],
+  ] as const)(
+    "reconstructs cached plugin executors with the current %s then %s origin",
+    async (firstOrigin, secondOrigin) => {
+      const factory = vi.fn((rawCtx: unknown) => {
+        const ctx = rawCtx as { conversationReadOrigin?: string };
+        return {
+          ...makeTool("cached_origin_tool"),
+          async execute() {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: ctx.conversationReadOrigin ?? "missing",
+                },
+              ],
+            };
+          },
+        };
+      });
+      setRegistry([
+        {
+          pluginId: "cache-origin-test",
+          optional: false,
+          source: "/tmp/cache-origin-test.js",
+          names: ["cached_origin_tool"],
+          factory,
+        },
+      ]);
+
+      resolvePluginTools(
+        createResolveToolsParams({
+          context: {
+            ...createContext(),
+            conversationReadOrigin: firstOrigin,
+          },
+        }),
+      );
+      const second = resolvePluginTools(
+        createResolveToolsParams({
+          context: {
+            ...createContext(),
+            conversationReadOrigin: secondOrigin,
+          },
+        }),
+      );
+
+      expect(factory).toHaveBeenCalledTimes(1);
+      await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: secondOrigin }],
+      });
+      expect(factory).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("retains cold-loaded plugin tools for cached descriptor execution after active registry replacement", async () => {
     const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
     const gatewayRegistry = setRegistry([
@@ -2819,6 +2876,10 @@ describe("resolvePluginTools optional tools", () => {
         plugins: [],
         tools: [],
         diagnostics: [],
+        sessionExtensions: [],
+        runtimeLifecycles: [],
+        agentEventSubscriptions: [],
+        sessionSchedulerJobs: [],
       } as never,
       "provider-runtime",
       "default",

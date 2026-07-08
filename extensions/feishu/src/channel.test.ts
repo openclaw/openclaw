@@ -1932,6 +1932,21 @@ describe("feishuPlugin actions", () => {
       action: "reactions",
       params: { messageId: "om_blocked", chatId: "oc_blocked" },
     },
+    {
+      name: "pin lookup",
+      action: "list-pins",
+      params: { chatId: "oc_blocked" },
+    },
+    {
+      name: "channel info",
+      action: "channel-info",
+      params: { chatId: "oc_blocked" },
+    },
+    {
+      name: "member info",
+      action: "member-info",
+      params: { chatId: "oc_blocked", memberId: "ou_blocked" },
+    },
   ])("rejects blocked Feishu $name before provider content reads", async ({ action, params }) => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -1950,7 +1965,7 @@ describe("feishuPlugin actions", () => {
         } as OpenClawConfig,
       } as never),
     ).rejects.toThrow("Feishu read target is not allowed.");
-    expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_blocked");
+    expect(getChatInfoMock).not.toHaveBeenCalled();
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
     expect(removeReactionFeishuMock).not.toHaveBeenCalled();

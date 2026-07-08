@@ -19,6 +19,10 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../../channels/plugins/conversation-read-origin.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -129,6 +133,7 @@ export type RunMessageActionParams = {
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   /**
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.
@@ -676,6 +681,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
   if (executionMode !== "gateway") {
     return null;
   }
+  const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
+    params.input.conversationReadOrigin,
+  );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
     actionParams: {
@@ -688,6 +696,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
+      ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
         normalizeOptionalString(params.params.idempotencyKey),
       ),
@@ -1239,6 +1248,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       senderIsOwner: input.senderIsOwner,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
       mediaAccess,
       accountId: accountId ?? undefined,
       sessionId: input.sessionId,
@@ -1351,6 +1363,9 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       agentId,
       requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
@@ -1486,6 +1501,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
         ? authorization.requesterSenderId
         : (input.requesterSenderId ?? undefined),
     senderIsOwner: input.senderIsOwner,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(input.conversationReadOrigin),
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
     inboundEventKind: input.inboundEventKind,

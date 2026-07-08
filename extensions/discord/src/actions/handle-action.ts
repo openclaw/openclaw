@@ -52,6 +52,7 @@ export async function handleDiscordMessageAction(
     | "mediaReadFile"
     | "sessionKey"
     | "inboundEventKind"
+    | "conversationReadOrigin"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -60,6 +61,7 @@ export async function handleDiscordMessageAction(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    conversationReadOrigin: ctx.conversationReadOrigin,
   } as const;
   const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
     notifyDiscordInboundEventOutboundSuccess({

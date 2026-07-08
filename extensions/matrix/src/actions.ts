@@ -168,6 +168,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
             currentChannelId: ctx.toolContext?.currentChannelId,
             currentChannelProvider: ctx.toolContext?.currentChannelProvider,
             currentChatType: ctx.toolContext?.currentChatType,
+            conversationReadOrigin: ctx.conversationReadOrigin,
           },
         },
       );

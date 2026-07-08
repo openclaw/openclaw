@@ -1,6 +1,9 @@
 // Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelMessageActionAdapter,
+  ConversationReadInvocationOrigin,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
@@ -30,14 +33,23 @@ function resolveSlackActionContext(params: {
   toolContext: unknown;
   mediaLocalRoots: readonly string[] | undefined;
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 }): SlackActionContext | undefined {
-  if (!params.toolContext && !params.mediaLocalRoots && !params.mediaReadFile) {
+  if (
+    !params.toolContext &&
+    !params.mediaLocalRoots &&
+    !params.mediaReadFile &&
+    !params.conversationReadOrigin
+  ) {
     return undefined;
   }
   return {
     ...(params.toolContext as SlackActionContext | undefined),
     ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    ...(params.conversationReadOrigin
+      ? { conversationReadOrigin: params.conversationReadOrigin }
+      : {}),
   };
 }
 
@@ -62,6 +74,7 @@ export function createSlackActions(
             toolContext,
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
+            conversationReadOrigin: ctx.conversationReadOrigin,
           });
           return await (options?.invoke
             ? options.invoke(action, cfg, actionContext)

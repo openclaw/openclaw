@@ -449,4 +449,77 @@ describe("Matrix read policy", () => {
       }),
     ).rejects.toThrow("Matrix read target is not allowed.");
   });
+
+  it.each([
+    {
+      name: "group",
+      members: ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
+      directFlag: null,
+    },
+    {
+      name: "direct room",
+      members: ["@bot:example.org", "@alice:example.org"],
+      directFlag: true,
+    },
+  ])("lets a direct operator read an unconfigured $name", async ({ members, directFlag }) => {
+    const client = createClient(members, directFlag);
+
+    await expect(
+      withAuthorizedMatrixReadTarget({
+        cfg: {
+          channels: {
+            matrix: {
+              groupPolicy: "allowlist",
+              dm: { policy: "pairing", allowFrom: [] },
+            },
+          },
+        } as CoreConfig,
+        roomId: "!operator:example.org",
+        context: { conversationReadOrigin: "direct-operator" },
+        opts: { client },
+        run: async () => "ok",
+      }),
+    ).resolves.toBe("ok");
+  });
+
+  it.each([
+    {
+      name: "disabled room",
+      cfg: {
+        groupPolicy: "open",
+        groups: { "!blocked:example.org": { enabled: false } },
+      },
+      members: ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
+    },
+    {
+      name: "wrong-account room",
+      cfg: {
+        groupPolicy: "open",
+        groups: { "!blocked:example.org": { account: "other" } },
+      },
+      members: ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
+    },
+    {
+      name: "disabled direct-message scope",
+      cfg: {
+        groupPolicy: "open",
+        dm: { policy: "disabled" },
+      },
+      members: ["@bot:example.org", "@alice:example.org"],
+      directFlag: true,
+    },
+  ])("keeps $name blocked for direct operators", async ({ cfg, members, directFlag }) => {
+    const client = createClient(members, directFlag ?? null);
+
+    await expect(
+      withAuthorizedMatrixReadTarget({
+        cfg: { channels: { matrix: cfg } } as CoreConfig,
+        accountId: "default",
+        roomId: "!blocked:example.org",
+        context: { conversationReadOrigin: "direct-operator" },
+        opts: { client },
+        run: async () => "ok",
+      }),
+    ).rejects.toThrow("Matrix read target is not allowed.");
+  });
 });
