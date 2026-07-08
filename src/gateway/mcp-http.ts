@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -146,7 +147,10 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-export async function startMcpLoopbackServer(port = 0): Promise<{
+export async function startMcpLoopbackServer(
+  port = 0,
+  authProfileStore?: AuthProfileStore,
+): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
@@ -244,6 +248,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
+          authProfileStore,
         });
 
         logMcpLoopbackTraffic("request", {
@@ -398,12 +403,15 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 }
 
 /** Returns the active MCP loopback server or starts one if none exists. */
-export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
+export async function ensureMcpLoopbackServer(
+  port = 0,
+  authProfileStore?: AuthProfileStore,
+): Promise<McpLoopbackServer> {
   if (activeMcpLoopbackServer) {
     return activeMcpLoopbackServer;
   }
   if (!activeMcpLoopbackServerPromise) {
-    activeMcpLoopbackServerPromise = startMcpLoopbackServer(port)
+    activeMcpLoopbackServerPromise = startMcpLoopbackServer(port, authProfileStore)
       .then((server) => {
         activeMcpLoopbackServer = server;
         return server;

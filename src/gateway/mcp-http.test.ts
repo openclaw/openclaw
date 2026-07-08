@@ -2,6 +2,7 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
@@ -1050,6 +1051,39 @@ describe("mcp loopback server", () => {
       currentMessageId: "message-256",
     });
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
+  });
+
+  it("forwards authProfileStore through loopback tool cache to gateway tool resolution", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        test_profile: { type: "api_key", provider: "xai", key: "sk-test" },
+      },
+    };
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: undefined,
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: undefined,
+      inboundEventKind: undefined,
+      messageProvider: undefined,
+      senderIsOwner: true,
+      sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: undefined,
+      authProfileStore: authStore,
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+    resolveGatewayScopedToolsMock.mockClear();
+    cache.resolve(baseParams);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
+    const callArgs = resolveGatewayScopedToolsMock.mock.calls[0]?.[0] as
+      | { authProfileStore?: AuthProfileStore }
+      | undefined;
+    expect(callArgs?.authProfileStore).toBe(authStore);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {

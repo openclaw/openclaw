@@ -548,7 +548,7 @@ export async function prepareCliRunContext(
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
-      await prepareDeps.ensureMcpLoopbackServer();
+      await prepareDeps.ensureMcpLoopbackServer(undefined, authStore);
     } catch (error) {
       throw new Error(
         `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
@@ -720,6 +720,7 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             senderIsOwner: undefined,
+            authProfileStore: authStore,
           }).tools
         : [];
     const promptToolNamesHash =
