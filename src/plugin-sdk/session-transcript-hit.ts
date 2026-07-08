@@ -181,8 +181,8 @@ export function resolveTranscriptStemToSessionKeys(params: {
   if (normalizedDeduped.length > 0) {
     return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }
-  const fallbackOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
-  return fallbackOwnerAgentId
-    ? [`agent:${normalizeAgentId(fallbackOwnerAgentId)}:${params.stem}`]
+  const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
+  return archivedOwnerAgentId
+    ? [`agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`]
     : [];
 }
