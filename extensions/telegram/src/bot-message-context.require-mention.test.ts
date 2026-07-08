@@ -24,7 +24,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
-const { buildTelegramGroupHistorySelfSender } = await import("./group-history-window.js");
+const { buildTelegramHistorySelfSender } = await import("./group-history-window.js");
 
 describe("buildTelegramMessageContext requireMention precedence", () => {
   function buildForumMessage(threadId = 99) {
@@ -309,7 +309,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
         [
           { sender: "Alice", body: "before self marker", timestamp: 1, messageId: "1" },
           {
-            sender: buildTelegramGroupHistorySelfSender("OpenClaw"),
+            sender: buildTelegramHistorySelfSender("OpenClaw"),
             body: "self marker body",
             timestamp: 2,
             messageId: "2",

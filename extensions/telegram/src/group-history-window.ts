@@ -7,7 +7,7 @@ import type {
 
 const TELEGRAM_GROUP_HISTORY_SELF_SUFFIX = " (you)";
 
-export function buildTelegramGroupHistorySelfSender(name: string): string {
+export function buildTelegramHistorySelfSender(name: string): string {
   return `${name}${TELEGRAM_GROUP_HISTORY_SELF_SUFFIX}`;
 }
 

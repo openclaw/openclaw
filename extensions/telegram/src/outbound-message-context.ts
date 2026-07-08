@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { buildTelegramHistorySelfSender } from "./group-history-window.js";
 import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 
 type TelegramPromptContextChannelData = {
@@ -98,7 +99,7 @@ function inferTelegramChatType(chatId: string | number): "private" | "supergroup
   return String(chatId).startsWith("-") ? "supergroup" : "private";
 }
 
-function buildOutboundCacheMessage(params: {
+export function buildOutboundCacheMessage(params: {
   account: TelegramOutboundPromptContextAccount;
   chatId: string | number;
   message: TelegramOutboundPromptContextMessage;
@@ -109,6 +110,10 @@ function buildOutboundCacheMessage(params: {
 }): TelegramOutboundPromptContextMessage {
   const chat = params.message.chat ?? {};
   const text = params.message.text ?? params.message.caption ?? params.text;
+  const rawSender = params.message.from;
+  const selfSender = buildTelegramHistorySelfSender(
+    params.account.name ?? rawSender?.first_name ?? rawSender?.username ?? "OpenClaw",
+  );
   return {
     ...params.message,
     message_id: params.messageId,
@@ -125,10 +130,11 @@ function buildOutboundCacheMessage(params: {
       ...(chat.title ? { title: chat.title } : {}),
       ...(chat.username ? { username: chat.username } : {}),
     },
-    from: params.message.from ?? {
-      id: 0,
+    from: {
+      ...rawSender,
+      id: rawSender?.id ?? 0,
       is_bot: true,
-      first_name: params.account.name ?? "OpenClaw",
+      first_name: selfSender,
     },
     ...(text ? { text } : {}),
     ...(params.messageThreadId !== undefined ? { message_thread_id: params.messageThreadId } : {}),

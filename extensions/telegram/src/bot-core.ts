@@ -51,7 +51,7 @@ import {
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import {
-  buildTelegramGroupHistorySelfSender,
+  buildTelegramHistorySelfSender,
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
@@ -264,7 +264,7 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const botHistorySender = buildTelegramGroupHistorySelfSender(
+  const botHistorySender = buildTelegramHistorySelfSender(
     account.name ?? opts.botInfo?.first_name ?? opts.botInfo?.username ?? "OpenClaw",
   );
   const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
