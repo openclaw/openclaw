@@ -2557,6 +2557,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime flow
   - H2: Selection source policy
   - H2: Auth failure skip cache
+  - H2: Provider refusals
   - H2: User-visible fallback notices
   - H2: Auth storage (keys + OAuth)
   - H2: Profile IDs
