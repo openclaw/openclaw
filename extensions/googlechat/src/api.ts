@@ -15,6 +15,10 @@ import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./ty
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
+// All outbound Chat API calls share a single deadline. Without this, a server
+// that accepts the TCP connection but never sends a response stalls the
+// reply path indefinitely and pins a gateway request lane.
+const GOOGLECHAT_API_TIMEOUT_MS = 30_000;
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
   return readProviderJsonResponse<T>(response, label);
@@ -54,6 +58,7 @@ async function withGoogleChatResponse<T>(params: {
       },
     },
     auditContext,
+    timeoutMs: GOOGLECHAT_API_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
