@@ -33,11 +33,13 @@ import type {
   GoogleMeetSession,
 } from "./transports/types.js";
 import {
+  createVoiceCallGateway,
   endMeetVoiceCallGatewayCall,
   getMeetVoiceCallGatewayCall,
   isVoiceCallMissingError,
   joinMeetViaVoiceCallGateway,
   speakMeetViaVoiceCallGateway,
+  type VoiceCallGateway,
 } from "./voice-call-gateway.js";
 
 type ChromeAudioBridgeResult = NonNullable<
@@ -224,6 +226,7 @@ export class GoogleMeetRuntime {
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
+  readonly #voiceCallGateway: VoiceCallGateway;
 
   constructor(
     private readonly params: {
@@ -232,7 +235,9 @@ export class GoogleMeetRuntime {
       runtime: PluginRuntime;
       logger: RuntimeLogger;
     },
-  ) {}
+  ) {
+    this.#voiceCallGateway = createVoiceCallGateway(params);
+  }
 
   list(): GoogleMeetSession[] {
     this.#refreshHealth();
@@ -434,11 +439,19 @@ export class GoogleMeetRuntime {
 
     try {
       if (transport === "chrome" || transport === "chrome-node") {
+        // Freeze the invoking agent into the bridge config so every later consult
+        // stays on the same workspace even if plugin defaults change mid-call.
+        const chromeConfig = request.agentId
+          ? {
+              ...this.params.config,
+              realtime: { ...this.params.config.realtime, agentId: request.agentId },
+            }
+          : this.params.config;
         const result =
           transport === "chrome-node"
             ? await launchChromeMeetOnNode({
                 runtime: this.params.runtime,
-                config: this.params.config,
+                config: chromeConfig,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
                 requesterSessionKey: request.requesterSessionKey,
@@ -448,7 +461,7 @@ export class GoogleMeetRuntime {
               })
             : await launchChromeMeet({
                 runtime: this.params.runtime,
-                config: this.params.config,
+                config: chromeConfig,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
                 requesterSessionKey: request.requesterSessionKey,
@@ -494,13 +507,17 @@ export class GoogleMeetRuntime {
         const voiceCallResult = this.params.config.voiceCall.enabled
           ? await joinMeetViaVoiceCallGateway({
               config: this.params.config,
+              gateway: this.#voiceCallGateway,
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
               ...(request.requesterSessionKey
                 ? { requesterSessionKey: request.requesterSessionKey }
                 : {}),
-              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
+              agentId: request.agentId,
+              sessionKey: request.agentId
+                ? `agent:${request.agentId}:google-meet:${session.id}`
+                : buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
@@ -520,7 +537,7 @@ export class GoogleMeetRuntime {
         if (voiceCallResult?.callId) {
           this.#sessionStops.set(session.id, async () => {
             await endMeetVoiceCallGatewayCall({
-              config: this.params.config,
+              gateway: this.#voiceCallGateway,
               callId: voiceCallResult.callId,
             });
           });
@@ -581,7 +598,7 @@ export class GoogleMeetRuntime {
     if (session.transport === "twilio" && session.twilio?.voiceCallId) {
       try {
         await speakMeetViaVoiceCallGateway({
-          config: this.params.config,
+          gateway: this.#voiceCallGateway,
           callId: session.twilio.voiceCallId,
           message:
             instructions ||
@@ -856,7 +873,7 @@ export class GoogleMeetRuntime {
     }
     try {
       const status = await getMeetVoiceCallGatewayCall({
-        config: this.params.config,
+        gateway: this.#voiceCallGateway,
         callId,
       });
       if (status.found === false) {

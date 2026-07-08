@@ -135,7 +135,7 @@ export type {
   MattermostRequireMentionResolverInput,
 } from "./monitor-gating.js";
 
-export type MonitorMattermostOpts = {
+type MonitorMattermostOpts = {
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
