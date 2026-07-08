@@ -6331,10 +6331,12 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     });
     expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
 
-    // Force two consecutive commit conflicts: the first drives the benign
-    // stale-snapshot retry, the second drives the self-heal. The third commit
-    // (after the fenced teardown) is allowed through so init can complete.
-    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+    // Force a genuinely persistent wedge. The main attempt's stale-snapshot
+    // retry + self-heal request consume two commits; the fenced revalidation
+    // consumes two more and STILL conflicts, confirming the candidate is
+    // current; only the final post-teardown commit is allowed through so init
+    // can complete.
+    commitConflictControl.forcedConflicts.set(sessionKey, 4);
 
     const result = await initSessionState({
       ctx: {
@@ -6356,10 +6358,11 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     expect(result.sessionId).toBe(wedgedSessionId);
     // The wedged runtime was disposed by the self-heal teardown.
     expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(wedgedSessionId);
-    // Recursion bound: one stale-snapshot retry + one self-heal retry + one
-    // successful commit == 3 attempts. A second self-heal loop would push this
-    // higher (and would have thrown via conflictRecoveryAttempted instead).
-    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(3);
+    // Commit accounting: main attempt stale-retry + self-heal (2) + fenced
+    // revalidation stale-retry + self-heal (2) + one successful post-teardown
+    // commit (1) == 5 attempts. A second self-heal loop would have thrown via
+    // conflictRecoveryAttempted instead.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(5);
     expect(commitConflictControl.forcedConflicts.get(sessionKey)).toBe(0);
   });
 
@@ -6395,7 +6398,10 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
       },
     });
 
-    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+    // Persistent wedge (4): the fenced revalidation still conflicts on the
+    // same identity, so the drain fence must interrupt the live turn before
+    // teardown.
+    commitConflictControl.forcedConflicts.set(sessionKey, 4);
 
     const result = await initSessionState({
       ctx: {
@@ -6419,5 +6425,70 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     expect(released).toBe(true);
     expect(result.sessionId).toBe(wedgedSessionId);
     expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(wedgedSessionId);
+  });
+
+  it("skips the drain and teardown when the conflict candidate goes obsolete before self-heal", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-obsolete-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-obsolete-user";
+    const wedgedSessionId = "obsolete-conflict-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: wedgedSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: wedgedSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
+
+    // A foreign turn is present, but the candidate self-resolves during the
+    // fenced revalidation, so it must NOT be interrupted or drained.
+    let interrupted = false;
+    const lease: SessionWorkAdmissionLease = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted = true;
+        lease?.release();
+      },
+    });
+
+    // Only two conflicts: the main attempt's stale-snapshot retry + self-heal
+    // request consume both, so the fenced revalidation commit succeeds and the
+    // candidate is obsolete. The self-heal must return that completed outcome
+    // without draining the foreign turn or disposing the still-valid runtime.
+    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-obsolete-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Init completed via the fenced revalidation.
+    expect(result.sessionId).toBe(wedgedSessionId);
+    // Teardown was skipped: the still-valid runtime is retained.
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
+    // The live foreign admission was never interrupted.
+    expect(interrupted).toBe(false);
+    // main stale-retry + self-heal request (2) + fenced revalidation success
+    // (1) == 3 commits; no post-teardown retry happened.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(3);
+
+    lease.release();
   });
 });

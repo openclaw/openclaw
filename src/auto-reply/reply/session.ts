@@ -433,11 +433,31 @@ async function selfHealReplySessionInitConflict(
   candidate: Extract<InitSessionStateAttemptOutcome, { kind: "conflict-self-heal" }>,
 ): Promise<InitSessionStateAttemptOutcome> {
   const identities = [candidate.sessionKey, candidate.sessionId];
+  let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
   return await runExclusiveSessionLifecycleMutation({
     scope: attemptContext.storePath,
     identities,
     signal: params.signal,
     prepare: async () => {
+      // A competing turn may finish init or rebind this identity between the
+      // conflict detection and this fenced prepare. Revalidate under the store
+      // writer BEFORE interrupting or disposing anything — exactly as the
+      // rollover path above does — so an obsolete candidate never drains live
+      // work or retires a still-valid runtime. If the refreshed attempt already
+      // completed, changed identity, or no longer wants self-heal, hand that
+      // outcome back and skip teardown entirely.
+      const revalidated = await runExclusiveSessionStoreWrite(
+        attemptContext.storePath,
+        async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+      );
+      if (
+        revalidated.kind !== "conflict-self-heal" ||
+        revalidated.sessionKey !== candidate.sessionKey ||
+        revalidated.sessionId !== candidate.sessionId
+      ) {
+        preparedOutcome = revalidated;
+        return;
+      }
       // Interrupt and wait for any foreign in-flight turn on this identity to
       // release. `interruptSessionWorkAdmissions` skips the current stack's own
       // admission, so this drains competitors, not this initializing turn.
@@ -453,6 +473,11 @@ async function selfHealReplySessionInitConflict(
       }
     },
     run: async () => {
+      // The candidate went obsolete during revalidation; return the refreshed
+      // outcome without performing any teardown side effect.
+      if (preparedOutcome) {
+        return preparedOutcome;
+      }
       // Fenced: foreign admissions are drained and, while the mutation is active,
       // new ones are blocked. Now run the runtime-agnostic recovery — dispose the
       // wedged session's MCP runtime and run the registered harness reset hooks
