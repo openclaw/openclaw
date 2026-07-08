@@ -768,6 +768,30 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionFile).toBeUndefined();
   });
 
+  it("prefers the agent frozen on the call", async () => {
+    const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([
+      { text: '{"spoken":"Support agent."}' },
+    ]);
+
+    await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice", responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "support" });
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
+    });
+  });
+
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
