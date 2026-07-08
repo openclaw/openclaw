@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
-  writeCronStoreSnapshot,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { list, update } from "./ops.js";
+import { add, list, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -16,16 +14,6 @@ describe("cron service ops: disable + list round-trip", () => {
   it("hides disabled jobs from default list, surfaces them with includeDisabled, and restores them after enable", async () => {
     const store = fixtures.makeStorePath();
     const scheduledAt = Date.now() + 60_000;
-    const job = createIsolatedRegressionJob({
-      id: "disable-and-list",
-      name: "disable-and-list",
-      scheduledAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
-      payload: { kind: "agentTurn", message: "ping" },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    await writeCronStoreSnapshot(store.storePath, [job]);
-
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -35,7 +23,23 @@ describe("cron service ops: disable + list round-trip", () => {
       runIsolatedAgentJob: vi.fn(),
     });
 
+    const job = await add(state, {
+      name: "disable-and-list",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "ping" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      delivery: { mode: "announce" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
     await update(state, job.id, { enabled: false });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
 
     const defaultListAfterDisable = await list(state);
     expect(defaultListAfterDisable.map((j) => j.id)).not.toContain(job.id);
@@ -49,6 +53,9 @@ describe("cron service ops: disable + list round-trip", () => {
     expect(disabledFromAllList?.payload).toEqual(job.payload);
 
     await update(state, job.id, { enabled: true });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
 
     const defaultListAfterEnable = await list(state);
     const reenabled = defaultListAfterEnable.find((j) => j.id === job.id);
