@@ -6798,6 +6798,13 @@ details[open] > .ov-expandable-toggle::after {
   flex-direction: column;
   gap: 12px;
   min-width: 320px;
+  /* Real card surface: the modal-dialog element itself is transparent, so the
+     dialog body must carry its own chrome (mirrors .question-card / .exec-approval-card). */
+  padding: 20px;
+  background: var(--card, var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
 }
 .goal-dialog-field {
   display: flex;
@@ -6806,17 +6813,23 @@ details[open] > .ov-expandable-toggle::after {
 }
 .goal-dialog-label {
   font-size: var(--control-ui-text-sm);
-  color: var(--text-muted);
+  font-weight: 500;
+  color: var(--text);
 }
 .goal-dialog-objective,
 .goal-dialog-budget {
   width: 100%;
   padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--radius-md, 8px);
+  background: var(--secondary);
   color: var(--text);
   font: inherit;
+}
+.goal-dialog-objective:focus,
+.goal-dialog-budget:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .goal-dialog-error {
   color: var(--danger);
