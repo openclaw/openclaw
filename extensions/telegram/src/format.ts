@@ -74,6 +74,11 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (isAutoLinkedFileRef(href, label)) {
     return null;
   }
+  // Bare query URLs are safer as decoded text; Telegram detects them as URL
+  // entities without exposing an escaped inline-link href to clients.
+  if (/^https?:\/\//i.test(href) && href.includes("&") && label === href) {
+    return null;
+  }
   const safeHref = escapeHtmlAttr(href);
   return {
     start: link.start,

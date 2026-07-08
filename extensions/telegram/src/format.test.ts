@@ -452,9 +452,27 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("keeps bare URL query separators out of inline link hrefs", () => {
+    const input = "https://example.com/wp-admin/post.php?post=100&action=edit";
+    const expected = "https://example.com/wp-admin/post.php?post=100&amp;action=edit";
+
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    expect(markdownToTelegramRichHtml(input)).toBe(expected);
+    expect(
+      markdownToTelegramChunks(input, 4096)
+        .map((chunk) => chunk.html)
+        .join(""),
+    ).toBe(expected);
+  });
+
   it("properly nests link inside bold", () => {
     const res = markdownToTelegramHtml("**bold [link](https://example.com) text**");
     expect(res).toBe('<b>bold <a href="https://example.com">link</a> text</b>');
+  });
+
+  it("keeps labelled URL query links as inline Telegram links", () => {
+    const res = markdownToTelegramHtml("[edit](https://example.com/page?post=100&action=edit)");
+    expect(res).toBe('<a href="https://example.com/page?post=100&amp;action=edit">edit</a>');
   });
 
   it("properly nests bold wrapping a link with trailing text", () => {
