@@ -263,6 +263,40 @@ describe("embedded-agent runner run registry", () => {
     expect(cancel).toHaveBeenCalledWith("superseded");
   });
 
+  it("expires stuck recovery as run_stalled even with a live embedded handle", async () => {
+    // The live-handle path is the common field case: the wedged run still owns
+    // a registered handle, and its abort handler re-enters abortByUser. The
+    // expiry must win the attribution race (run_stalled, not aborted_by_user).
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reply-stuck-live",
+      sessionId: "session-reply-stuck-live",
+      resetTriggered: false,
+    });
+    const handle = createRunHandle({
+      abort: () => {
+        operation.abortByUser();
+      },
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: handle.abort,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun("session-reply-stuck-live", handle);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: "session-reply-stuck-live",
+      sessionKey: "agent:main:reply-stuck-live",
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 50,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+  });
+
   it("claims shared restart ownership before invoking an attached handle", () => {
     const abort = vi.fn();
     const handle = createRunHandle({ abort });

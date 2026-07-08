@@ -770,11 +770,13 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  if (
+  // Recovery is a staleness expiry: stamp run_stalled on the reply operation
+  // BEFORE any handle abort, or the run loop's abort handler re-enters
+  // abortByUser and misattributes the watchdog kill to the user.
+  const expiredReplyRun =
     params.reason === "stuck_recovery" &&
-    !ACTIVE_EMBEDDED_RUNS.has(params.sessionId) &&
-    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery")
-  ) {
+    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery");
+  if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
     // Reply expiry aborts synchronously and clears registry ownership. Let the
     // command lane observe that abort before recovery decides whether to reset it.
     await new Promise<void>((resolve) => {
@@ -783,7 +785,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId);
+  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
