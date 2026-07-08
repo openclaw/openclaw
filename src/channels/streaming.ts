@@ -593,10 +593,17 @@ export function buildChannelProgressDraftLine(
       if (input.phase !== undefined && input.phase !== "update") {
         return undefined;
       }
+      const planSteps = input.steps ?? [];
+      const stepCount =
+        planSteps.length > 0
+          ? `${planSteps.length} step${planSteps.length === 1 ? "" : "s"}`
+          : undefined;
+      // Structured, edit-in-place summary: step count + the first few steps (the progress-line
+      // correlation key groups repeated plan updates into one throttled, edited line).
       return buildNamedProgressLine(
         input.event,
         "update_plan",
-        [input.explanation, input.steps?.[0], input.title ?? "planning"],
+        [input.explanation, stepCount, ...planSteps.slice(0, 4), input.title ?? "planning"],
         options,
       );
     }
