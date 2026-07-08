@@ -5952,12 +5952,6 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
-      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
@@ -6065,6 +6059,14 @@ export async function runEmbeddedAttempt(
         });
         trajectoryEndRecorded = true;
       }
+      // Flush after the final events so session.cleanup_completed and
+      // session.ended are persisted in the trajectory sidecar before export.
+      await flushEmbeddedAttemptTrajectoryRecorder({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        log,
+        trajectoryRecorder,
+      });
     }
   } finally {
     removeExternalAbortSignalListener?.();
