@@ -871,6 +871,27 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for package-manager shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "sh");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "pnpm exec sh -c 'echo warmup-ok'",
+      secondCommand: "pnpm exec sh -c 'id > marker'",
+      env,
+      persistedPattern: null,
+      allowlistPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {
     if (process.platform === "win32") {
       return;

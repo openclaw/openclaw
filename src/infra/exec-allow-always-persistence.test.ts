@@ -37,6 +37,80 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it("persists package-manager exec approvals against the inner executable", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "pnpm --reporter silent exec -- tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
+  it("keeps package-manager shell carriers one-shot", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "echo");
+    const env = makePathEnv(dir);
+    const command = "pnpm exec sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
+      "allow-once",
+      "deny",
+    ]);
+  });
+
+  it("keeps package-manager shell-call modes one-shot", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "npx");
+    const env = makePathEnv(dir);
+    const command = "npx --call \"sh -c 'echo warmup-ok'\"";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
   it("keeps shell wrappers without reusable patterns one-shot", async () => {
     const cwd = makeTempDir();
     const command = "sh -c './scripts/run.sh'";

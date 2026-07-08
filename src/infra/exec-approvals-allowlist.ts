@@ -53,6 +53,7 @@ import {
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { resolveKnownPackageManagerExecInvocation } from "./package-manager-exec-wrapper.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
   isDirectShellPositionalCarrierCommand,
@@ -1113,6 +1114,14 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
   });
 }
 
+function resolveAllowAlwaysPatternArgv(argv: string[]): string[] | null {
+  const packageManagerExec = resolveKnownPackageManagerExecInvocation(argv);
+  if (packageManagerExec.kind === "unsafe-exec") {
+    return null;
+  }
+  return packageManagerExec.kind === "unwrapped" ? packageManagerExec.argv : argv;
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -1126,8 +1135,12 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
+  const patternArgv = resolveAllowAlwaysPatternArgv(params.segment.argv);
+  if (!patternArgv) {
+    return;
+  }
   const trustPlan = resolveExecWrapperTrustPlan(
-    params.segment.argv,
+    patternArgv,
     undefined,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );
