@@ -4,6 +4,7 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -66,6 +67,14 @@ type MattermostTarget =
   | { kind: "channel"; id: string }
   | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
+
+// Caps match the Slack DM channel cache precedent; bounded by distinct (baseUrl, token, target)
+// triples seen during process lifetime. Without a cap, long-running servers accumulate one entry
+// per unique recipient/channel pair forever.
+const MATTERMOST_BOT_USER_CACHE_MAX = 64;
+const MATTERMOST_USER_BY_NAME_CACHE_MAX = 512;
+const MATTERMOST_CHANNEL_BY_NAME_CACHE_MAX = 512;
+const MATTERMOST_DM_CHANNEL_CACHE_MAX = 1024;
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
@@ -204,6 +213,7 @@ async function resolveBotUser(
   const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   const user = await fetchMattermostMe(client);
   botUserCache.set(key, user);
+  pruneMapToMaxSize(botUserCache, MATTERMOST_BOT_USER_CACHE_MAX);
   return user;
 }
 
@@ -226,6 +236,7 @@ async function resolveUserIdByUsername(params: {
   });
   const user = await fetchMattermostUserByUsername(client, username);
   userByNameCache.set(key, user);
+  pruneMapToMaxSize(userByNameCache, MATTERMOST_USER_BY_NAME_CACHE_MAX);
   return user.id;
 }
 
@@ -253,6 +264,7 @@ async function resolveChannelIdByName(params: {
       const channel = await fetchMattermostChannelByName(client, team.id, name);
       if (channel?.id) {
         channelByNameCache.set(key, channel.id);
+        pruneMapToMaxSize(channelByNameCache, MATTERMOST_CHANNEL_BY_NAME_CACHE_MAX);
         return channel.id;
       }
     } catch {
@@ -345,6 +357,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
   params.onDmChannelResolution?.(resolution);
   const channel = await resolution;
   dmChannelCache.set(dmKey, channel.id);
+  pruneMapToMaxSize(dmChannelCache, MATTERMOST_DM_CHANNEL_CACHE_MAX);
   return channel.id;
 }
 

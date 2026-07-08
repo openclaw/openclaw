@@ -744,3 +744,83 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
   });
 });
+
+describe("sendMessageMattermost outbound cache caps", () => {
+  function makeAccount(token: string) {
+    return {
+      accountId: "default",
+      botToken: token,
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    };
+  }
+
+  function restoreSendMocks() {
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
+    mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    restoreSendMocks();
+  });
+
+  it("evicts oldest DM channel cache entries after the configured cap", async () => {
+    const token = "token-dm-cap-test";
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(token));
+
+    const firstUserId = `dm${"0".repeat(24)}`;
+    for (let index = 0; index < 1025; index += 1) {
+      const userId = `dm${String(index).padStart(24, "0")}`;
+      mockState.createMattermostDirectChannelWithRetry.mockResolvedValueOnce({
+        id: `dm-channel-${index}`,
+      });
+      await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
+    }
+
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1025);
+
+    vi.clearAllMocks();
+    restoreSendMocks();
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(token));
+    mockState.createMattermostDirectChannelWithRetry.mockResolvedValueOnce({
+      id: "dm-channel-0-again",
+    });
+
+    await sendMessageMattermost(`user:${firstUserId}`, "hello again", { cfg: TEST_CFG });
+
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts oldest user-by-name cache entries after the configured cap", async () => {
+    const token = "token-user-cap-test";
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(token));
+
+    const firstUsername = "user0";
+    for (let index = 0; index < 513; index += 1) {
+      const username = `user${index}`;
+      mockState.fetchMattermostUserByUsername.mockResolvedValueOnce({ id: `uid-${index}` });
+      mockState.createMattermostDirectChannelWithRetry.mockResolvedValueOnce({
+        id: `dm-channel-${index}`,
+      });
+      await sendMessageMattermost(`@${username}`, "hello", { cfg: TEST_CFG });
+    }
+
+    expect(mockState.fetchMattermostUserByUsername).toHaveBeenCalledTimes(513);
+
+    vi.clearAllMocks();
+    restoreSendMocks();
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(token));
+    mockState.fetchMattermostUserByUsername.mockResolvedValueOnce({ id: "uid-0" });
+    mockState.createMattermostDirectChannelWithRetry.mockResolvedValueOnce({
+      id: "dm-channel-0-again",
+    });
+
+    await sendMessageMattermost(`@${firstUsername}`, "hello again", { cfg: TEST_CFG });
+
+    expect(mockState.fetchMattermostUserByUsername).toHaveBeenCalledTimes(1);
+    expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
+  });
+});
