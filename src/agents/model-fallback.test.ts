@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -213,6 +218,7 @@ function resetModelFallbackTestState(): void {
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
     .mockReturnValue(undefined);
+  resetDiagnosticEventsForTest();
 }
 
 function setDefaultPluginMetadataSnapshot(): void {
@@ -561,6 +567,65 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
 describe("runWithModelFallback", () => {
+  it("emits model failover diagnostics for ordinary fallback transitions", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const failoverEvents: Array<Extract<DiagnosticEventPayload, { type: "model.failover" }>> = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.failover") {
+        failoverEvents.push(event);
+      }
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary rate limited", {
+          provider: "openai",
+          model: "gpt-5.4",
+          reason: "rate_limit",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        sessionId: "session:failover-diagnostics",
+        sessionKey: "agent:test:failover-diagnostics",
+        lane: "main",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(failoverEvents).toHaveLength(1);
+      expect(failoverEvents[0]).toMatchObject({
+        type: "model.failover",
+        sessionId: "session:failover-diagnostics",
+        sessionKey: "agent:test:failover-diagnostics",
+        lane: "main",
+        fromProvider: "openai",
+        fromModel: "gpt-5.4",
+        toProvider: "anthropic",
+        toModel: "claude-sonnet-4-6",
+        reason: "rate_limit",
+        cascadeDepth: 1,
+        suspended: false,
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
