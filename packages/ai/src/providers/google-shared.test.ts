@@ -6,6 +6,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
 } from "./google-shared.js";
 
@@ -248,5 +249,18 @@ describe("buildGoogleGenerateContentParams", () => {
 
     expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
     expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
+});
+
+describe("buildGoogleSimpleThinking", () => {
+  it("returns disabled thinking when clampThinkingLevel maps to off", () => {
+    const noReasoningModel: Model<"google-generative-ai"> = {
+      ...model,
+      reasoning: false,
+    };
+    const result = buildGoogleSimpleThinking(noReasoningModel, {
+      reasoning: "high",
+    });
+    expect(result).toEqual({ enabled: false });
   });
 });
