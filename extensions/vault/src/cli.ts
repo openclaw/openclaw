@@ -238,7 +238,10 @@ function parseTargetSpecifier(value: string): {
   agentId?: string;
 } {
   if (value.startsWith("auth-profiles:")) {
-    const [, agentId, targetPath] = value.split(":");
+    const remainder = value.slice("auth-profiles:".length);
+    const separatorIndex = remainder.indexOf(":");
+    const agentId = separatorIndex >= 0 ? remainder.slice(0, separatorIndex) : "";
+    const targetPath = separatorIndex >= 0 ? remainder.slice(separatorIndex + 1) : "";
     if (!agentId || !targetPath) {
       throw new Error(`Invalid --target auth-profiles target: ${value}`);
     }

@@ -70,7 +70,7 @@ describe("vault CLI setup plan", () => {
       configTargetSecrets: testing.parseConfigTargetMappings([
         "channels.telegram.botToken=channels/telegram/botToken",
         "models.providers.openai.headers.x-api-key=providers/openai/proxyKey",
-        "auth-profiles:main:profiles.openai.key=providers/openai/apiKey",
+        "auth-profiles:main:profiles.openai:default.key=providers/openai/apiKey",
       ]),
     });
 
@@ -98,8 +98,8 @@ describe("vault CLI setup plan", () => {
       },
       {
         type: "auth-profiles.api_key.key",
-        path: "profiles.openai.key",
-        pathSegments: ["profiles", "openai", "key"],
+        path: "profiles.openai:default.key",
+        pathSegments: ["profiles", "openai:default", "key"],
         agentId: "main",
         ref: {
           source: "exec",
@@ -114,7 +114,7 @@ describe("vault CLI setup plan", () => {
     expect(
       testing.parseConfigTargetMappings([
         "channels.telegram.botToken=channels/telegram/botToken",
-        "auth-profiles:main:profiles.openai.key=providers/openai/apiKey",
+        "auth-profiles:main:profiles.openai:default.key=providers/openai/apiKey",
       ]),
     ).toEqual([
       {
@@ -122,7 +122,7 @@ describe("vault CLI setup plan", () => {
         secretId: "channels/telegram/botToken",
       },
       {
-        path: "profiles.openai.key",
+        path: "profiles.openai:default.key",
         agentId: "main",
         secretId: "providers/openai/apiKey",
       },
