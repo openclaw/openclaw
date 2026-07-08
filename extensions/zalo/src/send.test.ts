@@ -18,6 +18,9 @@ import { sendMessageZalo, sendPhotoZalo } from "./send.js";
 
 type ZaloSendResult = Awaited<ReturnType<typeof sendMessageZalo>>;
 
+const UNPAIRED_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+const ZALO_TEXT_LIMIT = 2000;
+
 function requireSuccessfulSend(result: ZaloSendResult, expectedMessageId: string) {
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -117,6 +120,39 @@ describe("zalo send", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
+  });
+
+  it("does not leave dangling surrogates when truncating outbound text at the 2000 limit", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-surrogate" },
+    });
+
+    const text = `${"a".repeat(ZALO_TEXT_LIMIT - 1)}🐱`;
+    await sendMessageZalo("dm-chat-surrogate-text", text, {
+      token: "zalo-token",
+    });
+
+    const sentText = sendMessageMock.mock.calls[0]?.[1]?.text as string;
+    expect(sentText).toBe("a".repeat(ZALO_TEXT_LIMIT - 1));
+    expect(UNPAIRED_SURROGATE_RE.test(sentText)).toBe(false);
+  });
+
+  it("does not leave dangling surrogates when truncating photo captions at the 2000 limit", async () => {
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-surrogate" },
+    });
+
+    const caption = `${"a".repeat(ZALO_TEXT_LIMIT - 1)}🐱`;
+    await sendPhotoZalo("dm-chat-surrogate-caption", "https://example.com/photo.jpg", {
+      token: "zalo-token",
+      caption,
+    });
+
+    const sentCaption = sendPhotoMock.mock.calls[0]?.[1]?.caption as string;
+    expect(sentCaption).toBe("a".repeat(ZALO_TEXT_LIMIT - 1));
+    expect(UNPAIRED_SURROGATE_RE.test(sentCaption)).toBe(false);
   });
 
   it("sends cfg-backed media directly without hosted-media rewrites", async () => {
