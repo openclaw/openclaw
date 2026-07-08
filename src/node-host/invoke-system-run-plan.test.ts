@@ -641,6 +641,13 @@ describe("hardenApprovedExecutionPaths", () => {
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 5,
     },
+    {
+      name: "npm cwd exec tsx file",
+      argv: ["npm", "-C", "./package", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 6,
+    },
   ];
 
   it("captures mutable runtime operands in approval plans", () => {

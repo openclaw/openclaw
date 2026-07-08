@@ -117,6 +117,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     },
   );
 
+  it("persists npm cwd exec approvals against the inner executable", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "npm");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "npm -C ./package exec -- tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
   it("persists npm x approvals against the inner executable", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "npm");

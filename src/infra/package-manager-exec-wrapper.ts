@@ -111,6 +111,7 @@ function firstSubcommandAfterOptions(
   argv: string[],
   params: {
     optionsWithValue: ReadonlySet<string>;
+    caseSensitiveOptionsWithValue?: ReadonlySet<string>;
     flagOptions: ReadonlySet<string>;
   },
 ): string | null {
@@ -128,7 +129,12 @@ function firstSubcommandAfterOptions(
     if (!token.startsWith("-")) {
       return normalizeLowercaseStringOrEmpty(token);
     }
-    const flag = normalizeOptionFlag(token);
+    const parsedOption = parseInlineOptionToken(token);
+    if (params.caseSensitiveOptionsWithValue?.has(parsedOption.name)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (params.optionsWithValue.has(flag)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
@@ -266,8 +272,9 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
       idx += 1;
       break;
     }
-    const flag = normalizeOptionFlag(token);
-    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag) || flag === "-C") {
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
+    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag) || parsedOption.name === "-C") {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -369,7 +376,8 @@ export function resolveKnownPackageManagerExecInvocation(
         return { kind: "unwrapped", argv: unwrapped };
       }
       const firstSubcommand = firstSubcommandAfterOptions(argv, {
-        optionsWithValue: new Set([...NPM_EXEC_OPTIONS_WITH_VALUE, "-C"]),
+        optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
+        caseSensitiveOptionsWithValue: new Set(["-C"]),
         flagOptions: NPM_EXEC_FLAG_OPTIONS,
       });
       return NPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")

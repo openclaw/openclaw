@@ -1277,6 +1277,16 @@ $0 \\"$1\\"" touch {marker}`,
     });
     expect(npmInner.allowlistSatisfied).toBe(true);
 
+    const npmCwdInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm -C ./package exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmCwdInner.allowlistSatisfied).toBe(true);
+
     const npmAliasInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm x -- tsx ./run.ts",
       allowlist: [{ pattern: tsxPath, source: "allow-always" }],
