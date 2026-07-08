@@ -5997,6 +5997,33 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      // Record final trajectory events and flush before any rethrow so
+      // cleanup failures do not leave the session trajectory incomplete.
+      // See: https://github.com/openclaw/openclaw/issues/102014
+      if (trajectoryRecorder && !trajectoryEndRecorded) {
+        trajectoryRecorder.recordEvent("session.cleanup_completed");
+        trajectoryRecorder.recordEvent("session.ended", {
+          status:
+            trajectoryTerminalStatus ??
+            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
+          aborted,
+          externalAbort,
+          timedOut,
+          idleTimedOut,
+          timedOutDuringCompaction,
+          timedOutDuringToolExecution,
+          timedOutByRunBudget,
+          promptError: promptError ? formatErrorMessage(promptError) : undefined,
+          terminalError: trajectoryTerminalError,
+        });
+        trajectoryEndRecorded = true;
+      }
+      await flushEmbeddedAttemptTrajectoryRecorder({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        log,
+        trajectoryRecorder,
+      });
       const synthesizedCleanupTakeoverError =
         !cleanupError && promptError && sessionLockController.hasSessionTakeover()
           ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
@@ -6038,35 +6065,6 @@ export async function runEmbeddedAttempt(
           await Promise.reject(toErrorObject(cleanupFailure, "Non-Error rejection"));
         }
       }
-      // Record session.ended after cleanup completes so the timestamp reflects
-      // actual session end including teardown and state persistence.
-      // See: https://github.com/openclaw/openclaw/issues/102014
-      if (trajectoryRecorder && !trajectoryEndRecorded) {
-        trajectoryRecorder.recordEvent("session.cleanup_completed");
-        trajectoryRecorder.recordEvent("session.ended", {
-          status:
-            trajectoryTerminalStatus ??
-            (promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup"),
-          aborted,
-          externalAbort,
-          timedOut,
-          idleTimedOut,
-          timedOutDuringCompaction,
-          timedOutDuringToolExecution,
-          timedOutByRunBudget,
-          promptError: promptError ? formatErrorMessage(promptError) : undefined,
-          terminalError: trajectoryTerminalError,
-        });
-        trajectoryEndRecorded = true;
-      }
-      // Flush after the final events so session.cleanup_completed and
-      // session.ended are persisted in the trajectory sidecar before export.
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
-      });
     }
   } finally {
     removeExternalAbortSignalListener?.();
