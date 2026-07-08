@@ -1,8 +1,8 @@
 // Imessage plugin module implements cli output behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-export const IMESSAGE_CLI_STDOUT_MAX_CHARS = 8 * 1024 * 1024;
-export const IMESSAGE_CLI_STDERR_TAIL_CHARS = 64 * 1024;
+const IMESSAGE_CLI_STDOUT_MAX_CHARS = 8 * 1024 * 1024;
+const IMESSAGE_CLI_STDERR_TAIL_CHARS = 64 * 1024;
 
 type AppendStdoutResult = { ok: true; value: string } | { ok: false; message: string };
 

@@ -45,7 +45,7 @@ import {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
 };
-export type ToolHandlerFn = (
+type ToolHandlerFn = (
   args: unknown,
   callId: string,
   context: ToolHandlerContext,
@@ -243,7 +243,7 @@ type PendingStreamToken = {
   callId?: string;
 };
 
-export type StreamSessionRequest = {
+type StreamSessionRequest = {
   providerName?: "twilio" | "telnyx";
   callId?: string;
   from?: string;
@@ -258,6 +258,7 @@ export type StreamSession = {
 
 type CallRegistration = {
   callId: string;
+  instructions: string;
   initialGreetingInstructions?: string;
 };
 
@@ -345,6 +346,7 @@ export class RealtimeCallHandler {
     private readonly providerConfig: RealtimeVoiceProviderConfig,
     private readonly servePath: string,
     private readonly coreConfig?: OpenClawConfig,
+    private readonly resolveInstructions?: (call: CallRecord) => string,
   ) {}
 
   setPublicUrl(url: string): void {
@@ -574,7 +576,7 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, initialGreetingInstructions } = registration;
+    const { callId, instructions, initialGreetingInstructions } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
     const talk: TalkSessionController = createTalkSessionController(
       {
@@ -721,7 +723,7 @@ export class RealtimeCallHandler {
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
       interruptResponseOnInputAudio,
-      instructions: this.config.instructions,
+      instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
@@ -1269,12 +1271,11 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
+    const instructions = this.resolveInstructions?.(callRecord) ?? this.config.instructions;
     return {
       callId: callRecord.callId,
-      initialGreetingInstructions: buildGreetingInstructions(
-        this.config.instructions,
-        initialGreeting,
-      ),
+      instructions,
+      initialGreetingInstructions: buildGreetingInstructions(instructions, initialGreeting),
     };
   }
 

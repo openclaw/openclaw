@@ -28,7 +28,7 @@ export type TransientProviderRetryOptions = {
 
 export type TransientProviderRetryConfig = boolean | TransientProviderRetryOptions;
 
-export const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
+const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
   attempts: 2,
   baseDelayMs: 250,
   maxDelayMs: 1_000,

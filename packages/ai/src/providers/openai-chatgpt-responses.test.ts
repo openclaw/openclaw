@@ -3,6 +3,7 @@ import { zstdDecompressSync } from "node:zlib";
 // ChatGPT Responses provider tests cover stream handling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -104,6 +105,7 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     resetOpenAICodexWebSocketDebugStats();
+    configureAiTransportHost({});
   });
 
   const model = {
@@ -122,6 +124,41 @@ describe("streamOpenAICodexResponses transport", () => {
   const context = {
     messages: [{ role: "user", content: "hi", timestamp: 1 }],
   } satisfies Context;
+
+  it("unwraps sentinels before constructing ChatGPT SSE auth headers", async () => {
+    const realToken = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-sentinel" },
+    });
+    const sentinel = "oc-sent-v1-0123456789abcdef01234567";
+    configureAiTransportHost({
+      resolveSecretSentinel: (value) => value.replaceAll(sentinel, realToken),
+    });
+    let authorization: string | null = null;
+    let providerToken: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        authorization = headers.get("authorization");
+        providerToken = headers.get("x-provider-token");
+        return completedSseResponse();
+      }),
+    );
+
+    const result = await streamOpenAICodexResponses(
+      { ...model, headers: { "X-Provider-Token": `Bearer ${sentinel}` } },
+      context,
+      {
+        apiKey: sentinel,
+        transport: "sse",
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(authorization).toBe(`Bearer ${realToken}`);
+    expect(authorization).not.toContain(sentinel);
+    expect(providerToken).toBe(`Bearer ${realToken}`);
+  });
 
   it("builds the first Node request with an OS-specific user agent", async () => {
     vi.resetModules();

@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How cron works
   - H2: Schedule types
   - H3: Day-of-month and day-of-week use OR logic
+  - H2: Event triggers (condition watchers)
   - H2: Payloads
   - H3: Agent-turn options
   - H3: Command payloads
@@ -3709,6 +3710,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/secrets
 - Headings:
   - H2: Runtime model
+  - H2: Egress-time injection (sentinels)
   - H2: Agent-access boundary
   - H2: Active-surface filtering
   - H2: Gateway auth surface diagnostics

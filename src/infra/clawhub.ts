@@ -1904,10 +1904,10 @@ export async function fetchClawHubPromotion(params: {
 // claim` always revalidates against the live API so the kill switch wins
 // regardless of snapshot staleness.
 
-export const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
+const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
 // Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
 // Bump only in lockstep with the server-side schema.
-export const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
+const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
 
 export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
   const context = "promotions feed";

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -611,6 +612,7 @@ class GatewaySession(
       }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
       method: String,
       params: JsonElement?,
@@ -625,7 +627,12 @@ class GatewaySession(
         pending.remove(id)
         throw err
       }
-      connectionScope.launch(Dispatchers.IO) {
+      // ATOMIC start: joinOwnedWork() cancels connectionJob right after failPending(); a
+      // DEFAULT-start watcher still queued for dispatch would be cancelled without ever running
+      // and silently drop the terminal onError owed to fire-and-forget callers. ATOMIC
+      // guarantees this block runs; await() on the already-failed deferred then surfaces the
+      // disconnect outcome without suspending.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
         try {
           val response =
             try {

@@ -290,7 +290,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
 
-export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
   "minimal",
   "low",
@@ -506,7 +506,7 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-export type VoiceCallEffectiveConfigResult = {
+type VoiceCallEffectiveConfigResult = {
   config: VoiceCallConfig;
   numberRouteKey?: string;
 };

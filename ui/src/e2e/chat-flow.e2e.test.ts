@@ -617,6 +617,53 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("routes page typing to the active composer without stealing text input focus", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Type whenever you are ready.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Type whenever you are ready.").click();
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(false);
+
+      await page.keyboard.type("first character preserved");
+      expect(await composer.inputValue()).toBe("first character preserved");
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await page.getByRole("button", { name: "Open command palette" }).click();
+      const paletteInput = page.locator(".cmd-palette__input");
+      await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => paletteInput.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.type("session search");
+
+      expect(await paletteInput.inputValue()).toBe("session search");
+      expect(await composer.inputValue()).toBe("first character preserved");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps stale context visible as approximate without warning or compaction", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
