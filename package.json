@@ -120,6 +120,7 @@
     "!dist/extensions/matrix/**",
     "!dist/extensions/moonshot/**",
     "!dist/extensions/msteams/**",
+    "!dist/extensions/mxc/**",
     "!dist/extensions/nextcloud-talk/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/parallel/**",
