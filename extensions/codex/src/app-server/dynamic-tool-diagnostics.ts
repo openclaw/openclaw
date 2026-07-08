@@ -6,6 +6,7 @@ import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from ".
 
 type DynamicToolDiagnosticContext = {
   call: CodexDynamicToolCallParams;
+  agentId?: string | undefined;
   runId?: string | undefined;
   sessionId?: string | undefined;
   sessionKey?: string | undefined;
@@ -15,6 +16,7 @@ type DynamicToolDiagnosticContext = {
 export function emitDynamicToolStartedDiagnostic(params: DynamicToolDiagnosticContext): void {
   emitTrustedDiagnosticEvent({
     type: "tool.execution.started",
+    agentId: params.agentId,
     runId: params.runId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -32,6 +34,7 @@ export function emitDynamicToolErrorDiagnostic(
 ): void {
   emitTrustedDiagnosticEvent({
     type: "tool.execution.error",
+    agentId: params.agentId,
     runId: params.runId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -55,6 +58,7 @@ export function emitDynamicToolTerminalDiagnostic(
   if (terminalType === "completed") {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.completed",
+      agentId: params.agentId,
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -67,6 +71,7 @@ export function emitDynamicToolTerminalDiagnostic(
   if (terminalType === "blocked") {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
+      agentId: params.agentId,
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

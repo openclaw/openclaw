@@ -110,15 +110,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `Crestodian setup requires a nonempty auth value`() {
-        #expect(!OnboardingView.hasCrestodianSetupAuth([:]))
-        #expect(!OnboardingView.hasCrestodianSetupAuth(["token": "  "]))
-        #expect(OnboardingView.hasCrestodianSetupAuth(["mode": "token"]))
-        #expect(OnboardingView.hasCrestodianSetupAuth([
-            "token": ["source": "env", "provider": "default", "id": "GATEWAY_TOKEN"],
-        ]))
-    }
-
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

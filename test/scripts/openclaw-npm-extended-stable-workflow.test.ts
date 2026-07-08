@@ -12,6 +12,7 @@ type Workflow = {
       inputs?: {
         bypass_extended_stable_guard?: { default?: boolean; type?: string };
         npm_dist_tag?: { options?: string[] };
+        plugin_npm_run_id?: { required?: boolean; type?: string };
       };
     };
   };
@@ -63,6 +64,9 @@ describe("minimal npm extended-stable workflow", () => {
       "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
+      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").env?.PREFLIGHT_ONLY,
+    ).toBe("${{ inputs.preflight_only }}");
+    expect(
       step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
     ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
     expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
@@ -111,8 +115,32 @@ describe("minimal npm extended-stable workflow", () => {
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,status,conclusion,url");
-    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(2);
+    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(3);
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
+  });
+
+  it("requires and authenticates the plugin npm run before an extended-stable core publish", () => {
+    const parsed = workflow();
+    expect(parsed.on?.workflow_dispatch?.inputs?.plugin_npm_run_id).toMatchObject({
+      required: false,
+      type: "string",
+    });
+    const required = step(
+      parsed.jobs?.validate_publish_request,
+      "Require preflight artifact promotion on real publish",
+    );
+    expect(required.env?.PLUGIN_NPM_RUN_ID).toBe("${{ inputs.plugin_npm_run_id }}");
+    expect(required.run).toContain("Extended-stable publish requires plugin_npm_run_id");
+
+    const verify = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify plugin npm release run metadata",
+    );
+    expect(verify.env?.RUN_KIND).toBe("plugin");
+    expect(verify.run).toContain(
+      "--json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url",
+    );
+    expect(verify.run).toContain("openclaw-npm-extended-stable-release.mjs verify-run");
   });
 
   it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {

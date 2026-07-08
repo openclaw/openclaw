@@ -13,6 +13,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
@@ -39,6 +40,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { normalizeProxyIp } from "./proxy-ip.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -79,7 +81,7 @@ function sanitizeTranscriptForLog(value: string): string {
   if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
     return sanitized;
   }
-  return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+  return `${truncateUtf16Safe(sanitized, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
 function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
@@ -1012,8 +1014,14 @@ export class VoiceCallWebhookServer {
         callId,
         sessionKey: call.sessionKey,
         from: call.from,
+        agentId: resolveCallAgentId(call, effectiveConfig),
         transcript: call.transcript,
         userMessage,
+        onEarlyText: async (text) => {
+          console.log(`[voice-call] Early AI response: "${text}"`);
+          const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+          return speakResult.success;
+        },
       });
 
       if (result.error) {
@@ -1021,7 +1029,7 @@ export class VoiceCallWebhookServer {
         return;
       }
 
-      if (result.text) {
+      if (result.text && !result.deliveredEarly) {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
       }

@@ -480,6 +480,13 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Files",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -918,8 +925,8 @@ struct RootTabs: View {
                         self.showOnboarding = false
                     },
                     onComplete: {
-                        self.selectSidebarDestination(.chat)
                         self.showOnboarding = false
+                        self.selectSidebarDestination(.chat)
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
@@ -1235,13 +1242,15 @@ extension RootTabs {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            Task {
+                await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectLastKnown() }
+            Task { await self.gatewayController.connectActiveGateway() }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1277,7 +1286,7 @@ extension RootTabs {
 
     private func hasExistingGatewayConfig() -> Bool {
         if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }

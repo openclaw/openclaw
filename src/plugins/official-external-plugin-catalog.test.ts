@@ -1632,6 +1632,7 @@ describe("official external plugin catalog", () => {
       ["deepinfra", "@openclaw/deepinfra-provider"],
       ["deepseek", "@openclaw/deepseek-provider"],
       ["groq", "@openclaw/groq-provider"],
+      ["longcat", "@openclaw/longcat-provider"],
       ["kilocode", "@openclaw/kilocode-provider"],
       ["kimi", "@openclaw/kimi-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
@@ -1660,6 +1661,7 @@ describe("official external plugin catalog", () => {
       ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
       ["zai", "@openclaw/zai-provider"],
     ] as const;
+    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -1675,6 +1677,14 @@ describe("official external plugin catalog", () => {
         npmSpec,
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.9",
+      });
+    }
+    for (const [id, npmSpec] of currentExternalized) {
+      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.11",
       });
     }
   });
@@ -1752,6 +1762,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists LongCat as an official external provider", () => {
+    const longcat = expectCatalogEntry("longcat");
+
+    expect(resolveOfficialExternalPluginId(longcat)).toBe("longcat");
+    expect(getOfficialExternalPluginCatalogEntry("meituan-longcat")).toBe(longcat);
+    expect(resolveOfficialExternalPluginInstall(longcat)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/longcat-provider",
+      npmSpec: "@openclaw/longcat-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
+
   it("resolves external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
@@ -1813,7 +1836,9 @@ describe("official external plugin catalog", () => {
         CLOUDFLARE_AI_GATEWAY_API_KEY: "cloudflare-key",
         DEEPINFRA_API_KEY: "deepinfra-key",
         DEEPSEEK_API_KEY: "deepseek-key",
+        FEATHERLESS_API_KEY: "featherless-key",
         GROQ_API_KEY: "groq-key",
+        LONGCAT_API_KEY: "longcat-key",
         KILOCODE_API_KEY: "kilocode-key",
         KIMICODE_API_KEY: "kimi-key",
         KIMI_API_KEY: "moonshot-kimi-key",
@@ -1823,6 +1848,7 @@ describe("official external plugin catalog", () => {
         STEPFUN_API_KEY: "stepfun-key",
         FIREWORKS_API_KEY: "fireworks-key",
         TOKENHUB_API_KEY: "tokenhub-key",
+        TOKENPLAN_API_KEY: "tokenplan-key",
         VENICE_API_KEY: "venice-key",
         AI_GATEWAY_API_KEY: "gateway-key",
         ZAI_API_KEY: "zai-key",
@@ -1834,10 +1860,12 @@ describe("official external plugin catalog", () => {
       "cloudflare-ai-gateway",
       "deepinfra",
       "deepseek",
+      "featherless",
       "fireworks",
       "groq",
       "kilocode",
       "kimi",
+      "longcat",
       "moonshot",
       "qianfan",
       "qwen",
@@ -1848,6 +1876,32 @@ describe("official external plugin catalog", () => {
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ LONGCAT_API_KEY: " " })).toEqual([]);
+  });
+
+  it("keeps Tencent auth choices available through the cold-install auth catalog", () => {
+    const tencent = expectCatalogEntry("tencent");
+    const tokenHub = tencent.openclaw?.providers?.find(
+      (provider) => provider.id === "tencent-tokenhub",
+    );
+    const tokenPlan = tencent.openclaw?.providers?.find(
+      (provider) => provider.id === "tencent-tokenplan",
+    );
+
+    expect(tokenHub?.envVars).toEqual(["TOKENHUB_API_KEY"]);
+    expect(tokenHub?.authChoices).toEqual([
+      expect.objectContaining({
+        choiceId: "tokenhub-api-key",
+        optionKey: "tokenhubApiKey",
+        cliFlag: "--tokenhub-api-key",
+      }),
+    ]);
+    expect(tokenPlan?.envVars).toEqual(["TOKENPLAN_API_KEY"]);
+    expect(tokenPlan?.authChoices?.[0]).toMatchObject({
+      choiceId: "tokenplan-api-key",
+      optionKey: "tokenplanApiKey",
+      cliFlag: "--tokenplan-api-key",
+    });
   });
 
   it("keeps Groq available through the cold-install auth catalog", () => {

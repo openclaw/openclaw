@@ -19,8 +19,6 @@ import type { SessionConfig } from "@github/copilot-sdk";
 
 type SdkInfiniteSessionConfig = NonNullable<SessionConfig["infiniteSessions"]>;
 
-export type { SdkInfiniteSessionConfig as CopilotInfiniteSessionConfig };
-
 export interface CopilotInfiniteSessionOptions {
   enabled?: boolean;
   backgroundCompactionThreshold?: number;

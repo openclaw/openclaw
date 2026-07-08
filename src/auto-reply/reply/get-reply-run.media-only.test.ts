@@ -39,10 +39,24 @@ vi.mock("../../config/sessions/paths.js", () => ({
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
 const drainFormattedSystemEventsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+const consumeSessionSkillSuggestionMock = vi.hoisted(() => vi.fn());
+
+vi.mock(import("../../config/sessions/session-accessor.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadSessionEntry: loadSessionEntryMock,
+  };
+});
 
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
+}));
+
+vi.mock("../../config/sessions/skill-suggestions.js", () => ({
+  consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
@@ -115,6 +129,7 @@ vi.mock("./groups.js", () => ({
 vi.mock("./inbound-meta.js", () => ({
   buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
+  formatActiveGoalContext: vi.fn().mockReturnValue(undefined),
   resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -313,12 +328,14 @@ describe("runPreparedReply media-only handling", () => {
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
+    loadSessionEntryMock.mockReset();
+    consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     vi.mocked(buildDirectChatContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildGroupChatContext).mockReturnValue("");
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValue("");
+    vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     replyRunTesting.resetReplyRunRegistry();
   });
@@ -561,6 +578,7 @@ describe("runPreparedReply media-only handling", () => {
         ThreadStarterBody: undefined,
       },
       expect.anything(),
+      undefined,
     );
   });
 
@@ -1164,6 +1182,57 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
   });
 
+  it.each([
+    ["group", true],
+    ["channel", true],
+    ["direct", false],
+  ] as const)("persists sender attribution for %s turns only", async (chatType, shouldPersist) => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: chatType,
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: chatType,
+          SenderId: "user-42",
+          SenderName: "Ada",
+          SenderUsername: "ada",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType,
+          channel: "telegram",
+        } as SessionEntry,
+      }),
+    );
+
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    if (shouldPersist) {
+      expect(message).toMatchObject({
+        __openclaw: {
+          senderId: "user-42",
+          senderName: "Ada",
+          senderUsername: "ada",
+        },
+      });
+    } else {
+      expect(message).not.toHaveProperty("__openclaw.senderId");
+      expect(message).not.toHaveProperty("__openclaw.senderName");
+      expect(message).not.toHaveProperty("__openclaw.senderUsername");
+    }
+  });
+
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {
     await runPreparedReply(
       baseParams({
@@ -1458,6 +1527,141 @@ describe("runPreparedReply media-only handling", () => {
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("refreshes goal context after interrupt admission waits", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const inboundMeta = await import("./inbound-meta.js");
+    const activeEntry: SessionEntry = {
+      sessionId: "session-goal-interrupt",
+      updatedAt: 1,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-interrupt",
+        objective: "Finish the interrupted work",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokenStartFresh: true,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+      pendingSkillSuggestion: {
+        skillName: "github-pr-workflow",
+        detectedAt: 1,
+      },
+    };
+    const completeEntry: SessionEntry = {
+      ...activeEntry,
+      goal: { ...activeEntry.goal!, status: "complete" },
+      pendingSkillSuggestion: undefined,
+    };
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
+      entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
+    );
+    vi.mocked(inboundMeta.buildInboundUserContextPrefix).mockImplementation(
+      (_ctx, _envelope, entry) =>
+        [
+          entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
+          entry?.pendingSkillSuggestion
+            ? 'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.'
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+    );
+    consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+      entry: { ...activeEntry, pendingSkillSuggestion: undefined },
+      suggestion: activeEntry.pendingSkillSuggestion,
+    });
+    loadSessionEntryMock.mockReturnValue(completeEntry);
+    const activeRun = createReplyOperation({
+      sessionId: "session-goal-interrupt",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    activeRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-goal-interrupt",
+        sessionEntry: activeEntry,
+        sessionStore: { "session-key": activeEntry },
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+    while (!activeRun.abortSignal.aborted) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    activeRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "session-key",
+      readConsistency: "latest",
+    });
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
+    expect(call.followupRun.currentInboundContext?.text).toContain(
+      'A reusable workflow ("github-pr-workflow") was detected last turn',
+    );
+  });
+
+  it("consumes a skill suggestion once for the next interactive turn", async () => {
+    const suggestion = { skillName: "github-pr-workflow", detectedAt: 1 };
+    const sessionEntry: SessionEntry = {
+      sessionId: "skill-suggestion-session",
+      updatedAt: 1,
+      pendingSkillSuggestion: suggestion,
+    };
+    const clearedEntry: SessionEntry = {
+      ...sessionEntry,
+      pendingSkillSuggestion: undefined,
+    };
+    const sessionStore = { "session-key": sessionEntry };
+    consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+      entry: clearedEntry,
+      suggestion,
+    });
+    vi.mocked(buildInboundUserContextPrefix).mockImplementation((_ctx, _envelope, entry) =>
+      entry?.pendingSkillSuggestion
+        ? 'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.'
+        : "",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+    expect(sessionStore["session-key"].pendingSkillSuggestion).toBeUndefined();
+    expect(requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
+      'A reusable workflow ("github-pr-workflow") was detected last turn',
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+    expect(
+      requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
+    ).not.toContain("A reusable workflow");
   });
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -2142,7 +2346,7 @@ describe("runPreparedReply media-only handling", () => {
       role: "user",
       content: "#35676 Keśava: No wtf",
       timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false },
+      __openclaw: { senderIsOwner: false, senderName: "Keśava" },
     });
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
@@ -2538,6 +2742,44 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+  });
+
+  it("keeps active goal context out of background heartbeat turns", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "heartbeat-goal-session",
+      updatedAt: 1,
+      goal: {
+        schemaVersion: 1,
+        id: "heartbeat-goal",
+        objective: "Finish the interactive task",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+      pendingSkillSuggestion: {
+        skillName: "github-pr-workflow",
+        detectedAt: 1,
+      },
+    };
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore: { "session-key": sessionEntry },
+      }),
+    );
+
+    expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+    );
+    expect(consumeSessionSkillSuggestionMock).not.toHaveBeenCalled();
+    expect(sessionEntry.pendingSkillSuggestion).toBeDefined();
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {

@@ -1028,6 +1028,12 @@ export async function sendMessageTelegram(
       );
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
+      if (!chunk.text?.trim()) {
+        // plainText derives from text via telegramHtmlToPlainTextFallback, so
+        // an empty rich render has no sendable fallback.
+        sendLogger.warn("telegram richMessage chunk rendered empty HTML; skipping");
+        continue;
+      }
       try {
         warnTelegramRichHtmlDegradations({
           context: "richMessage",
@@ -1438,7 +1444,7 @@ export async function sendTypingTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
   await requestWithDiag(
@@ -1807,8 +1813,7 @@ export async function editMessageTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
     shouldRetry: (err) =>
-      isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
-      isTelegramServerError(err),
+      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
   });
   const requestWithEditShouldLog = <T>(
     fn: () => Promise<T>,
@@ -2196,7 +2201,7 @@ type TelegramCreateForumTopicOpts = {
   iconCustomEmojiId?: string;
 };
 
-export type TelegramCreateForumTopicResult = {
+type TelegramCreateForumTopicResult = {
   topicId: number;
   name: string;
   chatId: string;

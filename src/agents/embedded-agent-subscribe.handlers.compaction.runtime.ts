@@ -1,7 +1,8 @@
 /**
  * Runtime helpers for reconciling compaction counts after subscribe events.
  */
-import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CompactionCounterAttribution } from "./compaction-attribution.js";
 import { log } from "./embedded-agent-runner/logger.js";
 
@@ -28,24 +29,20 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
   const storePath = resolveStorePath(configStore, { agentId });
   let previousCompactionCount: number | undefined;
   let nextCompactionCount: number | undefined;
-  const nextEntry = await updateSessionStoreEntry({
-    storePath,
-    sessionKey,
-    update: async (entry) => {
-      // The live stream and store can both observe compactions. Keep the max so
-      // late lower-count updates cannot make future resume labels regress.
-      const currentCount = Math.max(0, entry.compactionCount ?? 0);
-      const nextCount = Math.max(currentCount, observedCompactionCount);
-      previousCompactionCount = currentCount;
-      nextCompactionCount = nextCount;
-      if (nextCount === currentCount) {
-        return null;
-      }
-      return {
-        compactionCount: nextCount,
-        updatedAt: Math.max(entry.updatedAt ?? 0, now),
-      };
-    },
+  const nextEntry = await updateSessionEntry({ sessionKey, storePath }, async (entry) => {
+    // The live stream and store can both observe compactions. Keep the max so
+    // late lower-count updates cannot make future resume labels regress.
+    const currentCount = Math.max(0, entry.compactionCount ?? 0);
+    const nextCount = Math.max(currentCount, observedCompactionCount);
+    previousCompactionCount = currentCount;
+    nextCompactionCount = nextCount;
+    if (nextCount === currentCount) {
+      return null;
+    }
+    return {
+      compactionCount: nextCount,
+      updatedAt: Math.max(entry.updatedAt ?? 0, now),
+    };
   });
   if (attribution && previousCompactionCount !== undefined && nextCompactionCount !== undefined) {
     const delta = nextCompactionCount - previousCompactionCount;

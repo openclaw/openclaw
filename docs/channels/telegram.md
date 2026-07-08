@@ -23,7 +23,11 @@ Production-ready for bot DMs and groups via grammY. Long polling is the default 
 
 <Steps>
   <Step title="Create the bot token in BotFather">
-    Open Telegram, chat with **@BotFather** (confirm the handle is exactly `@BotFather`), run `/newbot`, follow the prompts, and save the token.
+    Both flows end with a token you paste into OpenClaw — pick one:
+
+    - **Chat flow**: open Telegram, chat with **@BotFather** (confirm the handle is exactly `@BotFather`), run `/newbot`, follow the prompts, and save the token.
+    - **Web flow**: open [BotFather's web app](https://t.me/BotFather?startapp) — it runs in every Telegram client, including [web.telegram.org](https://web.telegram.org) — create the bot in the UI, and copy its token.
+
   </Step>
 
   <Step title="Configure token and DM policy">
@@ -98,6 +102,8 @@ Token resolution is account-aware: `tokenFile` beats `botToken` beats env, and c
 
     - `/setjoingroups` — allow/deny group adds
     - `/setprivacy` — group visibility behavior
+
+    The same settings are available in [BotFather's web app](https://t.me/BotFather?startapp) if you prefer a UI over chat commands.
 
   </Accordion>
 </AccordionGroup>
@@ -667,10 +673,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Scope (`messages.ackReactionScope`, default `"group-mentions"`; no Telegram-account or Telegram-channel override today):**
 
-    `all` (DMs + groups), `direct` (DMs only), `group-all` (every group message, no DMs), `group-mentions` (groups when the bot is mentioned; **no DMs** — default), `off` / `none` (disabled).
+    `all` (DMs + groups, including ambient room events), `direct` (DMs only), `group-all` (every group message except ambient room events, no DMs), `group-mentions` (groups when the bot is mentioned; **no DMs** — default), `off` / `none` (disabled).
 
     <Note>
-    The default scope (`group-mentions`) does not fire ack reactions in DMs. Set `messages.ackReactionScope` to `direct` or `all` for that. This value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
+    The default scope (`group-mentions`) does not fire ack reactions in DMs or ambient room events. Use `direct` or `all` for DMs; only `all` acknowledges ambient room events. This value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
     </Note>
 
   </Accordion>

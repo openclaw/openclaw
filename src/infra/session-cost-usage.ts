@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -78,7 +79,7 @@ export type {
 
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
-const USAGE_COST_CACHE_VERSION = 6;
+const USAGE_COST_CACHE_VERSION = 7;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -482,6 +483,7 @@ function buildCostUsageSummaryFromCache(params: {
   files: UsageCostTranscriptFile[];
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   refreshing: boolean;
 }): CostUsageSummary {
   const dailyMap = new Map<string, CostUsageTotals>();
@@ -511,7 +513,7 @@ function buildCostUsageSummaryFromCache(params: {
       if (usageEntry.timestamp < params.startMs || usageEntry.timestamp > params.endMs) {
         continue;
       }
-      const date = formatDayKey(new Date(usageEntry.timestamp));
+      const date = formatDayKey(new Date(usageEntry.timestamp), params.dailyUtcOffsetMinutes);
       const bucket = dailyMap.get(date) ?? emptyTotals();
       addTotals(bucket, usageEntry);
       dailyMap.set(date, bucket);
@@ -519,7 +521,7 @@ function buildCostUsageSummaryFromCache(params: {
     }
   }
 
-  fillMissingDays(dailyMap, params.startMs, params.endMs);
+  fillMissingDays(dailyMap, params.startMs, params.endMs, params.dailyUtcOffsetMinutes);
 
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
@@ -565,6 +567,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   sessionFile: string;
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
 }): SessionCostSummary | null {
   if (!params.entry.transcriptEntries) {
     return null;
@@ -624,7 +627,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
           (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
         if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= maxLatencyMs) {
           latencyValues.push(latencyMs);
-          const dayKey = formatDayKey(new Date(ts));
+          const dayKey = formatDayKey(new Date(ts), params.dailyUtcOffsetMinutes);
           const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
           dailyLatencies.push(latencyMs);
           dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -650,7 +653,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
 
     if (ts !== undefined) {
       const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+      const dayKey = formatDayKey(date, params.dailyUtcOffsetMinutes);
       activityDatesSet.add(dayKey);
       const daily = dailyMessageMap.get(dayKey) ?? {
         date: dayKey,
@@ -709,7 +712,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     addTotals(totals, usageTotals);
     if (ts !== undefined) {
       const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+      const dayKey = formatDayKey(date, params.dailyUtcOffsetMinutes);
       const componentTokens =
         usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
       const existingDaily = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
@@ -841,6 +844,9 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   };
 }
 
+const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
+  value === "provider-billed" ? value : undefined;
+
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
@@ -862,6 +868,7 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     output: asFiniteNumber(cost.output),
     cacheRead: asFiniteNumber(cost.cacheRead),
     cacheWrite: asFiniteNumber(cost.cacheWrite),
+    totalOrigin: normalizeUsageCostTotalOrigin(cost.totalOrigin),
   };
 };
 
@@ -927,8 +934,17 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   };
 };
 
-const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+const formatUtcDayKey = (date: Date): string =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+const formatDayKey = (date: Date, utcOffsetMinutes?: number): string => {
+  if (utcOffsetMinutes === undefined) {
+    return date.toLocaleDateString("en-CA", {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+  }
+  return formatUtcDayKey(new Date(date.getTime() + utcOffsetMinutes * 60 * 1000));
+};
 
 /**
  * Maximum window (in days) for which we will zero-fill missing calendar
@@ -943,14 +959,11 @@ const formatDayKey = (date: Date): string =>
 const MAX_ZERO_FILL_DAYS = 366;
 
 /**
- * Parse a `YYYY-MM-DD` day key (as produced by `formatDayKey`) into a Date
- * constructed at local noon on that calendar date. Local-noon anchoring
- * gives a ±12h cushion so the resulting Date always formats back to the
- * same key via `formatDayKey`, even across DST transitions where the
- * local clock shifts by ±1h. Returns `null` for malformed keys so the
- * caller can fall back safely.
+ * Parse a `YYYY-MM-DD` day key into its UTC calendar-day timestamp. The
+ * timestamp is only used to enumerate calendar labels; usage timestamps stay
+ * in their requested timezone bucket.
  */
-const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
+const parseDayKeyToUtcMs = (dayKey: string): number | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
   if (!match) {
     return null;
@@ -958,10 +971,13 @@ const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
   const year = Number(match[1]);
   const monthIdx = Number(match[2]) - 1;
   const day = Number(match[3]);
-  // Constructs the Date in the runtime's local timezone, which is the same
-  // timezone `formatDayKey` uses (`Intl.DateTimeFormat().resolvedOptions().timeZone`).
-  const date = new Date(year, monthIdx, day, 12, 0, 0, 0);
-  return Number.isFinite(date.getTime()) ? date : null;
+  const dayMs = Date.UTC(year, monthIdx, day);
+  const date = new Date(dayMs);
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === monthIdx &&
+    date.getUTCDate() === day
+    ? dayMs
+    : null;
 };
 
 /**
@@ -970,17 +986,15 @@ const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
  * resulting `daily` series matches the requested range length (one bar per
  * calendar day) instead of only covering days with recorded usage.
  *
- * Iteration steps by calendar day in the local timezone — we derive the
- * start and end day keys via `formatDayKey`, anchor a cursor at local noon
- * of the start day, and advance via `setDate(getDate() + 1)`. This is
- * robust against local-clock DST transitions where a fixed 24h ms step
- * would land in the previous or next calendar day (and risk skipping an
- * interior day from the zero-fill output).
+ * Day keys must use the same fixed offset as the request range. Otherwise a
+ * remote Gateway can return local-date labels for UTC/browser-local ranges,
+ * which drops boundary usage when the UI compares calendar windows.
  */
 const fillMissingDays = (
   dailyMap: Map<string, CostUsageTotals>,
   startMs: number,
   endMs: number,
+  utcOffsetMinutes?: number,
 ): void => {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
     return;
@@ -993,10 +1007,11 @@ const fillMissingDays = (
   if (spanDays > MAX_ZERO_FILL_DAYS) {
     return;
   }
-  const startKey = formatDayKey(new Date(startMs));
-  const endKey = formatDayKey(new Date(endMs));
-  const cursorDate = parseDayKeyToLocalNoon(startKey);
-  if (cursorDate === null) {
+  const startKey = formatDayKey(new Date(startMs), utcOffsetMinutes);
+  const endKey = formatDayKey(new Date(endMs), utcOffsetMinutes);
+  const startDayMs = parseDayKeyToUtcMs(startKey);
+  const endDayMs = parseDayKeyToUtcMs(endKey);
+  if (startDayMs === null || endDayMs === null) {
     // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
     // key, but if locale data ever shifts under us, at least make sure the
     // endpoint days are present so the chart isn't completely empty.
@@ -1008,35 +1023,18 @@ const fillMissingDays = (
     }
     return;
   }
-  // Hard upper bound to avoid runaway loops on bogus inputs (e.g. malformed
-  // formatDayKey output that never reaches endKey). Pads the expected span
-  // by a few iterations to cover any DST-driven boundary fuzz.
-  const maxIterations = MAX_ZERO_FILL_DAYS + 5;
-  let lastKey: string | undefined;
-  for (let i = 0; i <= maxIterations; i += 1) {
-    const key = formatDayKey(cursorDate);
+  const maxIterations = MAX_ZERO_FILL_DAYS + 1;
+  for (let cursorMs = startDayMs, i = 0; cursorMs <= endDayMs && i < maxIterations; i += 1) {
+    const key = formatUtcDayKey(new Date(cursorMs));
     if (!dailyMap.has(key)) {
       dailyMap.set(key, emptyTotals());
     }
-    lastKey = key;
-    if (key === endKey) {
-      break;
-    }
-    // Advance one calendar day in the local timezone. `setDate` handles
-    // month/year rollover, and the local-noon anchor (set in
-    // parseDayKeyToLocalNoon) gives us a ±12h cushion against ±1h DST
-    // shifts, so the cursor never lands in the prior or next calendar day.
-    cursorDate.setDate(cursorDate.getDate() + 1);
+    cursorMs += dayMs;
   }
-  // Defensive: make sure the end-day key is present even if the loop
-  // terminated early (e.g. iteration cap hit before reaching endKey).
-  if (lastKey !== endKey && !dailyMap.has(endKey)) {
+  if (!dailyMap.has(endKey)) {
     dailyMap.set(endKey, emptyTotals());
   }
 };
-
-const formatUtcDayKey = (date: Date): string =>
-  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
 const getUtcQuarterHourBucketKey = (
   date: Date,
@@ -1156,12 +1154,13 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
 
 const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
   costBreakdown?.total === 0 &&
-  [
-    costBreakdown.input,
-    costBreakdown.output,
-    costBreakdown.cacheRead,
-    costBreakdown.cacheWrite,
-  ].some((value) => value !== undefined && value !== 0);
+  (costBreakdown.totalOrigin === "provider-billed" ||
+    [
+      costBreakdown.input,
+      costBreakdown.output,
+      costBreakdown.cacheRead,
+      costBreakdown.cacheWrite,
+    ].some((value) => value !== undefined && value !== 0));
 
 const shouldRecomputeRecordedZeroCost = (params: {
   cost: ReturnType<typeof resolveModelCostConfig>;
@@ -1248,6 +1247,17 @@ async function* readJsonlRecords(
   }
 }
 
+async function* readJsonlRecordsBestEffort(
+  filePath: string,
+): AsyncGenerator<Record<string, unknown>> {
+  try {
+    yield* readJsonlRecords(filePath);
+  } catch {
+    // Diagnostic readers return the records available before a stream failure.
+    // Durable cache scans use the strict reader so partial data is never marked fresh.
+  }
+}
+
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -1307,8 +1317,8 @@ async function scanTranscriptFile(params: {
         })
       ) {
         // Fill in missing estimates and override fabricated API-provided zeros
-        // for known-priced models such as DeepSeek V4. Providers that reconcile
-        // only the total keep their authoritative zero when components are nonzero.
+        // for known-priced models such as DeepSeek V4. Providers that mark
+        // the total as provider-billed keep their authoritative zero total.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       }
@@ -1414,6 +1424,7 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   /** @deprecated Use startMs/endMs. */
   days?: number;
   config?: OpenClawConfig;
@@ -1460,7 +1471,7 @@ export async function loadCostUsageSummary(params?: {
         if (!ts || ts < sinceTime || ts > untilTime) {
           return;
         }
-        const dayKey = formatDayKey(entry.timestamp ?? now);
+        const dayKey = formatDayKey(entry.timestamp ?? now, params?.dailyUtcOffsetMinutes);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
         applyUsageTotals(bucket, entry.usage);
         if (entry.costBreakdown?.total !== undefined) {
@@ -1480,7 +1491,7 @@ export async function loadCostUsageSummary(params?: {
     });
   }
 
-  fillMissingDays(dailyMap, sinceTime, untilTime);
+  fillMissingDays(dailyMap, sinceTime, untilTime, params?.dailyUtcOffsetMinutes);
 
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
@@ -1745,6 +1756,7 @@ export async function refreshCostUsageCache(params?: {
 export async function loadCostUsageSummaryFromCache(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config?: OpenClawConfig;
   agentId?: string;
   requestRefresh?: boolean;
@@ -1794,6 +1806,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     files,
     startMs: params.startMs,
     endMs: params.endMs,
+    dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
     refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
@@ -1806,6 +1819,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
@@ -1870,6 +1884,27 @@ export async function loadSessionCostSummaryFromCache(params: {
   const refreshRunning =
     usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
+  // Persisted summaries use Gateway-local day keys. Request-scoped UTC/browser
+  // offsets must rebuild daily projections from the cached transcript entries.
+  const requiresDailyRebucket = params.dailyUtcOffsetMinutes !== undefined;
+  if (
+    summary &&
+    params.startMs !== undefined &&
+    params.endMs !== undefined &&
+    (requiresDailyRebucket ||
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+  ) {
+    summary = entry
+      ? buildSessionCostSummaryFromCacheEntry({
+          entry,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+        })
+      : null;
+  }
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
       sessionId: params.sessionId,
@@ -1879,33 +1914,8 @@ export async function loadSessionCostSummaryFromCache(params: {
       agentId: params.agentId,
       startMs: params.startMs,
       endMs: params.endMs,
+      dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
     });
-  }
-  if (
-    summary &&
-    params.startMs !== undefined &&
-    params.endMs !== undefined &&
-    !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
-  ) {
-    summary = entry
-      ? buildSessionCostSummaryFromCacheEntry({
-          entry,
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          startMs: params.startMs,
-          endMs: params.endMs,
-        })
-      : params.refreshMode === "sync-when-empty"
-        ? await loadSessionCostSummary({
-            sessionId: params.sessionId,
-            sessionEntry: params.sessionEntry,
-            sessionFile: params.sessionFile,
-            config: params.config,
-            agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
-        : null;
   }
   return {
     summary,
@@ -1931,6 +1941,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
@@ -1949,6 +1960,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   ]);
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
+  const requiresDailyRebucket = params.dailyUtcOffsetMinutes !== undefined;
   const summaries = params.sessions.map((session, index) => {
     const stat = stats[index];
     const file = stat
@@ -1972,7 +1984,8 @@ export async function loadSessionCostSummariesFromCache(params: {
       summary &&
       params.startMs !== undefined &&
       params.endMs !== undefined &&
-      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+      (requiresDailyRebucket ||
+        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
@@ -1981,6 +1994,7 @@ export async function loadSessionCostSummariesFromCache(params: {
             sessionFile: session.sessionFile,
             startMs: params.startMs,
             endMs: params.endMs,
+            dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           })
         : null;
     }
@@ -2204,7 +2218,7 @@ export async function discoverAllSessions(params?: {
             if (message?.role === "user") {
               const content = message.content;
               if (typeof content === "string") {
-                firstUserMessage = content.slice(0, 100);
+                firstUserMessage = truncateUtf16Safe(content, 100);
               } else if (Array.isArray(content)) {
                 for (const block of content) {
                   if (
@@ -2214,7 +2228,7 @@ export async function discoverAllSessions(params?: {
                   ) {
                     const text = (block as Record<string, unknown>).text;
                     if (typeof text === "string") {
-                      firstUserMessage = text.slice(0, 100);
+                      firstUserMessage = truncateUtf16Safe(text, 100);
                     }
                     break;
                   }
@@ -2281,6 +2295,7 @@ export async function loadSessionCostSummary(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
 }): Promise<SessionCostSummary | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
@@ -2360,7 +2375,10 @@ export async function loadSessionCostSummary(params: {
             latencyMs <= MAX_LATENCY_MS
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
+            const dayKey = formatDayKey(
+              entry.timestamp ?? new Date(tsLocal),
+              params.dailyUtcOffsetMinutes,
+            );
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -2385,7 +2403,7 @@ export async function loadSessionCostSummary(params: {
       }
 
       if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+        const dayKey = formatDayKey(entry.timestamp, params.dailyUtcOffsetMinutes);
         activityDatesSet.add(dayKey);
         const daily = dailyMessageMap.get(dayKey) ?? {
           date: dayKey,
@@ -2427,7 +2445,7 @@ export async function loadSessionCostSummary(params: {
       }
 
       if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+        const dayKey = formatDayKey(entry.timestamp, params.dailyUtcOffsetMinutes);
         const entryTokenTotals = computeUsageTokenTotals(entry.usage);
         // Preserve the legacy dailyBreakdown token basis until daily metrics are
         // refactored separately. The precise quarter-hour bucket below uses
@@ -2721,7 +2739,7 @@ export async function loadSessionLogs(params: {
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecords(sessionFile)) {
+  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
@@ -2803,19 +2821,16 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content
+      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
-        content = content.slice(0, maxLen) + "…";
+        content = truncateUtf16Safe(content, maxLen) + "…";
       }
 
       // Get timestamp
-      let timestamp = 0;
-      if (typeof parsed.timestamp === "string") {
-        timestamp = new Date(parsed.timestamp).getTime();
-      } else if (typeof message.timestamp === "number") {
-        timestamp = message.timestamp;
-      }
+      // Keep detail logs on the usage-summary timestamp path, including nested
+      // fallback; direct Date parsing can leak NaN as null through Gateway JSON.
+      const timestamp = parseTimestamp(parsed)?.getTime() ?? 0;
 
       // Get usage for assistant messages
       let tokens: number | undefined;

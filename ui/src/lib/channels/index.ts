@@ -34,7 +34,7 @@ export type ChannelsState = {
   whatsappBusy: boolean;
 };
 
-export type LoadChannelsOptions = {
+type LoadChannelsOptions = {
   softTimeoutMs?: number;
 };
 
@@ -48,9 +48,7 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
-export function createInitialChannelsState(
-  snapshot: Partial<ChannelGatewaySnapshot> = {},
-): ChannelsState {
+function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
@@ -138,7 +136,7 @@ export async function loadChannels(
   await refresh;
 }
 
-export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
+async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   if (!state.client || !state.connected || state.whatsappBusy) {
     return;
   }

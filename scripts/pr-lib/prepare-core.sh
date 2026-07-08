@@ -47,6 +47,17 @@ verify_prep_branch_matches_prepared_head() {
   exit 1
 }
 
+resolve_prep_sync_evidence_sha() {
+  local local_pre_sync_head="$1"
+  local remote_pre_sync_head="$2"
+  local local_tree
+  local_tree=$(git rev-parse "${local_pre_sync_head}^{tree}") || return 1
+  local remote_tree
+  remote_tree=$(git rev-parse "${remote_pre_sync_head}^{tree}") || return 1
+  [ "$local_tree" = "$remote_tree" ] || return 1
+  printf '%s\n' "$remote_pre_sync_head"
+}
+
 prepare_init() {
   local pr="$1"
   enter_worktree "$pr" true
@@ -236,19 +247,36 @@ prepare_sync_head() {
 
   checkout_prep_branch "$pr"
 
+  local pre_sync_head
+  pre_sync_head=$(git rev-parse HEAD)
+
   # shellcheck disable=SC1091
   source .local/pr-meta.env
   # shellcheck disable=SC1091
   source .local/prep-context.env
 
   local rebased=false
+  local prep_sync_patch_id=""
   git fetch origin main
   if ! git merge-base --is-ancestor origin/main HEAD; then
+    local pre_sync_base
+    pre_sync_base=$(git merge-base "$pre_sync_head" origin/main)
+    local pre_sync_patch_id
+    pre_sync_patch_id=$(compute_pr_patch_id "$pre_sync_base" "$pre_sync_head")
+    if [ -z "$pre_sync_patch_id" ]; then
+      echo "Unable to fingerprint the pre-rebase PR patch."
+      exit 1
+    fi
     git rebase origin/main
     rebased=true
     if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+      prep_sync_patch_id=$(compute_pr_patch_id origin/main HEAD)
+      if [ "$prep_sync_patch_id" != "$pre_sync_patch_id" ]; then
+        echo "Rebase changed the PR patch; fresh hosted evidence is required."
+        exit 1
+      fi
       rm -f .local/gates.env .local/prep.env
-      echo "Rebased head requires fresh exact-head hosted CI/Testbox evidence after push."
+      echo "A patch-identical recent pre-rebase hosted run may be reusable after push."
     else
       prepare_gates "$pr"
       checkout_prep_branch "$pr"
@@ -297,18 +325,32 @@ EOF_PREP
   if [ "$rebased" = "true" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     local prep_sync_tree
     prep_sync_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
-    # Preserve the verified local lineage because GraphQL creates a remote
-    # commit with the same tree but the old branch parent.
+    local prep_sync_evidence_sha=""
+    if ! prep_sync_evidence_sha=$(
+      resolve_prep_sync_evidence_sha "$pre_sync_head" "$pushed_from_sha"
+    ); then
+      echo "Pre-sync local and hosted trees differ; fresh exact-head evidence is required."
+    fi
+    # Preserve local lineage separately from the hosted SHA: GraphQL creates
+    # a remote commit with the same tree but the old branch parent.
     printf '%s=%q\n' \
       PREP_SYNC_MAINLINE_BASE_SHA "$mainline_base_sha" \
       PREP_SYNC_TREE "$prep_sync_tree" \
+      PREP_SYNC_PATCH_ID "$prep_sync_patch_id" \
+      PREP_SYNC_EVIDENCE_SHA "$prep_sync_evidence_sha" \
       > .local/prep-sync.env
-    cat >> .local/prep.md <<EOF_PREP
-- Cleared stale prepare artifacts. Wait for hosted CI/Testbox on $prep_head_sha, then run prepare-run again.
+    if [ -n "$prep_sync_evidence_sha" ]; then
+      cat >> .local/prep.md <<EOF_PREP
+- Cleared stale prepare artifacts. Run prepare-run again; it may reuse green hosted evidence from $prep_sync_evidence_sha within the freshness window.
 EOF_PREP
+    else
+      cat >> .local/prep.md <<EOF_PREP
+- Cleared stale prepare artifacts. Fresh exact-head hosted evidence is required because the prior hosted tree did not match the local pre-rebase tree.
+EOF_PREP
+    fi
     echo "prepare-sync-head complete"
     echo "prep_head_sha=$prep_head_sha"
-    echo "Hosted CI/Testbox must pass for this exact head before prepare-run can continue."
+    echo "Run prepare-run again to verify the available hosted evidence."
     return
   fi
 

@@ -375,29 +375,69 @@ export function classifyUnitFastTestFileContent(source) {
   return reasons;
 }
 
-export function collectUnitFastTestCandidates(cwd = process.cwd()) {
+const unitFastCandidatesByKey = new Map();
+
+function collectUnitFastCandidates(cwd, scope) {
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${scope}`;
+  const cached = unitFastCandidatesByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const broad = scope === "broad";
   const discovered = collectRepoTestFiles(cwd).filter(
     (file) =>
-      matchesAnyGlob(file, unitFastCandidateGlobs) &&
+      matchesAnyGlob(file, broad ? broadUnitFastCandidateGlobs : unitFastCandidateGlobs) &&
       !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
   );
-  return [
+  const candidates = [
     ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
   ].toSorted((a, b) => a.localeCompare(b));
+  // Candidate discovery is immutable for the lifetime of a Vitest/audit process.
+  unitFastCandidatesByKey.set(cacheKey, candidates);
+  return candidates;
+}
+
+export function collectUnitFastTestCandidates(cwd = process.cwd()) {
+  return collectUnitFastCandidates(cwd, "default");
 }
 
 export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
-  const discovered = collectRepoTestFiles(cwd).filter(
-    (file) =>
-      matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-  );
-  return [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return collectUnitFastCandidates(cwd, "broad");
 }
 
 const unitFastAnalysisByKey = new Map();
+const unitFastFileAnalysisByKey = new Map();
+
+function analyzeUnitFastTestFile(cwd, file) {
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${file}`;
+  const cached = unitFastFileAnalysisByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let analysis;
+  try {
+    const source = fs.readFileSync(path.join(cwd, file), "utf8");
+    const reasons = classifyUnitFastTestFileContent(source);
+    const forced = forcedUnitFastTestFileSet.has(file);
+    analysis = {
+      file,
+      unitFast: forced || reasons.length === 0,
+      forced,
+      reasons,
+    };
+  } catch {
+    analysis = {
+      file,
+      unitFast: false,
+      reasons: ["missing-file"],
+    };
+  }
+
+  // Discovery is a process-start snapshot; default and broad audits overlap heavily.
+  unitFastFileAnalysisByKey.set(cacheKey, analysis);
+  return analysis;
+}
 
 export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {}) {
   const cacheKey = `${normalizeRepoPath(cwd)}\0${options.scope ?? "default"}`;
@@ -409,27 +449,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
     options.scope === "broad"
       ? collectBroadUnitFastTestCandidates(cwd)
       : collectUnitFastTestCandidates(cwd);
-  const analysis = candidates.map((file) => {
-    const absolutePath = path.join(cwd, file);
-    let source;
-    try {
-      source = fs.readFileSync(absolutePath, "utf8");
-    } catch {
-      return {
-        file,
-        unitFast: false,
-        reasons: ["missing-file"],
-      };
-    }
-    const reasons = classifyUnitFastTestFileContent(source);
-    const forced = forcedUnitFastTestFileSet.has(file);
-    return {
-      file,
-      unitFast: forced || reasons.length === 0,
-      forced,
-      reasons,
-    };
-  });
+  const analysis = candidates.map((file) => analyzeUnitFastTestFile(cwd, file));
   unitFastAnalysisByKey.set(cacheKey, analysis);
   return analysis;
 }
@@ -438,7 +458,6 @@ let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
 let cachedUnitFastTimerTestFiles = null;
 let cachedUnitFastTimerTestFileSet = null;
-const cachedSingleUnitFastTestFileResults = new Map();
 
 export function getUnitFastTestFiles() {
   if (cachedUnitFastTestFiles !== null) {
@@ -478,29 +497,10 @@ function getUnitFastTimerTestFileSet() {
 
 function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
   const normalized = normalizeRepoPath(file);
-  const cacheKey = `${normalizeRepoPath(cwd)}\0${normalized}`;
-  if (cachedSingleUnitFastTestFileResults.has(cacheKey)) {
-    return cachedSingleUnitFastTestFileResults.get(cacheKey);
-  }
-
   if (!isUnitFastCandidateFile(normalized)) {
-    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
     return false;
   }
-
-  let source;
-  try {
-    source = fs.readFileSync(path.join(cwd, normalized), "utf8");
-  } catch {
-    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
-    return false;
-  }
-
-  const result =
-    forcedUnitFastTestFileSet.has(normalized) ||
-    classifyUnitFastTestFileContent(source).length === 0;
-  cachedSingleUnitFastTestFileResults.set(cacheKey, result);
-  return result;
+  return analyzeUnitFastTestFile(cwd, normalized).unitFast;
 }
 
 export function isUnitFastTestFile(file) {

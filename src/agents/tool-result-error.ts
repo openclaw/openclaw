@@ -81,31 +81,42 @@ export function readToolResultDetails(result: unknown): Record<string, unknown> 
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const record = result as Record<string, unknown>;
-  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? (record.details as Record<string, unknown>)
-    : undefined;
+  try {
+    const details = readToolErrorField(result, "details");
+    return details && typeof details === "object" && !Array.isArray(details)
+      ? (details as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function readToolResultStatus(result: unknown): string | undefined {
-  return normalizeOptionalLowercaseString(readToolResultDetails(result)?.status);
+  const details = readToolResultDetails(result);
+  return normalizeOptionalLowercaseString(
+    details ? readToolErrorField(details, "status") : undefined,
+  );
 }
 
 export function isToolResultError(result: unknown): boolean {
   const details = readToolResultDetails(result);
   const normalized = readToolResultStatus(result);
-  const explicitlySuccessful = details?.ok === true || details?.success === true;
-  if (details?.ok === false || details?.success === false) {
+  const ok = details ? readToolErrorField(details, "ok") : undefined;
+  const success = details ? readToolErrorField(details, "success") : undefined;
+  const explicitlySuccessful = ok === true || success === true;
+  if (ok === false || success === false) {
     return true;
   }
   const hasFailureStatus = hasToolResultStatus(normalized, TOOL_FAILURE_RESULT_STATUSES);
   if (hasFailureStatus && !explicitlySuccessful) {
     return true;
   }
-  if (details?.timedOut === true || Boolean(details?.error)) {
+  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
+  const error = details ? readToolErrorField(details, "error") : undefined;
+  if (timedOut === true || Boolean(error)) {
     return true;
   }
-  const exitCode = details?.exitCode;
+  const exitCode = details ? readToolErrorField(details, "exitCode") : undefined;
   return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }
 
@@ -139,7 +150,8 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
     return "blocked";
   }
   const details = readToolResultDetails(result);
-  if (details?.timedOut === true || hasToolResultStatus(status, TOOL_TIMEOUT_RESULT_STATUSES)) {
+  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
+  if (timedOut === true || hasToolResultStatus(status, TOOL_TIMEOUT_RESULT_STATUSES)) {
     return "timed_out";
   }
   if (hasToolResultStatus(status, TOOL_CANCELLED_RESULT_STATUSES)) {

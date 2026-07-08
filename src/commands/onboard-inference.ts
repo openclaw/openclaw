@@ -190,8 +190,3 @@ export async function detectInferenceBackends(
   );
   return candidates;
 }
-
-/** Format a candidate for prompts/logs, e.g. "Codex — openai/gpt-5.5 (logged in)". */
-export function formatInferenceBackendCandidate(candidate: InferenceBackendCandidate): string {
-  return `${candidate.label} — ${candidate.modelRef} (${candidate.detail})`;
-}

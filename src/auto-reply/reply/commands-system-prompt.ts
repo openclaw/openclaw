@@ -30,7 +30,7 @@ import type { SkillEligibilityContext } from "../../skills/types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
-export type CommandsSystemPromptBundle = {
+type CommandsSystemPromptBundle = {
   systemPrompt: string;
   tools: AgentTool[];
   skillsPrompt: string;

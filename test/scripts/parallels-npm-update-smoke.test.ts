@@ -846,6 +846,11 @@ exit 7
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
+    const windowsScript = windowsUpdateScript({
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.5.3-beta.2",
+      updateTarget: "2026.5.3-beta.2",
+    });
     const macosScript = macosUpdateScript({
       auth: TEST_AUTH,
       expectedNeedle: "2026.5.3-beta.2",
@@ -856,7 +861,18 @@ exit 7
     expect(script).toContain("scrub_future_plugin_entries");
     expect(script).toContain("delete plugins.entries.feishu");
     expect(script).toContain("delete plugins.entries.whatsapp");
-    expect(script).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
+    expect(windowsScript).toContain(
+      'const futurePluginIds = new Set(["feishu", "whatsapp", "openai"])',
+    );
+    expect(windowsScript).toContain('replace(/^\\uFEFF/u, "")');
+    expect(windowsScript).toContain("if (allow.length !== plugins.allow.length)");
+    expect(windowsScript).toContain('JSON.stringify(config, null, 2) + "\\n"');
+    expect(windowsScript).not.toContain("ConvertTo-Json -Depth 100");
+    expect(windowsScript).toContain("& node.exe $nodeScriptPath $configPath");
+    expect(windowsScript).toContain(
+      "Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue",
+    );
+    expect(windowsScript).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
     expect(script).toContain("Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
     expect(macosScript).toContain('OPENCLAW_BIN="$(resolve_required_command openclaw)"');

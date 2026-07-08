@@ -15,6 +15,7 @@ export {
   setContinuationTracer,
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   type DiagnosticTraceContext,
   type Span as ContinuationSpan,
   type SpanAttributes as ContinuationSpanAttributes,

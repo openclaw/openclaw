@@ -988,6 +988,7 @@ function emitQuarantinedDynamicToolDiagnostics(
   for (const tool of tools) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
+      agentId: ctx?.agentId,
       runId: ctx?.runId,
       sessionId: ctx?.sessionId,
       sessionKey: ctx?.sessionKey,
@@ -1286,15 +1287,14 @@ function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse
   if (!disposition) {
     return response;
   }
-  if (disposition === "blocked") {
-    return withDiagnosticTerminalType(response, "blocked");
+  withDiagnosticTerminalType(response, disposition === "blocked" ? "blocked" : "error");
+  if (disposition !== "blocked") {
+    Object.defineProperty(response, "diagnosticTerminalReason", {
+      configurable: true,
+      enumerable: false,
+      value: disposition,
+    });
   }
-  withDiagnosticTerminalType(response, "error");
-  Object.defineProperty(response, "diagnosticTerminalReason", {
-    configurable: true,
-    enumerable: false,
-    value: disposition,
-  });
   return response;
 }
 

@@ -8,9 +8,9 @@ enum GatewayOnboardingReset {
         instanceId: String,
         gatewayStableID: String,
         disconnectGateway: Bool = true,
-        defaults: UserDefaults = .standard)
+        defaults: UserDefaults = .standard) async
     {
-        self.prepare(
+        await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: gatewayStableID,
@@ -22,26 +22,54 @@ enum GatewayOnboardingReset {
     static func reset(
         appModel: NodeAppModel,
         instanceId: String,
-        defaults: UserDefaults = .standard)
+        defaults: UserDefaults = .standard) async
     {
-        self.prepare(
+        await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: nil,
             disconnectGateway: true,
             defaults: defaults)
-        OnboardingStateStore.reset(defaults: defaults)
+        self.clearOnboardingState(defaults: defaults)
+    }
 
-        defaults.set(false, forKey: "gateway.onboardingComplete")
-        defaults.set(false, forKey: "gateway.hasConnectedOnce")
-        defaults.set(false, forKey: "gateway.manual.enabled")
-        defaults.set("", forKey: "gateway.manual.host")
-        defaults.set("", forKey: "gateway.setupCode")
-        defaults.set(defaults.integer(forKey: "onboarding.requestID") + 1, forKey: "onboarding.requestID")
+    /// Debug launch reset runs before cache actors exist, so file deletion can
+    /// finish synchronously before startup reads pairing defaults.
+    @MainActor
+    static func resetBeforeStartup(
+        appModel: NodeAppModel,
+        instanceId: String,
+        defaults: UserDefaults = .standard)
+    {
+        appModel.purgeChatTranscriptCacheBeforeStartup()
+        self.preparePairingState(
+            appModel: appModel,
+            instanceId: instanceId,
+            gatewayStableID: nil,
+            disconnectGateway: true,
+            defaults: defaults)
+        self.clearOnboardingState(defaults: defaults)
     }
 
     @MainActor
     private static func prepare(
+        appModel: NodeAppModel,
+        instanceId: String,
+        gatewayStableID: String?,
+        disconnectGateway: Bool,
+        defaults: UserDefaults) async
+    {
+        await appModel.purgeChatTranscriptCache(gatewayID: gatewayStableID)
+        self.preparePairingState(
+            appModel: appModel,
+            instanceId: instanceId,
+            gatewayStableID: gatewayStableID,
+            disconnectGateway: disconnectGateway,
+            defaults: defaults)
+    }
+
+    @MainActor
+    private static func preparePairingState(
         appModel: NodeAppModel,
         instanceId: String,
         gatewayStableID: String?,
@@ -54,7 +82,13 @@ enum GatewayOnboardingReset {
 
         let trimmedInstanceId = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
+            if let gatewayStableID {
+                GatewaySettingsStore.deleteGatewayCredentials(
+                    instanceId: trimmedInstanceId,
+                    stableID: gatewayStableID)
+            } else {
+                GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: trimmedInstanceId)
+            }
         }
 
         let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
@@ -83,11 +117,25 @@ enum GatewayOnboardingReset {
             DeviceAuthStore.clearToken(deviceId: deviceId, role: "operator")
             DeviceAuthStore.clearAll(profile: .shareExtension)
             GatewayTLSStore.clearAllFingerprints()
+            GatewaySettingsStore.clearGatewayCustomHeaders()
         }
 
-        GatewaySettingsStore.clearLastGatewayConnection(defaults: defaults)
+        if gatewayStableID == nil {
+            GatewaySettingsStore.clearGatewayRegistry(defaults: defaults)
+        }
         GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
         GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
         defaults.set(false, forKey: "gateway.autoconnect")
+    }
+
+    private static func clearOnboardingState(defaults: UserDefaults) {
+        OnboardingStateStore.reset(defaults: defaults)
+
+        defaults.set(false, forKey: "gateway.onboardingComplete")
+        defaults.set(false, forKey: "gateway.hasConnectedOnce")
+        defaults.set(false, forKey: "gateway.manual.enabled")
+        defaults.set("", forKey: "gateway.manual.host")
+        defaults.set("", forKey: "gateway.setupCode")
+        defaults.set(defaults.integer(forKey: "onboarding.requestID") + 1, forKey: "onboarding.requestID")
     }
 }

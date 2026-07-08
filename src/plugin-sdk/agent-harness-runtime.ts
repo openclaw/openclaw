@@ -119,6 +119,7 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {

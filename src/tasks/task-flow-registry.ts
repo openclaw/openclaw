@@ -208,7 +208,7 @@ function resolveFlowBlockedSummary(
   );
 }
 
-export function deriveTaskFlowStatusFromTask(
+function deriveTaskFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): TaskFlowStatus {
   if (task.status === "queued") {

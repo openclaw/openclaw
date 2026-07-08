@@ -24,6 +24,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 
     private let store: WatchInboxStore
     private let session: WCSession?
+    private let activationGate = WatchSessionActivationGate()
 
     init(store: WatchInboxStore) {
         self.store = store
@@ -38,26 +39,33 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     func activate() {
         guard let session else { return }
         session.delegate = self
-        session.activate()
+        self.beginActivation(session)
     }
 
-    private func ensureActivated() async {
-        guard let session else { return }
+    private func beginActivation(_ session: WCSession) {
+        if self.activationGate.beginActivation() {
+            session.activate()
+        }
+    }
+
+    private func activatedSession() async throws -> WCSession {
+        guard let session else {
+            throw WatchSessionActivationError.failed("session unavailable")
+        }
         if session.activationState == .activated {
-            return
+            self.activationGate.complete(activated: true, errorDescription: nil)
+            return session
         }
-        session.activate()
-        for _ in 0..<8 {
-            if session.activationState == .activated {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        self.beginActivation(session)
+        try await self.activationGate.waitUntilActivated()
+        guard session.activationState == .activated else {
+            throw WatchSessionActivationError.failed("session stayed inactive")
         }
+        return session
     }
 
     func requestExecApprovalSnapshot() async {
-        await self.ensureActivated()
-        guard let session else { return }
+        guard let session = try? await self.activatedSession() else { return }
         let request = WatchExecApprovalSnapshotRequestMessage(
             requestId: UUID().uuidString,
             sentAtMs: Self.nowMs())
@@ -74,13 +82,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func requestAppSnapshot() async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
         let request = WatchAppSnapshotRequestMessage(
             requestId: UUID().uuidString,
@@ -90,13 +96,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func sendReply(_ draft: WatchReplyDraft) async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
 
         var payload: [String: Any] = [
@@ -133,13 +137,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         gatewayStableID: String?,
         decision: WatchExecApprovalDecision) async -> WatchReplySendResult
     {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
 
         let payload = Self.encodeExecApprovalResolvePayload(
@@ -153,13 +155,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func sendAppCommand(_ message: WatchAppCommandMessage) async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
         return await self.sendPayload(Self.encodeAppCommandPayload(message), session: session)
     }
@@ -193,6 +193,14 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
                 replyHandler: { _ in continuation.resume(returning: ()) },
                 errorHandler: { error in continuation.resume(throwing: error) })
         }
+    }
+
+    private static func unavailableResult(_ error: any Error) -> WatchReplySendResult {
+        WatchReplySendResult(
+            deliveredImmediately: false,
+            queuedForDelivery: false,
+            transport: "none",
+            errorMessage: error.localizedDescription)
     }
 
     private static func nowMs() -> Int {
@@ -587,8 +595,11 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
     func session(
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
-        error _: (any Error)?)
+        error: (any Error)?)
     {
+        self.activationGate.complete(
+            activated: activationState == .activated,
+            errorDescription: error?.localizedDescription)
         if activationState == .activated, !session.receivedApplicationContext.isEmpty {
             self.consumeIncomingPayload(
                 session.receivedApplicationContext,

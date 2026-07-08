@@ -70,7 +70,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
@@ -1004,7 +1004,12 @@ type ExternalRunFailureReply = {
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
-function isNonDirectConversationContext(ctx: TemplateContext): boolean {
+type ExternalFailureConversationContext = Pick<
+  TemplateContext,
+  "ChatType" | "Provider" | "SessionKey" | "Surface"
+>;
+
+function isNonDirectConversationContext(ctx: ExternalFailureConversationContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   return chatType === "group" || chatType === "channel";
 }
@@ -1015,7 +1020,7 @@ function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean
 
 function resolveExternalRunFailureTextForConversation(params: {
   text: string;
-  sessionCtx: TemplateContext;
+  sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
 }): string {
@@ -1174,6 +1179,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -1245,6 +1255,23 @@ function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T 
   return marked;
 }
 
+export function buildTerminalAgentRunFailureReplyPayload(params: {
+  isHeartbeat?: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
 export function buildEmptyInteractiveReplyPayload(params: {
   isInteractive: boolean;
   isHeartbeat?: boolean;
@@ -1254,7 +1281,7 @@ export function buildEmptyInteractiveReplyPayload(params: {
   hasPendingContinuation: boolean;
   hasExplicitSilentReply: boolean;
   hasCommittedDelivery: boolean;
-  sessionCtx: TemplateContext;
+  sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
   if (
@@ -1951,6 +1978,7 @@ async function runAgentTurnWithFallbackInternal(
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
@@ -2052,12 +2080,12 @@ async function runAgentTurnWithFallbackInternal(
     }
   };
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -2407,6 +2435,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
@@ -2606,8 +2636,8 @@ async function runAgentTurnWithFallbackInternal(
                 sessionKey: params.sessionKey,
                 startedAt: cliLifecycleStartedAt,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -2851,8 +2881,8 @@ async function runAgentTurnWithFallbackInternal(
                 runId,
                 sessionKey: params.sessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -3659,6 +3689,9 @@ async function runAgentTurnWithFallbackInternal(
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
+      // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
+      // the targeted re-auth/failover copy is surfaced instead of the generic
+      // provider-auth message.
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
@@ -3895,7 +3928,7 @@ async function runAgentTurnWithFallbackInternal(
             ? params.opts.abortSignal
             : undefined;
       const abortLifecycleFields = {
-        ...resolveAgentRunAbortLifecycleFields(abortedSignal),
+        ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
         ...(isReplyOperationRestartAbort(params.replyOperation)
           ? {
               aborted: true as const,
@@ -4062,15 +4095,10 @@ async function runAgentTurnWithFallbackInternal(
     }
   }
   const terminalFailurePayload = terminalRunFailed
-    ? markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text: params.isHeartbeat
-            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          sessionCtx: params.sessionCtx,
-          isGenericRunnerFailure: true,
-          cfg: params.followupRun.run.config,
-        }),
+    ? buildTerminalAgentRunFailureReplyPayload({
+        isHeartbeat: params.isHeartbeat,
+        sessionCtx: params.sessionCtx,
+        cfg: params.followupRun.run.config,
       })
     : undefined;
 

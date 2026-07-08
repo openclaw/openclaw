@@ -7,6 +7,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -41,12 +42,13 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
+      providerUsageSummary: null,
       error: null,
     };
   }
 
   try {
-    const [result, costSummary] = await Promise.all([
+    const [result, costSummary, providerUsageSummary] = await Promise.all([
       requestSessionUsage(gateway.client, {
         ...query,
         agentId: query.agentId ?? undefined,
@@ -57,6 +59,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
         agentScope: "all",
         ...buildSessionUsageDateParams(query.timeZone),
       }),
+      gateway.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
     ]);
     return {
       client: gateway.client,
@@ -64,6 +67,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result,
       costSummary,
+      providerUsageSummary,
       error: null,
     };
   } catch (error) {
@@ -73,6 +77,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
+      providerUsageSummary: null,
       error: errorMessage(error),
     };
   }

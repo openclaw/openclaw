@@ -47,6 +47,11 @@ type GatewayPluginOptions = {
 const READY_STATE_OPEN = 1;
 const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES = 4096;
+// Discord can send multi-megabyte member chunks. Keep generous headroom while
+// bounding ws's 100 MiB default before an inbound payload reaches JSON parsing.
+export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
+  maxPayload: 16 * 1024 * 1024,
+}) satisfies ws.ClientOptions;
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 
@@ -171,7 +176,7 @@ export class GatewayPlugin extends Plugin {
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
-    return new ws.WebSocket(url);
+    return new ws.WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
   }
 
   private setupWebSocket(resume: boolean): void {

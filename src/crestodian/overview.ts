@@ -42,6 +42,7 @@ export type CrestodianOverview = {
   tools: {
     codex: LocalCommandProbe;
     claude: LocalCommandProbe;
+    gemini: LocalCommandProbe;
     apiKeys: {
       openai: boolean;
       anthropic: boolean;
@@ -169,10 +170,11 @@ export async function loadCrestodianOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [codex, claude, gateway, references] = await Promise.all([
+  const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
+    commandProbe("gemini"),
     (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
     resolveFastTestReferences(env) ??
       resolveReferences({
@@ -195,6 +197,7 @@ export async function loadCrestodianOverview(
     tools: {
       codex,
       claude,
+      gemini,
       apiKeys: {
         openai: Boolean(env.OPENAI_API_KEY?.trim()),
         anthropic: Boolean(env.ANTHROPIC_API_KEY?.trim()),
@@ -256,13 +259,14 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     ...agentLines,
     `Codex: ${formatCommandProbe(overview.tools.codex)}`,
     `Claude Code: ${formatCommandProbe(overview.tools.claude)}`,
+    `Gemini CLI: ${formatCommandProbe(overview.tools.gemini)}`,
     `API keys: OpenAI ${overview.tools.apiKeys.openai ? "found" : "not found"}, Anthropic ${
       overview.tools.apiKeys.anthropic ? "found" : "not found"
     }`,
-    `Planner: ${
+    `AI: ${
       overview.defaultModel
-        ? `model-assisted via ${overview.defaultModel} for fuzzy local commands`
-        : "deterministic only until a model is configured"
+        ? `conversation runs on ${overview.defaultModel}`
+        : "no model configured; local Claude Code/Codex/Gemini logins are reused when present"
     }`,
     `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
     overview.references.sourcePath
@@ -302,9 +306,9 @@ function formatStartupConfigStatus(overview: CrestodianOverview): string {
 
 function formatStartupUse(overview: CrestodianOverview): string {
   if (overview.defaultModel) {
-    return `Using: ${overview.defaultModel} for fuzzy local planning.`;
+    return `Using: ${overview.defaultModel} — just tell me what you want.`;
   }
-  return "Using: deterministic typed commands until we configure a model.";
+  return "Using: any local Claude Code/Codex/Gemini login I can find; typed commands as last resort.";
 }
 
 function formatStartupGatewayStatus(overview: CrestodianOverview): string {

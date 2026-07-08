@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isReasoningReplyPayload,
@@ -865,6 +866,7 @@ type NormalizedHeartbeatDelivery = {
   text: string;
   hasMedia: boolean;
   isInternalPlaceholderOnly: boolean;
+  silent?: boolean;
 };
 
 function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
@@ -879,6 +881,20 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
   return remaining.length === 0;
 }
 
+const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
+
+function truncateHeartbeatPreview(value: string | undefined): string | undefined {
+  return value ? truncateUtf16Safe(value, 200) : undefined;
+}
+
+function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; silent: boolean } {
+  const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
+  if (!match) {
+    return { text, silent: false };
+  }
+  return { text: text.slice(0, match.index).trimEnd(), silent: true };
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -891,20 +907,29 @@ function normalizeHeartbeatReply(
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(stripped.text);
+  const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
+  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
   if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
     return {
       shouldSkip: true,
       text: "",
       hasMedia,
       isInternalPlaceholderOnly,
+      ...(notifyFalse.silent ? { silent: true } : {}),
     };
   }
-  let finalText = isInternalPlaceholderOnly ? "" : stripped.text;
+  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia, isInternalPlaceholderOnly };
+  const shouldSkip = !hasMedia && finalText.trim().length === 0;
+  return {
+    shouldSkip,
+    text: finalText,
+    hasMedia,
+    isInternalPlaceholderOnly,
+    ...(notifyFalse.silent ? { silent: true } : {}),
+  };
 }
 
 function normalizeHeartbeatToolNotification(
@@ -1938,32 +1963,37 @@ export async function runHeartbeatOnce(opts: {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
-    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
-    if (heartbeatPlugin?.heartbeat?.checkReady) {
-      const readiness = await heartbeatPlugin.heartbeat.checkReady({
+    try {
+      const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
+      if (heartbeatPlugin?.heartbeat?.checkReady) {
+        const readiness = await heartbeatPlugin.heartbeat.checkReady({
+          cfg,
+          accountId: delivery.accountId,
+          deps: opts.deps,
+        });
+        if (!readiness.ok) {
+          return false;
+        }
+      }
+      const send = await sendDurableMessageBatch({
         cfg,
+        channel: delivery.channel,
+        to: delivery.to,
         accountId: delivery.accountId,
+        threadId: delivery.threadId,
+        payloads: [{ text: resolveHeartbeatOkText() }],
+        session: outboundSession,
+        identity: outboundIdentity,
         deps: opts.deps,
       });
-      if (!readiness.ok) {
-        return false;
+      if (send.status === "failed" || send.status === "partial_failed") {
+        throw send.error;
       }
+      return true;
+    } catch (err) {
+      log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(err)}`);
+      return false;
     }
-    const send = await sendDurableMessageBatch({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: delivery.accountId,
-      threadId: delivery.threadId,
-      payloads: [{ text: resolveHeartbeatOkText() }],
-      session: outboundSession,
-      identity: outboundIdentity,
-      deps: opts.deps,
-    });
-    if (send.status === "failed" || send.status === "partial_failed") {
-      throw send.error;
-    }
-    return true;
   };
 
   try {
@@ -2036,7 +2066,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
-        preview: heartbeatToolResponse.summary.slice(0, 200),
+        preview: truncateHeartbeatPreview(heartbeatToolResponse.summary),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
@@ -2113,8 +2143,12 @@ export async function runHeartbeatOnce(opts: {
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
-      normalized.text = execFallbackText;
-      normalized.shouldSkip = false;
+      const execNotifyFalse = stripTrailingHeartbeatNotifyFalse(execFallbackText);
+      normalized.text = execNotifyFalse.text;
+      normalized.shouldSkip = !normalized.hasMedia && !normalized.text.trim();
+      if (execNotifyFalse.silent) {
+        normalized.silent = true;
+      }
     }
     const replacement = !heartbeatToolResponse
       ? replaceGenericExternalRunFailureText(normalized.text)
@@ -2135,7 +2169,7 @@ export async function runHeartbeatOnce(opts: {
         updatedAt: previousUpdatedAt,
       });
 
-      const okSent = await maybeSendHeartbeatOk();
+      const okSent = normalized.silent ? false : await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
@@ -2186,7 +2220,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
-        preview: normalized.text.slice(0, 200),
+        preview: truncateHeartbeatPreview(normalized.text),
         durationMs: Date.now() - startedAt,
         hasMedia: false,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -2215,7 +2249,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
@@ -2235,7 +2269,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel,
         hasMedia: mediaUrls.length > 0,
@@ -2258,7 +2292,7 @@ export async function runHeartbeatOnce(opts: {
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
-          preview: previewText?.slice(0, 200),
+          preview: truncateHeartbeatPreview(previewText),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
           channel: delivery.channel,
@@ -2292,6 +2326,7 @@ export async function runHeartbeatOnce(opts: {
             ]),
       ],
       deps: opts.deps,
+      silent: normalized.silent,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
@@ -2345,11 +2380,12 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
-      preview: previewText?.slice(0, 200),
+      preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
+      ...(normalized.silent === true ? { silent: true } : {}),
       indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     });
     await updateTaskTimestamps();
@@ -2372,8 +2408,11 @@ export async function runHeartbeatOnce(opts: {
   }
 }
 
+export const testing = { truncateHeartbeatPreview };
+
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
@@ -2389,6 +2428,7 @@ export function startHeartbeatRunner(opts: {
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
+  const readCurrentConfig = opts.readCurrentConfig ?? (() => state.cfg);
   let initialized = false;
   let heartbeatTimeoutOverflowWarned = false;
 
@@ -2628,6 +2668,7 @@ export function startHeartbeatRunner(opts: {
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
+    const wakeConfig = readCurrentConfig();
     let ran = false;
     // Track retryable busy skips so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
@@ -2647,10 +2688,10 @@ export function startHeartbeatRunner(opts: {
         }
         try {
           const res = await runOnce({
-            cfg: state.cfg,
+            cfg: wakeConfig,
             agentId: targetAgent.agentId,
             heartbeat: resolveHeartbeatForWake({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: targetAgent.agentId,
               configuredHeartbeat: targetAgent.heartbeat,
               requestedHeartbeat,
@@ -2713,7 +2754,7 @@ export function startHeartbeatRunner(opts: {
         let res: HeartbeatRunResult;
         try {
           res = await runOnce({
-            cfg: state.cfg,
+            cfg: wakeConfig,
             agentId: agent.agentId,
             heartbeat: agent.heartbeat,
             source: params.source,
@@ -2747,13 +2788,13 @@ export function startHeartbeatRunner(opts: {
         let agentRan = res.status === "ran";
 
         const defaultSessionKey = resolveHeartbeatSession(
-          state.cfg,
+          wakeConfig,
           agent.agentId,
           agent.heartbeat,
         ).sessionKey;
         const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
           ? await listDueCommitmentSessionKeys({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: agent.agentId,
               nowMs: now,
               limit: 10,
@@ -2766,7 +2807,7 @@ export function startHeartbeatRunner(opts: {
           let commitmentRes: HeartbeatRunResult;
           try {
             commitmentRes = await runOnce({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: agent.agentId,
               heartbeat: agent.heartbeat,
               runScope: "commitment-only",

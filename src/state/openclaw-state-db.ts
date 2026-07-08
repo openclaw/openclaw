@@ -727,6 +727,10 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
   backfillCronRunLogEntryJson(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
+  ensureColumn(db, "cron_jobs", "declaration_key TEXT");
+  ensureColumn(db, "cron_jobs", "display_name TEXT");
+  ensureColumn(db, "cron_jobs", "owner_agent_id TEXT");
+  ensureColumn(db, "cron_jobs", "owner_session_key TEXT");
   ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
@@ -742,6 +746,8 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
   ensureColumn(db, "cron_jobs", "session_target TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "cron_jobs", "wake_mode TEXT NOT NULL DEFAULT 'auto'");
+  ensureColumn(db, "cron_jobs", "trigger_script TEXT");
+  ensureColumn(db, "cron_jobs", "trigger_once INTEGER");
   ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
   ensureColumn(db, "cron_jobs", "payload_message TEXT");
   ensureColumn(db, "cron_jobs", "payload_model TEXT");
@@ -857,6 +863,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
   runSqliteImmediateTransactionSync(db, () => {
     const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
     if (addedTaskRequesterAgentId) {

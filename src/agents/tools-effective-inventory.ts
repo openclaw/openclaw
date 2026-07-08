@@ -256,7 +256,8 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   };
 }
 
-function resolveEffectiveModelCompat(params: {
+/** Resolves compatibility metadata explicitly configured for a provider/model pair. */
+export function resolveConfiguredModelCompat(params: {
   cfg: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -307,7 +308,7 @@ export function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
-  const modelCompat = resolveEffectiveModelCompat({
+  const modelCompat = resolveConfiguredModelCompat({
     cfg: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,

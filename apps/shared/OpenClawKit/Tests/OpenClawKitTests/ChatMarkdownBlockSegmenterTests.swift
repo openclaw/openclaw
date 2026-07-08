@@ -115,6 +115,107 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    // MARK: - Display math
+
+    @Test func `same line dollar delimiters extract display math`() {
+        let blocks = self.segments("before\n$$ x^2 + y^2 $$\nafter")
+        #expect(blocks == [
+            .prose("before"),
+            .math(ChatMathBlock(latex: "x^2 + y^2", isComplete: true)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `own line dollar delimiters extract multiline display math`() {
+        let blocks = self.segments("""
+        $$
+        \\begin{aligned}
+        x &= 1 \\\\
+        y &= 2
+        \\end{aligned}
+        $$
+        """)
+        #expect(blocks == [
+            .math(ChatMathBlock(
+                latex: "\\begin{aligned}\nx &= 1 \\\\\ny &= 2\n\\end{aligned}",
+                isComplete: true)),
+        ])
+    }
+
+    @Test func `bracket delimiters extract display math`() {
+        let blocks = self.segments(#"\[\frac{a}{b}\]"#)
+        #expect(blocks == [
+            .math(ChatMathBlock(latex: #"\frac{a}{b}"#, isComplete: true)),
+        ])
+    }
+
+    @Test func `inline math delimiters stay prose`() {
+        let markdown = #"single $x$, parenthesized \(y\), and prose around $$z$$"#
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed math while streaming stays prose`() {
+        let markdown = "$$\nx + y"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed math in complete message renders as math`() {
+        let blocks = self.segments("$$\nx + y")
+        #expect(blocks == [
+            .math(ChatMathBlock(latex: "x + y", isComplete: true)),
+        ])
+    }
+
+    @Test func `math composes with prose and fenced code blocks`() {
+        let blocks = self.segments("before\n$$E = mc^2$$\n```swift\nlet value = 1\n```\nafter")
+        #expect(blocks == [
+            .prose("before"),
+            .math(ChatMathBlock(latex: "E = mc^2", isComplete: true)),
+            .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `oversized math stays raw prose`() {
+        let latex = String(repeating: "x", count: ChatMarkdownBlockSegmenter.maxMathBytes + 1)
+        let markdown = "$$\n\(latex)\n$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `oversized math keeps nested code fence in prose`() {
+        let latex = String(repeating: "x", count: ChatMarkdownBlockSegmenter.maxMathBytes + 1)
+        let markdown = "$$\n\(latex)\n```swift\nlet value = 1\n```\n$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `math delimiters inside code fences stay code`() {
+        let code = "$x$\n$$\nx + y\n$$\n\\[z\\]"
+        let blocks = self.segments("```tex\n\(code)\n```")
+        #expect(blocks == [
+            .code(ChatCodeBlock(language: "tex", code: code, isComplete: true)),
+        ])
+    }
+
+    @Test func `math delimiters inside multiline code span stay prose`() {
+        let markdown = "`literal\n$$ x + y $$\nend`"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `math delimiters inside list stay prose`() {
+        let markdown = "- item\n  $$x + y$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed streaming math leaves later opener lines as prose`() {
+        let markdown = "\\[\nfirst\n\\[\nsecond"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed streaming math keeps later code fence in prose`() {
+        let markdown = "before\n$$\nx + y\n```swift\nlet value = 1\n```"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
+    }
+
     // MARK: - Streaming fallbacks
 
     @Test func `unclosed fence while streaming stays plain`() {

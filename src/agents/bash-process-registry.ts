@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
@@ -270,7 +271,7 @@ export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return text.slice(text.length - max);
+  return sliceUtf16Safe(text, text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {
@@ -289,8 +290,9 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   const last = buffer.at(-1);
   if (last && last.length >= cap) {
     buffer.length = 0;
-    buffer.push(last.slice(last.length - cap));
-    return cap;
+    const kept = tail(last, cap);
+    buffer.push(kept);
+    return kept.length;
   }
   let dropCount = 0;
   while (dropCount < buffer.length) {
@@ -306,18 +308,16 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;
-    buffer[0] = buffer[0].slice(overflow);
-    pendingChars = cap;
+    const previousLength = buffer[0].length;
+    buffer[0] = sliceUtf16Safe(buffer[0], overflow);
+    pendingChars -= previousLength - buffer[0].length;
   }
   return pendingChars;
 }
 
 /** Keeps only the last `max` characters for bounded aggregate output storage. */
 function trimWithCap(text: string, max: number) {
-  if (text.length <= max) {
-    return text;
-  }
-  return text.slice(text.length - max);
+  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */
