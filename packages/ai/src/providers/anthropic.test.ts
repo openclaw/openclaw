@@ -151,6 +151,35 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
   });
 
+  it("keeps sentinel-backed Foundry Authorization headers on bearer routing", async () => {
+    const sentinel = "oc-sent-v1-0123456789abcdef01234567";
+    configureAiTransportHost({
+      buildModelFetch: () => async () => new Response(null, { status: 500 }),
+      resolveSecretSentinel: (value) => value.replaceAll(sentinel, "Bearer entra-access-token"),
+    });
+    const model = makeAnthropicModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      headers: { Authorization: sentinel },
+    });
+
+    streamAnthropic(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      {
+        apiKey: sentinel,
+      },
+    );
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+    };
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe(sentinel);
+  });
+
   it("keeps Microsoft Foundry API-key profiles on Anthropic API key auth", async () => {
     const model = makeAnthropicModel({
       provider: "microsoft-foundry",

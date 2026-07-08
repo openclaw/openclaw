@@ -49,7 +49,7 @@ import {
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
 
-export type ZaloMonitorOptions = {
+type ZaloMonitorOptions = {
   token: string;
   account: ResolvedZaloAccount;
   config: OpenClawConfig;

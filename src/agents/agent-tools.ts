@@ -22,6 +22,7 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
@@ -882,8 +883,15 @@ export function createOpenClawCodingTools(options?: {
           workspaceOnly: applyPatchWorkspaceOnly,
         });
   options?.recordToolPrepStage?.("shell-tools");
+  const ownerOnlyCoreToolDenylist =
+    options?.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
+  const ownerOnlyCoreToolPolicy =
+    ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
   const pluginToolAllowlist = capabilityProfile.policy.explicitToolAllowlist;
-  const pluginToolDenylist = capabilityProfile.policy.explicitToolDenylist;
+  const pluginToolDenylist = [
+    ...capabilityProfile.policy.explicitToolDenylist,
+    ...ownerOnlyCoreToolDenylist,
+  ];
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
@@ -1088,8 +1096,8 @@ export function createOpenClawCodingTools(options?: {
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
-  // Sender identity is carried for command/channel-action auth; tool visibility
-  // comes from configured tool policies, not per-turn sender ownership.
+  // Sender identity is primarily command/action auth, with one Gateway parity exception:
+  // explicit non-owner callers never receive owner-only control-plane core tools.
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsForModelProvider,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -1114,6 +1122,11 @@ export function createOpenClawCodingTools(options?: {
       {
         policy: sandboxToolPolicyWithToolSearchControls,
         label: "sandbox tools.allow",
+        unavailableCoreToolReason,
+      },
+      {
+        policy: ownerOnlyCoreToolPolicy,
+        label: "gateway sender owner-only tools",
         unavailableCoreToolReason,
       },
       {
