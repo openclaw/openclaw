@@ -153,6 +153,61 @@ describe("qa suite runtime agent process helpers", () => {
     }
   });
 
+  it("rejects and kills the qa cli when stdout emits an error", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: { PATH: "/usr/bin" },
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["qa", "suite"],
+    );
+    const assertion = expect(pending).rejects.toThrow("qa cli stdout error: pipe broke");
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("error", new Error("pipe broke"));
+    child.emit("close", 0);
+
+    await assertion;
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("rejects and kills the qa cli when stderr emits an error", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: { PATH: "/usr/bin" },
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+    const assertion = expect(pending).rejects.toThrow("qa cli stderr error: pipe broke");
+
+    await waitForSpawnCount(1);
+    child.stderr.emit("error", new Error("pipe broke"));
+    child.emit("close", 0);
+
+    await assertion;
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
   it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     try {

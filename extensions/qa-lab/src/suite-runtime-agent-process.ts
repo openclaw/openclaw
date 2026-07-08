@@ -271,19 +271,41 @@ async function runQaCli(
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
+    let settled = false;
+    const settleOnce = (settle: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      settle();
+    };
+    const rejectOutputStreamError = (streamName: "stdout" | "stderr", error: unknown) => {
+      signalQaCliProcessTree(child, "SIGKILL");
+      settleOnce(() => {
+        reject(new Error(`qa cli ${streamName} error: ${formatErrorMessage(error)}`));
+      });
+    };
     const timeout = setTimeout(() => {
       signalQaCliProcessTree(child, "SIGKILL");
-      reject(
-        new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
-      );
+      settleOnce(() => {
+        reject(
+          new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
+        );
+      });
     }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+    child.stdout.once("error", (error) => rejectOutputStreamError("stdout", error));
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
+    child.stderr.once("error", (error) => rejectOutputStreamError("stderr", error));
     child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+      settleOnce(() => reject(error));
     });
     child.once("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timeout);
       if (code === 0) {
         if (stdout.exceeded) {
