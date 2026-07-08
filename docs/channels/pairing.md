@@ -140,6 +140,7 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
+- `urls`: when available, the ordered LAN/Tailnet routes the mobile app can try
 - `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake (expires after 10 minutes; `expiresAtMs` is included in the payload)
 
 Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
@@ -163,6 +164,13 @@ or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
 for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
 emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
 fail closed before QR/setup-code issuance.
+
+For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
+HTTPS roots that proxy the active Gateway's loopback port and advertises them
+alongside the LAN route. Specific-interface `custom` and `tailnet` binds do not
+receive that fallback because a loopback Serve proxy cannot reach those
+listeners. The iOS app probes the advertised routes in order and saves the first
+reachable endpoint.
 
 ### Approve a node device
 

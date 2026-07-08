@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
-export type NativeI18nSurface = "android" | "apple";
+type NativeI18nSurface = "android" | "apple";
 
 export const NATIVE_I18N_LOCALES = [
   "zh-CN",
@@ -74,6 +74,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
@@ -85,10 +86,10 @@ const APPLE_MODIFIER_MULTILINE_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"""([\s\S]*?)"""/gu;
 const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
-const ANDROID_NAMED_LITERALS =
-  /\b(?:contentDescription|label|placeholder|title|message|supportingText|text)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_NAMED_LITERALS = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_TOAST_ARGS =
   /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_CHOOSER_ARGS = /\bIntent\.createChooser\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_DIALOG_CALLS =
   /\.(?:setTitle|setMessage|setPositiveButton|setNegativeButton|setNeutralButton)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_UI_STATE_TEXT =
@@ -103,6 +104,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "Card",
   "Checkbox",
   "Column",
+  "combinedClickable",
   "DropdownMenuItem",
   "Icon",
   "IconButton",
@@ -126,7 +128,7 @@ const CONDITIONAL_BRANCHES = [
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
 const UI_STRING_NAME_RE =
-  /(?:title|subtitle|body|message|label|text|description|detail|prompt|help)$/iu;
+  /(?:title|subtitle|body|message|label|text|description|detail|prompt|placeholder|help)$/iu;
 const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\{/gu;
 const APPLE_SWITCH_BRANCH =
   /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;
@@ -564,6 +566,27 @@ function normalizeSource(source: string): string {
   return source;
 }
 
+function identifierBefore(source: string, offset: number): string | null {
+  let cursor = offset - 1;
+  while (cursor >= 0 && source.charCodeAt(cursor) <= 32) {
+    cursor -= 1;
+  }
+  const end = cursor + 1;
+  while (cursor >= 0 && (isAsciiAlphaNumeric(source[cursor]) || source[cursor] === "_")) {
+    cursor -= 1;
+  }
+  const start = cursor + 1;
+  if (
+    start === end ||
+    (!isAsciiLowercaseLetter(source[start]) &&
+      !isAsciiUppercaseLetter(source[start]) &&
+      source[start] !== "_")
+  ) {
+    return null;
+  }
+  return source.slice(start, end);
+}
+
 function enclosingCallName(source: string, offset: number): string | null {
   let depth = 0;
   for (let index = offset - 1; index >= 0; index -= 1) {
@@ -578,7 +601,7 @@ function enclosingCallName(source: string, offset: number): string | null {
       depth -= 1;
       continue;
     }
-    return source.slice(0, index).match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/u)?.[1] ?? null;
+    return identifierBefore(source, index);
   }
   return null;
 }
@@ -636,6 +659,7 @@ function extractCandidates(
       : [
           [ANDROID_CALLS, "ui-call"],
           [ANDROID_TOAST_ARGS, "ui-toast"],
+          [ANDROID_CHOOSER_ARGS, "ui-chooser"],
           [ANDROID_DIALOG_CALLS, "ui-dialog"],
           [ANDROID_UI_STATE_TEXT, "ui-state-text"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
@@ -773,15 +797,22 @@ function extractCandidates(
       }
     }
     for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
+      const argumentName = match[1];
       const callName = enclosingCallName(source, match.index ?? 0);
-      if (!callName || !uiCallNames.has(callName) || !match[1]) {
+      if (
+        !argumentName ||
+        !UI_STRING_NAME_RE.test(argumentName) ||
+        !callName ||
+        !uiCallNames.has(callName) ||
+        !match[2]
+      ) {
         continue;
       }
       addCandidate(
         entries,
         surface,
         repoPath,
-        match[1],
+        match[2],
         "ui-named-argument",
         lineNumber(source, match.index ?? 0),
       );
@@ -837,36 +868,31 @@ function extractCandidates(
   return entries;
 }
 
-async function walkFiles(
-  root: string,
-  surface: NativeI18nSurface,
-  out: string[] = [],
-): Promise<string[]> {
+async function walkFiles(root: string, surface: NativeI18nSurface): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      if (GENERATED_PATH_RE.test(fullPath) || EXCLUDED_PATH_RE.test(fullPath)) {
-        continue;
+  const nested = await Promise.all(
+    entries.map(async (entry): Promise<string[]> => {
+      const fullPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        if (GENERATED_PATH_RE.test(fullPath) || EXCLUDED_PATH_RE.test(fullPath)) {
+          return [];
+        }
+        return await walkFiles(fullPath, surface);
       }
-      await walkFiles(fullPath, surface, out);
-      continue;
-    }
-    const extension = path.extname(entry.name);
-    const isAndroidValuesXml =
-      surface === "android" &&
-      extension === ".xml" &&
-      path.dirname(fullPath).endsWith(`${path.sep}res${path.sep}values`);
-    const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
-    if (
-      entry.isFile() &&
-      (allowed.has(extension) || isAndroidValuesXml) &&
-      !EXCLUDED_FILE_RE.test(entry.name)
-    ) {
-      out.push(fullPath);
-    }
-  }
-  return out;
+      const extension = path.extname(entry.name);
+      const isAndroidValuesXml =
+        surface === "android" &&
+        extension === ".xml" &&
+        path.dirname(fullPath).endsWith(`${path.sep}res${path.sep}values`);
+      const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
+      return entry.isFile() &&
+        (allowed.has(extension) || isAndroidValuesXml) &&
+        !EXCLUDED_FILE_RE.test(entry.name)
+        ? [fullPath]
+        : [];
+    }),
+  );
+  return nested.flat();
 }
 
 function withIds(entries: Candidate[]): NativeI18nEntry[] {
@@ -899,24 +925,55 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
     });
 }
 
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  limit: number,
+  run: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = Array<R>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) {
+          return;
+        }
+        results[index] = await run(values[index]);
+      }
+    }),
+  );
+  return results;
+}
+
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
-  const sources: Array<{
+  const roots = (["android", "apple"] as const).flatMap((surface) =>
+    SOURCE_ROOTS[surface].map((sourceRoot) => ({ sourceRoot, surface })),
+  );
+  const filesByRoot = await Promise.all(
+    roots.map(async ({ sourceRoot, surface }) => ({
+      files: (await walkFiles(sourceRoot, surface)).toSorted(),
+      surface,
+    })),
+  );
+  const sources = await mapWithConcurrency(
+    filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
+    NATIVE_SOURCE_READ_CONCURRENCY,
+    async ({ filePath, surface }) => ({
+      repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
+      source: await readFile(filePath, "utf8"),
+      surface,
+    }),
+  );
+  const typedSources: Array<{
     repoPath: string;
     source: string;
     surface: NativeI18nSurface;
-  }> = [];
-  for (const surface of ["android", "apple"] as const) {
-    for (const sourceRoot of SOURCE_ROOTS[surface]) {
-      const files = await walkFiles(sourceRoot, surface);
-      for (const filePath of files.toSorted()) {
-        const source = await readFile(filePath, "utf8");
-        const repoPath = path.relative(ROOT, filePath).split(path.sep).join("/");
-        sources.push({ repoPath, source, surface });
-      }
-    }
-  }
+  }> = sources;
   const uiCallNames = new Set([...APPLE_BUILTIN_UI_TYPES, ...ANDROID_BUILTIN_UI_CALLS]);
-  for (const { source, surface } of sources) {
+  for (const { source, surface } of typedSources) {
     if (surface === "android") {
       for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
         if (match[1]) {
@@ -933,7 +990,7 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
       }
     }
   }
-  const entries = sources.flatMap(({ repoPath, source, surface }) =>
+  const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
     extractCandidates(surface, repoPath, source, uiCallNames),
   );
   return withIds(entries);
@@ -943,7 +1000,7 @@ function render(entries: NativeI18nEntry[]): string {
   return `${JSON.stringify({ version: 1, entries }, null, 2)}\n`;
 }
 
-export async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
+async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
   const expected = render(await collectNativeI18nEntries());
   let current = "";
   try {

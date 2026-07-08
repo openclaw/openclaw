@@ -13,6 +13,7 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -75,6 +76,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
@@ -91,6 +93,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -116,6 +119,7 @@ internal enum class Tab(
   Sessions(key = "sessions", label = "Sessions", icon = Icons.Outlined.AccessTime),
   Settings(key = "settings", label = "Settings", icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = "Providers", icon = Icons.Outlined.Inventory2),
+  Files(key = "files", label = "Files", icon = Icons.Outlined.Folder),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
@@ -126,6 +130,8 @@ private val shellContentInsets: WindowInsets
 private val overviewMetricTileMinHeight = 96.dp
 private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
+private const val overviewRecentSessionLimit = 50
+private const val overviewRecentSessionVisibleLimit = 3
 
 internal fun shellBottomNavVisible(
   keyboardVisible: Boolean,
@@ -234,6 +240,11 @@ fun ShellScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
               onOpenChat = { nav.selectTab(Tab.Chat) },
+            )
+          Tab.Files ->
+            WorkspaceFilesScreen(
+              viewModel = viewModel,
+              onBack = nav::back,
             )
           Tab.Settings ->
             SettingsShellScreen(
@@ -373,14 +384,30 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
+  val overviewSessions = overviewRecentSessions(sessions)
+  val overviewSessionCount = overviewSessions.size
+  val candidateRecentRows =
+    remember(overviewSessions, channelsSummary) {
+      overviewRecentSessionRows(sessions = overviewSessions, channelsSummary = channelsSummary)
+    }
+  var recentRows by remember { mutableStateOf<List<RecentSessionListItem>>(emptyList()) }
+  val visibleRecentRows = recentRows.ifEmpty { candidateRecentRows }
   val metricCards =
     overviewMetricCards(
       isConnected = isConnected,
       hasAttention = attentionRows.isNotEmpty(),
       nodesDevicesSummary = nodesDevicesSummary,
       pendingApprovals = pendingApprovalsCount,
-      sessionCount = sessions.size,
+      sessionCount = overviewSessionCount,
     )
+
+  LaunchedEffect(candidateRecentRows) {
+    recentRows =
+      stableOverviewRecentRows(
+        previousRows = recentRows,
+        candidateRows = candidateRecentRows,
+      )
+  }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -419,7 +446,7 @@ private fun OverviewScreen(
             statusText = gatewaySummary(gatewayConnectionDisplay),
             isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
-            sessionCount = sessions.size,
+            sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
             onOpenVoice = { onSelectTab(Tab.Voice) },
@@ -448,7 +475,7 @@ private fun OverviewScreen(
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
 
-        if (sessions.isEmpty()) {
+        if (visibleRecentRows.isEmpty()) {
           item {
             ClawEmptyState(
               title = "No recent sessions",
@@ -459,16 +486,7 @@ private fun OverviewScreen(
         } else {
           item {
             RecentSessionList(
-              rows =
-                sessions.take(3).map { session ->
-                  val title = displaySessionTitle(session.displayName)
-                  RecentSessionListItem(
-                    key = session.key,
-                    title = title,
-                    source = sessionSourceLabel(session.key, channelsSummary),
-                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
-                  )
-                },
+              rows = visibleRecentRows,
               onOpen = { sessionKey ->
                 viewModel.switchChatSession(sessionKey)
                 onSelectTab(Tab.Chat)
@@ -853,6 +871,27 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
 
+internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int = overviewRecentSessions(sessions).size
+
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
+  sessions
+    .withIndex()
+    .groupBy { entry -> entry.value.key }
+    .values
+    .map { entries ->
+      entries
+        .sortedWith(
+          compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
+            .thenBy { entry -> entry.index },
+        ).first()
+    }.sortedWith(
+      compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
+        .thenBy { entry -> entry.value.key },
+    ).take(overviewRecentSessionLimit)
+    .map { entry -> entry.value }
+
+private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
+
 internal data class OverviewMetricCard(
   val title: String,
   val value: String,
@@ -980,6 +1019,14 @@ internal fun overviewMetricCardSpecs(
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
+    ),
+    OverviewMetricCardSpec(
+      title = "Files",
+      value = if (isConnected) "Browse" else "Offline",
+      subtitle = "Agent workspace files",
+      icon = Icons.Outlined.Folder,
+      status = if (isConnected) ClawStatus.Success else ClawStatus.Neutral,
+      tab = Tab.Files,
     ),
   )
 }
@@ -1221,12 +1268,46 @@ private fun ModuleListRow(
   }
 }
 
-private data class RecentSessionListItem(
+internal data class RecentSessionListItem(
   val key: String,
   val title: String,
   val source: String,
   val metadata: String,
 )
+
+internal fun overviewRecentSessionRows(
+  sessions: List<ChatSessionEntry>,
+  channelsSummary: GatewayChannelsSummary,
+): List<RecentSessionListItem> =
+  sessions
+    .take(overviewRecentSessionVisibleLimit)
+    .map { session ->
+      val title = displaySessionTitle(session.displayName)
+      RecentSessionListItem(
+        key = session.key,
+        title = title,
+        source = sessionSourceLabel(session.key, channelsSummary),
+        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "",
+      )
+    }
+
+internal fun stableOverviewRecentRows(
+  previousRows: List<RecentSessionListItem>,
+  candidateRows: List<RecentSessionListItem>,
+): List<RecentSessionListItem> {
+  val previousRowsByKey = previousRows.associateBy { row -> row.key }
+  return candidateRows.map { candidateRow ->
+    val previousRow = previousRowsByKey[candidateRow.key]
+    if (previousRow == null) candidateRow else candidateRow.withStableFieldsFrom(previousRow)
+  }
+}
+
+private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessionListItem): RecentSessionListItem =
+  copy(
+    title = title.ifBlank { previousRow.title },
+    source = source.ifBlank { previousRow.source },
+    metadata = metadata.ifBlank { previousRow.metadata },
+  )
 
 /** Recent sessions panel that preserves the session key behind display labels. */
 @Composable

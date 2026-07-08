@@ -85,6 +85,27 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
   message: "wrote stability bundle: /tmp/openclaw-stability.json",
   path: "/tmp/openclaw-stability.json",
 }));
+const bootLifecycle = vi.hoisted(() => ({
+  decisions: [] as Array<{
+    tripped: boolean;
+    uncleanBoots: number;
+    windowMs: number;
+    shouldWriteStabilityBundle: boolean;
+    recovered: boolean;
+  }>,
+  inspect: vi.fn(
+    (_env?: NodeJS.ProcessEnv, _nowMs?: number) =>
+      bootLifecycle.decisions.shift() ?? {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: false,
+      },
+  ),
+  record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
+  complete: vi.fn(),
+}));
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
 }));
@@ -257,6 +278,17 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
     writeDiagnosticStabilityBundleForFailureSync(reason, error),
 }));
 
+vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
+  GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
+  GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
+  inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.inspect(env, nowMs),
+  recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
+    bootLifecycle.record(env, nowMs, reason),
+  completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
+    bootLifecycle.complete(bootId, completion),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     info: (message: string) => {
@@ -322,6 +354,10 @@ describe("gateway run option collisions", () => {
     controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     writeDiagnosticStabilityBundleForFailureSync.mockClear();
+    bootLifecycle.decisions.length = 0;
+    bootLifecycle.inspect.mockClear();
+    bootLifecycle.record.mockClear();
+    bootLifecycle.complete.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -370,6 +406,7 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
+      channelAutostartSuppression?: { reason?: string };
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
     };
@@ -1353,6 +1390,54 @@ describe("gateway run option collisions", () => {
     const secondOptions = gatewayStartOptions(1);
     expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
     expect(secondOptions.startupStartedAt).toBe(2000);
+  });
+
+  it("re-inspects crash-loop breaker state for each boot iteration", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1000);
+        await start({ startupStartedAt: 1000 });
+        await beginBoot?.(2000);
+        await start({ startupStartedAt: 2000 });
+      },
+    );
+    bootLifecycle.decisions.push(
+      {
+        tripped: true,
+        uncleanBoots: 3,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: true,
+        recovered: false,
+      },
+      {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+    );
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
+    expect(bootLifecycle.inspect.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
+    expect(bootLifecycle.record.mock.calls.map((call) => call[2])).toEqual([
+      "gateway.crash_loop_breaker",
+      "gateway.crash_loop_recovered",
+    ]);
+    expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledTimes(1);
+    expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
+      reason: "crash-loop-breaker",
+    });
+    expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
   it("logs when first startup will build missing Control UI assets", async () => {

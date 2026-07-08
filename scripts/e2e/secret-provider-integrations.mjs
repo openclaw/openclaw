@@ -358,6 +358,9 @@ async function cleanupEnv(root, options = {}) {
 
 function runCommand(command, args, options = {}) {
   const timeoutMs = clampSecretProofTimerTimeoutMs(options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+  const timeoutKillGraceMs = clampSecretProofTimerTimeoutMs(
+    options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
+  );
   return new Promise((resolve, reject) => {
     const usesProcessGroup = options.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
@@ -376,11 +379,8 @@ function runCommand(command, args, options = {}) {
     let killTimer;
     let forceKillAt;
     const armForceKill = () => {
-      forceKillAt ??= Date.now() + COMMAND_TIMEOUT_KILL_GRACE_MS;
-      killTimer ??= setTimeout(
-        () => terminateProcessTree(child, "SIGKILL"),
-        COMMAND_TIMEOUT_KILL_GRACE_MS,
-      );
+      forceKillAt ??= Date.now() + timeoutKillGraceMs;
+      killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), timeoutKillGraceMs);
       killTimer.unref();
     };
     const abort = () => {
@@ -418,7 +418,7 @@ function runCommand(command, args, options = {}) {
     const finishTerminatedTree = async () => {
       await finishTimedOutCommandProcessTree(child, {
         forceKillAt,
-        timeoutKillGraceMs: COMMAND_TIMEOUT_KILL_GRACE_MS,
+        timeoutKillGraceMs,
       });
       if (killTimer) {
         clearTimeout(killTimer);

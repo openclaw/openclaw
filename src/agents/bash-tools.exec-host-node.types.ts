@@ -38,6 +38,8 @@ export type ExecuteNodeHostCommandParams = {
   defaultTimeoutSec: number;
   approvalRunningNoticeMs: number;
   warnings: string[];
+  /** Warnings that apply only when the command runs inline, never while approval is pending. */
+  foregroundWarnings?: string[];
   notifySessionKey?: string;
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;

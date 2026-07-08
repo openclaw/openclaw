@@ -752,12 +752,12 @@ Replace model IDs with exact names from `ollama list` or
 
     Use `compat.supportsTools: false` only when the model or server reliably
     fails on tool schemas — it trades agent capability for stability.
-    `localModelLean` removes the browser, cron, and message tools from the
-    direct agent surface (message stays if the run needs direct message
-    delivery semantics) and puts larger catalogs behind Tool Search, but does
-    not change Ollama's runtime context or thinking mode. Pair it with
-    `params.num_ctx` and `params.thinking: false` for small Qwen-style
-    thinking models that loop or spend their budget on hidden reasoning.
+    `localModelLean` removes heavyweight browser, cron, message, media-generation,
+    voice, and PDF tools from the direct agent surface unless explicitly required,
+    and puts larger catalogs behind Tool Search. It does not change Ollama's
+    runtime context or thinking mode. Pair it with `params.num_ctx` and
+    `params.thinking: false` for small Qwen-style thinking models that loop or
+    spend their budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>

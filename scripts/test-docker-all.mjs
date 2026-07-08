@@ -54,7 +54,7 @@ const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
-export function dockerAllUsage() {
+function dockerAllUsage() {
   return [
     "Usage: node scripts/test-docker-all.mjs [--plan-json]",
     "",
@@ -438,7 +438,7 @@ async function writeTimingStore(timingStore, results) {
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
 
-async function writeRunSummary(logDir, summary) {
+export async function writeRunSummary(logDir, summary) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
@@ -594,7 +594,7 @@ export function runShellCommand({
       env,
       stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
     let killTimer;
@@ -722,7 +722,7 @@ export function runShellCaptureCommand({
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -873,6 +873,25 @@ async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
     targetable: false,
     timedOut: result.timedOut,
   };
+}
+
+export async function runCleanupSmokePhase(baseEnv, logDir, phases) {
+  const command = "pnpm test:docker:cleanup";
+  const startedAtMs = Date.now();
+  let failure;
+  try {
+    await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+      failure = await runCleanupSmoke(baseEnv, logDir, command, startedAtMs);
+      if (failure) {
+        throw new Error(
+          `Run cleanup smoke after parallel lanes failed with status ${failure.status}`,
+        );
+      }
+    });
+  } catch (error) {
+    failure ??= await recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs);
+  }
+  return failure;
 }
 
 async function runForegroundGroup(entries, env) {
@@ -1295,7 +1314,7 @@ async function printFailureSummary(failures, tailLines) {
   }
 }
 
-const activeChildren = new Set();
+const activeChildren = new Map();
 let activeChildrenShutdownPromise;
 
 function shellCommandSkippedForShutdown() {
@@ -1373,7 +1392,7 @@ function terminateChild(child, signal) {
 }
 
 function terminateActiveChildren(signal) {
-  for (const child of activeChildren) {
+  for (const child of activeChildren.keys()) {
     terminateChild(child, signal);
   }
 }
@@ -1383,13 +1402,13 @@ async function shutdownActiveChildren(signal, exitCode) {
     terminateActiveChildren("SIGKILL");
     return activeChildrenShutdownPromise;
   }
-  const children = [...activeChildren];
+  const children = [...activeChildren.entries()];
   terminateActiveChildren(signal);
   activeChildrenShutdownPromise = Promise.all(
-    children.map((child) =>
+    children.map(([child, timeoutKillGraceMs]) =>
       finishTimedOutShellProcessTree(child, {
-        killAt: Date.now() + SHELL_TIMEOUT_KILL_GRACE_MS,
-        timeoutKillGraceMs: SHELL_TIMEOUT_KILL_GRACE_MS,
+        killAt: Date.now() + timeoutKillGraceMs,
+        timeoutKillGraceMs,
       }),
     ),
   ).finally(() => {
@@ -1714,32 +1733,7 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
-    const cleanupStartedAtMs = Date.now();
-    let cleanupFailure;
-    try {
-      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
-        cleanupFailure = await runCleanupSmoke(
-          baseEnv,
-          logDir,
-          cleanupSmokeCommand,
-          cleanupStartedAtMs,
-        );
-        if (cleanupFailure) {
-          throw new Error(
-            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
-          );
-        }
-      });
-    } catch (error) {
-      cleanupFailure ??= await recordCleanupSmokeFailure(
-        error,
-        baseEnv,
-        logDir,
-        cleanupSmokeCommand,
-        cleanupStartedAtMs,
-      );
-    }
+    const cleanupFailure = await runCleanupSmokePhase(baseEnv, logDir, phases);
     if (cleanupFailure) {
       failures.push(cleanupFailure);
     }

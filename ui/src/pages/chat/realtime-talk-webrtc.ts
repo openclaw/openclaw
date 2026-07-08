@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -72,10 +73,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.audio.srcObject = event.streams[0];
       }
     });
-    const media = await this.awaitSetupStep(
-      peer,
-      navigator.mediaDevices.getUserMedia({ audio: true }),
-    );
+    const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));
     if (media === cancelledSetup) {
       return;
     }

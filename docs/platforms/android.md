@@ -3,23 +3,142 @@ summary: "Android app (node): connection runbook + Connect/Chat/Voice/Canvas com
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
+  - Mirroring or controlling an Android device from a remote Mac
   - Verifying chat history parity across clients
 title: "Android app"
 ---
 
 <Note>
-The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN). It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and as a signed standalone APK on supported [GitHub Releases](https://github.com/openclaw/openclaw/releases). It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) for the app, [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
+- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a supported [GitHub Release](https://github.com/openclaw/openclaw/releases), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
+
+## Install outside Google Play
+
+Regular final and correction GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance.
+
+Choose a [release](https://github.com/openclaw/openclaw/releases) that lists both assets, then download and verify that exact tag before sideloading:
+
+```bash
+release_tag=vYYYY.M.PATCH
+gh release download "$release_tag" \
+  --repo openclaw/openclaw \
+  --pattern OpenClaw-Android.apk \
+  --pattern OpenClaw-Android-SHA256SUMS.txt
+sha256sum --check OpenClaw-Android-SHA256SUMS.txt
+gh attestation verify OpenClaw-Android.apk \
+  --repo openclaw/openclaw \
+  --signer-workflow openclaw/openclaw/.github/workflows/android-release.yml \
+  --source-ref "refs/tags/${release_tag}" \
+  --deny-self-hosted-runners
+```
+
+<Warning>
+Google Play and standalone APK installs use different update channels and may have different signing identities. Android may require uninstalling the existing app before switching channels, which removes its local app data. Stay on one channel for normal updates.
+</Warning>
+
+## Mirror and control Android from a remote Mac
+
+[scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
+forwards keyboard and pointer input through Android Debug Bridge (ADB). This is an operator-side
+workflow, separate from the OpenClaw node connection. It is useful when the Android device and the
+Mac are in different locations but share a private Tailscale network.
+
+### Before you begin
+
+- Install Tailscale on the Android device and the Mac, and connect both to the same tailnet.
+- On Android, enable **Developer options** and **USB debugging**. Android 16 places **Wireless
+  debugging** under **Settings > System > Developer options**. See [Android developer
+  options](https://developer.android.com/studio/debug/dev-options).
+- Install scrcpy and ADB on the Mac:
+
+  ```bash
+  brew install scrcpy
+  brew install --cask android-platform-tools
+  ```
+
+- Keep the Android device available for the first connection. Android must approve each Mac's ADB
+  key before that Mac can control the device.
+
+### Enable ADB over TCP
+
+For the initial setup, connect the Android device by USB to a trusted computer and approve its
+debugging prompt. Then run:
+
+```bash
+adb devices
+adb tcpip 5555
+```
+
+You can now disconnect USB. If port 5555 stops listening after a device reboot or debugging reset,
+repeat this local setup step. Android 11 and later can also establish the initial trust with
+**Wireless debugging > Pair device with pairing code** and `adb pair`.
+
+### Allow only the controller Mac
+
+Tailnets with restrictive grants must explicitly allow the controller Mac to reach TCP port 5555
+on the Android device. Add a narrow rule to the tailnet policy, replacing the example addresses
+with the two devices' stable Tailscale IPs:
+
+```json5
+{
+  grants: [
+    {
+      src: ["<remote-mac-tailnet-ip>"],
+      dst: ["<android-tailnet-ip>"],
+      ip: ["tcp:5555"],
+    },
+  ],
+}
+```
+
+See [Tailscale grants](https://tailscale.com/docs/reference/syntax/grants) for host aliases and other
+selectors. Do not grant this port to the public internet or expose it with Funnel: an authorized ADB
+client has broad control of the device.
+
+### Connect and start mirroring
+
+On the remote Mac:
+
+```bash
+adb connect <android-tailnet-ip>:5555
+adb devices
+scrcpy --serial <android-tailnet-ip>:5555
+```
+
+The first `adb connect` from this Mac shows an authorization dialog on Android. Unlock the device,
+confirm the key fingerprint, and select **Always allow from this computer** only when the Mac is
+trusted. A successful `adb devices` entry ends in `device`; `unauthorized` means the on-device prompt
+has not been approved.
+
+Once the scrcpy window opens, use it directly or target it with a macOS screen-automation tool such
+as [Peekaboo](https://peekaboo.sh/). scrcpy carries the display and input; Tailscale provides only the
+private network path.
+
+### Troubleshooting
+
+- `Connection timed out`: verify the tailnet grant for TCP 5555. A successful `tailscale ping` proves
+  peer reachability, not that policy permits this TCP port. Test with
+  `nc -vz <android-tailnet-ip> 5555` from the Mac.
+- `unauthorized`: unlock Android and approve the remote Mac's ADB key, or remove the stale workstation
+  under **Wireless debugging > Paired devices** and pair it again.
+- `Connection refused`: reconnect locally and run `adb tcpip 5555` again.
+- More than one device listed: keep the explicit `--serial <android-tailnet-ip>:5555` argument.
+
+When finished, close scrcpy and disconnect ADB:
+
+```bash
+adb disconnect <android-tailnet-ip>:5555
+```
 
 ## Connection runbook
 
@@ -97,7 +216,16 @@ In the Android app:
 - Use **Setup Code** or **Manual** mode.
 - If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
-After the first successful pairing, Android auto-reconnects on launch: the manual endpoint (if enabled), otherwise the last discovered gateway (best-effort).
+After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+### Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateways** lists paired gateways with the active one marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway.
+- The **Connect** tab shows a quick switcher when more than one gateway is paired.
+- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per gateway. Switching never mixes state between gateways, and messages queued while offline are delivered only to the gateway they were written for.
+- **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
 ### Presence alive beacons
 
@@ -147,6 +275,7 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
+- Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
 ### 7. Canvas + camera
 
@@ -194,6 +323,10 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
 
+### 9. Workspace files (read-only)
+
+The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+
 ## Assistant entrypoints
 
 Android supports launching OpenClaw from the system assistant trigger (Google Assistant). Holding the home button (or another `ACTION_ASSIST` trigger) opens the app; saying "Hey Google, ask OpenClaw `<prompt>`" matches the app's declared App Actions query pattern and hands the prompt into the chat composer without auto-sending it.
@@ -219,6 +352,8 @@ Android can forward device notifications to the gateway as `node.event` items. T
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notifications are always excluded. Their messages are already owned by native OpenClaw channel sessions; forwarding the Android notification as a separate node event could route a reply through the wrong conversation.
 
 ## Related
 

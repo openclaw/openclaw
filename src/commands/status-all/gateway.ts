@@ -2,6 +2,7 @@
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
 
@@ -27,7 +28,7 @@ function shorten(message: string, maxLen: number): string {
   if (cleaned.length <= maxLen) {
     return cleaned;
   }
-  return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
+  return `${truncateUtf16Safe(cleaned, Math.max(0, maxLen - 1))}…`;
 }
 
 function normalizeGwsLine(line: string): string {

@@ -3,8 +3,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
-import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
+import { rotateOversizedCodexAppServerStartupBinding as rotateStartupBindingImpl } from "./startup-binding.js";
+
+function rotateOversizedCodexAppServerStartupBinding(
+  params: Omit<Parameters<typeof rotateStartupBindingImpl>[0], "bindingStore" | "identity">,
+) {
+  return rotateStartupBindingImpl({
+    ...params,
+    bindingStore: testCodexAppServerBindingStore,
+    identity: { kind: "session", agentId: "main", sessionId: params.sessionFile },
+  });
+}
 
 describe("Codex app-server startup binding", () => {
   let tempDir: string;

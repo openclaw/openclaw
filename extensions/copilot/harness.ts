@@ -35,7 +35,7 @@ export type { CopilotClientPool, CopilotClientPoolOptions };
 
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
-export interface CreateCopilotAgentHarnessOptions {
+interface CreateCopilotAgentHarnessOptions {
   id?: string;
   label?: string;
   pluginConfig?: unknown;

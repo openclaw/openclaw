@@ -1,5 +1,8 @@
 import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
+
+const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 type ClawRouterBudget = {
   configured?: unknown;
@@ -62,6 +65,19 @@ function buildSummary(payload: ClawRouterUsagePayload): string | undefined {
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
+async function readClawRouterUsagePayload(
+  response: Response,
+  timeoutMs: number,
+): Promise<ClawRouterUsagePayload> {
+  const buffer = await readResponseWithLimit(response, CLAWROUTER_USAGE_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ maxBytes }) => new Error(`ClawRouter usage response exceeds ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`ClawRouter usage response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  return JSON.parse(new TextDecoder().decode(buffer)) as ClawRouterUsagePayload;
+}
+
 export async function fetchClawRouterUsage(params: {
   token: string;
   baseUrl?: string;
@@ -78,22 +94,40 @@ export async function fetchClawRouterUsage(params: {
   if (!response.ok) {
     throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
   }
-  const payload = (await response.json()) as ClawRouterUsagePayload;
+  const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
   const budget = payload.budget;
   const limitMicros = nonNegativeNumber(budget?.limitMicros);
   const spentMicros = nonNegativeNumber(budget?.spentMicros);
+  const costMicros = nonNegativeNumber(payload.usage?.summary?.actualCostMicros);
+  const resetAt = resolveMonthlyResetAt(budget?.windowKey);
   const windows = [];
   if (budget?.configured === true && limitMicros !== undefined && spentMicros !== undefined) {
     windows.push({
       label: "Monthly budget",
       usedPercent: limitMicros === 0 ? 100 : Math.min(100, (spentMicros / limitMicros) * 100),
-      resetAt: resolveMonthlyResetAt(budget?.windowKey),
+      resetAt,
     });
   }
+  const billing: ProviderUsageSnapshot["billing"] =
+    budget?.configured === true && limitMicros !== undefined && spentMicros !== undefined
+      ? [
+          {
+            type: "budget",
+            used: spentMicros / 1_000_000,
+            limit: limitMicros / 1_000_000,
+            unit: "USD",
+            period: "month",
+            resetAt,
+          },
+        ]
+      : costMicros !== undefined
+        ? [{ type: "spend", amount: costMicros / 1_000_000, unit: "USD" }]
+        : undefined;
   return {
     provider: "clawrouter" as ProviderUsageSnapshot["provider"],
     displayName: "ClawRouter",
     windows,
+    ...(billing ? { billing } : {}),
     summary: buildSummary(payload),
     plan: budget?.configured === true ? "Managed monthly budget" : "Unmetered proxy key",
   };

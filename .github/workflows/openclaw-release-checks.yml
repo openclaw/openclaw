@@ -538,7 +538,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Resolve release package artifact
         id: package

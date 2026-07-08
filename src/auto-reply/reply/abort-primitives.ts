@@ -7,7 +7,6 @@ const ABORT_TRIGGERS = new Set([
   "stop",
   "esc",
   "abort",
-  "wait",
   "exit",
   "interrupt",
   "detente",

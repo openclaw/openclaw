@@ -117,9 +117,13 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     func sendNotification(
         id: String,
-        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) async throws -> WatchNotificationSendResult
     {
-        let payload = WatchMessagingPayloadCodec.encodeNotificationPayload(id: id, params: params)
+        let payload = WatchMessagingPayloadCodec.encodeNotificationPayload(
+            id: id,
+            params: params,
+            gatewayStableID: gatewayStableID)
         return try await self.transport.sendPayload(payload)
     }
 
@@ -156,6 +160,13 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
     {
         try await self.transport.sendSnapshotPayload(
             WatchMessagingPayloadCodec.encodeAppSnapshotPayload(message))
+    }
+
+    func sendChatCompletion(
+        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
+    {
+        try await self.transport.sendPayload(
+            WatchMessagingPayloadCodec.encodeChatCompletionPayload(message))
     }
 
     private func emitStatusIfChanged(_ snapshot: WatchMessagingStatus) {

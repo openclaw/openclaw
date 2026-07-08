@@ -554,8 +554,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     const repoDir = createTempPluginRepo();
     let trustedPublisherRequests = 0;
     let rateLimitedBodyCanceled = false;
-    let firstTrustedPublisherRequestAt: number | undefined;
-    let retryTrustedPublisherRequestAt: number | undefined;
+    const retryDelays: number[] = [];
     const fetchImpl: typeof fetch = async (input) => {
       const requestUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -566,7 +565,6 @@ describe("collectPluginClawHubReleasePlan", () => {
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
         trustedPublisherRequests += 1;
         if (trustedPublisherRequests === 1) {
-          firstTrustedPublisherRequestAt = Date.now();
           return new Response(
             new ReadableStream({
               cancel() {
@@ -576,7 +574,6 @@ describe("collectPluginClawHubReleasePlan", () => {
             { status: 429 },
           );
         }
-        retryTrustedPublisherRequestAt = Date.now();
         return new Response(
           JSON.stringify({
             trustedPublisher: {
@@ -598,13 +595,14 @@ describe("collectPluginClawHubReleasePlan", () => {
       selection: ["@openclaw/demo-plugin"],
       fetchImpl,
       registryBaseUrl: "https://clawhub.ai",
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
     });
 
     expect(trustedPublisherRequests).toBe(2);
     expect(rateLimitedBodyCanceled).toBe(true);
-    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
-      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
-    );
+    expect(retryDelays).toEqual([1_000]);
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
   });
 
@@ -613,8 +611,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(retryAfter) - 1_000);
     let trustedPublisherRequests = 0;
-    let firstTrustedPublisherRequestAt: number | undefined;
-    let retryTrustedPublisherRequestAt: number | undefined;
+    const retryDelays: number[] = [];
     const fetchImpl: typeof fetch = async (input) => {
       const requestUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -625,10 +622,8 @@ describe("collectPluginClawHubReleasePlan", () => {
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
         trustedPublisherRequests += 1;
         if (trustedPublisherRequests === 1) {
-          firstTrustedPublisherRequestAt = performance.now();
           return new Response("", { status: 429, headers: { "retry-after": retryAfter } });
         }
-        retryTrustedPublisherRequestAt = performance.now();
         return new Response(
           JSON.stringify({
             trustedPublisher: {
@@ -651,22 +646,22 @@ describe("collectPluginClawHubReleasePlan", () => {
         selection: ["@openclaw/demo-plugin"],
         fetchImpl,
         registryBaseUrl: "https://clawhub.ai",
+        sleep: async (ms) => {
+          retryDelays.push(ms);
+        },
       });
     } finally {
       nowSpy.mockRestore();
     }
 
     expect(trustedPublisherRequests).toBe(2);
-    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
-      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
-    );
+    expect(retryDelays).toEqual([1_000]);
   });
 
   it("falls back to the bounded retry schedule for an excessive Retry-After header", async () => {
     const repoDir = createTempPluginRepo();
     let trustedPublisherRequests = 0;
-    let firstTrustedPublisherRequestAt: number | undefined;
-    let retryTrustedPublisherRequestAt: number | undefined;
+    const retryDelays: number[] = [];
     const fetchImpl: typeof fetch = async (input) => {
       const requestUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -677,10 +672,8 @@ describe("collectPluginClawHubReleasePlan", () => {
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
         trustedPublisherRequests += 1;
         if (trustedPublisherRequests === 1) {
-          firstTrustedPublisherRequestAt = Date.now();
           return new Response("", { status: 429, headers: { "retry-after": "999999999999" } });
         }
-        retryTrustedPublisherRequestAt = Date.now();
         return new Response(
           JSON.stringify({
             trustedPublisher: {
@@ -702,12 +695,13 @@ describe("collectPluginClawHubReleasePlan", () => {
       selection: ["@openclaw/demo-plugin"],
       fetchImpl,
       registryBaseUrl: "https://clawhub.ai",
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
     });
 
     expect(trustedPublisherRequests).toBe(2);
-    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
-      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
-    );
+    expect(retryDelays).toEqual([1_000]);
   });
 
   it("routes missing package rows to bootstrap candidates instead of normal candidates", async () => {

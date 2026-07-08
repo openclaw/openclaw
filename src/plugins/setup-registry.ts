@@ -67,7 +67,7 @@ export type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-cli-backend-missing-runtime"
   | "setup-descriptor-cli-backend-runtime-undeclared";
 
-export type PluginSetupRegistryDiagnostic = {
+type PluginSetupRegistryDiagnostic = {
   pluginId: string;
   code: PluginSetupRegistryDiagnosticCode;
   declaredId?: string;

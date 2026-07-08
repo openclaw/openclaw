@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCardSurface
@@ -33,7 +35,7 @@ import androidx.compose.ui.unit.dp
 
 /** Renders chat history newest-first while preserving stable scroll behavior during streaming. */
 @Composable
-fun ChatMessageListCard(
+internal fun ChatMessageListCard(
   sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
@@ -41,15 +43,23 @@ fun ChatMessageListCard(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   modifier: Modifier = Modifier,
+  outboxItems: List<ChatOutboxItem> = emptyList(),
+  onRetryOutbox: (String) -> Unit = {},
+  onDeleteOutbox: (String) -> Unit = {},
+  onReplyMessage: (String) -> Unit = {},
+  speechState: MessageSpeechState? = null,
+  onToggleListen: ((String, String) -> Unit)? = null,
 ) {
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
+        outboxItems = outboxItems,
       )
     }
   val readerScroll =
@@ -71,7 +81,19 @@ fun ChatMessageListCard(
     ) {
       itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
         when (item) {
-          is ChatTimelineItem.Message -> ChatMessageBubble(message = item.message)
+          is ChatTimelineItem.Message ->
+            ChatMessageBubble(
+              message = item.message,
+              onReplyMessage = onReplyMessage,
+              speechState = speechState,
+              onToggleListen = onToggleListen,
+            )
+          is ChatTimelineItem.OutboxCommand ->
+            ChatOutboxBubble(
+              item = item.item,
+              onRetry = { onRetryOutbox(item.item.id) },
+              onDelete = { onDeleteOutbox(item.item.id) },
+            )
           is ChatTimelineItem.PendingTools -> ChatPendingToolsBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.StreamingAssistant -> ChatStreamingAssistantBubble(text = item.text)
           ChatTimelineItem.Thinking -> ChatTypingIndicatorBubble()
@@ -80,7 +102,7 @@ fun ChatMessageListCard(
     }
 
     if (timeline.items.isEmpty()) {
-      if (historyLoading) {
+      if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
         LoadingChatHint(modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(modifier = Modifier.align(Alignment.Center), healthOk = healthOk)

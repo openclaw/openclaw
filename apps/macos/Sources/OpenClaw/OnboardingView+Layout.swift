@@ -4,9 +4,11 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: 130)
-                .offset(y: 10)
-                .frame(height: 145)
+            // Chat-heavy pages shrink the mascot so the content gets the room.
+            GlowingOpenClawIcon(size: self.heroSize)
+                .offset(y: self.usesCompactHero ? 4 : 10)
+                .frame(height: self.heroFrameHeight)
+                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
             GeometryReader { _ in
                 HStack(spacing: 0) {
@@ -23,6 +25,7 @@ extension OnboardingView {
                 .clipped()
             }
             .frame(height: self.contentHeight)
+            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
             Spacer(minLength: 0)
             self.navigationBar
@@ -87,7 +90,7 @@ extension OnboardingView {
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
-        let crestodianLockIndex = pageOrder.firstIndex(of: crestodianPageIndex)
+        let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -105,7 +108,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI)
+                    .disabled(self.installingCLI || self.aiSetup.isBusy)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -115,18 +118,19 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = self.installingCLI && index != self.currentPage
+                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
+                        index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
-                    // past the Crestodian page before setup authored the config.
-                    let isCrestodianLocked = crestodianLockIndex != nil &&
-                        self.state.connectionMode == .local &&
-                        !self.crestodianSetupComplete &&
-                        index > (crestodianLockIndex ?? 0)
+                    // past the AI page before a candidate passed its live test.
+                    let isAILocked = aiLockIndex != nil &&
+                        self.state.connectionMode != .unconfigured &&
+                        !self.aiSetup.connected &&
+                        index > (aiLockIndex ?? 0)
                     let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
-                        isCrestodianLocked
+                        isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {

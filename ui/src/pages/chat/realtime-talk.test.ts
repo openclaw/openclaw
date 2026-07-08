@@ -195,6 +195,7 @@ describe("RealtimeTalkSession", () => {
         prefixPaddingMs: 250,
         reasoningEffort: "low",
       },
+      { inputDeviceId: "usb-mic" },
     );
 
     await session.start();
@@ -210,5 +211,160 @@ describe("RealtimeTalkSession", () => {
       prefixPaddingMs: 250,
       reasoningEffort: "low",
     });
+    expect(webRtcCtor).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ inputDeviceId: "usb-mic" }),
+    );
+  });
+
+  it("does not fall back to Gateway relay when config selects a client transport", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw clientError;
+      }
+      if (method === "talk.config") {
+        return {
+          config: {
+            talk: {
+              realtime: { transport: "provider-websocket" },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toBe(clientError);
+
+    expect(request.mock.calls).toEqual([
+      ["talk.client.create", { sessionKey: "main" }],
+      ["talk.config", {}],
+    ]);
+    expect(relayCtor).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Gateway relay when config selects Gateway relay", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw new Error("browser session unavailable");
+      }
+      if (method === "talk.config") {
+        return {
+          config: {
+            talk: {
+              realtime: { transport: "gateway-relay" },
+            },
+          },
+        };
+      }
+      if (method === "talk.session.create") {
+        return {
+          provider: "example",
+          transport: "gateway-relay",
+          relaySessionId: "relay-1",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 24000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24000,
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(3, "talk.session.create", {
+      sessionKey: "main",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+    });
+    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to Gateway relay when a successful config read resolves Auto", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw new Error("browser session unavailable");
+      }
+      if (method === "talk.config") {
+        return { config: {} };
+      }
+      if (method === "talk.session.create") {
+        return {
+          provider: "example",
+          transport: "gateway-relay",
+          relaySessionId: "relay-1",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 24000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24000,
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(3, "talk.session.create", {
+      sessionKey: "main",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+    });
+    expect(relayCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when the effective config cannot be read", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw clientError;
+      }
+      if (method === "talk.config") {
+        throw new Error("config unavailable");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toBe(clientError);
+
+    expect(request.mock.calls).toEqual([
+      ["talk.client.create", { sessionKey: "main" }],
+      ["talk.config", {}],
+    ]);
+    expect(relayCtor).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when the effective config payload is missing", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw clientError;
+      }
+      if (method === "talk.config") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toBe(clientError);
+
+    expect(request.mock.calls).toEqual([
+      ["talk.client.create", { sessionKey: "main" }],
+      ["talk.config", {}],
+    ]);
+    expect(relayCtor).not.toHaveBeenCalled();
   });
 });

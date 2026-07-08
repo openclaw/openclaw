@@ -20,6 +20,8 @@ const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
+const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
+const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CLEANUP_DOCKER_SMOKE_PATH = "scripts/test-cleanup-docker.sh";
 const INSTALL_E2E_DOCKER_SMOKE_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -552,7 +554,7 @@ shift 2
         join(binDir, "docker"),
         `#!/bin/sh
 printf "captured docker build log\\n"
-/bin/sleep 2
+/bin/sleep 0.05
 `,
       );
       chmodSync(join(binDir, "docker"), 0o755);
@@ -567,7 +569,8 @@ export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
 
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
-output="$(docker_build_run e2e-build -t demo-image .)"
+printf "captured docker build log\\n" >"$TMPDIR/build.log"
+output="$(docker_build_maybe_print_heartbeat e2e-build 1 1 "$TMPDIR/build.log")"
 [[ "$output" = *"Docker build e2e-build still running ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
 [[ "$output" != *"captured docker build log"* ]]
@@ -627,7 +630,7 @@ docker_build_run e2e-build -t demo-image .
           if (existsSync(filePath)) {
             return;
           }
-          await delay(100);
+          await delay(10);
         }
         throw new Error(`file was not written: ${filePath}`);
       };
@@ -642,7 +645,7 @@ docker_build_run e2e-build -t demo-image .
           } catch {
             return;
           }
-          await delay(100);
+          await delay(10);
         }
         throw new Error(`process stayed alive: ${pid}`);
       };
@@ -1130,6 +1133,39 @@ fi
       "docker_e2e_read_positive_int_env OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES 524288",
     );
     expect(runner).toContain('-e "OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES=$SNAPSHOT_MAX_BYTES"');
+  });
+
+  it("uses Playwright Chromium for the browser CDP snapshot image", () => {
+    const runner = readFileSync(BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("ENV PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright");
+    expect(runner).toContain("playwright-core/cli.js install --with-deps chromium");
+    expect(runner).not.toContain("apt-get install -y --no-install-recommends chromium");
+  });
+
+  it("opens the browser CDP fixture before snapshotting", () => {
+    const runner = readFileSync(BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH, "utf8");
+    const quarantineIndex = runner.indexOf("mkdir -p /tmp/openclaw-browser-cdp");
+    const configIndex = runner.indexOf("node scripts/e2e/lib/fixture.mjs browser-cdp");
+    const openIndex = runner.indexOf(
+      'browser \\"\\${base_args[@]}\\" --browser-profile docker-cdp open',
+    );
+    const doctorIndex = runner.indexOf(
+      'browser \\"\\${base_args[@]}\\" --browser-profile docker-cdp doctor --deep',
+    );
+    const snapshotIndex = runner.indexOf(
+      'browser \\"\\${base_args[@]}\\" --browser-profile docker-cdp snapshot --interactive',
+    );
+
+    expect(quarantineIndex).toBeGreaterThan(-1);
+    expect(configIndex).toBeGreaterThan(-1);
+    expect(configIndex).toBeGreaterThan(quarantineIndex);
+    expect(openIndex).toBeGreaterThan(-1);
+    expect(openIndex).toBeGreaterThan(configIndex);
+    expect(doctorIndex).toBeGreaterThan(openIndex);
+    expect(snapshotIndex).toBeGreaterThan(doctorIndex);
+    expect(runner).toContain(">/tmp/browser-cdp-doctor.txt 2>&1 || true");
+    expect(runner).toContain("failed to disable Playwright AI snapshot chunk");
   });
 
   it("fails Docker commands fast when timeout is unavailable", () => {
@@ -3099,10 +3135,11 @@ export ROOT_DIR TMPDIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 4')"
+printf "captured container log\\n" >"$TMPDIR/run.log"
+output="$(docker_e2e_maybe_print_log_heartbeat plugins-run 1 1 "$TMPDIR/run.log")"
 [[ "$output" = *"still running plugins-run ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
-[[ "$output" = *"captured container log"* ]]
+[[ "$output" != *"captured container log"* ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -3121,17 +3158,18 @@ set -euo pipefail
 ROOT_DIR=${shellQuote(rootDir)}
 TMPDIR=${shellQuote(workDir)}
 export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 command_pid_file="$TMPDIR/command.pid"
 (
-  run_logged_print_heartbeat plugins-run 30 bash -c 'printf "%s" "$$" > "$1"; while true; do /bin/sleep 1; done' bash "$command_pid_file"
+  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
 ) &
 wrapper_pid="$!"
 for _ in $(seq 1 100); do
   [ -s "$command_pid_file" ] && break
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 if [ ! -s "$command_pid_file" ]; then
   kill -TERM "$wrapper_pid" 2>/dev/null || true
@@ -3140,13 +3178,12 @@ if [ ! -s "$command_pid_file" ]; then
 fi
 command_pid="$(cat "$command_pid_file")"
 kill -TERM "$wrapper_pid"
-/bin/sleep 2
 for _ in $(seq 1 50); do
   if ! kill -0 "$command_pid" 2>/dev/null; then
     wait "$wrapper_pid" 2>/dev/null || true
     exit 0
   fi
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 kill -TERM "$command_pid" 2>/dev/null || true
 kill -TERM "$wrapper_pid" 2>/dev/null || true
@@ -3217,8 +3254,10 @@ docker() {
 
   test -n "$cidfile"
   printf "container-term\\n" >"$cidfile"
+  printf "started\\n" >"$TMPDIR/docker-started"
   printf "docker running\\n"
-  while true; do /bin/sleep 10; done
+  trap 'exit 143' TERM
+  while true; do /bin/sleep 0.05; done
 }
 export -f docker
 
@@ -3227,15 +3266,16 @@ export -f docker
 ) &
 wrapper_pid="$!"
 for _ in $(seq 1 50); do
-  [ -s "$TMPDIR/docker-rm-seen" ] && break
-  /bin/sleep 0.1
+  [ -s "$TMPDIR/docker-started" ] && break
+  /bin/sleep 0.01
   kill -0 "$wrapper_pid" 2>/dev/null || true
 done
+test -s "$TMPDIR/docker-started"
 kill -TERM "$wrapper_pid" 2>/dev/null || true
 wait "$wrapper_pid" 2>/dev/null || true
 for _ in $(seq 1 50); do
   grep -qx "container-term" "$TMPDIR/docker-rm-seen" 2>/dev/null && break
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 grep -qx "container-term" "$TMPDIR/docker-rm-seen"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
@@ -3731,6 +3771,26 @@ output="$(cat "$sampler_log")"
       expect(runner, path).not.toMatch(/(^|\n)\s*docker rm -f "\$CONTAINER_NAME"/u);
       expect(runner, path).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
     }
+
+    const composeRunner = readFileSync(COMPOSE_SETUP_E2E_PATH, "utf8");
+    expect(composeRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CLI_NAME"/u);
+    expect(composeRunner).toContain('docker_e2e_docker_cmd rm -f "$CLI_NAME"');
+
+    const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
+    expect(packageRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CONTAINER_NAME"/u);
+    expect(packageRunner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
+    expect(packageRunner).toContain(
+      'DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"',
+    );
+    expect(packageRunner).toContain(
+      'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d',
+    );
+    expect(packageRunner).not.toMatch(/(^|\n)docker run -d/u);
+    for (const runner of [composeRunner, packageRunner]) {
+      expect(runner).toContain(
+        'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
+      );
+    }
   });
 
   it("routes the gateway network client through the timeout-aware run helper", () => {
@@ -3968,6 +4028,7 @@ output="$(cat "$sampler_log")"
     expect(doctorLoginctlShim).toContain("Linger=yes");
     expect(doctorSystemctlShim).toContain("ActiveState=inactive");
     expect(doctorSystemctlShim).toContain('unit_path="$HOME/.config/systemd/user/${unit}"');
+    expect(doctorScenario).toContain("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1");
     expect(readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8")).toContain(
       "scripts/e2e/lib/plugins/sweep.sh",
     );

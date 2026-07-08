@@ -1,7 +1,9 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -14,6 +16,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
@@ -31,8 +34,18 @@ function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
 }
 
 describe("readBestEffortConfig", () => {
+  beforeAll(() => {
+    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
+    // Materialized reads use the process-stable provider policy cache.
+    applyProviderConfigDefaultsForConfig({ provider: "anthropic", config: {}, env: {} });
+  });
+
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  afterAll(() => {
+    setBundledPluginsDirOverrideForTest(undefined);
   });
 
   it("can read snapshots without updating config observation state", async () => {

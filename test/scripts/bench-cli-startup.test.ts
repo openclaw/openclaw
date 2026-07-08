@@ -150,6 +150,11 @@ describe("bench-cli-startup", () => {
           {
             cwd: join(__dirname, "../.."),
             encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "50",
+              VITEST: "1",
+            },
             timeout: 8_000,
           },
         );

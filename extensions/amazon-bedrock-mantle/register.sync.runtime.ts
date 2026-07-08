@@ -4,12 +4,14 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveClaudeSonnet5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
+  resolveMantleSonnet5Cost,
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
@@ -18,6 +20,28 @@ type BedrockMantlePluginConfig = {
     enabled?: boolean;
   };
 };
+
+function normalizeMantleResolvedModel(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (
+    resolveClaudeSonnet5ModelIdentity({ id: params.modelId, params: params.model.params }) ===
+    undefined
+  ) {
+    return undefined;
+  }
+  const cost = resolveMantleSonnet5Cost();
+  if (
+    params.model.cost.input === cost.input &&
+    params.model.cost.output === cost.output &&
+    params.model.cost.cacheRead === cost.cacheRead &&
+    params.model.cost.cacheWrite === cost.cacheWrite
+  ) {
+    return undefined;
+  }
+  return { ...params.model, cost };
+}
 
 /** Register the Amazon Bedrock Mantle provider with OpenClaw. */
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
@@ -65,6 +89,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
         apiKey,
         env,
       }),
+    normalizeResolvedModel: ({ modelId, model }) =>
+      normalizeMantleResolvedModel({ modelId, model }),
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

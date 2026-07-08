@@ -72,6 +72,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           setupCode,
           ...(qrDataUrl ? { qrDataUrl } : {}),
           gatewayUrl: resolved.payload.url,
+          ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
           // Label only — never the raw gateway token/password.
           auth: resolved.authLabel,
           urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,

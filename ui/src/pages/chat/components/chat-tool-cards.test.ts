@@ -29,6 +29,7 @@ vi.mock("../tool-display.ts", () => ({
 }));
 
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
@@ -118,6 +119,35 @@ describe("tool-cards", () => {
       '{\n  "url": "https://example.com"\n}',
       "Opened page",
     ]);
+  });
+
+  it("does not repeat the tool identity in expanded details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:4a:call-4a",
+          name: "skill_workshop",
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
+          outputText: "Proposal created",
+        },
+        {
+          expanded: true,
+          onOpenSidebar: vi.fn(),
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
+    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Skill Workshop");
+    expect(bodyText).toContain('"action": "create"');
+    expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
   });
 
   it("renders expanded tool calls without an inline output block when no output is present", () => {
@@ -237,12 +267,23 @@ describe("tool-cards", () => {
     expect(formatCollapsedToolSummaryText("   ")).toBeUndefined();
   });
 
+  it("omits normalized tool details that repeat the label", () => {
+    expect(formatDistinctCollapsedToolSummaryText("bash", "Bash")).toBeUndefined();
+    expect(
+      formatDistinctCollapsedToolSummaryText("heartbeat_respond", "Heartbeat Respond"),
+    ).toBeUndefined();
+    expect(formatDistinctCollapsedToolSummaryText("run openclaw doctor", "Bash")).toBe(
+      "run openclaw doctor",
+    );
+  });
+
   it("keeps collapsed markdown previews bounded after display cleanup", () => {
     const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
 
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");
+    expect(formatCollapsedToolPreviewText(`${"A".repeat(119)}🚀tail`)).toBe("A".repeat(119));
   });
 
   it("bounds raw string argument fallbacks in collapsed summaries", () => {

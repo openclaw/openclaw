@@ -56,9 +56,85 @@ describe("crabline transport", () => {
           provider?: string;
         };
         expect(manifest.provider).toBe("telegram");
+        await expect(
+          transport.sendInbound({
+            conversation: { id: "-1001234567890", kind: "group" },
+            senderId: "100001",
+            senderName: "Alice",
+            text: "Telegram baseline marker check.",
+          }),
+        ).resolves.toMatchObject({
+          id: expect.stringMatching(/^\d+$/u),
+          text: "Telegram baseline marker check.",
+        });
       } finally {
         await transport.cleanup?.();
       }
+    });
+  });
+
+  it("configures distinct Telegram actors for canonical sender allowlist flows", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        transportPolicy: {
+          requireGroupMention: true,
+          senderAllowlist: ["driver"],
+        },
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+          channels: {
+            telegram: {
+              allowFrom: ["100001"],
+              groupAllowFrom: ["100001"],
+              groupPolicy: "allowlist",
+            },
+          },
+        });
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-routing-ordering", kind: "group" },
+          senderId: "observer",
+          text: "observer",
+        });
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-routing-ordering", kind: "group" },
+          senderId: "driver",
+          text: "driver",
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const response = await fetch(
+          `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/getUpdates`,
+        );
+        const payload = (await response.json()) as {
+          result?: Array<{ message?: { from?: { id?: number }; text?: string } }>;
+        };
+        expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("rejects canonical sender-policy flows on non-Telegram Crabline bridges", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      await expect(
+        createQaCrablineTransportAdapter({
+          outputDir,
+          transportPolicy: { senderAllowlist: ["driver"] },
+          selection: createSelection("matrix"),
+          state: createQaBusState(),
+        }),
+      ).rejects.toThrow("Crabline matrix does not support the requested group transport policy");
     });
   });
 
@@ -215,7 +291,7 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.sendInbound({
+        const inbound = await transport.sendInbound({
           conversation: {
             id: "D12345678",
             kind: "direct",
@@ -224,6 +300,7 @@ describe("crabline transport", () => {
           senderName: "Alice",
           text: "Slack baseline marker check.",
         });
+        expect(inbound.id).toMatch(/^\d+\.\d+$/u);
 
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         expect(env.SLACK_API_URL).toBeTruthy();
@@ -616,6 +693,7 @@ describe("crabline transport", () => {
         ).resolves.toMatchObject({
           conversation: { id: roomId, kind: "group" },
           direction: "inbound",
+          id: expect.stringMatching(/^\$[a-f0-9]{16}:matrix\.test$/u),
           senderId: "@alice:matrix.test",
           text: "Matrix baseline marker check.",
         });
@@ -771,12 +849,12 @@ describe("crabline transport", () => {
       try {
         await transport.state.addInboundMessage({
           conversation: {
-            id: "alice",
-            kind: "direct",
+            id: "-1001234567890",
+            kind: "channel",
           },
-          senderId: "alice",
+          senderId: "100001",
           senderName: "Alice",
-          text: "DM baseline marker check.",
+          text: "Channel baseline marker check.",
         });
 
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
@@ -789,7 +867,7 @@ describe("crabline transport", () => {
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: "100001",
+              chat_id: -1001234567890,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },
@@ -802,16 +880,15 @@ describe("crabline transport", () => {
         expect(response.ok).toBe(true);
 
         await expect(
-          transport.state.waitFor({
-            direction: "outbound",
-            kind: "message-text",
+          transport.waitForOutbound({
+            conversation: { id: "-1001234567890", kind: "group" },
             textIncludes: "assistant via fake telegram",
             timeoutMs: 1_000,
           }),
         ).resolves.toMatchObject({
           conversation: {
-            id: "alice",
-            kind: "direct",
+            id: "-1001234567890",
+            kind: "group",
           },
           direction: "outbound",
           text: "assistant via fake telegram",

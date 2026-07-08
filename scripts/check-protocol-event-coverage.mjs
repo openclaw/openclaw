@@ -11,11 +11,11 @@
 // Client "handled" sets are extracted with deliberately simple parsing over
 // the mobile app sources: Swift `switch <x>.event { case "..." }` blocks plus
 // `.event == "..."` comparisons, and Kotlin `when (event) { "..." -> }` blocks
-// plus `event == "..."` comparisons scoped to `fun handle*Event(...)` bodies
-// so predicate helpers outside the dispatch path do not count as coverage. Events a client intentionally does not
-// consume live in scripts/protocol-event-coverage.allowlist.json with a
-// one-line reason. New gateway events that no client handles (and are not
-// allowlisted) fail the check.
+// plus `event == "..."` comparisons scoped to `fun handle*Event(...)` bodies.
+// Swift case labels may use qualified static string constants; those are
+// resolved across the scanned source tree so deleting the real handler cannot
+// hide behind an allowlist entry. Events a client intentionally does not
+// consume live in scripts/protocol-event-coverage.allowlist.json.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,10 @@ const MIN_EXPECTED_GATEWAY_EVENTS = 10;
 const GATEWAY_EVENTS_BLOCK_RE = /export const GATEWAY_EVENTS = \[([\s\S]*?)\];/u;
 const SWIFT_EVENT_SWITCH_RE = /\bswitch\s+\w+(?:\.\w+)*\.event\s*\{/u;
 const SWIFT_CASE_LABEL_RE = /^\s*case\s+(.+?):/u;
+const SWIFT_TYPE_DECLARATION_RE =
+  /^\s*(?:(?:private|fileprivate|internal|public)\s+)?(?:enum|struct|class|actor|extension)\s+([A-Za-z_]\w*)[^{]*\x7b/u;
+const SWIFT_STATIC_STRING_CONSTANT_RE = /^\s*static\s+let\s+([A-Za-z_]\w*)\s*=\s*"([^"]+)"/u;
+const SWIFT_QUALIFIED_CONSTANT_RE = /\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\b/gu;
 const KOTLIN_EVENT_WHEN_RE = /\bwhen\s*\(\s*event\s*\)\s*\{/u;
 // Kotlin gateway handlers follow the `handle*Event` naming convention
 // (handleEvent, handleGatewayEvent, handleExecApprovalGatewayEvent, ...).
@@ -148,16 +152,57 @@ function pushStringLiterals(segment, names) {
 }
 
 /**
- * Extracts event names a Swift source handles: string-literal case labels of
- * `switch <x>.event` blocks plus `.event == "..."` comparisons. Case labels
- * built from constants are invisible to this extractor and need an allowlist
- * entry explaining that.
+ * Extracts qualified static string constants declared at Swift type scope.
+ * Type qualification avoids resolving unrelated constants that share a short
+ * member name elsewhere in the app.
  */
-export function extractSwiftHandledEvents(source) {
+export function extractSwiftStaticStringConstants(source) {
+  const constants = new Map();
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const declaration = SWIFT_TYPE_DECLARATION_RE.exec(lines[i]);
+    if (!declaration) {
+      continue;
+    }
+    const typeName = declaration[1];
+    let depth = 0;
+    for (let j = i; j < lines.length; j += 1) {
+      const line = lines[j];
+      if (depth === 1) {
+        const constant = SWIFT_STATIC_STRING_CONSTANT_RE.exec(line);
+        if (constant) {
+          constants.set(`${typeName}.${constant[1]}`, constant[2]);
+        }
+      }
+      const braceSource = sanitizeLineForBraces(line);
+      for (const char of braceSource) {
+        if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth -= 1;
+        }
+      }
+      if (j > i && depth <= 0) {
+        break;
+      }
+    }
+  }
+  return constants;
+}
+
+/** Extracts Swift gateway-event case labels, including qualified constants. */
+export function extractSwiftHandledEvents(source, constants = new Map()) {
   const names = collectBlockCaseLabels(source, SWIFT_EVENT_SWITCH_RE, (line, sink) => {
     const label = SWIFT_CASE_LABEL_RE.exec(line);
     if (label) {
       pushStringLiterals(label[1], sink);
+      const constantReferences = sanitizeLineForBraces(label[1]);
+      for (const reference of constantReferences.matchAll(SWIFT_QUALIFIED_CONSTANT_RE)) {
+        const value = constants.get(reference[1]);
+        if (value) {
+          sink.push(value);
+        }
+      }
     }
   });
   for (const comparison of source.matchAll(SWIFT_EVENT_COMPARISON_RE)) {
@@ -325,8 +370,9 @@ function loadAllowlist(rootDir, fsImpl) {
 }
 
 function collectClientHandledEvents(params) {
-  const { rootDir, roots, extension, extract, sentinels, fsImpl } = params;
+  const { rootDir, roots, extension, extract, buildExtractContext, sentinels, fsImpl } = params;
   const handled = new Set();
+  const sources = new Map();
   for (const root of roots) {
     const rootPath = path.resolve(rootDir, root);
     if (!fsImpl.existsSync(rootPath)) {
@@ -335,14 +381,18 @@ function collectClientHandledEvents(params) {
       );
     }
     for (const filePath of listFilesRecursive(rootPath, extension, fsImpl)) {
-      for (const event of extract(fsImpl.readFileSync(filePath, "utf8"))) {
-        handled.add(event);
-      }
+      sources.set(filePath, fsImpl.readFileSync(filePath, "utf8"));
+    }
+  }
+  const extractContext = buildExtractContext?.(sources.values());
+  for (const source of sources.values()) {
+    for (const event of extract(source, extractContext)) {
+      handled.add(event);
     }
   }
   for (const sentinel of sentinels) {
     const source = readRequiredFile(rootDir, sentinel, fsImpl);
-    if (extract(source).size === 0) {
+    if (extract(source, extractContext).size === 0) {
       throw new Error(
         `Sentinel dispatch file ${sentinel} no longer matches any event names; ` +
           "its event handling likely moved or changed shape. Update scripts/check-protocol-event-coverage.mjs.",
@@ -352,11 +402,25 @@ function collectClientHandledEvents(params) {
   return handled;
 }
 
+function collectSwiftStaticStringConstants(sources) {
+  const constants = new Map();
+  for (const source of sources) {
+    for (const [name, value] of extractSwiftStaticStringConstants(source)) {
+      const existing = constants.get(name);
+      if (existing !== undefined && existing !== value) {
+        throw new Error(`Conflicting Swift string constant values for ${name}.`);
+      }
+      constants.set(name, value);
+    }
+  }
+  return constants;
+}
+
 /**
  * Runs the full coverage check against a repo checkout and returns error
  * strings plus a summary for logging.
  */
-export function collectProtocolEventCoverageErrors(params = {}) {
+function collectProtocolEventCoverageErrors(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
 
@@ -373,6 +437,7 @@ export function collectProtocolEventCoverageErrors(params = {}) {
         roots: IOS_SCAN_ROOTS,
         extension: ".swift",
         extract: extractSwiftHandledEvents,
+        buildExtractContext: collectSwiftStaticStringConstants,
         sentinels: [IOS_SENTINEL_FILE],
         fsImpl,
       }),

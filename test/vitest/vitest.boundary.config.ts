@@ -5,7 +5,7 @@ import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
-export function loadBoundaryIncludePatternsFromEnv(
+function loadBoundaryIncludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): string[] | null {
   return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);

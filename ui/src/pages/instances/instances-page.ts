@@ -21,7 +21,7 @@ function readPresence(value: unknown): PresenceEntry[] | null {
   return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
 }
 
-export class InstancesPage extends LitElement {
+class InstancesPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

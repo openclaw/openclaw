@@ -11,6 +11,8 @@ import {
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
@@ -30,6 +32,10 @@ vi.mock("../gateway/net.js", async () => {
     pickPrimaryLanIPv4: mocks.pickPrimaryLanIPv4Mock,
   };
 });
+
+vi.mock("../infra/gateway-lock.js", () => ({
+  readActiveGatewayLockPort: readActiveGatewayLockPortMock,
+}));
 
 const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
@@ -110,11 +116,13 @@ describe("resolveGatewayConnection", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
+    readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
@@ -127,6 +135,7 @@ describe("resolveGatewayConnection", () => {
         env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
     );
     delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
@@ -141,7 +150,7 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await expect(resolveGatewayConnection({ url: "wss://override.example/ws" })).rejects.toThrow(
-      "explicit credentials",
+      /remove --url to use the configured target/i,
     );
   });
 
@@ -184,6 +193,32 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
 
     expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
+  });
+
+  it("uses a verified active local Gateway port when no target is explicit", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", port: 18789, auth: { token: "config-token" } },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.url).toBe("ws://127.0.0.1:48789");
+    expect(result.token).toBe("config-token");
+  });
+
+  it("keeps an explicit Gateway port ahead of active lock metadata", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", port: 18789, auth: { token: "config-token" } },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      const result = await resolveGatewayConnection({});
+
+      expect(result.url).toBe("ws://127.0.0.1:19001");
+      expect(readActiveGatewayLockPortMock).not.toHaveBeenCalled();
+    });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });

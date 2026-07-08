@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
+  resolveAgentExplicitRecipientSession: vi.fn(async () => ({})),
   readAcpSessionMeta: vi.fn<typeof readAcpSessionMeta>(() => undefined),
   listAgentIds: vi.fn(() => ["main"]),
   loadConfigReturn: {} as Record<string, unknown>,
@@ -205,6 +206,16 @@ vi.mock("../../infra/voicewake-routing.js", () => ({
   loadVoiceWakeRoutingConfig: mocks.loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger: mocks.resolveVoiceWakeRouteByTrigger,
 }));
+
+vi.mock("../../infra/outbound/agent-delivery.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/agent-delivery.js")>(
+    "../../infra/outbound/agent-delivery.js",
+  );
+  return {
+    ...actual,
+    resolveAgentExplicitRecipientSession: mocks.resolveAgentExplicitRecipientSession,
+  };
+});
 
 vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: (...args: unknown[]) =>
@@ -622,6 +633,7 @@ describe("gateway agent handler", () => {
     mocks.emitGatewaySessionEndPluginHook.mockReset();
     mocks.emitGatewaySessionStartPluginHook.mockReset();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    mocks.resolveAgentExplicitRecipientSession.mockReset().mockResolvedValue({});
     mocks.readAcpSessionMeta.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.getChannelPlugin.mockReset();
@@ -663,6 +675,309 @@ describe("gateway agent handler", () => {
         maxEntries: 42,
       },
     });
+  });
+
+  it("resolves explicit recipient sessions before Gateway admission", async () => {
+    const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.loadConfigReturn = { session: { dmScope: "per-account-channel-peer" } };
+    mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({
+      sessionKey,
+      channel: "whatsapp",
+      to: "user:+15551234567",
+      accountId: "work",
+      threadId: "topic-42",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "recipient-session", updatedAt: Date.now() },
+      canonicalKey: sessionKey,
+    });
+    let persistedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store = {
+        [sessionKey]: { sessionId: "recipient-session", updatedAt: Date.now() },
+      };
+      const result = await updater(store);
+      persistedEntry = store[sessionKey];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent({
+      message: "hi",
+      agentId: "ops",
+      channel: "whatsapp",
+      to: "+15551234567",
+      threadId: "topic-42",
+      idempotencyKey: "recipient-session-route",
+    });
+
+    expect(mocks.resolveAgentExplicitRecipientSession).toHaveBeenCalledWith({
+      cfg: mocks.loadConfigReturn,
+      agentId: "ops",
+      channel: "whatsapp",
+      to: "+15551234567",
+      accountId: undefined,
+      threadId: "topic-42",
+    });
+    const call = await waitForAgentCommandCall<{
+      sessionKey?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    }>();
+    expect(call.sessionKey).toBe(sessionKey);
+    expect(call).toMatchObject({
+      channel: "whatsapp",
+      to: "user:+15551234567",
+      accountId: "work",
+      threadId: "topic-42",
+    });
+    expect(persistedEntry?.deliveryContext).toEqual({
+      channel: "whatsapp",
+      to: "user:+15551234567",
+      accountId: "work",
+      threadId: "topic-42",
+    });
+  });
+
+  it.each(["webchat", "LAST"])(
+    "keeps the agent main session for non-deliverable channel hint %s",
+    async (channel) => {
+      const sessionKey = "agent:ops:main";
+      mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue(sessionKey);
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "ops-main", updatedAt: Date.now() },
+        canonicalKey: sessionKey,
+      });
+      mocks.updateSessionStore.mockImplementation(
+        async (_path, updater) =>
+          await updater({
+            [sessionKey]: { sessionId: "ops-main", updatedAt: Date.now() },
+          }),
+      );
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent({
+        message: "hi",
+        agentId: "ops",
+        channel,
+        to: "+15551234567",
+        idempotencyKey: `non-deliverable-${channel}`,
+      });
+
+      expect(mocks.resolveAgentExplicitRecipientSession).not.toHaveBeenCalled();
+      const call = await waitForAgentCommandCall<{ sessionKey?: string }>();
+      expect(call.sessionKey).toBe(sessionKey);
+    },
+  );
+
+  it("dedupes retries while explicit recipient session routing is pending", async () => {
+    const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
+    const runId = "recipient-session-route-pending";
+    let finishRoute = (_result: { sessionKey: string }) => {};
+    const routePending = new Promise<{ sessionKey: string }>((resolve) => {
+      finishRoute = resolve;
+    });
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.loadConfigReturn = { session: { dmScope: "per-account-channel-peer" } };
+    mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "recipient-session", updatedAt: Date.now() },
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(
+      async (_path, updater) =>
+        await updater({
+          [sessionKey]: { sessionId: "recipient-session", updatedAt: Date.now() },
+        }),
+    );
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const context = makeContext();
+    const request = {
+      message: "hi",
+      agentId: "ops",
+      channel: "whatsapp",
+      accountId: "work",
+      to: "+15551234567",
+      idempotencyKey: runId,
+    } satisfies AgentParams;
+    const first = invokeAgent(request, { context, reqId: runId });
+    await waitForAssertion(() => {
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+        runId,
+        status: "accepted",
+      });
+    });
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
+
+    const duplicateRespond = vi.fn();
+    await invokeAgent(request, {
+      context,
+      reqId: `${runId}-duplicate`,
+      respond: duplicateRespond,
+      flushDispatch: false,
+    });
+    expect(duplicateRespond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
+    });
+    expect(mocks.resolveAgentExplicitRecipientSession).toHaveBeenCalledTimes(1);
+
+    finishRoute({ sessionKey });
+    await first;
+  });
+
+  it("honors owner cancellation while explicit recipient session routing is pending", async () => {
+    const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
+    const runId = "recipient-session-route-abort";
+    let finishRoute = (_result: { sessionKey: string }) => {};
+    const routePending = new Promise<{ sessionKey: string }>((resolve) => {
+      finishRoute = resolve;
+    });
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.loadConfigReturn = { session: { dmScope: "per-account-channel-peer" } };
+    mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "recipient-session", updatedAt: Date.now() },
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(
+      async (_path, updater) =>
+        await updater({
+          [sessionKey]: { sessionId: "recipient-session", updatedAt: Date.now() },
+        }),
+    );
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const ownerClient = { connId: "owner-conn" } as AgentHandlerArgs["client"];
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "+15551234567",
+        idempotencyKey: runId,
+      },
+      { context, client: ownerClient, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => {
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+        runId,
+        agentId: "ops",
+        status: "accepted",
+      });
+    });
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:ops:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-recipient-route", method: "chat.abort" },
+      client: ownerClient,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
+
+    finishRoute({ sessionKey });
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("clears pending dedupe when explicit recipient session routing fails", async () => {
+    const runId = "recipient-session-route-error";
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({
+      error: new Error("ambiguous recipient"),
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "team",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "ambiguous recipient",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("clears pending dedupe when the routed recipient session is unavailable", async () => {
+    const sessionKey = "agent:ops:whatsapp:direct:+15551234567";
+    const runId = "recipient-session-route-archived";
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({ sessionKey });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "recipient-session", updatedAt: 1, archivedAt: 1 },
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "+15551234567",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      message: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("uses single-entry persistence for ordinary gateway admission touches", async () => {
@@ -1286,72 +1601,75 @@ describe("gateway agent handler", () => {
   });
 
   it.each([
-    { name: "status terminal row", status: "done" as const },
-    { name: "endedAt-only terminal row" },
+    { name: "status-done row", status: "done" as const, expectReuse: true },
+    { name: "status-killed row", status: "killed" as const, expectReuse: false },
+    { name: "endedAt-only row", status: undefined, expectReuse: false },
   ])(
-    "rotates a terminal main session from a $name when its transcript is newer",
+    "handles a terminal main session from a $name when its transcript is newer",
     async (scenario) => {
       const now = Date.parse("2026-05-18T09:47:00.000Z");
       vi.useFakeTimers({ toFake: ["Date"] });
       dateOnlyFakeClockActive = true;
       vi.setSystemTime(now);
 
-      await withTempDir(
-        { prefix: "openclaw-gateway-terminal-main-newer-transcript-" },
-        async (root) => {
-          const sessionsDir = `${root}/sessions`;
-          await fs.mkdir(sessionsDir, { recursive: true });
-          const sessionFile = "terminal-main-session.jsonl";
-          const transcriptPath = `${sessionsDir}/${sessionFile}`;
-          await fs.writeFile(
-            transcriptPath,
-            `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-            "utf8",
-          );
-          await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
-          mocks.loadSessionEntry.mockReturnValue({
-            cfg: {},
-            storePath: `${sessionsDir}/sessions.json`,
-            entry: {
-              sessionId: "terminal-main-session",
-              sessionFile,
-              ...(scenario.status ? { status: scenario.status } : {}),
-              updatedAt: now - 10_000,
-              sessionStartedAt: now - 60_000,
-              lastInteractionAt: now - 10_000,
-              startedAt: now - 20_000,
-              endedAt: now - 15_000,
-              runtimeMs: 5_000,
-              cliSessionBindings: {
-                "claude-cli": { sessionId: "old-claude-cli-session" },
-                "codex-cli": { sessionId: "old-codex-cli-session" },
-              },
-              cliSessionIds: {
-                "claude-cli": "old-claude-cli-session",
-                "codex-cli": "old-codex-cli-session",
-              },
-              claudeCliSessionId: "old-claude-cli-session",
+      await withTempDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
+        const sessionsDir = `${root}/sessions`;
+        await fs.mkdir(sessionsDir, { recursive: true });
+        const sessionFile = "terminal-main-session.jsonl";
+        const transcriptPath = `${sessionsDir}/${sessionFile}`;
+        await fs.writeFile(
+          transcriptPath,
+          `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+          "utf8",
+        );
+        await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg: {},
+          storePath: `${sessionsDir}/sessions.json`,
+          entry: {
+            sessionId: "terminal-main-session",
+            sessionFile,
+            ...(scenario.status ? { status: scenario.status } : {}),
+            updatedAt: now - 10_000,
+            sessionStartedAt: now - 60_000,
+            lastInteractionAt: now - 10_000,
+            startedAt: now - 20_000,
+            endedAt: now - 15_000,
+            runtimeMs: 5_000,
+            cliSessionBindings: {
+              "claude-cli": { sessionId: "old-claude-cli-session" },
+              "codex-cli": { sessionId: "old-codex-cli-session" },
             },
-            canonicalKey: "agent:main:main",
-          });
+            cliSessionIds: {
+              "claude-cli": "old-claude-cli-session",
+              "codex-cli": "old-codex-cli-session",
+            },
+            claudeCliSessionId: "old-claude-cli-session",
+          },
+          canonicalKey: "agent:main:main",
+        });
 
-          const capturedEntry = await runMainAgentAndCaptureEntry(
-            "test-idem-terminal-main-newer-transcript",
-          );
+        const capturedEntry = await runMainAgentAndCaptureEntry(
+          "test-idem-terminal-main-newer-transcript",
+        );
 
-          const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-          expect(call.sessionId).not.toBe("terminal-main-session");
-          expect(capturedEntry?.sessionId).not.toBe("terminal-main-session");
-          expect(capturedEntry?.status).toBeUndefined();
-          expect(capturedEntry?.startedAt).toBeUndefined();
-          expect(capturedEntry?.endedAt).toBeUndefined();
-          expect(capturedEntry?.runtimeMs).toBeUndefined();
-          expect(capturedEntry?.sessionFile).toBeUndefined();
-          expect(capturedEntry?.cliSessionBindings).toBeUndefined();
-          expect(capturedEntry?.cliSessionIds).toBeUndefined();
-          expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
-        },
-      );
+        const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+        if (scenario.expectReuse) {
+          expect(call.sessionId).toBe("terminal-main-session");
+          expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+          return;
+        }
+        expect(call.sessionId).not.toBe("terminal-main-session");
+        expect(capturedEntry?.sessionId).not.toBe("terminal-main-session");
+        expect(capturedEntry?.status).toBeUndefined();
+        expect(capturedEntry?.startedAt).toBeUndefined();
+        expect(capturedEntry?.endedAt).toBeUndefined();
+        expect(capturedEntry?.runtimeMs).toBeUndefined();
+        expect(capturedEntry?.sessionFile).toBeUndefined();
+        expect(capturedEntry?.cliSessionBindings).toBeUndefined();
+        expect(capturedEntry?.cliSessionIds).toBeUndefined();
+        expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+      });
     },
   );
 

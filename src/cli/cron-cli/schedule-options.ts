@@ -35,7 +35,7 @@ export type CronEditScheduleRequest =
   | { kind: "none" };
 
 /** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
-export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
+function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
   const normalized = normalizeScheduleOptions(options);
   if (normalized.onExitCwd && !normalized.onExitCommand) {
     throw new Error("--on-exit-cwd requires --on-exit.");

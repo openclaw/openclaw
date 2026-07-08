@@ -63,6 +63,25 @@ function boundedTextErrorResponse(
   return { response, cancel, releaseLock, text };
 }
 
+function oversizedJsonResponse(): { response: Response; wasCanceled: () => boolean } {
+  let canceled = false;
+  const body = new TextEncoder().encode(`{"key":"${"x".repeat(16 * 1024 * 1024)}"}`);
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(body);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+    wasCanceled: () => canceled,
+  };
+}
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -191,6 +210,19 @@ describe("OpenRouter OAuth", () => {
       key: "sk-or-v1-test",
       userId: "user-1",
     });
+  });
+
+  it("bounds successful OpenRouter OAuth responses", async () => {
+    const oversized = oversizedJsonResponse();
+
+    await expect(
+      exchangeOpenRouterOAuthCode({
+        code: "AUTHCODE",
+        codeVerifier: "verifier-1",
+        fetchImpl: vi.fn(async () => oversized.response),
+      }),
+    ).rejects.toThrow("OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes");
+    expect(oversized.wasCanceled()).toBe(true);
   });
 
   it("surfaces OpenRouter OAuth exchange errors without credential material", async () => {

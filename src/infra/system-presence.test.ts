@@ -114,6 +114,13 @@ describe("system-presence", () => {
     expect(entry?.text).toBe("Node: relay-host · mode operator");
   });
 
+  it("keeps fallback text keys UTF-16 safe", () => {
+    const keyPrefix = `presence-${randomUUID()}`.padEnd(63, "x");
+    const update = updateSystemPresence({ text: `${keyPrefix}🚀tail` });
+
+    expect(update.key).toBe(keyPrefix);
+  });
+
   it("prunes stale non-self entries after TTL", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.now());

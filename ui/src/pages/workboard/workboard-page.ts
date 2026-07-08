@@ -3,7 +3,7 @@ import { html, LitElement, nothing } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import {
   configureWorkboardPolling,
@@ -14,7 +14,7 @@ import {
 } from "../../lib/workboard/index.ts";
 import { renderWorkboard } from "./view.ts";
 
-export class WorkboardPage extends LitElement {
+class WorkboardPage extends LitElement {
   override createRenderRoot() {
     return this;
   }
@@ -106,9 +106,7 @@ export class WorkboardPage extends LitElement {
 
   private pluginEnabled(): boolean | null {
     const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    return snapshot
-      ? isPluginEnabledInConfigSnapshot(snapshot, "workboard", { enabledByDefault: false })
-      : null;
+    return snapshot ? isWorkboardEnabledInConfigSnapshot(snapshot) : null;
   }
 
   private syncWorkboardRuntime() {

@@ -136,7 +136,6 @@ export function formatAgentModelStartupDetails(params: {
   provider: string;
   model: string;
 }): string {
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
   const explicitThinking = resolveExplicitStartupThinking({
@@ -145,25 +144,29 @@ export function formatAgentModelStartupDetails(params: {
     model: params.model,
     defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
   });
-  const resolvedThinking =
-    explicitThinking ??
-    resolveThinkingDefault({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      catalog: configuredCatalog,
-    });
-  const thinking =
-    explicitThinking ??
-    (isConfiguredReasoningDisabled({
-      catalog: configuredCatalog,
-      provider: params.provider,
-      model: params.model,
-    })
-      ? "off"
-      : resolvedThinking === "off"
-        ? "medium"
-        : resolvedThinking);
+  let thinking = explicitThinking;
+  if (thinking === undefined) {
+    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
+    // only to discard their default below.
+    if (
+      isConfiguredReasoningDisabled({
+        catalog: configuredCatalog,
+        provider: params.provider,
+        model: params.model,
+      })
+    ) {
+      thinking = "off";
+    } else {
+      const resolvedThinking = resolveThinkingDefault({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        catalog: configuredCatalog,
+      });
+      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
+    }
+  }
   const fast = resolveFastModeState({
     cfg: params.cfg,
     provider: params.provider,

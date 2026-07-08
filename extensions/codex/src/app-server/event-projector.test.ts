@@ -25,7 +25,6 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -109,7 +108,6 @@ afterEach(async () => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
-  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
@@ -1005,10 +1003,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("error", {
         error: {
@@ -1029,10 +1028,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for failed turns", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("turn/completed", {
         turn: {
@@ -1056,9 +1056,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    rememberCodexRateLimits({
+    const rateLimits = {
       rateLimits: {
         limitId: "codex",
         limitName: "Codex",
@@ -1069,6 +1068,9 @@ describe("CodexAppServerEventProjector", () => {
         rateLimitReachedType: "rate_limit_reached",
       },
       rateLimitsByLimitId: null,
+    };
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimits,
     });
 
     await projector.handleNotification(
@@ -1118,35 +1120,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
     expect(result.promptError).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
-  });
-
-  it("normalizes snake_case current token usage fields", async () => {
-    const projector = await createProjector();
-
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", {
-        tokenUsage: {
-          total: { total_tokens: 1_000_000 },
-          last_token_usage: {
-            total_tokens: 17,
-            input_tokens: 8,
-            cached_input_tokens: 3,
-            output_tokens: 9,
-          },
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expectUsageFields(result.attemptUsage, { input: 5, output: 9, cacheRead: 3, total: 17 });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 5,
-      output: 9,
-      cacheRead: 3,
-      total: 17,
-    });
   });
 
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
@@ -1652,6 +1625,30 @@ describe("CodexAppServerEventProjector", () => {
     ).toBe(false);
   });
 
+  it("projects thread-scoped guardian warnings", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: { threadId: "thread-other", message: "Wrong thread." },
+    } as ProjectorNotification);
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: {
+        threadId: THREAD_ID,
+        message: "Guardian rejection limit reached; ending turn as interrupted.",
+      },
+    } as ProjectorNotification);
+
+    const warning = findAgentEvent(onAgentEvent, {
+      stream: "codex_app_server.guardian",
+      phase: "warning",
+    }).data;
+    expect(warning.message).toBe("Guardian rejection limit reached; ending turn as interrupted.");
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
@@ -1827,6 +1824,7 @@ describe("CodexAppServerEventProjector", () => {
     try {
       await projector.handleNotification(
         forCurrentTurn("item/started", {
+          startedAtMs: 1_750_000_000_000,
           item: {
             type: "commandExecution",
             id: "cmd-1",
@@ -1844,6 +1842,7 @@ describe("CodexAppServerEventProjector", () => {
       );
       await projector.handleNotification(
         forCurrentTurn("item/completed", {
+          completedAtMs: 1_750_000_000_042,
           item: {
             type: "commandExecution",
             id: "cmd-1",
@@ -1912,6 +1911,7 @@ describe("CodexAppServerEventProjector", () => {
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         durationMs: "durationMs" in event ? event.durationMs : undefined,
+        sourceTimestampMs: event.sourceTimestampMs,
       })),
     ).toEqual([
       {
@@ -1919,12 +1919,14 @@ describe("CodexAppServerEventProjector", () => {
         toolName: "bash",
         toolCallId: "cmd-1",
         durationMs: undefined,
+        sourceTimestampMs: 1_750_000_000_000,
       },
       {
         type: "tool.execution.completed",
         toolName: "bash",
         toolCallId: "cmd-1",
         durationMs: 42,
+        sourceTimestampMs: 1_750_000_000_042,
       },
     ]);
     const result = projector.buildResult(buildEmptyToolTelemetry());
@@ -1957,6 +1959,521 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
   });
+
+  it.each([
+    ["cancelled", "cancelled"],
+    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
+  ] as const)(
+    "preserves enclosing %s provenance for failed native tools",
+    async (abortReason, terminalReason) => {
+      const abortController = new AbortController();
+      abortController.abort(abortReason);
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+      const commandItem = {
+        type: "commandExecution",
+        id: "cmd-aborted",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      };
+
+      try {
+        await projector.handleNotification(forCurrentTurn("item/started", { item: commandItem }));
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", {
+            item: { ...commandItem, status: "failed", durationMs: 4 },
+          }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "cmd-aborted",
+          terminalReason,
+        }),
+      );
+    },
+  );
+
+  it.each([
+    ["cancelled", "cancelled"],
+    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
+  ] as const)(
+    "finalizes an active native tool as %s when building an interrupted result",
+    async (abortReason, terminalReason) => {
+      const abortController = new AbortController();
+      abortController.abort(abortReason);
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            item: {
+              type: "commandExecution",
+              id: "cmd-active-abort",
+              command: "pnpm test extensions/codex",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          }),
+        );
+        projector.buildResult(buildEmptyToolTelemetry());
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "cmd-active-abort",
+          terminalReason,
+        }),
+      );
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === "cmd-active-abort")
+          .map((event) => event.type),
+      ).toEqual(["tool.execution.started", "tool.execution.error"]);
+    },
+  );
+
+  it.each([
+    [
+      "collaboration",
+      {
+        id: "collab-audit-1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: THREAD_ID,
+        receiverThreadIds: ["child-thread-1"],
+        prompt: "sensitive prompt text",
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {},
+      },
+      "collab.spawnAgent",
+    ],
+    [
+      "image generation",
+      {
+        id: "image-generation-audit-1",
+        type: "imageGeneration",
+        status: "completed",
+        revisedPrompt: "sensitive revised prompt",
+        result: "sensitive image payload",
+      },
+      "image_generation",
+    ],
+    [
+      "image view",
+      {
+        id: "image-view-audit-1",
+        type: "imageView",
+        path: "/workspace/sensitive-filename.png",
+      },
+      "image_view",
+    ],
+    [
+      "sleep",
+      {
+        id: "sleep-audit-1",
+        type: "sleep",
+        durationMs: 250,
+      },
+      "sleep",
+    ],
+  ] as const)(
+    "emits metadata-only lifecycle diagnostics for native %s items",
+    async (_, item, toolName) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector();
+
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", { item, startedAtMs: 1_750_000_000_000 }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", { item, completedAtMs: 1_750_000_000_042 }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+          .map((event) => ({
+            type: event.type,
+            toolName: "toolName" in event ? event.toolName : null,
+          })),
+      ).toEqual([
+        { type: "tool.execution.started", toolName },
+        { type: "tool.execution.completed", toolName },
+      ]);
+      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+    },
+  );
+
+  it.each([
+    ["completed", "tool.execution.completed", undefined, undefined],
+    ["failed", "tool.execution.error", "failed", undefined],
+    ["cancelled", "tool.execution.error", "cancelled", undefined],
+    [undefined, "tool.execution.error", "failed", "tool_outcome_unknown"],
+    ["future_status", "tool.execution.error", "failed", "tool_outcome_unknown"],
+  ] as const)(
+    "uses raw %s status for redacted native web-search audit actions",
+    async (status, terminalType, terminalReason, errorCode) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector();
+      const item = {
+        id: "web-search-audit-1",
+        type: "webSearch",
+        query: "sensitive query",
+        action: { type: "search", query: "sensitive query", queries: null },
+      };
+
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", { item, startedAtMs: 1_750_000_000_000 }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", { item, completedAtMs: 1_750_000_000_042 }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("rawResponseItem/completed", {
+            item: {
+              id: item.id,
+              type: "web_search_call",
+              status,
+              action: item.action,
+            },
+          }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+          .map((event) => ({
+            type: event.type,
+            toolName: "toolName" in event ? event.toolName : null,
+            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+            errorCode: "errorCode" in event ? event.errorCode : undefined,
+            sourceTimestampMs: "sourceTimestampMs" in event ? event.sourceTimestampMs : undefined,
+          })),
+      ).toEqual([
+        {
+          type: "tool.execution.started",
+          toolName: "web_search",
+          terminalReason: undefined,
+          errorCode: undefined,
+          sourceTimestampMs: 1_750_000_000_000,
+        },
+        {
+          type: terminalType,
+          toolName: "web_search",
+          terminalReason,
+          errorCode,
+          sourceTimestampMs: 1_750_000_000_042,
+        },
+      ]);
+      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+    },
+  );
+
+  it("keeps raw open-page status unknown until explicit completion", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const projector = await createProjector();
+    const item = {
+      id: "web-search-open-page-1",
+      type: "webSearch",
+      query: "",
+      action: { type: "openPage", url: "https://example.com/sensitive" },
+    };
+
+    try {
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            id: item.id,
+            type: "web_search_call",
+            status: "open",
+            action: { type: "open_page", url: "https://example.com/sensitive" },
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+        .map((event) => ({
+          type: event.type,
+          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+          errorCode: "errorCode" in event ? event.errorCode : undefined,
+        })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        terminalReason: undefined,
+        errorCode: undefined,
+      },
+      {
+        type: "tool.execution.error",
+        terminalReason: "failed",
+        errorCode: "tool_outcome_unknown",
+      },
+    ]);
+    expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+  });
+
+  it("keeps native web-search outcomes unknown at finalization when no raw terminal arrives", async () => {
+    const abortController = new AbortController();
+    abortController.abort("cancelled");
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const projector = await createProjector(undefined, {
+      runAbortSignal: abortController.signal,
+    });
+    const item = {
+      id: "web-search-without-raw-terminal",
+      type: "webSearch",
+      query: "sensitive extension query",
+      action: { type: "search", query: "sensitive extension query", queries: null },
+    };
+
+    try {
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+      projector.buildResult(buildEmptyToolTelemetry());
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+        .map((event) => ({
+          type: event.type,
+          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+          errorCode: "errorCode" in event ? event.errorCode : undefined,
+        })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        terminalReason: undefined,
+        errorCode: undefined,
+      },
+      {
+        type: "tool.execution.error",
+        terminalReason: "failed",
+        errorCode: "tool_outcome_unknown",
+      },
+    ]);
+    expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive extension query");
+  });
+
+  it.each([
+    [
+      "web search",
+      "cancelled",
+      {
+        id: "web-search-started-only",
+        type: "webSearch",
+        query: "sensitive query",
+        action: { type: "search", query: "sensitive query", queries: null },
+      },
+    ],
+    [
+      "image generation",
+      Object.assign(new Error("turn timed out"), { name: "TimeoutError" }),
+      {
+        id: "image-generation-started-only",
+        type: "imageGeneration",
+        status: "in_progress",
+        revisedPrompt: "sensitive prompt",
+        result: null,
+      },
+    ],
+  ] as const)(
+    "keeps started-only native %s outcomes unknown when the enclosing run stops",
+    async (_, abortReason, item) => {
+      const abortController = new AbortController();
+      abortController.abort(abortReason);
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+
+      try {
+        await projector.handleNotification(forCurrentTurn("item/started", { item }));
+        projector.buildResult(buildEmptyToolTelemetry());
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+          .map((event) => ({
+            type: event.type,
+            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+            errorCode: "errorCode" in event ? event.errorCode : undefined,
+          })),
+      ).toEqual([
+        {
+          type: "tool.execution.started",
+          terminalReason: undefined,
+          errorCode: undefined,
+        },
+        {
+          type: "tool.execution.error",
+          terminalReason: "failed",
+          errorCode: "tool_outcome_unknown",
+        },
+      ]);
+      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+    },
+  );
+
+  it("projects native image-generation error status as a failed audit action", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const projector = await createProjector();
+    const startedItem = {
+      id: "image-generation-error-1",
+      type: "imageGeneration",
+      status: "in_progress",
+      revisedPrompt: null,
+      result: null,
+    };
+
+    try {
+      await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: { ...startedItem, status: "error" },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter((event) => "toolCallId" in event && event.toolCallId === startedItem.id)
+        .map((event) => ({
+          type: event.type,
+          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+        })),
+    ).toEqual([
+      { type: "tool.execution.started", terminalReason: undefined },
+      { type: "tool.execution.error", terminalReason: "failed" },
+    ]);
+  });
+
+  it.each([
+    ["missing", undefined, undefined],
+    ["in-progress", "in_progress", undefined],
+    [
+      "unrecognized",
+      "future_status",
+      Object.assign(new Error("turn timed out"), { name: "TimeoutError" }),
+    ],
+  ] as const)(
+    "keeps %s native image-generation terminal status non-successful",
+    async (_, status, abortReason) => {
+      const abortController = new AbortController();
+      if (abortReason) {
+        abortController.abort(abortReason);
+      }
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+      const startedItem = {
+        id: `image-generation-${status ?? "missing"}`,
+        type: "imageGeneration",
+        status: "in_progress",
+        revisedPrompt: null,
+        result: null,
+      };
+
+      try {
+        await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", { item: { ...startedItem, status } }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === startedItem.id)
+          .map((event) => ({
+            type: event.type,
+            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+            errorCode: "errorCode" in event ? event.errorCode : undefined,
+          })),
+      ).toEqual([
+        {
+          type: "tool.execution.started",
+          terminalReason: undefined,
+          errorCode: undefined,
+        },
+        {
+          type: "tool.execution.error",
+          terminalReason: "failed",
+          errorCode: "tool_outcome_unknown",
+        },
+      ]);
+    },
+  );
 
   it("synthesizes native tool progress from turn completion snapshots", async () => {
     const onAgentEvent = vi.fn();
@@ -2349,6 +2866,13 @@ describe("CodexAppServerEventProjector", () => {
           exitCode: null,
           durationMs: null,
         },
+        {
+          type: "imageGeneration",
+          id: "image-running-snapshot",
+          status: "in_progress",
+          revisedPrompt: null,
+          result: null,
+        },
       ]),
     );
 
@@ -2494,6 +3018,196 @@ describe("CodexAppServerEventProjector", () => {
         cwd: "/workspace",
       }),
     });
+  });
+
+  it.each(["failed", "cancelled", "timed_out"] as const)(
+    "projects a declined native approval with %s disposition as one terminal error",
+    async (disposition) => {
+      const projector = await createProjector();
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            item: {
+              type: "commandExecution",
+              id: "cmd-approval-failure",
+              command: "pnpm test extensions/codex",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          }),
+        );
+        projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", {
+            item: {
+              type: "commandExecution",
+              id: "cmd-approval-failure",
+              command: "pnpm test extensions/codex",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "declined",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: 1,
+            },
+          }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => event.type.startsWith("tool.execution."))
+          .map((event) =>
+            "terminalReason" in event
+              ? { type: event.type, terminalReason: event.terminalReason }
+              : { type: event.type },
+          ),
+      ).toEqual([
+        { type: "tool.execution.started" },
+        { type: "tool.execution.error", terminalReason: disposition },
+      ]);
+    },
+  );
+
+  it("coalesces a native pre-tool failure with the matching item terminal", async () => {
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const item = {
+      type: "commandExecution" as const,
+      id: "cmd-pre-tool-failure",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent" as const,
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+    };
+
+    try {
+      projector.recordNativeToolPreToolUseFailure({
+        toolName: "exec",
+        toolCallId: item.id,
+        disposition: "timed_out",
+        durationMs: 5,
+      });
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { ...item, status: "inProgress", durationMs: null },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: { ...item, status: "declined", durationMs: 7 },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter(
+          (event) =>
+            event.type.startsWith("tool.execution.") &&
+            "toolCallId" in event &&
+            event.toolCallId === item.id,
+        )
+        .map((event) =>
+          event.type === "tool.execution.error"
+            ? {
+                type: event.type,
+                toolName: event.toolName,
+                durationMs: event.durationMs,
+                errorCategory: event.errorCategory,
+                terminalReason: event.terminalReason,
+              }
+            : {
+                type: event.type,
+                toolName: "toolName" in event ? event.toolName : undefined,
+              },
+        ),
+    ).toEqual([
+      { type: "tool.execution.started", toolName: "bash" },
+      {
+        type: "tool.execution.error",
+        toolName: "bash",
+        durationMs: 7,
+        errorCategory: "before_tool_call",
+        terminalReason: "timed_out",
+      },
+    ]);
+  });
+
+  it("finalizes a native pre-tool failure when no item arrives", async () => {
+    const runAbortController = new AbortController();
+    const projector = await createProjector(undefined, {
+      runAbortSignal: runAbortController.signal,
+    });
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      projector.recordNativeToolPreToolUseFailure({
+        toolName: "exec",
+        toolCallId: "native-no-item",
+        disposition: "failed",
+        durationMs: 5,
+      });
+      runAbortController.abort("codex_side_question_finished");
+      projector.buildResult(buildEmptyToolTelemetry());
+      projector.recordNativeToolPreToolUseFailure({
+        toolName: "exec",
+        toolCallId: "native-late-no-item",
+        disposition: "failed",
+        durationMs: 6,
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents.filter(
+        (event) =>
+          event.type.startsWith("tool.execution.") &&
+          "toolCallId" in event &&
+          (event.toolCallId === "native-no-item" || event.toolCallId === "native-late-no-item"),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolName: "exec",
+        toolCallId: "native-no-item",
+        durationMs: 5,
+        errorCategory: "before_tool_call",
+        terminalReason: "failed",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolName: "exec",
+        toolCallId: "native-late-no-item",
+        durationMs: 6,
+        errorCategory: "before_tool_call",
+        terminalReason: "cancelled",
+      }),
+    ]);
   });
 
   it("clears a recovered declined native tool error", async () => {

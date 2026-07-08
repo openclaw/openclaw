@@ -25,7 +25,7 @@ export type CrestodianSetupApplyResult = {
 };
 
 /** Prompter for quickstart-only flows: notes go to the log, prompts fail loud. */
-function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompter {
+export function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompter {
   const unexpected = (kind: string) => {
     throw new Error(`crestodian setup hit an interactive ${kind} prompt; quickstart must not ask`);
   };
