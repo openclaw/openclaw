@@ -1245,6 +1245,64 @@ describe("handleFeishuMessage command authorization", () => {
     expect(observedAbortSignal?.aborted).toBe(true);
   });
 
+  it("suppresses late reply delivery after the source typing target is missing", async () => {
+    let beforeDeliver:
+      | ((payload: { text: string }) => { text: string } | null | Promise<{ text: string } | null>)
+      | undefined;
+    const dispatcher = {
+      ...createReplyDispatcher(),
+      appendBeforeDeliver: vi.fn((callback) => {
+        beforeDeliver = callback;
+      }),
+    } as ReturnType<typeof createReplyDispatcher> & {
+      appendBeforeDeliver: ReturnType<typeof vi.fn>;
+    };
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher,
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
+
+    let lateDeliveryResult: { text: string } | null | undefined;
+    mockDispatchReplyFromConfig.mockImplementationOnce(async () => {
+      const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+        | { onTypingTargetMissing?: (messageId: string) => void }
+        | undefined;
+      dispatcherParams?.onTypingTargetMissing?.("msg-missing-before-final");
+      lateDeliveryResult = await beforeDeliver?.({ text: "late final" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+
+    await dispatchMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-missing-before-final",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: commandRuntime.channel,
+    });
+
+    expect(dispatcher.appendBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(lateDeliveryResult).toBeNull();
+  });
+
   it("routes /compact through the standard reply dispatch path (#90185)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
 
