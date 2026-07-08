@@ -14,6 +14,7 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/toke
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -663,7 +664,12 @@ export async function resolveSubagentCompletionOrigin(params: {
   }
 }
 
-export function loadRequesterSessionEntry(requesterSessionKey: string) {
+export function loadRequesterSessionEntry(requesterSessionKey: string): {
+  cfg: OpenClawConfig;
+  entry: SessionEntry | undefined;
+  canonicalKey: string;
+  effectiveSessionKey?: string;
+} {
   if (subagentAnnounceDeliveryDeps.loadRequesterSessionEntry) {
     return subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(requesterSessionKey);
   }
