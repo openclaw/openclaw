@@ -166,7 +166,7 @@ function applyGithubCopilotDomainToConfig(
   const models = config.models ?? {};
   const providers = models.providers ?? {};
   const provider = providers[PROVIDER_ID] ?? {};
-  const params = { ...(provider.params ?? {}) } as Record<string, unknown>;
+  const params = { ...provider.params } as Record<string, unknown>;
   if (isEnterprise) {
     params.githubDomain = domain;
   } else {
