@@ -58,7 +58,6 @@ vi.mock("./client-helpers.js", () => ({
   shouldStripProviderAuthEnvVarsForAcpServer: mocks.shouldStripProviderAuthEnvVarsForAcpServer,
 }));
 
-let sdkInitResolve: () => void;
 let sdkInitReject: (e: Error) => void;
 
 vi.mock("@agentclientprotocol/sdk", () => {
