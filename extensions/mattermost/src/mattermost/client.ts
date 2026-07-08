@@ -29,12 +29,15 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+export type MattermostRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
 
 export type MattermostClient = {
   baseUrl: string;
   apiBaseUrl: string;
   token: string;
-  request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  request: <T>(path: string, init?: MattermostRequestInit) => Promise<T>;
   /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
   fetchImpl: MattermostFetch;
 };
@@ -193,32 +196,41 @@ export function createMattermostClient(params: {
   // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
-  const guardedFetchImpl: MattermostFetch = async (input, init) => {
+  const guardedFetchImpl = async (
+    input: RequestInfo | URL,
+    init?: MattermostRequestInit,
+  ): Promise<Response> => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const { timeoutMs: initTimeoutMs, ...requestInit } = init ?? {};
+    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
     const { response, release } = await fetchWithSsrFGuard({
       url,
-      init,
+      init: requestInit,
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
-      signal: init?.signal ?? undefined,
-      timeoutMs: requestTimeoutMs,
+      signal: requestInit.signal ?? undefined,
+      timeoutMs,
     });
     return responseWithRelease(response, release);
   };
 
-  const timedExternalFetchImpl: MattermostFetch | undefined = externalFetchImpl
+  const timedExternalFetchImpl:
+    | ((input: RequestInfo | URL, init?: MattermostRequestInit) => Promise<Response>)
+    | undefined = externalFetchImpl
     ? async (input, init) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const { timeoutMs: initTimeoutMs, ...requestInit } = init ?? {};
+        const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
         const { signal, cleanup } = buildTimeoutAbortSignal({
-          timeoutMs: requestTimeoutMs,
-          signal: init?.signal ?? undefined,
+          timeoutMs,
+          signal: requestInit.signal ?? undefined,
           operation: "mattermost-api",
           url,
         });
         try {
-          return await externalFetchImpl(input, { ...init, signal });
+          return await externalFetchImpl(input, { ...requestInit, signal });
         } finally {
           cleanup();
         }
@@ -227,7 +239,7 @@ export function createMattermostClient(params: {
 
   const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
 
-  const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+  const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
     const headers = new Headers(init?.headers);
     headers.set("Authorization", `Bearer ${token}`);
@@ -312,11 +324,13 @@ export async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>("/channels/direct", {
     method: "POST",
     body: JSON.stringify(userIds),
     signal,
+    timeoutMs,
   });
 }
 
@@ -431,7 +445,12 @@ export async function createMattermostDirectChannelWithRetry(
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const result = await createMattermostDirectChannel(client, userIds, controller.signal);
+        const result = await createMattermostDirectChannel(
+          client,
+          userIds,
+          controller.signal,
+          timeoutMs,
+        );
         return result;
       } finally {
         clearTimeout(timeoutId);

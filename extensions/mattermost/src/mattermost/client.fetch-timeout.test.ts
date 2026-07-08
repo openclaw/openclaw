@@ -2,7 +2,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createMattermostClient, fetchMattermostMe } from "./client.js";
+import {
+  createMattermostClient,
+  createMattermostDirectChannelWithRetry,
+  fetchMattermostMe,
+} from "./client.js";
 
 type HangingMattermostServer = {
   baseUrl: string;
@@ -139,6 +143,32 @@ describe("Mattermost REST client fetch timeout", () => {
     expect(result.status).toBe("rejected");
     if (result.status !== "rejected") {
       throw new Error(`expected caller abort rejection, got ${result.status}`);
+    }
+    expect(errorName(result.error)).toMatch(/^(AbortError|TimeoutError)$/);
+  });
+
+  it("preserves configured DM retry timeouts longer than the client default", async () => {
+    const server = await startHangingMattermostServer();
+    const client = createMattermostClient({
+      baseUrl: server.baseUrl,
+      botToken: "bot-token",
+      allowPrivateNetwork: true,
+      timeoutMs: 50,
+    });
+
+    const request = createMattermostDirectChannelWithRetry(client, ["bot-user", "dm-user"], {
+      maxRetries: 0,
+      timeoutMs: 250,
+    });
+    request.catch(() => undefined);
+    await server.waitForRequest();
+
+    expect(await settleWithin(request, 120)).toEqual({ status: "pending" });
+    const result = await settleWithin(request, 600);
+
+    expect(result.status).toBe("rejected");
+    if (result.status !== "rejected") {
+      throw new Error(`expected DM retry timeout rejection, got ${result.status}`);
     }
     expect(errorName(result.error)).toMatch(/^(AbortError|TimeoutError)$/);
   });
