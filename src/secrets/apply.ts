@@ -68,6 +68,12 @@ type AuthStoreSnapshot = {
 
 type ProjectedState = {
   nextConfig: OpenClawConfig;
+  // Config with only the provider *additions* (providerUpserts) applied, before any provider delete
+  // or target migration. Non-null only when there are upserts; committed first (Phase 0) so that
+  // auth-store SecretRefs pointing at a newly-defined provider alias always resolve. Provider deletes
+  // are deliberately excluded here - they ride the final config write so a store ref is never left
+  // pointing at an alias removed before the store moved off it.
+  providerMutationConfig: OpenClawConfig | null;
   configSnapshot: ConfigFileSnapshot;
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
@@ -236,12 +242,22 @@ async function projectPlanState(params: {
   const warnings: string[] = [];
   const configPath = resolveUserPath(snapshot.path);
 
-  const providerConfigChanged = applyProviderPlanMutations({
+  // Provider additions (upserts) may be referenced by new auth-store refs, so they commit first
+  // (Phase 0). Provider deletes must NOT precede the stores - an alias a store still references must
+  // outlive the store rewrite - so they are applied after the snapshot below and ride the final
+  // config write (Phase B). Apply upserts, snapshot the additions-only config, then apply deletes.
+  const providerUpsertsChanged = applyProviderPlanMutations({
     config: nextConfig,
     upserts: params.plan.providerUpserts,
+    deletes: undefined,
+  });
+  const providerMutationConfig = providerUpsertsChanged ? structuredClone(nextConfig) : null;
+  const providerDeletesChanged = applyProviderPlanMutations({
+    config: nextConfig,
+    upserts: undefined,
     deletes: params.plan.providerDeletes,
   });
-  if (providerConfigChanged) {
+  if (providerUpsertsChanged || providerDeletesChanged) {
     changedFiles.add(configPath);
   }
 
@@ -295,6 +311,7 @@ async function projectPlanState(params: {
 
   return {
     nextConfig,
+    providerMutationConfig,
     configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
@@ -890,13 +907,32 @@ export async function runSecretsApply(params: {
   }
 
   try {
-    await replaceConfigFile({
-      nextConfig: projected.nextConfig,
-      snapshot: projected.configSnapshot,
-      writeOptions: projected.configWriteOptions,
-      io,
-      afterWrite: { mode: "auto" },
-    });
+    // There is no cross-store transaction across the config file and the N per-agent SQLite
+    // databases, so the commit is ordered by dependency to keep every persisted SecretRef resolvable
+    // and to never publish a config that falsely claims migration:
+    //
+    //   Phase 0  provider *additions* (providerUpserts) into openclaw.json, if any. Committed first
+    //            so an auth-store SecretRef pointing at a newly-defined provider alias can always
+    //            resolve, even if a later write fails - the ref never outruns its definition.
+    //   Phase A  satellite files + per-agent SQLite auth-stores.
+    //   Phase B  the full config (additions + deletes + target migrations), committed last so the
+    //            manifest only flips a credential to a SecretRef once every store it points at has
+    //            committed (prevents config=ref while an auth-store stays plaintext, issue #88012),
+    //            and a provider delete never lands before the store that still references it.
+    let configBaseHashAfterPhase0: string | undefined;
+    if (projected.providerMutationConfig) {
+      const phase0 = await replaceConfigFile({
+        nextConfig: projected.providerMutationConfig,
+        snapshot: projected.configSnapshot,
+        writeOptions: projected.configWriteOptions,
+        io,
+        afterWrite: { mode: "auto" },
+      });
+      configBaseHashAfterPhase0 = phase0.persistedHash ?? undefined;
+      // Re-snapshot config at the additions state so a later rollback restores to here (keeping the
+      // additions) instead of to the original, which would orphan committed store refs.
+      snapshots.set(projected.configPath, captureFileSnapshot(projected.configPath));
+    }
     for (const writeLocal of writes) {
       writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
     }
@@ -906,6 +942,25 @@ export async function runSecretsApply(params: {
       if (agentDir && store) {
         saveAuthProfileStore(store, agentDir);
       }
+    }
+    if (projected.providerMutationConfig) {
+      // Phase 0 advanced config past configSnapshot. Re-read for this write but assert against
+      // Phase 0's persisted hash, so a concurrent edit to openclaw.json between Phase 0 and Phase B
+      // is rejected (compare-and-set) instead of being silently overwritten.
+      await replaceConfigFile({
+        nextConfig: projected.nextConfig,
+        io,
+        baseHash: configBaseHashAfterPhase0,
+        afterWrite: { mode: "auto" },
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig: projected.nextConfig,
+        snapshot: projected.configSnapshot,
+        writeOptions: projected.configWriteOptions,
+        io,
+        afterWrite: { mode: "auto" },
+      });
     }
   } catch (err) {
     // Apply can touch multiple files; restore captured snapshots so partial writes do not leave

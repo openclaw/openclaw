@@ -1085,4 +1085,270 @@ describe("secrets apply", () => {
       mode: "json",
     });
   });
+
+  it("leaves config un-migrated when a per-agent auth-store commit fails (issue #88012)", async () => {
+    // One `secrets apply` migrates both an inline config provider key and an agent auth-store to
+    // SecretRefs. openclaw.json is the manifest that declares the migration, so it is committed
+    // last: a fault while committing the auth-store must abort before config is touched, and even
+    // if the best-effort rollback also fails, config must never be left claiming SecretRefs while a
+    // plaintext credential survives on disk (the cross-store divergence in issue #88012).
+    await writeJsonFile(fixture.configPath, {
+      models: { providers: { openai: createOpenAiProviderConfig("sk-openai-plaintext") } }, // pragma: allowlist secret
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-ope...text" }, // pragma: allowlist secret
+      },
+    });
+    const plan = createPlan({
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    // Model a mid-commit IO fault: the per-agent SQLite auth-store commit throws, and the
+    // best-effort config rollback restore throws too (same sticky disk fault). This is the
+    // persistence condition from issue #88012 / PROOF-CAND-057.
+    const storeModule = await import("../agents/auth-profiles/store.js");
+    const sharedModule = await import("./shared.js");
+    const actualWriteTextFileAtomic = sharedModule.writeTextFileAtomic;
+    const saveSpy = vi.spyOn(storeModule, "saveAuthProfileStore").mockImplementationOnce(() => {
+      throw new Error("simulated auth-store commit fault");
+    });
+    const rollbackSpy = vi
+      .spyOn(sharedModule, "writeTextFileAtomic")
+      .mockImplementation((targetPath, content, mode) => {
+        if (path.basename(targetPath) === "openclaw.json") {
+          throw new Error("simulated config rollback restore fault");
+        }
+        return actualWriteTextFileAtomic(targetPath, content, mode);
+      });
+
+    try {
+      await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+        /Secrets apply failed/,
+      );
+
+      // config must still hold the plaintext key, never a SecretRef object: committing config last
+      // means a failed auth-store commit never publishes a config that falsely claims migration.
+      const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+        models: { providers: { openai: { apiKey: unknown } } };
+      };
+      expect(config.models.providers.openai.apiKey).toBe("sk-openai-plaintext");
+    } finally {
+      rollbackSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
+  });
+
+  it("commits a new provider definition before the auth-store ref that uses it (issue #88012, no orphaned provider ref)", async () => {
+    // A single apply defines a new secrets provider (providerUpserts), points an auth-store profile's
+    // ref at that new alias, and migrates an inline config key. The provider definition must commit
+    // before the auth-store, so that even if the final config write and its rollback both fail, a
+    // persisted store ref to the new alias still resolves against committed config (no dangling ref).
+    await writeJsonFile(fixture.configPath, {
+      models: { providers: { openai: createOpenAiProviderConfig("sk-openai-plaintext") } }, // pragma: allowlist secret
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-ope...text" }, // pragma: allowlist secret
+      },
+    });
+    const plan = createPlan({
+      providerUpserts: { newprov: { source: "env" } },
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: { source: "env", provider: "newprov", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const mutateModule = await import("../config/mutate.js");
+    const storeModule = await import("../agents/auth-profiles/store.js");
+    const actualReplaceConfigFile = mutateModule.replaceConfigFile;
+    const actualSaveAuthProfileStore = storeModule.saveAuthProfileStore;
+    // Fail the FULL config write (the openai key is migrated to a SecretRef) but let the
+    // provider-definitions write (key still plaintext) succeed - i.e. fail config-last, keep Phase 0.
+    const replaceSpy = vi
+      .spyOn(mutateModule, "replaceConfigFile")
+      .mockImplementation(async (args) => {
+        const next = args.nextConfig as {
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        const apiKey = next.models?.providers?.openai?.apiKey;
+        if (apiKey && typeof apiKey === "object") {
+          throw new Error("simulated config write fault");
+        }
+        return actualReplaceConfigFile(args);
+      });
+    // Let the store commit succeed but fail its best-effort rollback, so the store keeps the ref.
+    let saveCalls = 0;
+    const saveSpy = vi
+      .spyOn(storeModule, "saveAuthProfileStore")
+      .mockImplementation((store, agentDir, opts) => {
+        saveCalls += 1;
+        if (saveCalls === 1) {
+          return actualSaveAuthProfileStore(store, agentDir, opts);
+        }
+        throw new Error("simulated auth-store rollback fault");
+      });
+
+    try {
+      await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+        /Secrets apply failed/,
+      );
+
+      // The auth-store kept its ref to the new provider alias...
+      const store = (await readAuthStore(fixture)) as unknown as {
+        profiles: { "openai:default": { keyRef?: { provider?: string } } };
+      };
+      expect(store.profiles["openai:default"].keyRef?.provider).toBe("newprov");
+      // ...and committed config defines that provider, so the ref resolves (no orphaned reference).
+      const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+        secrets?: { providers?: Record<string, unknown> };
+      };
+      expect(config.secrets?.providers?.newprov).toBeDefined();
+    } finally {
+      saveSpy.mockRestore();
+      replaceSpy.mockRestore();
+    }
+  });
+
+  it("does not delete a provider before the final config write that moves refs off it", async () => {
+    // config defines provider "oldprov" and an auth-store profile still references it. A plan deletes
+    // oldprov while migrating an inline config key. The delete must ride the final config write (not a
+    // Phase 0 pre-commit), so a fault on that write leaves oldprov defined and the existing store ref
+    // resolvable - the alias is never removed before the store moves off it.
+    await writeJsonFile(fixture.configPath, {
+      secrets: { providers: { oldprov: { source: "env" } } },
+      models: { providers: { openai: createOpenAiProviderConfig("sk-openai-plaintext") } }, // pragma: allowlist secret
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "oldprov", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+    const plan = createPlan({
+      providerDeletes: ["oldprov"],
+      targets: [createOpenAiProviderTarget()],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const mutateModule = await import("../config/mutate.js");
+    const actualReplaceConfigFile = mutateModule.replaceConfigFile;
+    // Fail the config write that carries the migration (openai key migrated to a ref); a pure
+    // additions pre-commit (key still plaintext) is allowed through.
+    const replaceSpy = vi
+      .spyOn(mutateModule, "replaceConfigFile")
+      .mockImplementation(async (args) => {
+        const next = args.nextConfig as {
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        const apiKey = next.models?.providers?.openai?.apiKey;
+        if (apiKey && typeof apiKey === "object") {
+          throw new Error("simulated config write fault");
+        }
+        return actualReplaceConfigFile(args);
+      });
+
+    try {
+      await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+        /Secrets apply failed/,
+      );
+      // oldprov must still be defined: the delete rode the failed final write and never landed early.
+      const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+        secrets?: { providers?: Record<string, unknown> };
+      };
+      expect(config.secrets?.providers?.oldprov).toBeDefined();
+    } finally {
+      replaceSpy.mockRestore();
+    }
+  });
+
+  it("rejects a concurrent openclaw.json edit made between the provider pre-commit and the final write", async () => {
+    // A providerUpserts plan triggers the Phase 0 pre-commit. If another writer edits openclaw.json
+    // between Phase 0 and the final config write, the final write must compare-and-set against Phase 0's
+    // hash and reject the stale write rather than silently overwrite the concurrent edit.
+    await writeJsonFile(fixture.configPath, {
+      models: { providers: { openai: createOpenAiProviderConfig("sk-openai-plaintext") } }, // pragma: allowlist secret
+    });
+    const plan = createPlan({
+      providerUpserts: { addedprov: { source: "env" } },
+      targets: [createOpenAiProviderTarget()],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const mutateModule = await import("../config/mutate.js");
+    const actualReplaceConfigFile = mutateModule.replaceConfigFile;
+    const replaceSpy = vi
+      .spyOn(mutateModule, "replaceConfigFile")
+      .mockImplementation(async (args) => {
+        const next = args.nextConfig as {
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        const apiKey = next.models?.providers?.openai?.apiKey;
+        const isFinalWrite = apiKey && typeof apiKey === "object";
+        if (!isFinalWrite) {
+          // Phase 0 pre-commit (additions, key still plaintext): let it land, then simulate a
+          // concurrent writer changing openclaw.json before the final write re-reads it.
+          const result = await actualReplaceConfigFile(args);
+          const cfg = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+            models: { providers: { openai: { baseUrl?: string } } };
+          };
+          cfg.models.providers.openai.baseUrl = "https://concurrent-edit.example/v1";
+          await fs.writeFile(fixture.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+          return result;
+        }
+        return actualReplaceConfigFile(args);
+      });
+
+    try {
+      // The final write's compare-and-set must reject the stale projected config.
+      await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow();
+      // The concurrent edit survives - it was not silently overwritten by the stale final write.
+      const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+        models: { providers: { openai: { baseUrl?: string } } };
+      };
+      expect(config.models.providers.openai.baseUrl).toBe("https://concurrent-edit.example/v1");
+    } finally {
+      replaceSpy.mockRestore();
+    }
+  });
 });
