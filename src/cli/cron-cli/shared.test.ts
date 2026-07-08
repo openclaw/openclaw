@@ -155,6 +155,26 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "(stagger 5m)");
   });
 
+  it("marks trigger schedules and shows evaluation details", () => {
+    const job = createBaseJob({
+      schedule: { kind: "every", everyMs: 30_000 },
+      trigger: { script: "json({ fire: true })", once: true },
+      state: {
+        triggerEvalCount: 4,
+        lastTriggerEvalAtMs: Date.now() - 30_000,
+        lastTriggerFireAtMs: Date.now() - 60_000,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "every 30s+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
+  });
+
   it("shows on-exit schedules in list and show output", () => {
     const job = createBaseJob({
       id: "on-exit-job",

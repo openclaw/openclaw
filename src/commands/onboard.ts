@@ -41,7 +41,7 @@ const CONVERSATIONAL_SAFE_ONBOARD_KEYS = new Set([
   "classic",
 ]);
 
-export function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
+function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }

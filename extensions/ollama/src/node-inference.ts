@@ -179,7 +179,7 @@ async function fetchLoadedModelNames(baseUrl: string): Promise<Set<string>> {
   }
 }
 
-export async function discoverOllamaNodeModels(
+async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
 ): Promise<OllamaModelsPayload> {
   const apiBase = resolveOllamaApiBase(baseUrl);

@@ -21,14 +21,14 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 
-export type ContainerRpcOptions = {
+type ContainerRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
   maxAttachmentBytes?: number;
 };
 
-export type ContainerWebSocketMessage = {
+type ContainerWebSocketMessage = {
   envelope?: {
     syncMessage?: unknown;
     dataMessage?: {

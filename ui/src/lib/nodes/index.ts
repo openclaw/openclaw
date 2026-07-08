@@ -118,7 +118,7 @@ export type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprov
 
 export type ExecApprovalsTarget = { kind: "gateway" } | { kind: "node"; nodeId: string };
 
-export type NodesState = {
+type NodesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   nodesLoading: boolean;
@@ -127,7 +127,7 @@ export type NodesState = {
   chatError?: string | null;
 };
 
-export type DevicesState = {
+type DevicesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   devicesLoading: boolean;
@@ -649,6 +649,26 @@ async function generateIdentity(): Promise<DeviceIdentity> {
     publicKey: base64UrlEncode(publicKey),
     privateKey: base64UrlEncode(privateKey),
   };
+}
+
+/**
+ * Synchronous identity probe for render gating: reads the stored device id
+ * without creating, repairing, or fingerprint-verifying an identity, so a
+ * "do we hold credentials?" check stays side-effect free before connect().
+ */
+export function peekStoredDeviceIdentityId(): string | null {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    return parsed?.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId
+      ? parsed.deviceId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {

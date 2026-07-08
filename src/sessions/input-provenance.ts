@@ -114,9 +114,7 @@ export function hasInterSessionUserProvenance(
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.
-export function buildInterSessionPromptPrefix(
-  inputProvenance: InputProvenance | undefined,
-): string {
+function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefined): string {
   const provenance = inputProvenance?.kind === "inter_session" ? inputProvenance : undefined;
   const details = [
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,

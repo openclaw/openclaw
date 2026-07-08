@@ -42,6 +42,7 @@ Never infer a recipient from a casual name alone when several chats or handles c
 ## Host Requirements
 
 - macOS 14+ with Messages.app signed in for send/react/bridge actions.
+- Private API mode is strongly encouraged for OpenClaw iMessage. It unlocks replies, precise tapbacks, effects, polls, attachment replies, read/typing actions, and group management. Basic mode is a fallback for reads plus plain text/file send.
 - Full Disk Access for the process context that runs `imsg` or OpenClaw; reads fail without Messages DB access.
 - Automation permission for Messages.app when using public `send`.
 - Accessibility permission for the process context that runs public `imsg react`; it uses System Events UI automation. Bridge `tapback` uses private API instead.
@@ -73,13 +74,13 @@ Do not make `jq` a hard prerequisite for the skill; it is only a convenient form
 
 ## Capability Choice
 
-Use public Messages automation when enough:
+Use standard commands for reads, target resolution, and plain sends:
 
 - Read/list/search/watch: `chats`, `group`, `history`, `search`, `watch`
 - Basic text/file send: `send`
 - Standard tapback to most recent incoming message in a chat: `react`
 
-Use the private API bridge only for features public automation cannot do:
+Use the private API bridge for the native iMessage actions OpenClaw users normally expect:
 
 - Rich replies, text formatting, effects, subjects, multipart sends
 - Native Apple Messages polls and poll votes
@@ -89,7 +90,7 @@ Use the private API bridge only for features public automation cannot do:
 - Group create/name/photo/member/leave/delete/mark actions
 - Account, whois, nickname checks
 
-Before bridge actions, check:
+For OpenClaw channel setup, check bridge availability early:
 
 ```bash
 imsg status --json
@@ -102,7 +103,7 @@ imsg launch
 imsg status --json
 ```
 
-If SIP, library validation, private entitlement checks, or missing selectors still block the capability, do not ask the user to disable SIP casually. Explain that the requested private-API action is unavailable on this host and offer the closest non-bridge action, if one exists.
+If SIP, library validation, private entitlement checks, or missing selectors still block the capability, explain that the requested private-API action is unavailable on this host and offer the closest non-bridge action, if one exists. Do not silently downgrade a threaded reply, effect, subject, poll, or GUID-targeted tapback into a plain send/react.
 
 ## DM Scenarios
 
@@ -205,11 +206,11 @@ Use `send-rich --reply-to <message-guid>` for threaded replies. Confirm the refe
 
 Native Apple Messages polls require the bridge. Creation needs at least two `--option` values. Voting requires one of `--option-id`, `--option-index`, or `--option`.
 
-Messages renders only the options on a poll balloon; the `--question` title is not shown to recipients. Set `--question` (required) plus at least two `--option` values.
+Messages renders only the options on a poll balloon, so current `imsg poll send` echoes `--question` as a best-effort plain caption after the poll. Use `--comment` to override that caption. Do not retry automatically when only the caption fails: the poll may already be delivered.
 
 ```bash
 imsg poll send --chat 'iMessage;-;+15551234567' \
-  --question "Dinner?" --option "Pizza" --option "Sushi"
+  --question "Dinner?" --option "Pizza" --option "Sushi" --comment "Vote by 5pm"
 imsg poll send --chat 'iMessage;+;chat0000' --reply-to <message-guid> \
   --question "Approve?" --option "Yes" --option "No"
 imsg poll vote --chat 'iMessage;+;chat0000' \
@@ -222,7 +223,7 @@ Find poll IDs and options with:
 imsg history --chat-id 42 --limit 20 --json | jq -s '.[] | select(.poll != null) | {guid, poll}'
 ```
 
-Poll vote rows are `poll` events, not tapbacks; `watch --reactions` is not required to see them.
+`history` and `watch` backfill a title-less inbound native poll's `poll.question` from its clean caption row. Poll vote rows are `poll` events, not tapbacks; `watch --reactions` is not required to see them.
 
 ## Watch and Long-Running Agents
 
@@ -246,4 +247,4 @@ For a daemon or multi-chat integration, use `imsg rpc`. It speaks JSON-RPC 2.0 o
 - Never send to unknown numbers or ambiguous contact-name matches without approval.
 - Confirm attachments exist and are the intended files.
 - Prefer E.164 phone numbers; use `--region US` or another region only when needed for local formats.
-- Do not use bridge actions just because they are available; use them only when the requested behavior needs them.
+- Use bridge actions for bridge-only semantics, but confirm visible state changes and destructive actions first.

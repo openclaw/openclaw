@@ -24,4 +24,26 @@ describe("loadPromptTemplates", () => {
     expect(templates).toHaveLength(1);
     expect(templates[0]?.description).toBe(`${"a".repeat(59)}...`);
   });
+
+  it("preserves dash-prefixed Markdown as prompt content", async () => {
+    const root = tempDirs.make("openclaw-prompt-templates-");
+    const promptsDir = join(root, "prompts");
+    await mkdir(promptsDir, { recursive: true });
+    const content = "----\nname: bogus\ndescription: must remain Markdown\n---\n# Body\n";
+    await writeFile(join(promptsDir, "dash-prefix.md"), content, "utf-8");
+
+    const templates = loadPromptTemplates({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      promptPaths: [promptsDir],
+      includeDefaults: false,
+    });
+
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({
+      name: "dash-prefix",
+      description: "----",
+      content,
+    });
+  });
 });

@@ -43,7 +43,7 @@ export function readAbsolutePath(input: unknown): string | InvalidPathResult {
   return input;
 }
 
-export function canonicalPathFromFsSafeError(err: unknown): string | undefined {
+function canonicalPathFromFsSafeError(err: unknown): string | undefined {
   if (!(err instanceof FsSafeError) || !err.cause || typeof err.cause !== "object") {
     return undefined;
   }

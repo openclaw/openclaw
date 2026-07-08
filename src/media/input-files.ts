@@ -161,7 +161,7 @@ export function normalizeMimeType(value: string | undefined): string | undefined
 }
 
 /** Parses a Content-Type header into normalized MIME and optional charset values. */
-export function parseContentType(value: string | undefined): {
+function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
 } {
