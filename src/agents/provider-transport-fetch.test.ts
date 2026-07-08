@@ -213,6 +213,11 @@ describe("buildGuardedModelFetch", () => {
     expect(
       new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
     ).toBe("record-header-secret");
+    expect(
+      new Headers(ensureModelProviderLocalServiceMock.mock.calls[0]?.[1] as HeadersInit).get(
+        "x-api-key",
+      ),
+    ).toBe(recordSentinel);
   });
 
   it("swaps sentinels in tuple init headers", async () => {

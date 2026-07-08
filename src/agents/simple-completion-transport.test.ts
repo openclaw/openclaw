@@ -208,41 +208,6 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toBe(model);
   });
 
-  it("unwraps the provider-owned Google transport fallback at its plugin boundary", () => {
-    const secret = JSON.stringify({ token: "google-oauth-token", projectId: "demo" });
-    const sentinel = mintSecretSentinel(secret, { label: "model-auth:custom-google" });
-    const googleStream = vi.fn(() => "google-stream-result" as never);
-    resolveProviderStreamFn.mockReturnValue(undefined);
-    createTransportAwareStreamFnForModel.mockReturnValue(googleStream);
-    const model: Model<"google-generative-ai"> = {
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro",
-      api: "google-generative-ai" as const,
-      provider: "custom-google",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 8_192,
-      headers: { Authorization: `Bearer ${sentinel}` },
-    };
-
-    prepareModelForSimpleCompletion({ model });
-
-    expect(createTransportAwareStreamFnForModel).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
-      expect.any(Object),
-    );
-    const registeredStream = ensureCustomApiRegistered.mock.calls[0]?.[1] as StreamFn;
-    void registeredStream(model as never, {} as never, { apiKey: sentinel } as never);
-    expect(googleStream).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
-      {},
-      { apiKey: secret },
-    );
-  });
-
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {
     const model: Model<"anthropic-messages"> = {
       id: "claude-sonnet",

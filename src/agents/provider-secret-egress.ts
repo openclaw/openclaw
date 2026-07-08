@@ -113,6 +113,25 @@ export function unwrapHeaderSentinelsForProviderEgress<T extends Record<string, 
   return headers ? (headers as T) : input;
 }
 
+export function unwrapHeadersInitSentinelsForProviderEgress(
+  input: HeadersInit | undefined,
+  boundary: string,
+): HeadersInit | undefined {
+  if (!input) {
+    return input;
+  }
+  const headers = new Headers(input);
+  let changed = false;
+  for (const [name, value] of headers) {
+    const resolved = unwrapSecretSentinelsForProviderEgress(value, boundary);
+    if (resolved !== value) {
+      headers.set(name, resolved);
+      changed = true;
+    }
+  }
+  return changed ? headers : input;
+}
+
 function unwrapRequestTransportSentinelsForProviderEgress(
   request: ModelProviderRequestTransportOverrides | undefined,
   boundary: string,

@@ -860,9 +860,10 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    const rawHeaders = request?.headers ?? init?.headers;
     const swappedEgress = swapSecretSentinelsForEgress({
       url: rawUrl,
-      headers: request?.headers ?? init?.headers,
+      headers: rawHeaders,
     });
     const url = swappedEgress.url;
     const policy = resolveProviderTransportSsrFPolicy({
@@ -924,7 +925,7 @@ export function buildGuardedModelFetch(
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        baseInit?.headers,
+        rawHeaders,
         localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
