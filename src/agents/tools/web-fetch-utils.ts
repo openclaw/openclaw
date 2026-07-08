@@ -44,7 +44,6 @@ type HtmlTagToken = {
 type ReadTagResult = {
   token: HtmlTagToken | null;
   next: number;
-  text?: string;
 };
 
 // Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
@@ -517,24 +516,14 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
     if (!read) {
       const rawTextStart = findRawTextOpenTagStart(html, i + 1, html.length);
       if (rawTextStart !== -1) {
-        if (!startsLikeHtmlTag(html, i)) {
-          appendText(stack, decodeEntities(html.slice(i, rawTextStart)));
-        }
         i = rawTextStart;
         continue;
       }
-      if (startsLikeHtmlTag(html, i)) {
-        break;
-      }
-      appendText(stack, decodeEntities(html.slice(i)));
       break;
     }
-    const { token, next, text } = read;
+    const { token, next } = read;
     i = next;
     if (!token) {
-      if (text) {
-        appendText(stack, decodeEntities(text));
-      }
       continue;
     }
 
