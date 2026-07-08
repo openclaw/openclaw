@@ -7533,6 +7533,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Native approval delivery
   - H3: Narrower approval runtime subpaths
   - H3: Setup subpaths
+  - H3: Status contracts
   - H3: Other narrow channel subpaths
   - H2: Inbound mention policy
   - H2: Walkthrough
@@ -7569,6 +7570,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
   - H2: How to migrate
+  - H2: Channel status type migration
   - H2: Import path reference
   - H2: Removed compatibility surfaces
   - H3: Process-global API-provider publication
@@ -9056,13 +9058,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Catchphrase
   - H2: Related
 
-## reference/templates/IDENTITY.md
-
-- Route: /reference/templates/IDENTITY
-- Headings:
-  - H1: IDENTITY.md - Who Am I?
-  - H2: Related
-
 ## reference/templates/SOUL.dev.md
 
 - Route: /reference/templates/SOUL.dev
@@ -9112,14 +9107,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /reference/templates/USER.dev
 - Headings:
   - H1: USER.md - User Profile
-  - H2: Related
-
-## reference/templates/USER.md
-
-- Route: /reference/templates/USER
-- Headings:
-  - H1: USER.md - About Your Human
-  - H2: Context
   - H2: Related
 
 ## reference/test.md
