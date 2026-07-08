@@ -273,6 +273,14 @@ export async function readResponseText(
         parts.push(chunk);
 
         if (truncated || bytesRead >= maxBytes) {
+          // Exact-size responses are complete, not truncated.
+          // Peek one more read to confirm whether the stream has ended.
+          if (!truncated) {
+            const peek = await reader.read();
+            if (peek.done) {
+              break;
+            }
+          }
           truncated = true;
           break;
         }
