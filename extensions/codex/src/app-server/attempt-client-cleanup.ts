@@ -146,7 +146,11 @@ export async function retireCodexAppServerClientAfterTimedOutTurn(
     reason: string;
   },
 ): Promise<void> {
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
+  // A timed-out turn marks the physical client suspect: fail co-leased
+  // attempts into their retry path instead of leaving them wedged on it.
+  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client, {
+    failActiveLeases: true,
+  });
   const detachedSharedClient = Boolean(retiredSharedClient);
   interruptCodexTurnBestEffort(client, {
     threadId: params.threadId,

@@ -171,6 +171,80 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.abortController.signal.aborted).toBe(false);
   });
 
+  it("fires terminal idle timeout while an app-server request is in flight", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armTerminalIdleWatch();
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "terminal",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "startup",
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_terminal_idle_timeout");
+  });
+
+  it("keeps terminal idle alive when notifications arrive during an in-flight request", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armTerminalIdleWatch();
+    vi.advanceTimersByTime(9);
+    harness.controller.noteNotificationReceived("item/commandExecution/outputDelta");
+    vi.advanceTimersByTime(9);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    vi.advanceTimersByTime(1);
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "terminal",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "notification:item/commandExecution/outputDelta",
+      },
+    ]);
+  });
+
+  it("keeps completion idle gated while a request is in flight", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.touchActivity("turn:start", { arm: true });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    harness.controller.scheduleProgressWatches();
+    vi.advanceTimersByTime(1);
+
+    expect(harness.timeouts).toMatchObject([{ kind: "completion" }]);
+  });
+
+  it("keeps assistant-completion gated while a request is in flight", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armAssistantCompletionIdleWatch();
+    vi.advanceTimersByTime(10);
+
+    expect(harness.completed).toBe(false);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    vi.advanceTimersByTime(1);
+
+    expect(harness.completed).toBe(true);
+  });
+
   it("waits for active completion blocker items before firing completion idle timeout", () => {
     const harness = createController();
     harness.activeCompletionBlockers = 1;

@@ -26,6 +26,7 @@ type SharedCodexAppServerClientEntry = {
   activeLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
+  closeError?: Error;
 };
 
 type SharedCodexAppServerClientState = {
@@ -212,6 +213,9 @@ async function acquireSharedCodexAppServerClient(
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
+    if (entry.closeError) {
+      throw entry.closeError;
+    }
     // Later leases of the same keyed client may carry fresher config; the
     // runtime install itself stays one-per-physical-client.
     ensureCodexAppServerClientRuntime(client, {
@@ -408,9 +412,18 @@ export function retainSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
-/** Marks a matching shared client to close after active leases/acquires drain. */
+/**
+ * Retires a matching shared client. Default is graceful: detach from the map
+ * (future acquisitions get a fresh client) and close once leases drain.
+ * `failActiveLeases` is for suspect clients only (timed-out turns): it closes
+ * the physical connection immediately so co-leased attempts hit the normal
+ * client-closed retry path, and pending acquires reject instead of leasing
+ * the poisoned process. Routine cleanup must NOT use it — it would abort
+ * healthy sibling turns on a working client.
+ */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
+  opts?: { failActiveLeases?: boolean },
 ): { activeLeases: number; closed: boolean } | undefined {
   if (!client) {
     return undefined;
@@ -420,6 +433,11 @@ export function retireSharedCodexAppServerClientIfCurrent(
     if (entry.client === client) {
       state.clients.delete(key);
       entry.closeWhenIdle = true;
+      if (opts?.failActiveLeases) {
+        entry.closeError = new Error("codex app-server client is closed");
+        const closed = closeRetiredSharedClientEntry(entry);
+        return { activeLeases: entry.activeLeases, closed };
+      }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
       return { activeLeases: entry.activeLeases, closed };
     }
@@ -551,6 +569,16 @@ function closeRetiredSharedClientEntryIfIdle(entry: SharedCodexAppServerClientEn
   }
   const client = entry.client;
   entry.closeWhenIdle = false;
+  entry.client = undefined;
+  client.close();
+  return true;
+}
+
+function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
+  const client = entry.client;
+  if (!client) {
+    return false;
+  }
   entry.client = undefined;
   client.close();
   return true;

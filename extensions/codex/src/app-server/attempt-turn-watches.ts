@@ -166,12 +166,7 @@ export function createCodexAttemptTurnWatchController(params: {
 
   function scheduleTerminalIdleWatch() {
     clearTerminalIdleTimer();
-    if (
-      params.isCompleted() ||
-      params.signal.aborted ||
-      !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
-    ) {
+    if (params.isCompleted() || params.signal.aborted || !terminalIdleWatchArmed) {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
@@ -371,12 +366,14 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireTerminalIdleTimeout() {
+    // This is the physical-client liveness backstop. An in-flight request can
+    // be silent forever if the client is wedged, so only real notifications
+    // reset the terminal clock.
     if (
       params.isCompleted() ||
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
-      !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      !terminalIdleWatchArmed
     ) {
       return;
     }
