@@ -1545,6 +1545,15 @@ export async function runMessageAction(
   }
   const channel = await resolveChannel(cfg, params, input.toolContext);
   params.channel = channel;
+  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const pluginOwnedAction = action !== "send" && action !== "poll";
+  if (
+    pluginOwnedAction &&
+    channelPlugin?.actions?.supportsAction &&
+    !channelPlugin.actions.supportsAction({ action })
+  ) {
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
+  }
   params = normalizeMessageActionInput({
     action,
     args: params,
@@ -1608,7 +1617,6 @@ export async function runMessageAction(
     mediaAccess,
   });
   const gateway = resolveGateway(input);
-  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const preserveSendBuffer =
     action === "send" &&
     Boolean(gateway) &&

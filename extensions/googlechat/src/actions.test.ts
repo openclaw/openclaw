@@ -1,13 +1,10 @@
 // Googlechat tests cover actions plugin behavior.
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
-const uploadGoogleChatAttachment = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
-const getGoogleChatRuntime = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   listEnabledGoogleChatAccounts,
@@ -16,11 +13,6 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./api.js", () => ({
   sendGoogleChatMessage,
-  uploadGoogleChatAttachment,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getGoogleChatRuntime,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -41,7 +33,6 @@ describe("googlechat message actions", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./api.js");
-    vi.doUnmock("./runtime.js");
     vi.doUnmock("./targets.js");
     vi.resetModules();
   });
@@ -89,8 +80,10 @@ describe("googlechat message actions", () => {
     ]);
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
-      actions: ["send", "upload-file"],
+      actions: ["send"],
     });
+    expect(googlechatMessageActions.supportsAction?.({ action: "send" })).toBe(true);
+    expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
   it("keeps the legacy reaction gate from changing account-scoped discovery", () => {
@@ -106,32 +99,15 @@ describe("googlechat message actions", () => {
       expect(
         googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId }),
       ).toEqual({
-        actions: ["send", "upload-file"],
+        actions: ["send"],
       });
     }
   });
 
-  it("sends messages with uploaded media through the resolved space", async () => {
-    const account = buildAccount({
-      config: { mediaMaxMb: 5 },
-    });
+  it("sends text through the resolved space", async () => {
+    const account = buildAccount();
     resolveGoogleChatAccount.mockReturnValue(account);
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
-    const readRemoteMediaBuffer = vi.fn(async () => ({
-      buffer: Buffer.from("remote-bytes"),
-      fileName: "remote.png",
-      contentType: "image/png",
-    }));
-    getGoogleChatRuntime.mockReturnValue({
-      channel: {
-        media: {
-          readRemoteMediaBuffer,
-        },
-      },
-    });
-    uploadGoogleChatAttachment.mockResolvedValue({
-      attachmentUploadToken: "token-1",
-    });
     sendGoogleChatMessage.mockResolvedValue({
       messageName: "spaces/AAA/messages/msg-1",
       threadName: "spaces/AAA/threads/thread-1",
@@ -145,7 +121,6 @@ describe("googlechat message actions", () => {
       params: {
         to: "spaces/AAA",
         message: "caption",
-        media: "https://example.com/file.png",
         threadId: "thread-1",
       },
       cfg: {},
@@ -156,23 +131,11 @@ describe("googlechat message actions", () => {
       account,
       target: "spaces/AAA",
     });
-    expect(readRemoteMediaBuffer).toHaveBeenCalledWith({
-      url: "https://example.com/file.png",
-      maxBytes: 5 * 1024 * 1024,
-    });
-    expect(uploadGoogleChatAttachment).toHaveBeenCalledWith({
-      account,
-      space: "spaces/AAA",
-      filename: "remote.png",
-      buffer: Buffer.from("remote-bytes"),
-      contentType: "image/png",
-    });
     expect(sendGoogleChatMessage).toHaveBeenCalledWith({
       account,
       space: "spaces/AAA",
       text: "caption",
       thread: "thread-1",
-      attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
     });
     expectJsonResult(result, {
       ok: true,
@@ -182,69 +145,54 @@ describe("googlechat message actions", () => {
     });
   });
 
-  it("routes upload-file through the same attachment upload path with filename override", async () => {
-    const account = buildAccount({
-      config: { mediaMaxMb: 5 },
-    });
-    resolveGoogleChatAccount.mockReturnValue(account);
-    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
-    const localRoot = "/tmp/googlechat-action-test";
-    const localPath = path.join(localRoot, "local.md");
-    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
-    getGoogleChatRuntime.mockReturnValue({
-      channel: {
-        media: {
-          readRemoteMediaBuffer: vi.fn(),
-        },
-      },
-    });
-    uploadGoogleChatAttachment.mockResolvedValue({
-      attachmentUploadToken: "token-2",
-    });
-    sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/BBB/messages/msg-2",
-      threadName: "spaces/BBB/threads/thread-2",
-    });
-
-    if (!googlechatMessageActions.handleAction) {
-      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
-    }
-    const result = await googlechatMessageActions.handleAction({
-      action: "upload-file",
+  it.each([
+    { action: "send", params: { to: "spaces/AAA", message: "caption", media: "remote.png" } },
+    {
+      action: "send",
+      params: { to: "spaces/AAA", message: "caption", mediaUrl: "remote.png" },
+    },
+    {
+      action: "send",
+      params: { to: "spaces/AAA", message: "caption", mediaUrls: ["remote.png"] },
+    },
+    {
+      action: "send",
+      params: { to: "spaces/AAA", message: "caption", fileUrl: "remote.png" },
+    },
+    {
+      action: "send",
       params: {
-        to: "spaces/BBB",
-        path: localPath,
-        message: "notes",
-        filename: "renamed.txt",
+        to: "spaces/AAA",
+        message: "caption",
+        attachments: [{ url: "remote.png" }],
       },
-      cfg: {},
-      accountId: "default",
-      mediaLocalRoots: [localRoot],
-      mediaReadFile: readFile,
-    } as never);
+    },
+    {
+      action: "upload-file",
+      params: { to: "spaces/AAA", message: "caption", path: "local.png" },
+    },
+  ])(
+    "rejects outbound attachment action $action before provider access",
+    async ({ action, params }) => {
+      if (!googlechatMessageActions.handleAction) {
+        throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+      }
+      await expect(
+        googlechatMessageActions.handleAction({
+          action,
+          params,
+          cfg: {},
+          accountId: "default",
+        } as never),
+      ).rejects.toThrow(
+        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
+      );
 
-    expect(readFile).toHaveBeenCalledWith(localPath);
-    expect(uploadGoogleChatAttachment).toHaveBeenCalledWith({
-      account,
-      space: "spaces/BBB",
-      filename: "renamed.txt",
-      buffer: Buffer.from("local-bytes"),
-      contentType: "text/markdown",
-    });
-    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/BBB",
-      text: "notes",
-      thread: undefined,
-      attachments: [{ attachmentUploadToken: "token-2", contentName: "renamed.txt" }],
-    });
-    expectJsonResult(result, {
-      ok: true,
-      to: "spaces/BBB",
-      messageName: "spaces/BBB/messages/msg-2",
-      threadName: "spaces/BBB/threads/thread-2",
-    });
-  });
+      expect(resolveGoogleChatAccount).not.toHaveBeenCalled();
+      expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
+      expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["react", "reactions"])(
     "rejects unsupported %s actions without provider access",
@@ -264,7 +212,6 @@ describe("googlechat message actions", () => {
       ).rejects.toThrow(`Action ${action} is not supported for provider googlechat.`);
 
       expect(sendGoogleChatMessage).not.toHaveBeenCalled();
-      expect(uploadGoogleChatAttachment).not.toHaveBeenCalled();
     },
   );
 });

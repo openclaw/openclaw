@@ -60,8 +60,9 @@ const googlechatActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return null;
     }
-    return { actions: ["send", "upload-file"] };
+    return { actions: ["send"] };
   },
+  supportsAction: ({ action }) => action === "send",
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
     const { googlechatMessageActions } = await import("./actions.js");

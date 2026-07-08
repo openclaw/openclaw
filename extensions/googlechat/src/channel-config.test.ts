@@ -21,10 +21,11 @@ describe("googlechatPlugin config adapter", () => {
     expect(googlechatSetupPlugin.capabilities?.chatTypes).toEqual(
       googlechatPlugin.capabilities?.chatTypes,
     );
+    expect(googlechatPlugin.capabilities?.media).toBe(true);
     expect(googlechatPlugin.capabilities?.reactions).toBeUndefined();
   });
 
-  it("does not advertise user-auth-only reaction actions", () => {
+  it("does not advertise user-auth-only actions", () => {
     const cfg = {
       channels: {
         googlechat: {
@@ -35,8 +36,10 @@ describe("googlechatPlugin config adapter", () => {
     } as OpenClawConfig;
 
     expect(googlechatPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
-      actions: ["send", "upload-file"],
+      actions: ["send"],
     });
+    expect(googlechatPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
+    expect(googlechatPlugin.actions?.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
   it("registers an exec-capable native approval runtime", () => {
