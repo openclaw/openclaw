@@ -185,6 +185,17 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     });
   });
 
+  it("closes titles when literal title text looks like nested markup", () => {
+    expect(htmlToMarkdown(`<title>My <a> Site</title><p>Hello</p>`)).toEqual({
+      text: "Hello",
+      title: "My Site",
+    });
+    expect(htmlToMarkdown(`<title>My <h1> Site</h1></title><p>Hello</p>`)).toEqual({
+      text: "Hello",
+      title: "My Site",
+    });
+  });
+
   it("bounds nested render contexts from malformed repeated anchors", () => {
     const rendered = htmlToMarkdown(`<a href=/x>t`.repeat(100)).text;
 

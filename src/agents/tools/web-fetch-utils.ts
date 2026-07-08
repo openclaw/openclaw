@@ -401,12 +401,18 @@ function closeContext(
       state.title ??= label || undefined;
       return;
     case "anchor":
-      parent.parts.push(
-        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
-      );
+      if (parent.kind === "title") {
+        parent.parts.push(label);
+      } else {
+        parent.parts.push(
+          context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+        );
+      }
       return;
     case "heading":
-      if (parent.kind === "anchor") {
+      if (parent.kind === "title") {
+        parent.parts.push(label);
+      } else if (parent.kind === "anchor") {
         parent.parts.push(label);
         parent.hasText ||= Boolean(label);
       } else {
@@ -414,10 +420,14 @@ function closeContext(
       }
       return;
     case "list-item":
-      if (parent.kind === "anchor") {
-        parent.hasText ||= Boolean(label);
+      if (parent.kind === "title") {
+        parent.parts.push(label);
+      } else {
+        if (parent.kind === "anchor") {
+          parent.hasText ||= Boolean(label);
+        }
+        parent.parts.push(`\n- ${label}`);
       }
-      parent.parts.push(`\n- ${label}`);
       return;
     case "root":
       parent.parts.push(label);
@@ -561,7 +571,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
 
     if (token.closing) {
       if (token.name === "title") {
-        closeMatchingContext(stack, "title", state);
+        closeThroughContext(stack, "title", state);
       } else if (token.name === "a") {
         closeMatchingContext(stack, "anchor", state);
       } else if (/^h[1-6]$/.test(token.name)) {
