@@ -109,13 +109,6 @@ export const zh_CN = {
       serveHint: "面向你的 tailnet 设备提供私有 HTTPS",
       warningTitle: "Tailscale 警告",
     },
-    hooks: {
-      configuredTitle: "Hooks 已配置",
-      enable: "启用 hooks？",
-      introTitle: "Hooks",
-      noHooksMessage: "没有找到可用 hook。你可以稍后在配置中设置 hooks。",
-      noHooksTitle: "没有可用 Hooks",
-    },
     completion: {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
@@ -238,6 +231,8 @@ export const zh_CN = {
       websocketUrl: "Gateway WebSocket URL",
     },
     setup: {
+      authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",
+      authChoiceFailedTitle: "提供商设置失败",
       authChoiceRequired: "必须选择认证方式",
       channelsTitle: "频道",
       configHandling: "配置处理",
@@ -468,6 +463,7 @@ export const zh_CN = {
       tokenHelpCopyToken: "3) 复制 token（格式类似 123456:ABC...）",
       tokenHelpNewBot: "2) 运行 /newbot（或 /mybots）",
       tokenHelpOpenBotFather: "1) 打开 Telegram 并与 @BotFather 对话",
+      tokenHelpWebApp: "更喜欢图形界面？BotFather 网页应用：{url}（创建 bot 后复制 token）",
       tokenInputPrompt: "输入 Telegram bot token",
       tokenKeepPrompt: "Telegram token 已配置。保留当前值？",
       userIdHelpGetUpdates:
@@ -882,6 +878,7 @@ export const zh_CN = {
     },
     search: {
       apiKeyRequired: "需要 API key",
+      credentialRequired: "需要 {label}",
       chooseProvider: "选择一个提供方。有些提供方需要 API key，有些无需 key。",
       configured: "已配置",
       configureLaterHint: "稍后可用 openclaw configure --section web 配置",
@@ -948,6 +945,9 @@ export const zh_CN = {
       laterTitle: "稍后",
       managedWebSearchSkipped: "已跳过托管 web search provider。",
       noBackgroundGatewayExpected: "本次设置未安装 Gateway 服务，因此不会有后台 Gateway。",
+      noModelAuth: "提供商 “{provider}” 尚未配置凭据，聊天将失败，直到添加认证。",
+      noModelAuthNext: "随时可以通过 {command} 添加提供商。",
+      noModelAuthTitle: "缺少模型认证",
       nodeAndroid: "Android app（camera/canvas）",
       nodeIos: "iOS app（camera/canvas）",
       nodeMac: "macOS app（system + notifications）",

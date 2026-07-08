@@ -250,6 +250,24 @@ describe("gateway sessions patch", () => {
     );
   });
 
+  test("marks archived sessions unread and clears the marker when read", async () => {
+    const store = mainStoreEntry({ archivedAt: 10, lastReadAt: 20 });
+    const unread = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
+    );
+    expect(unread.archivedAt).toBe(10);
+    expect(unread.lastReadAt).toBe(20);
+    expect(unread.markedUnreadAt).toEqual(expect.any(Number));
+
+    const read = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: false } }),
+    );
+    expect(read.archivedAt).toBe(10);
+    expect(read.lastReadAt).toEqual(expect.any(Number));
+    expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
+    expect(read.markedUnreadAt).toBeUndefined();
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -365,6 +383,53 @@ describe("gateway sessions patch", () => {
     expect(entry.responseUsage).toBe("tokens");
     expect(entry.parentSessionKey).toBe("agent:main:main");
     expect(entry.fastMode).toBe(true);
+  });
+
+  test("persists, trims, and clears category", async () => {
+    const store = mainStoreEntry({});
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "  Research  " },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ category: "Research" }),
+        patch: { key: MAIN_SESSION_KEY, category: null },
+      }),
+    );
+    expect(cleared.category).toBeUndefined();
+  });
+
+  test("allows duplicate categories across sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      ...mainStoreEntry({}),
+      "agent:main:discord:channel:123": {
+        sessionId: "other",
+        updatedAt: 1,
+        category: "Research",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "Research" },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+  });
+
+  test("rejects empty category", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, category: "   " },
+      }),
+      "invalid category: empty",
+    );
   });
 
   test("clears fastMode when patch sets null", async () => {
@@ -596,6 +661,32 @@ describe("gateway sessions patch", () => {
       }),
     );
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+  });
+
+  test("persists provider-qualified aliases without cross-provider collisions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: OPENAI_GPT_MODEL },
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "lmstudio-moe/Local" },
+        loadGatewayModelCatalog: loadCatalog(
+          "lmstudio-moe/qwen3.6-35b-a3b",
+          "lmstudio-dense/qwen3.6-27b",
+        ),
+      }),
+    );
+
+    expectModelSelection(entry, "lmstudio-moe", "qwen3.6-35b-a3b");
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   test("sets spawnDepth for subagent sessions", async () => {

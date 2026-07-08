@@ -1,8 +1,13 @@
 // Crestodian gateway methods host the setup/repair conversation for clients.
-import { validateCrestodianChatParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  validateCrestodianChatParams,
+  validateCrestodianSetupActivateParams,
+  validateCrestodianSetupDetectParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
 import { buildOnboardingWelcome } from "../../crestodian/onboarding-welcome.js";
 import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -43,6 +48,56 @@ async function evictOldestSession(sessions: Map<string, CrestodianChatSession>):
 }
 
 export const crestodianHandlers: GatewayRequestHandlers = {
+  /** Structured onboarding: list reusable AI access on this host. */
+  "crestodian.setup.detect": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateCrestodianSetupDetectParams,
+        "crestodian.setup.detect",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const { detectSetupInference } = await import("../../crestodian/setup-inference.js");
+    respond(true, await detectSetupInference(), undefined);
+  },
+  /**
+   * Structured onboarding: live-test one candidate and persist it on success.
+   * Serialized per gateway process implicitly by the app driving one attempt
+   * at a time; a failed attempt never mutates config (see setup-inference.ts).
+   */
+  "crestodian.setup.activate": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateCrestodianSetupActivateParams,
+        "crestodian.setup.activate",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
+    const runtime = {
+      ...defaultRuntime,
+      // Setup runs inside the gateway process; a failing sub-step must reject
+      // the RPC, never exit the daemon.
+      exit: (code: number | undefined): never => {
+        throw new Error(`setup step exited with code ${String(code)}`);
+      },
+    };
+    const result = await activateSetupInference({
+      kind: params.kind,
+      ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
+      ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
+      ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+      surface: "gateway",
+      runtime,
+    });
+    respond(true, result, undefined);
+  },
   "crestodian.chat": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCrestodianChatParams, "crestodian.chat", respond)) {
       return;

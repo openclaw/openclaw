@@ -15,6 +15,7 @@ import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
+  SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
@@ -309,10 +310,6 @@ function isUnreferencedSessionArtifactFile(
   );
 }
 
-// An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
-// atomic write (those rename within milliseconds), so it is safe to reclaim
-// regardless of the general unreferenced-artifact age threshold (#56827).
-const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
 // Prompt blobs are written or mtime-refreshed before sessions.json points at
 // them. Treat fresh unreferenced blobs as in-flight so cleanup cannot strand a
 // durable promptRef that is about to be committed by another writer.

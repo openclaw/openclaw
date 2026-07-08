@@ -1,5 +1,6 @@
 // Control UI chat module implements realtime talk gateway relay behavior.
 import { bytesToBase64, floatToPcm16, RealtimeTalkPcmOutputQueue } from "./realtime-talk-audio.ts";
+import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -78,12 +79,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       }
       this.handleRelayEvent(evt.payload as GatewayRelayEvent);
     });
-    this.media = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
+    this.media = await openRealtimeTalkInput(this.ctx.inputDeviceId, {
+      autoGainControl: true,
+      echoCancellation: true,
+      noiseSuppression: true,
     });
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });

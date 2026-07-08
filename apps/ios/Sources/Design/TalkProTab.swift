@@ -150,22 +150,22 @@ struct TalkProTab: View {
 
     private var conversationSection: some View {
         Section("Conversation") {
-            LabeledContent("Agent", value: self.appModel.chatAgentName)
-            LabeledContent("Session", value: self.appModel.chatSessionKey)
-            LabeledContent("Runtime", value: self.appModel.talkMode.statusText)
+            SettingsDetailRow("Agent", value: self.appModel.chatAgentName)
+            SettingsDetailRow("Session", value: self.appModel.chatSessionKey)
+            SettingsDetailRow("Runtime", value: self.appModel.talkMode.statusText)
         }
     }
 
     private var voiceModeSection: some View {
         Section("Voice Mode") {
-            LabeledContent("Configured", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-            LabeledContent("Active", value: self.activeModeText)
-            LabeledContent("Transport", value: self.transportText)
+            SettingsDetailRow("Configured", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+            SettingsDetailRow("Active", value: self.activeModeText)
+            SettingsDetailRow("Transport", value: self.transportText)
             if let issueText = self.talkIssueText {
-                LabeledContent("Last issue", value: issueText)
+                SettingsDetailRow("Last issue", value: issueText)
             }
-            LabeledContent("Permission", value: self.permissionText)
-            LabeledContent("Speech language", value: self.speechLocaleText)
+            SettingsDetailRow("Permission", value: self.permissionText)
+            SettingsDetailRow("Speech language", value: self.speechLocaleText)
         }
     }
 

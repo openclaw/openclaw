@@ -51,14 +51,18 @@ struct AboutSettings: View {
                     .padding(.horizontal, 18)
             }
 
+            // Unified first-party link set shared with the iOS and Android About screens.
             VStack(alignment: .center, spacing: 6) {
+                AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
+                AboutLinkRow(icon: "book", title: "Docs", url: "https://docs.openclaw.ai")
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
                     title: "GitHub",
                     url: "https://github.com/openclaw/openclaw")
-                AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
-                AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
-                AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:peter@steipete.me")
+                AboutLinkRow(
+                    icon: "bubble.left.and.bubble.right",
+                    title: "Discord",
+                    url: "https://discord.gg/clawd")
             }
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
@@ -161,7 +165,9 @@ private struct AboutLinkRow: View {
 
     var body: some View {
         Button {
-            if let url = URL(string: url) { NSWorkspace.shared.open(url) }
+            if let url = URL(string: url) {
+                NSWorkspace.shared.open(url)
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: self.icon)
@@ -173,22 +179,6 @@ private struct AboutLinkRow: View {
         .buttonStyle(.plain)
         .onHover { self.hovering = $0 }
         .pointingHandCursor()
-    }
-}
-
-private struct AboutMetaRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(self.label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(self.value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.primary)
-        }
     }
 }
 

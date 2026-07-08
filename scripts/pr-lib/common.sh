@@ -37,6 +37,15 @@ changelog_required_for_changed_files() {
   return 1
 }
 
+root_changelog_update_allowed_for_pr() {
+  case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 print_review_stdout_summary() {
   require_artifact .local/review.md
   require_artifact .local/review.json

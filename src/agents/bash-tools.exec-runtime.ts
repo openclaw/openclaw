@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -199,7 +200,7 @@ function emitExecProcessCompleted(params: {
 }
 
 /** Renders a host label for user-facing exec policy messages. */
-export function renderExecHostLabel(host: ExecHost) {
+function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
 
@@ -293,7 +294,7 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
     return normalized;
   }
   const safe = Math.max(1, maxChars - 1);
-  return `${normalized.slice(0, safe)}…`;
+  return `${truncateUtf16Safe(normalized, safe)}…`;
 }
 
 /** Merges shell-discovered PATH entries into an exec environment. */

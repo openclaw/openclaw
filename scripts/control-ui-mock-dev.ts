@@ -10,6 +10,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
@@ -73,7 +74,7 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } = {},
 ) {
   return {
-    contextTokens: null,
+    contextTokens: 200_000,
     displayName: label,
     hasActiveRun: false,
     key,
@@ -91,7 +92,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   return {
     count: sessions.length,
     defaults: {
-      contextTokens: null,
+      contextTokens: 200_000,
       model: "gpt-5.5",
       modelProvider: "openai",
     },
@@ -629,7 +630,11 @@ const server = await createServer({
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
-    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+    alias: [
+      ...resolveExternalPackageAliasesForVite(),
+      ...resolveSourcePackageAliasesForVite(),
+      ...resolveTsconfigPathAliasesForVite(),
+    ],
   },
   root: uiRoot,
   server: {

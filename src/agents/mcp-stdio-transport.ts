@@ -118,6 +118,7 @@ export class OpenClawStdioClientTransport implements Transport {
   async close(): Promise<void> {
     const processToClose = this.process ?? this.closingProcess;
     this.process = undefined;
+    this.closingProcess = processToClose;
     if (processToClose) {
       this.closingProcess = processToClose;
     }

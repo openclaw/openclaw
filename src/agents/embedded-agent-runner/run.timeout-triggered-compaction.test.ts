@@ -13,6 +13,7 @@ import {
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -75,9 +76,11 @@ type HookEvent = {
   compactedCount?: number;
   tokenCount?: number;
   sessionFile?: string;
+  previousSessionId?: string;
 };
 
 type HookContext = {
+  sessionId?: string;
   sessionKey?: string;
 };
 
@@ -114,6 +117,7 @@ function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookCo
 describe("timeout-triggered compaction", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -509,6 +513,8 @@ describe("timeout-triggered compaction", () => {
       result: {
         summary: "engine-owned timeout compaction",
         tokensAfter: 70,
+        sessionId: "rotated-timeout-session",
+        sessionFile: "/tmp/rotated-timeout-session.json",
       },
     });
 
@@ -522,8 +528,10 @@ describe("timeout-triggered compaction", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 70,
-      sessionFile: "/tmp/session.json",
+      sessionFile: "/tmp/rotated-timeout-session.json",
+      previousSessionId: "test-session",
     });
+    expect(afterContext.sessionId).toBe("rotated-timeout-session");
     expect(afterContext.sessionKey).toBe("test-key");
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });

@@ -11,6 +11,14 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
+const DAY_MS = 86_400_000;
+
+type UsageCostWindowSummary = {
+  days: number;
+  startDate: string;
+  endDate: string;
+  totals: UsageTotals;
+};
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
@@ -462,6 +470,30 @@ function parseYmdDate(dateStr: string): Date | null {
   return date;
 }
 
+function parseIsoDayIndex(dateStr: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return timestamp / DAY_MS;
+}
+
+function formatIsoDayIndex(dayIndex: number): string {
+  return new Date(dayIndex * DAY_MS).toISOString().slice(0, 10);
+}
+
 function formatDayLabel(dateStr: string): string {
   const date = parseYmdDate(dateStr);
   if (!date) {
@@ -505,6 +537,56 @@ const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => 
   target.cacheWriteCost += source.cacheWriteCost ?? 0;
   target.missingCostEntries += source.missingCostEntries ?? 0;
 };
+
+function buildUsageCostWindowSummary(
+  daily: Array<UsageTotals & { date: string }>,
+  startDate: string,
+  endDate: string,
+): UsageCostWindowSummary | null {
+  const startDay = parseIsoDayIndex(startDate);
+  const endDay = parseIsoDayIndex(endDate);
+  if (startDay === null || endDay === null || startDay > endDay) {
+    return null;
+  }
+
+  const totals = emptyUsageTotals();
+  for (const entry of daily) {
+    const day = parseIsoDayIndex(entry.date);
+    if (day !== null && day >= startDay && day <= endDay) {
+      mergeUsageTotals(totals, entry);
+    }
+  }
+
+  return {
+    days: endDay - startDay + 1,
+    startDate,
+    endDate,
+    totals,
+  };
+}
+
+function buildUsageCostWindows(
+  daily: Array<UsageTotals & { date: string }>,
+  rangeStartDate: string,
+  rangeEndDate: string,
+  periods: number[] = [1, 7, 30, 90],
+): UsageCostWindowSummary[] {
+  const rangeStartDay = parseIsoDayIndex(rangeStartDate);
+  const rangeEndDay = parseIsoDayIndex(rangeEndDate);
+  if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {
+    return [];
+  }
+
+  const rangeDays = rangeEndDay - rangeStartDay + 1;
+  return Array.from(new Set(periods.map((days) => Math.max(1, Math.trunc(days)))))
+    .filter((days) => days < rangeDays)
+    .toSorted((left, right) => left - right)
+    .map((days) => {
+      const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
+      return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);
+    })
+    .filter((summary): summary is UsageCostWindowSummary => summary !== null);
+}
 
 const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
@@ -759,6 +841,8 @@ const buildUsageInsightStats = (
 export type { UsageInsightStats };
 export {
   buildAggregatesFromSessions,
+  buildUsageCostWindowSummary,
+  buildUsageCostWindows,
   buildPeakErrorHours,
   buildUsageInsightStats,
   charsToTokens,

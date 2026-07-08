@@ -152,6 +152,13 @@ export type TuiSessionMutationResult = {
   };
 };
 
+/** Options for creating a fresh TUI session through the backend lifecycle. */
+export type TuiSessionCreateOptions = {
+  key: string;
+  agentId?: string;
+  parentSessionKey?: string;
+};
+
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
@@ -177,6 +184,7 @@ export type TuiBackend = {
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
+  createSession: (opts: TuiSessionCreateOptions) => Promise<TuiSessionMutationResult>;
   resetSession: (
     key: string,
     reason?: "new" | "reset",

@@ -18,7 +18,7 @@ import {
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "agent" | "bidi" | "transcribe";
 export type GoogleMeetModeInput = GoogleMeetMode | "realtime";
-export type GoogleMeetRealtimeStrategy = "agent" | "bidi";
+type GoogleMeetRealtimeStrategy = "agent" | "bidi";
 type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
@@ -106,7 +106,7 @@ export function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetCon
 
 const SOX_DEFAULT_BUFFER_BYTES = 8192;
 const SOX_MIN_BUFFER_BYTES = 17;
-export const DEFAULT_GOOGLE_MEET_AUDIO_BUFFER_BYTES = SOX_DEFAULT_BUFFER_BYTES / 2;
+const DEFAULT_GOOGLE_MEET_AUDIO_BUFFER_BYTES = SOX_DEFAULT_BUFFER_BYTES / 2;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function withSoxBuffer(command: readonly string[], bufferBytes: number): string[] {

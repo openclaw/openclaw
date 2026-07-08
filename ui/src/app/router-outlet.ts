@@ -11,19 +11,15 @@ type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
 };
 
-export type RouterOutletOptions<TLoadContext = unknown> = {
+type RouterOutletOptions<TLoadContext = unknown> = {
   retryContext?: TLoadContext;
 };
 
-export type RouterOutletBoundaryOptions = {
+type RouterOutletBoundaryOptions = {
   onNotFound?: () => void;
 };
 
-export type RouterOutletSelection<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = {
+type RouterOutletSelection<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
   status: RouterState<TRouteId, TModule, TData>["status"];
   active: RouteMatch<TRouteId, TModule, TData> | undefined;
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;
@@ -115,7 +111,7 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   `;
 }
 
-export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
+function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   selection: RouterOutletSelection<TRouteId, TModule, TData>,
   options: RouterOutletOptions<TLoadContext> = {},
@@ -283,7 +279,7 @@ class RouterOutletDirective extends AsyncDirective {
 
 const routerOutletDirective = directive(RouterOutletDirective);
 
-export function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
+function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
   router: Router<TRouteId, TContext, TModule, TData>,
   boundaryOptions: RouterOutletBoundaryOptions,
   options: RouterOutletOptions<TContext> = {},
@@ -291,7 +287,7 @@ export function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
   return routerOutletDirective(router, options.retryContext, boundaryOptions);
 }
 
-export class OpenClawRouterOutlet<
+class OpenClawRouterOutlet<
   TRouteId extends string = string,
   TLoadContext = unknown,
   TModule = unknown,

@@ -15,13 +15,17 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../run-wait.js", () => ({
-  waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
-  readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
-    text: "Test announce reply",
-    fingerprint: "test-announce-reply",
-  }),
-}));
+vi.mock("../run-wait.js", async (importOriginal) => {
+  const { isRecoverableAgentWaitError } = await importOriginal<typeof import("../run-wait.js")>();
+  return {
+    isRecoverableAgentWaitError,
+    waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
+    readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
+      text: "Test announce reply",
+      fingerprint: "test-announce-reply",
+    }),
+  };
+});
 
 vi.mock("./agent-step.js", () => ({
   runAgentStep: vi.fn().mockResolvedValue("Test announce reply"),
@@ -335,6 +339,114 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       firstMockArg(vi.mocked(readLatestAssistantReplySnapshot), "assistant reply snapshot")
         .sessionKey,
     ).toBe("agent:main:discord:group:dev");
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("notifies the requester when delayed target delivery fails after acceptance", async () => {
+    vi.mocked(waitForAgentRun).mockResolvedValueOnce({
+      status: "timeout",
+      error:
+        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43 alive=true",
+      pendingError: true,
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      notifyRequesterOnWaitFailure: true,
+      baseline: {
+        text: "previous reply",
+        fingerprint: "previous-reply",
+      },
+      waitRunId: "run-lock-timeout",
+    });
+
+    expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
+      sessionKey: "agent:main:discord:group:req",
+      sourceSessionKey: "agent:worker:discord:group:dev",
+      sourceTool: "sessions_send",
+    });
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.message).toContain("sessions_send delivery to");
+    expect(stepInput.message).toContain("SessionWriteLockTimeoutError");
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("does not notify the requester for waited sends that already returned the error inline", async () => {
+    vi.mocked(waitForAgentRun).mockResolvedValueOnce({
+      status: "timeout",
+      error:
+        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43 alive=true",
+      pendingError: true,
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      waitRunId: "run-lock-timeout-inline",
+    });
+
+    expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("keeps ordinary delayed target timeouts silent", async () => {
+    vi.mocked(waitForAgentRun).mockResolvedValueOnce({
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      notifyRequesterOnWaitFailure: true,
+      waitRunId: "run-still-working",
+    });
+
+    expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("keeps recoverable delayed wait errors silent", async () => {
+    vi.mocked(waitForAgentRun).mockResolvedValueOnce({
+      status: "error",
+      error: "gateway closed (1006)",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      notifyRequesterOnWaitFailure: true,
+      waitRunId: "run-wait-interrupted",
+    });
+
+    expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
     expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });

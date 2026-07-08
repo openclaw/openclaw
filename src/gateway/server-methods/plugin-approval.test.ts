@@ -242,7 +242,7 @@ const invalidRequestCases = [
   },
   {
     name: "description exceeding max length",
-    params: { title: "T", description: "x".repeat(257) },
+    params: { title: "T", description: "x".repeat(513) },
   },
   {
     name: "timeoutMs exceeding max",

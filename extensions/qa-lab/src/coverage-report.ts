@@ -20,6 +20,7 @@ type QaCoverageScenarioSummary = {
 };
 
 type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
+  channel?: string;
   coverageIds: string[];
   docsRefs: string[];
   codeRefs: string[];
@@ -163,6 +164,7 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     docsRefs: [...(scenario.docsRefs ?? [])],
     codeRefs: [...(scenario.codeRefs ?? [])],
     executionKind: scenario.execution.kind,
+    channel: scenario.execution.channel,
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
@@ -481,7 +483,24 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  return `pnpm openclaw qa suite ${scenarioArgs}`;
+  const requiredDrivers = [
+    ...new Set(
+      matches.map((match) => match.requiredChannelDriver).filter((driver): driver is string =>
+        Boolean(driver),
+      ),
+    ),
+  ];
+  const driverArg =
+    requiredDrivers.length === 1 && requiredDrivers[0] !== "qa-channel"
+      ? ` --channel-driver ${requiredDrivers[0]}`
+      : "";
+  const channels = [
+    ...new Set(matches.map((match) => match.channel).filter((channel): channel is string =>
+      Boolean(channel),
+    )),
+  ];
+  const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
+  return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {

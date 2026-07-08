@@ -94,7 +94,7 @@ type DreamingAgentOption = {
   label: string;
 };
 
-export type DreamingProps = {
+type DreamingProps = {
   viewState: DreamingViewState;
   active: boolean;
   selectedAgentId: string;

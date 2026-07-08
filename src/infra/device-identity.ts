@@ -244,6 +244,10 @@ export function loadOrCreateDeviceIdentity(
       // Avoid overwriting recognizable but invalid identity files; callers can still use a fresh key.
       return generateIdentity();
     }
+    if (identityFileExists(filePath)) {
+      // Unrecognized existing files may hold a newer schema; never overwrite them either.
+      return generateIdentity();
+    }
   } catch {
     if (identityFileExists(filePath)) {
       return generateIdentity();
@@ -261,6 +265,23 @@ export function loadOrCreateDeviceIdentity(
   privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
     trailingNewline: true,
   });
+  return identity;
+}
+
+let processDeviceIdentity: { filePath: string; identity: DeviceIdentity } | undefined;
+
+/**
+ * Keep one identity stable for the lifetime of the active state-dir process.
+ * Recognizable invalid stores yield transient keys, so independent reloads would split gateway ownership.
+ */
+export function loadOrCreateProcessDeviceIdentity(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity {
+  if (processDeviceIdentity?.filePath === filePath) {
+    return processDeviceIdentity.identity;
+  }
+  const identity = loadOrCreateDeviceIdentity(filePath);
+  processDeviceIdentity = { filePath, identity };
   return identity;
 }
 

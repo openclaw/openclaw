@@ -584,6 +584,27 @@ describe("session MCP runtime", () => {
     expect(dynamicRefValidator(1).valid).toBe(false);
   });
 
+  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
+    let thrown: unknown;
+    try {
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          value: { type: "string", pattern: "[" },
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: expect.stringContaining(
+        "Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression",
+      ),
+      cause: expect.any(Error),
+    });
+  });
+
   it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -901,6 +922,46 @@ describe("session MCP runtime", () => {
       ]);
       expect(catalog.servers.docs?.toolCount).toBe(2);
       expect(catalog.servers.docs?.tools?.filteredCount).toBe(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects adversarial MCP tool filters without regex backtracking", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
+    const serverPath = path.join(tempDir, "linear-filter.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: `${"a".repeat(64)}c`,
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-linear-tool-filter",
+      sessionKey: "agent:test:session-linear-tool-filter",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: [`${"*a".repeat(24)}*b`] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools).toEqual([]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import {
   floatToPcm16,
   RealtimeTalkPcmOutputQueue,
 } from "./realtime-talk-audio.ts";
+import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -104,7 +105,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
-    this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.media = await openRealtimeTalkInput(this.ctx.inputDeviceId);
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     this.ws = new WebSocket(wsUrl);

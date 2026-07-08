@@ -9,6 +9,7 @@ import type {
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
+import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
@@ -143,7 +144,7 @@ export function agentLoopContinue(
   }
 
   if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new Error("Cannot continue from message role: assistant");
+    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
   }
 
   const stream = createAgentStream();
@@ -209,7 +210,7 @@ export async function runAgentLoopContinue(
   }
 
   if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new Error("Cannot continue from message role: assistant");
+    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
   }
 
   const newMessages: AgentMessage[] = [];
@@ -659,6 +660,7 @@ async function executeToolCallsSequential(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       };
     } else {
@@ -729,6 +731,7 @@ async function executeToolCallsParallel(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
@@ -784,6 +787,7 @@ type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorKind?: "argument-validation";
 };
 
 type ExecutedToolCallOutcome = {
@@ -796,6 +800,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
 };
 
@@ -904,9 +909,30 @@ async function prepareToolCall(
     };
   }
 
+  let preparedToolCall: AgentToolCall;
   try {
-    const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-    const validatedArgs = validateToolArguments(tool, preparedToolCall);
+    preparedToolCall = prepareToolCallArguments(tool, toolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+    };
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+      errorKind: "argument-validation",
+    };
+  }
+
+  try {
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
@@ -1067,6 +1093,7 @@ async function emitToolExecutionEnd(
     result: finalized.result,
     isError: finalized.isError,
     executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
     ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   });
 }

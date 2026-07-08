@@ -13,6 +13,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
@@ -38,6 +39,8 @@ import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { normalizeProxyIp } from "./proxy-ip.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -78,7 +81,7 @@ function sanitizeTranscriptForLog(value: string): string {
   if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
     return sanitized;
   }
-  return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+  return `${truncateUtf16Safe(sanitized, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
 function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
@@ -105,24 +108,6 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
 
 function buildRequestUrl(requestUrl: string | undefined): URL {
   return new URL(requestUrl ?? "/", "http://localhost");
-}
-
-function normalizeProxyIp(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const unwrapped =
-    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-  const normalized = unwrapped.toLowerCase();
-  const mappedIpv4Prefix = "::ffff:";
-  if (normalized.startsWith(mappedIpv4Prefix)) {
-    const mappedIpv4 = normalized.slice(mappedIpv4Prefix.length);
-    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(mappedIpv4)) {
-      return mappedIpv4;
-    }
-  }
-  return normalized;
 }
 
 function resolveForwardedClientIp(
@@ -422,16 +407,7 @@ export class VoiceCallWebhookServer {
           transcript,
           isFinal: true,
         };
-        this.manager.processEvent(event);
-
-        // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
-        const callMode = call.metadata?.mode as string | undefined;
-        const shouldRespond = call.direction === "inbound" || callMode === "conversation";
-        if (shouldRespond) {
-          this.handleInboundResponse(call.callId, transcript).catch((err: unknown) => {
-            console.warn(`[voice-call] Failed to auto-respond:`, err);
-          });
-        }
+        this.processEventWithAutoResponse(event);
       },
       onSpeechStart: (providerCallId) => {
         if (this.provider.name !== "twilio") {
@@ -958,11 +934,28 @@ export class VoiceCallWebhookServer {
   private processParsedEvents(events: NormalizedEvent[]): void {
     for (const event of events) {
       try {
-        this.manager.processEvent(event);
+        this.processEventWithAutoResponse(event);
       } catch (err) {
         console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }
     }
+  }
+
+  private processEventWithAutoResponse(event: NormalizedEvent): void {
+    const result = this.manager.processEvent(event);
+    if (result.kind !== "final-speech" || result.waiterResolved) {
+      return;
+    }
+    const callMode = result.call.metadata?.mode as string | undefined;
+    if (result.call.direction !== "inbound" && callMode !== "conversation") {
+      return;
+    }
+
+    // Both media-stream and carrier-webhook transcripts share this handoff.
+    // The manager result excludes replays and turn-token mismatches.
+    void this.handleInboundResponse(result.call.callId, result.transcript).catch((err: unknown) => {
+      console.warn(`[voice-call] Failed to auto-respond:`, err);
+    });
   }
 
   private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {
@@ -1021,8 +1014,14 @@ export class VoiceCallWebhookServer {
         callId,
         sessionKey: call.sessionKey,
         from: call.from,
+        agentId: resolveCallAgentId(call, effectiveConfig),
         transcript: call.transcript,
         userMessage,
+        onEarlyText: async (text) => {
+          console.log(`[voice-call] Early AI response: "${text}"`);
+          const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+          return speakResult.success;
+        },
       });
 
       if (result.error) {
@@ -1030,9 +1029,9 @@ export class VoiceCallWebhookServer {
         return;
       }
 
-      if (result.text) {
+      if (result.text && !result.deliveredEarly) {
         console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+        await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
       }
     } catch (err) {
       console.error(`[voice-call] Auto-response error:`, err);

@@ -34,7 +34,7 @@ export type MemoryReadonlyRecoveryState = {
   readMeta: () => { vectorDims?: number } | undefined;
 };
 
-export function isMemoryReadonlyDbError(err: unknown): boolean {
+function isMemoryReadonlyDbError(err: unknown): boolean {
   const readonlyPattern =
     /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
   const messages = new Set<string>();
@@ -67,7 +67,7 @@ export function isMemoryReadonlyDbError(err: unknown): boolean {
   return [...messages].some((value) => readonlyPattern.test(value));
 }
 
-export function extractMemoryErrorReason(err: unknown): string {
+function extractMemoryErrorReason(err: unknown): string {
   if (err instanceof Error && err.message.trim()) {
     return err.message;
   }

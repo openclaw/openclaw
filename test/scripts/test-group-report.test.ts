@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -331,6 +331,62 @@ describe("scripts/test-group-report aggregation", () => {
       });
 
       expect(calls).toStrictEqual(["failed", "passed"]);
+      expect(result.failed).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
+        ["failed", 1],
+        ["passed", 0],
+      ]);
+      expect(result.runEntries.map((entry) => entry.config)).toStrictEqual(["passed"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues allow-failures profiling after a config writes an empty JSON report", async () => {
+    const tempDir = makeTempDir();
+    try {
+      const result = await runReportPlans({
+        args: parseTestGroupReportArgs([
+          "--config",
+          "failed.config.ts",
+          "--config",
+          "passed.config.ts",
+          "--allow-failures",
+          "--no-rss",
+        ]),
+        logDir: path.join(tempDir, "logs"),
+        reportDir: path.join(tempDir, "reports"),
+        runPlans: [
+          { config: "failed.config.ts", forwardedArgs: [], label: "failed" },
+          { config: "passed.config.ts", forwardedArgs: [], label: "passed" },
+        ],
+        runVitestJsonReport: async (params: {
+          config: string;
+          label: string;
+          logPath: string;
+          reportPath: string;
+        }) => {
+          fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
+          fs.writeFileSync(
+            params.reportPath,
+            `${JSON.stringify({
+              testResults: params.label === "failed" ? [] : [{ name: "passed.test.ts" }],
+            })}\n`,
+            "utf8",
+          );
+          return {
+            config: params.config,
+            elapsedMs: 10,
+            label: params.label,
+            logPath: params.logPath,
+            maxRssBytes: null,
+            reportPath: params.reportPath,
+            status: params.label === "failed" ? 1 : 0,
+          };
+        },
+      });
+
       expect(result.failed).toBe(true);
       expect(result.exitCode).toBe(0);
       expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
@@ -835,7 +891,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("times out a child that ignores SIGTERM", async () => {
+  it.concurrent("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -866,7 +922,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(result.output).toContain("sending SIGKILL");
   });
 
-  it("kills timed wrapper process groups without orphaning the measured process", async () => {
+  it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
     }
@@ -963,7 +1019,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("cleans process-group descendants before forwarding parent SIGTERM", async () => {
+  it.concurrent("cleans process-group descendants before forwarding parent SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1024,7 +1080,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("finishes promptly when timed process-group descendants exit cleanly", async () => {
+  it.concurrent("finishes promptly when timed process-group descendants exit cleanly", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1082,7 +1138,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("streams large child output to a log path without retaining it", async () => {
+  it.concurrent("streams large child output to a log path without retaining it", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
     const logPath = path.join(tempDir, "child.log");
     try {
@@ -1116,7 +1172,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("keeps no-log child output bounded to a tail", async () => {
+  it.concurrent("keeps no-log child output bounded to a tail", async () => {
     const result = await spawnText(
       process.execPath,
       [
@@ -1142,7 +1198,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(result.output).toContain("output exceeded 1048576 bytes");
   });
 
-  it("stops streamed child output after the configured log cap", async () => {
+  it.concurrent("stops streamed child output after the configured log cap", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
     const logPath = path.join(tempDir, "child.log");
     try {
@@ -1179,6 +1235,24 @@ describe("scripts/test-group-report child process guard", () => {
 });
 
 describe("scripts/test-group-report run plans", () => {
+  let serialFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
+  let parallelFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
+
+  beforeAll(() => {
+    withEnv(
+      {
+        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+      },
+      () => {
+        serialFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+      },
+    );
+    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
+      parallelFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+    });
+  });
+
   it("isolates full-suite duration reports by default", () => {
     expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite"]))).toEqual([
       "--isolate=true",
@@ -1258,40 +1332,27 @@ describe("scripts/test-group-report run plans", () => {
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
-    withEnv(
-      {
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-      },
-      () => {
-        const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-
-        expect(plans.map((plan) => plan.config)).not.toContain(
-          "test/vitest/vitest.full-agentic.config.ts",
-        );
-        expect(plans.map((plan) => plan.config)).toContain(
-          "test/vitest/vitest.agents-tools.config.ts",
-        );
-      },
+    expect(serialFullSuitePlans.map((plan) => plan.config)).not.toContain(
+      "test/vitest/vitest.full-agentic.config.ts",
+    );
+    expect(serialFullSuitePlans.map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.agents-tools.config.ts",
     );
   });
 
   it("preserves full-suite shard file args and unique report labels", () => {
-    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
-      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-      const gatewayServerPlans = plans.filter(
-        (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
-      );
+    const gatewayServerPlans = parallelFullSuitePlans.filter(
+      (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
+    );
 
-      expect(gatewayServerPlans.length).toBeGreaterThan(1);
-      expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
-        gatewayServerPlans.length,
-      );
-      expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
-      expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
-        "src/gateway/server.node-pairing-authz.test.ts",
-      );
-    });
+    expect(gatewayServerPlans.length).toBeGreaterThan(1);
+    expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
+      gatewayServerPlans.length,
+    );
+    expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
+    expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
+      "src/gateway/server.node-pairing-authz.test.ts",
+    );
   });
 });
 

@@ -687,10 +687,13 @@ export function createGatewayCloseHandler(
     healthInterval: ReturnType<typeof setInterval>;
     dedupeCleanup: ReturnType<typeof setInterval>;
     mediaCleanup: ReturnType<typeof setInterval> | null;
-    agentUnsub: (() => void) | null;
+    worktreeCleanup: ReturnType<typeof setInterval> | null;
+    skillCuratorCleanup: () => void;
+    agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
     lifecycleUnsub: (() => void) | null;
+    taskUnsub: (() => void) | null;
     getPendingReplyCount?: () => number;
     clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
     configReloader: { stop: () => Promise<void> };
@@ -893,6 +896,10 @@ export function createGatewayCloseHandler(
       if (params.mediaCleanup) {
         clearInterval(params.mediaCleanup);
       }
+      if (params.worktreeCleanup) {
+        clearInterval(params.worktreeCleanup);
+      }
+      params.skillCuratorCleanup();
       if (params.agentUnsub) {
         await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
       }
@@ -904,6 +911,9 @@ export function createGatewayCloseHandler(
       }
       if (params.lifecycleUnsub) {
         await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
+      }
+      if (params.taskUnsub) {
+        await shutdownStep("task-unsub", () => params.taskUnsub!(), warnings);
       }
       params.chatRunState.clear();
       let clientCloseFailures = 0;

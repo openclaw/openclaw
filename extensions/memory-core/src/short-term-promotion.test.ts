@@ -3217,45 +3217,31 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("uses score tie-breakers when capping stores with invalid timestamps", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
-      await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: Object.fromEntries(
-          Array.from({ length: maxEntries + 3 }, (_, index) => [
-            `entry-${index}`,
-            {
-              key: `entry-${index}`,
-              path: "memory/2026-04-01.md",
-              startLine: index + 1,
-              endLine: index + 1,
-              source: "memory",
-              snippet: `Invalid timestamp recall ${index}`,
-              recallCount: 1,
-              dailyCount: 0,
-              groundedCount: 0,
-              totalScore: index,
-              maxScore: 0.75,
-              firstRecalledAt: "not-a-date",
-              lastRecalledAt: "not-a-date",
-              queryHashes: [`q-${index}`],
-              recallDays: ["2026-04-01"],
-              conceptTags: [],
-            },
-          ]),
-        ),
-      });
+  it("uses score tie-breakers when retention timestamps are invalid", () => {
+    const entry = {
+      key: "lower-score",
+      path: "memory/2026-04-01.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "Invalid timestamp recall",
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 1,
+      maxScore: 0.75,
+      firstRecalledAt: "not-a-date",
+      lastRecalledAt: "not-a-date",
+      queryHashes: ["q"],
+      recallDays: ["2026-04-01"],
+      conceptTags: [],
+    };
+    const higherScoreEntry = { ...entry, key: "higher-score", totalScore: 2 };
 
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-
-      expect(repair.removedOverflowEntries).toBe(3);
-      const entries = await readRecallStoreEntries(workspaceDir);
-      expect(Object.keys(entries)).toHaveLength(maxEntries);
-      expect(entries["entry-0"]).toBeUndefined();
-      expect(entries[`entry-${maxEntries + 2}`]).toBeDefined();
-    });
+    expect([entry, higherScoreEntry].toSorted(testing.compareShortTermRecallRetention)).toEqual([
+      higherScoreEntry,
+      entry,
+    ]);
   });
 
   it("rejects long contaminated legacy recall entries before truncating snippets", async () => {

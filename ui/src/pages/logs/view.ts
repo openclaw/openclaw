@@ -7,7 +7,7 @@ import type { LogEntry, LogLevel } from "./log-lines.ts";
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 type ExportFileLabel = "filtered" | "visible";
 
-export type LogsProps = {
+type LogsProps = {
   loading: boolean;
   error: string | null;
   file: string | null;

@@ -97,31 +97,6 @@ import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
-// Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
-const UNICODE_TO_SLACK: Record<string, string> = {
-  "👀": "eyes",
-  "🤔": "thinking_face",
-  "🔥": "fire",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "✅": "white_check_mark",
-  "👍": "thumbsup",
-  "❌": "x",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "⚠️": "warning",
-  "✍": "writing_hand",
-  "🗜️": "compression",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠️": "hammer_and_wrench",
-  "💻": "computer",
-};
 const SLACK_REASONING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
@@ -167,17 +142,6 @@ function resolveSlackBotLoopProtection(
     defaultEnabled: true,
     nowMs: resolveSlackMessageTimestampMs(prepared.message),
   };
-}
-
-function toSlackEmojiName(emoji: string): string {
-  let trimmed = emoji.trim();
-  while (trimmed.startsWith(":")) {
-    trimmed = trimmed.slice(1);
-  }
-  while (trimmed.endsWith(":")) {
-    trimmed = trimmed.slice(0, -1);
-  }
-  return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -548,12 +512,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
+    prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
-    cfg.messages?.statusReactions?.enabled !== false;
+    cfg.messages?.statusReactions?.enabled === true;
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
+      await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err: unknown) => {
@@ -564,7 +529,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
+      await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err: unknown) => {

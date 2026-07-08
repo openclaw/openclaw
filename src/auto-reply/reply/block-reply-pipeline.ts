@@ -19,6 +19,8 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   didObserveBlockReply: () => boolean;
   didStreamSubstantiveReply: () => boolean;
+  /** True only after a final-answer lane payload is sent. */
+  didStreamTerminalReply?: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
   hasSentExactPayload?: (payload: ReplyPayload) => boolean;
@@ -77,7 +79,6 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   });
 }
 
-
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -130,6 +131,7 @@ export function createBlockReplyPipeline(params: {
   let didStream = false;
   let didObserveBlockReply = false;
   let didStreamSubstantiveReply = false;
+  let didStreamTerminalReply = false;
   let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
@@ -200,6 +202,13 @@ export function createBlockReplyPipeline(params: {
         if (!isStatusNotice) {
           didStream = true;
           didStreamSubstantiveReply = true;
+          if (
+            payload.isReasoning !== true &&
+            payload.isCommentary !== true &&
+            hasOutboundReplyContent(payload, { trimText: true })
+          ) {
+            didStreamTerminalReply = true;
+          }
         }
       })
       .catch((err: unknown) => {
@@ -333,6 +342,7 @@ export function createBlockReplyPipeline(params: {
     didStream: () => didStream,
     didObserveBlockReply: () => didObserveBlockReply,
     didStreamSubstantiveReply: () => didStreamSubstantiveReply,
+    didStreamTerminalReply: () => didStreamTerminalReply,
     isAborted: () => aborted,
     hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {

@@ -111,6 +111,7 @@ describe("pairing setup code", () => {
     params: {
       authLabel: string;
       url?: string;
+      urls?: string[];
       urlSource?: string;
     },
   ) {
@@ -129,6 +130,9 @@ describe("pairing setup code", () => {
     });
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
+    }
+    if (params.urls) {
+      expect(resolved.payload.urls).toEqual(params.urls);
     }
     if (params.urlSource) {
       expect(resolved.urlSource).toBe(params.urlSource);
@@ -149,6 +153,7 @@ describe("pairing setup code", () => {
     expected: {
       authLabel: string;
       url: string;
+      urls?: string[];
       urlSource: string;
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
@@ -591,7 +596,7 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=lan",
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 1,
+      expectedRunCommandCalls: 3,
     });
   });
 
@@ -636,7 +641,73 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=lan",
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 1,
+      expectedRunCommandCalls: 3,
+    });
+  });
+
+  it("adds a configured Tailscale Serve route to a LAN setup code", async () => {
+    const defaultRoute = createDefaultRouteRunner("en0");
+    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
+      if (argv.includes("serve")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            TCP: { "8443": { HTTPS: true } },
+            Web: {
+              "clawmac.tail.ts.net:8443": {
+                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      return defaultRoute();
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.139.3"),
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urls: ["ws://192.168.139.3:18789", "wss://clawmac.tail.ts.net:8443"],
+        urlSource: "gateway.bind=lan",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 2,
+    });
+  });
+
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    const runCommandWithTimeout = vi.fn(async () => {
+      throw new Error("Tailscale Serve discovery must not run for a custom bind");
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: { runCommandWithTimeout } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urlSource: "gateway.bind=custom",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 0,
     });
   });
 

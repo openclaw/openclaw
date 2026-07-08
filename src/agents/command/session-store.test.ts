@@ -1697,8 +1697,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBe(lastInteractionAt);
+      expect(sessionStore[sessionKey]?.lastActivityAt).toEqual(expect.any(Number));
+      expect(sessionStore[sessionKey]?.lastActivityAt).toBeGreaterThan(lastInteractionAt);
       expect(sessionStore[sessionKey]?.sessionStartedAt).toBe(sessionStartedAt);
       expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("preserves lastActivityAt for heartbeat-style runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-run";
+      const sessionId = "test-heartbeat-run-session";
+      const lastActivityAt = Date.now() - 60 * 60_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now() - 10_000,
+          lastActivityAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+        touchInteraction: false,
+        touchActivity: false,
+      });
+
+      expect(sessionStore[sessionKey]?.lastActivityAt).toBe(lastActivityAt);
+      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThan(lastActivityAt);
     });
   });
 
@@ -1895,6 +1939,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         updatedAt: 2,
         sessionStartedAt: 777,
         lastInteractionAt: 20,
+        lastActivityAt: 21,
         modelProvider: "openai",
         model: "gpt-5.5",
         contextTokens: 400_000,
@@ -1965,6 +2010,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("new-visible-cli-session");
       expect(next?.compactionCount).toBe(9);
       expect(next?.lastInteractionAt).toBeGreaterThan(20);
+      // Preserved-state runs must not re-flag the session unread.
+      expect(next?.lastActivityAt).toBe(21);
     });
   });
 

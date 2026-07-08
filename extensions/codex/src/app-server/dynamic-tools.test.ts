@@ -501,9 +501,10 @@ describe("createCodexDynamicToolBridge", () => {
         ],
         signal: new AbortController().signal,
         hookContext: {
+          agentId: "agent-quarantine",
           runId: "run-1",
           sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: "global",
         },
       });
       await waitForDiagnosticEventsDrained();
@@ -537,9 +538,10 @@ describe("createCodexDynamicToolBridge", () => {
     expect(blockedEvents).toContainEqual(
       expect.objectContaining({
         type: "tool.execution.blocked",
+        agentId: "agent-quarantine",
         runId: "run-1",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "global",
         toolName: "fuzzplugin_move_angles",
         deniedReason: "unsupported_tool_schema",
         reason: 'fuzzplugin_move_angles.inputSchema.type must be "object"',
@@ -2779,6 +2781,176 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("preserves hook timeout classification for the outer lifecycle owner", async () => {
+    const beforeToolCall = vi.fn(async () => {
+      throw Object.assign(new Error("timed out after 5ms"), { name: "TimeoutError" });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-hook-timeout" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-hook-timeout",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.diagnosticTerminalType).toBe("error");
+    expect(result.diagnosticTerminalReason).toBe("timed_out");
+    expect(result.sideEffectEvidence).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["timed_out", "cancelled"] as const)(
+    "preserves structured %s results for the outer lifecycle owner",
+    async (status) => {
+      const bridge = createBridgeWithToolResult("exec", textToolResult("tool stopped", { status }));
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-${status}`,
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "pwd" },
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.diagnosticTerminalType).toBe("error");
+      expect(result.diagnosticTerminalReason).toBe(status);
+    },
+  );
+
+  it("preserves thrown timeout classification for the outer lifecycle owner", async () => {
+    const timeoutError = Object.assign(new Error("tool deadline elapsed"), {
+      name: "TimeoutError",
+    });
+    const onAgentToolResult = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "exec",
+          execute: vi.fn(async () => {
+            throw timeoutError;
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "pwd" },
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.diagnosticTerminalType).toBe("error");
+    expect(result.diagnosticTerminalReason).toBe("timed_out");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: {
+        content: [{ type: "text", text: "tool deadline elapsed" }],
+        details: { status: "timed_out", error: "tool deadline elapsed" },
+      },
+      isError: true,
+    });
+  });
+
+  it("contains hostile thrown values while notifying the outer lifecycle owner", async () => {
+    const hostileError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "exec",
+          execute: vi.fn(async () => {
+            throw hostileError;
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-hostile-error",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "pwd" },
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      diagnosticTerminalReason: "failed",
+      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+    });
+    expect(onAgentToolResult).toHaveBeenCalledOnce();
+  });
+
+  it("preserves report-only approval blocks for the outer lifecycle owner", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const tool = wrapToolWithBeforeToolCallHook(
+      createTool({ name: "exec", execute }),
+      { runId: "run-approval-report" },
+      { approvalMode: "report" },
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-approval-report" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-approval-report",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.diagnosticTerminalType).toBe("blocked");
+    expect(result.diagnosticTerminalReason).toBeUndefined();
+    expect(result.sideEffectEvidence).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("applies dynamic tool result middleware before after_tool_call observes the result", async () => {
     const events: string[] = [];
     const beforeToolCall = vi.fn(async () => {
@@ -2847,6 +3019,55 @@ describe("createCodexDynamicToolBridge", () => {
       expect(events).toEqual(["before_tool_call", "execute", "middleware", "after_tool_call"]);
     });
   });
+
+  it.each(["timed_out", "cancelled", "blocked"] as const)(
+    "preserves raw %s disposition for private observation after middleware rewrites it",
+    async (status) => {
+      const registry = createEmptyPluginRegistry();
+      const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+        event.result.content = [{ type: "text", text: "compacted failure" }];
+        const details = requireRecord(event.result.details, "middleware details");
+        details.stage = "middleware";
+        details.status = "failed";
+        return { result: event.result };
+      });
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "result-redactor",
+        pluginName: "Result Redactor",
+        rawHandler: handler,
+        handler,
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const onAgentToolResult = vi.fn();
+      const bridge = createBridgeWithToolResult("exec", textToolResult("raw failure", { status }));
+
+      const result = await bridge.handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: `call-raw-${status}`,
+          namespace: null,
+          tool: "exec",
+          arguments: { command: "status" },
+        },
+        { onAgentToolResult },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.diagnosticTerminalType).toBe(status === "blocked" ? "blocked" : "error");
+      expect(result.diagnosticTerminalReason).toBe(status === "blocked" ? undefined : status);
+      expect(onAgentToolResult).toHaveBeenCalledWith({
+        toolName: "exec",
+        result: {
+          content: [{ type: "text", text: "compacted failure" }],
+          details: { stage: "middleware", status },
+        },
+        isError: true,
+      });
+    },
+  );
 
   it("reports confirmed sends as successful when result middleware fails", async () => {
     const registry = createEmptyPluginRegistry();

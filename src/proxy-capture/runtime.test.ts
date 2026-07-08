@@ -1,5 +1,9 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerSecretValueForRedaction,
+  resetSecretRedactionRegistryForTest,
+} from "../logging/secret-redaction-registry.js";
 import type { DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,
@@ -94,6 +98,7 @@ describe("debug proxy runtime", () => {
     finalizeDebugProxyCapture(settings, deps);
     events.length = 0;
     calls.length = 0;
+    resetSecretRedactionRegistryForTest();
     fetchTarget.fetch = async () => new Response("{}", { status: 200 });
   });
 
@@ -194,6 +199,77 @@ describe("debug proxy runtime", () => {
       "content-type": "application/json",
       "set-cookie": "[REDACTED]",
     });
+  });
+
+  it("redacts registered exact values in custom headers and URL queries", async () => {
+    const secret = "capture-managed-secret";
+    const pathSecret = "capture/path secret";
+    registerSecretValueForRedaction(secret);
+    registerSecretValueForRedaction(pathSecret);
+    captureHttpExchange(
+      {
+        url: `https://api.example.com/models/${encodeURIComponent(pathSecret)}?key=${encodeURIComponent(secret)}`,
+        method: "GET",
+        requestHeaders: { "X-Managed": `Bearer ${secret}` },
+        response: new Response("{}", { status: 200 }),
+      },
+      settings,
+      deps,
+    );
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const request = events.find((event) => event.kind === "request");
+    expect(request?.path).toBe("/models/%5BREDACTED%5D?key=%5BREDACTED%5D");
+    expect(JSON.parse(String(request?.headersJson))).toStrictEqual({
+      "X-Managed": "Bearer [REDACTED]",
+    });
+  });
+
+  it("redacts registered values from failed global-fetch capture events", async () => {
+    const secret = "capture-failure/secret";
+    registerSecretValueForRedaction(secret);
+    fetchTarget.fetch = vi.fn(async () => {
+      throw new Error(`request failed for ${secret}`);
+    }) as typeof fetch;
+    initializeDebugProxyCapture("test", settings, deps);
+
+    await expect(
+      fetchTarget.fetch(`https://api.example.com/models/${encodeURIComponent(secret)}`),
+    ).rejects.toThrow("request failed");
+
+    const event = events.find((candidate) => candidate.kind === "error");
+    expect(event?.path).toBe("/models/%5BREDACTED%5D");
+    expect(event?.errorText).toBe("request failed for [REDACTED]");
+  });
+
+  it("keeps capture URLs valid when the full URL is a registered secret", () => {
+    const secretUrl = "https://signed.example/v1/callback";
+    registerSecretValueForRedaction(secretUrl);
+
+    captureHttpExchange(
+      {
+        url: secretUrl,
+        method: "GET",
+        response: new Response("{}", { status: 200 }),
+      },
+      settings,
+      deps,
+    );
+
+    const request = events.find((candidate) => candidate.kind === "request");
+    expect(request?.host).toBe("redacted.invalid");
+    expect(request?.path).toBe("/%5BREDACTED%5D");
+  });
+
+  it("does not fail capture on malformed percent escapes", async () => {
+    registerSecretValueForRedaction("capture-secret");
+    initializeDebugProxyCapture("test", settings, deps);
+
+    await expect(fetchTarget.fetch("https://api.example.com/x#%")).resolves.toBeInstanceOf(
+      Response,
+    );
   });
 
   it("skips capturing the body when Content-Length exceeds the cap", async () => {

@@ -66,6 +66,15 @@ Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
 
+## Delivery Evidence
+
+A `MessageReceipt` records the result returned by a channel adapter. Concrete
+platform message identifiers show that the platform send path accepted the
+message; they do not prove that a recipient's device displayed or read it.
+Receipts without platform message identifiers are local receipt metadata only.
+Channels with read receipts or device-delivery state should track those facts
+through a separate channel-specific path.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the
@@ -97,12 +106,12 @@ Runtime send helpers also live on `channel-outbound`:
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 
-| Outcome          | Meaning                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| `sent`           | at least one visible platform message was delivered                                      |
-| `suppressed`     | no platform message should be treated as missing                                         |
-| `partial_failed` | at least one platform message was delivered before a later payload or side effect failed |
-| `failed`         | no platform receipt was produced                                                         |
+| Outcome          | Meaning                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `sent`           | at least one visible platform message was accepted by the platform send path            |
+| `suppressed`     | no platform message should be treated as missing                                        |
+| `partial_failed` | at least one platform message was accepted before a later payload or side effect failed |
+| `failed`         | no platform receipt was produced                                                        |
 
 Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy

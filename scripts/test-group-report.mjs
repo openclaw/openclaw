@@ -641,7 +641,7 @@ function readReportInput(entry) {
   };
 }
 
-export function readReportInputs(entries) {
+function readReportInputs(entries) {
   const invalid = [];
   const missing = [];
   const reports = [];
@@ -1017,9 +1017,18 @@ export async function runReportPlans(params) {
           );
           includeEntry = false;
         } else {
-          console.error(
-            `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
-          );
+          try {
+            readReportInput({ config: plan.label, reportPath: run.reportPath, run });
+            console.error(
+              `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
+            );
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            console.error(
+              `[test-group-report] config failed; skipping unusable JSON report from ${run.reportPath} (${reason})`,
+            );
+            includeEntry = false;
+          }
         }
         if (!params.args.allowFailures) {
           exitCode = run.status || 1;

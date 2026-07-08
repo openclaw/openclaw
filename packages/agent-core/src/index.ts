@@ -2,6 +2,7 @@
 // compaction, execution envs, and utility helpers.
 export * from "./agent.js";
 export * from "./agent-loop.js";
+export * from "./errors.js";
 export * from "./node.js";
 export * from "./runtime-deps.js";
 export * from "./types.js";

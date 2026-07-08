@@ -20,7 +20,7 @@ import { renderLogs } from "./view.ts";
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-export class LogsPage extends LitElement {
+class LogsPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

@@ -126,7 +126,7 @@ export type ParentFlowLinkErrorCode =
   | "cancel_requested"
   | "terminal";
 
-export class ParentFlowLinkError extends Error {
+class ParentFlowLinkError extends Error {
   constructor(
     public readonly code: ParentFlowLinkErrorCode,
     message: string,
@@ -573,6 +573,7 @@ function mapAgentRunTerminalOutcomeToTaskStatus(
     case "aborted":
       return "cancelled";
     case "blocked":
+    case "abandoned":
     case "failed":
       return "failed";
     default:

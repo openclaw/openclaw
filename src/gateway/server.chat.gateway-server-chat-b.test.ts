@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -1732,6 +1732,7 @@ describe("gateway server chat", () => {
         });
 
         const context = {
+          getRuntimeConfig,
           loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
             async () => [
               {
@@ -1873,6 +1874,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -2182,6 +2184,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -2297,6 +2300,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -2650,6 +2654,7 @@ describe("gateway server chat", () => {
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const broadcastToConnIds = vi.fn();
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -2802,6 +2807,7 @@ describe("gateway server chat", () => {
       const broadcast = vi.fn();
       const broadcastToConnIds = vi.fn();
       const context = {
+        getRuntimeConfig,
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
           info: vi.fn(),
@@ -3616,8 +3622,13 @@ describe("gateway server chat", () => {
             role: "assistant",
             timestamp: Date.now(),
             content: [{ type: "text", text: "hello" }],
-            usage: { input: 12, output: 5, totalTokens: 17 },
-            cost: { total: 0.0123 },
+            usage: {
+              input: 12,
+              output: 5,
+              totalTokens: 17,
+              cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
+            },
+            cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
             details: { debug: true },
           },
         }),
@@ -3627,13 +3638,32 @@ describe("gateway server chat", () => {
       expect(messages).toHaveLength(1);
       const message = messages[0] as {
         role?: string;
-        usage?: { input?: number; output?: number; totalTokens?: number };
-        cost?: { total?: number };
+        usage?: {
+          input?: number;
+          output?: number;
+          totalTokens?: number;
+          cost?: Record<string, number>;
+        };
+        cost?: Record<string, number>;
       };
       expect(message.role).toBe("assistant");
       expect(message.usage?.input).toBe(12);
       expect(message.usage?.output).toBe(5);
       expect(message.usage?.totalTokens).toBe(17);
+      expect(message.usage?.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
+      expect(message.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
       expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
     });

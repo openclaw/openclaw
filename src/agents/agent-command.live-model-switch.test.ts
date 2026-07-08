@@ -81,6 +81,11 @@ vi.mock("./model-fallback.js", () => ({
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
   buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
+  createAcpToolLifecycleTracker: () => ({
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  }),
   createAcpVisibleTextAccumulator: () => state.createAcpVisibleTextAccumulatorMock(),
   emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
@@ -1396,6 +1401,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
   });
 
+  it("persists structured transcript media for ACP turns", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+
+    await agentCommand({
+      message: "[media attached: media://inbound/image-1]",
+      transcriptMessage: "",
+      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+      sessionKey: "agent:main:main",
+    });
+
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptBody: "",
+        userInput: {
+          text: "",
+          media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+          mediaOnlyText: "[User sent media without caption]",
+        },
+      }),
+    );
+  });
+
   it("keeps the initial session touch for local runs", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -2625,6 +2658,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        isControlUiVisible: false,
+      }),
+    );
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
@@ -3021,6 +3062,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "canonical image caption",
+    });
+  });
+
+  it("persists structured transcript media without a caption", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "[media attached: media://inbound/image-1]",
+      transcriptMessage: "",
+      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      to: "+1234567890",
+    });
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: { message?: unknown };
+    };
+    expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
+    expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "[User sent media without caption]",
+      MediaPath: "/media/inbound/image-1.png",
+      MediaPaths: ["/media/inbound/image-1.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
     });
   });
 
@@ -3578,6 +3646,31 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
+  it("keeps session provenance for internal ACP turns", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+
+    await agentCommand({
+      message: "internal ACP turn",
+      sessionKey: "agent:main:main",
+      sessionEffects: "internal",
+    });
+
+    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        isControlUiVisible: false,
+      }),
+    );
+  });
+
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
     state.acpResolveSessionMock.mockReturnValue({
       kind: "ready",
@@ -3623,6 +3716,35 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveAcpExplicitTurnPolicyErrorMock).not.toHaveBeenCalled();
     expect(state.resolveAcpDispatchPolicyErrorMock).toHaveBeenCalledTimes(1);
     expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("preserves ACP cancelled results without a stop reason", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({ type: "done", status: "cancelled" });
+    });
+
+    await agentCommand({
+      message: "cancelled ACP turn",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
   });
 
   it("flips hasSessionModelOverride on provider-only switch with same model", async () => {

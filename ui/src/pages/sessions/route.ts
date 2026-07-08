@@ -7,9 +7,9 @@ import type { SessionsRouteData } from "./sessions-page.ts";
 
 function routeOptions(location: RouteLocation) {
   const search = new URLSearchParams(location.search);
-  const expandedCheckpointKey = search.get("session")?.trim() || null;
+  const expandedSessionKey = search.get("session")?.trim() || null;
   const showArchived = ["1", "true"].includes(search.get("showArchived")?.toLowerCase() ?? "");
-  return { expandedCheckpointKey, showArchived };
+  return { expandedSessionKey, showArchived };
 }
 
 async function loadSessionsRoute(
@@ -17,15 +17,15 @@ async function loadSessionsRoute(
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
   const options = routeOptions(location);
-  const checkpointAgentId = parseAgentSessionKey(options.expandedCheckpointKey)?.agentId;
+  const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: options.expandedCheckpointKey || options.showArchived ? 0 : 60,
+        activeMinutes: options.expandedSessionKey || options.showArchived ? 0 : 60,
         limit: 50,
-        search: options.expandedCheckpointKey ?? undefined,
+        search: options.expandedSessionKey ?? undefined,
         includeGlobal: true,
-        includeUnknown: Boolean(options.expandedCheckpointKey),
+        includeUnknown: Boolean(options.expandedSessionKey),
         showArchived: options.showArchived,
         ...(checkpointAgentId ? { agentId: checkpointAgentId } : {}),
       })
@@ -50,7 +50,7 @@ export const page = definePage({
   path: "/sessions",
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
-    return `${options.expandedCheckpointKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;
+    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;
   },
   loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
   component: () =>
