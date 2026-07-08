@@ -922,7 +922,7 @@ jobs:
       contents: read
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
@@ -1009,7 +1009,7 @@ jobs:
       contents: read
     name: QA Smoke CI
     needs: [preflight, qa-smoke-ci-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
+    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
