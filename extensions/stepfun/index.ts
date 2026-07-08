@@ -24,6 +24,7 @@ import {
   STEPFUN_STANDARD_CN_BASE_URL,
   STEPFUN_STANDARD_INTL_BASE_URL,
 } from "./provider-catalog.js";
+import { stepfunMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
@@ -249,5 +250,7 @@ export default definePluginEntry({
           }),
       },
     });
+
+    api.registerMediaUnderstandingProvider(stepfunMediaUnderstandingProvider);
   },
 });
