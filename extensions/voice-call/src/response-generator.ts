@@ -15,7 +15,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
-export type VoiceResponseParams = {
+type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
@@ -38,7 +38,7 @@ export type VoiceResponseParams = {
   onEarlyText?: (text: string) => Promise<boolean>;
 };
 
-export type VoiceResponseResult = {
+type VoiceResponseResult = {
   text: string | null;
   /** Whether the complete response was handed to the transport before compaction. */
   deliveredEarly: boolean;
