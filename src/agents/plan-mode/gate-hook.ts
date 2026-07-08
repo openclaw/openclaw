@@ -35,16 +35,19 @@ export function resolvePlanModeGate(ctx: PlanModeGateContext): PlanModeGateResul
     try {
       return resolveSessionPlanState(loadSessionEntry({ sessionKey, storePath })).status;
     } catch {
-      // A store read failure must never be observed as an active plan; treat as inactive.
-      return "inactive" as const;
+      // An unreadable store cannot prove the session is NOT planning, so surface it
+      // as unknown and fail CLOSED below rather than silently reporting inactive.
+      return "unknown" as const;
     }
   })();
-  if (status !== "planning" && status !== "pending_approval") {
-    return { blocked: false };
+  if (status === "planning" || status === "pending_approval" || status === "unknown") {
+    // Fail closed: apply the gate (blocks mutating tools, still allows the read-only
+    // allowlist) instead of bypassing plan mode's read-only safety boundary.
+    return checkPlanModeMutationGate({
+      toolName: ctx.toolName,
+      planActive: true,
+      toolParams: ctx.toolParams,
+    });
   }
-  return checkPlanModeMutationGate({
-    toolName: ctx.toolName,
-    planActive: true,
-    toolParams: ctx.toolParams,
-  });
+  return { blocked: false };
 }
