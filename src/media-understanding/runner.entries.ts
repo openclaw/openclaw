@@ -18,6 +18,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { resolveImageSanitizationLimits } from "../agents/image-sanitization.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   mergeModelProviderRequestOverrides,
@@ -780,11 +781,13 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    const limits = resolveImageSanitizationLimits(cfg);
     const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
       maxBytes,
+      maxSide: limits.maxDimensionPx,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);

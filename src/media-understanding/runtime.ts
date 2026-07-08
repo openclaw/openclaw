@@ -3,6 +3,7 @@
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { resolveImageSanitizationLimits } from "../agents/image-sanitization.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
@@ -256,11 +257,13 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     cfg: params.cfg,
     timeoutMs,
   });
+  const limits = resolveImageSanitizationLimits(params.cfg);
   const normalizedImage = await normalizeImageDescriptionInput({
     buffer: image.buffer,
     fileName: image.fileName,
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
+    maxSide: limits.maxDimensionPx,
   });
   return {
     buffer: normalizedImage.buffer,
