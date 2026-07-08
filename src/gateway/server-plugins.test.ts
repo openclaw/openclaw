@@ -194,13 +194,18 @@ function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
 }
 
-function createRequestScope(label: string, scopes: string[]): PluginRuntimeGatewayRequestScope {
+function createRequestScope(
+  label: string,
+  scopes: string[],
+  internal?: Record<string, unknown>,
+): PluginRuntimeGatewayRequestScope {
   return {
     context: createTestContext(label),
     client: {
       connect: {
         scopes,
       },
+      ...(internal ? { internal } : {}),
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
   };
@@ -1574,6 +1579,30 @@ describe("loadGatewayPlugins", () => {
           runtime.run({
             sessionKey: "s-interactive-untrusted-override",
             message: "use untrusted override",
+            provider: "anthropic",
+            model: "claude-haiku-4-5",
+            deliver: false,
+          }),
+        ),
+      ),
+    ).rejects.toThrow('plugin "voice-call" is not trusted for provider/model override requests.');
+  });
+
+  test("does not honor an inherited internal override flag as caller authority", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    // A parent policy-authorized dispatch leaves allowModelOverride on the
+    // scope client; nested plugin overrides must still consult the policy.
+    const scope = createRequestScope("interactive-inherited-flag", ["operator.write"], {
+      allowModelOverride: true,
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+          runtime.run({
+            sessionKey: "s-inherited-flag-override",
+            message: "use inherited authority",
             provider: "anthropic",
             model: "claude-haiku-4-5",
             deliver: false,

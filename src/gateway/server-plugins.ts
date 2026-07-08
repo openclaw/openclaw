@@ -197,10 +197,6 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
 function canTrustedOfficialPluginRequestScopes(params: {
   pluginId?: string;
   pluginOrigin?: PluginOrigin;
@@ -368,9 +364,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-          ...(options?.runtimePluginToolGrant
-            ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
-            : {}),
+          runtimePluginToolGrant: options?.runtimePluginToolGrant,
           ...(allowModelOverride ? { allowModelOverride: true } : {}),
         }
       : undefined,
@@ -532,11 +526,11 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
       const overrideRequested = Boolean(params.provider || params.model);
-      // Fail closed: overrides need caller authority (admin scope / internal
-      // flag) or the operator's per-plugin opt-in, in any execution context,
-      // so untrusted plugins cannot steer model selection (#48277).
+      // Fail closed: plugin overrides need genuine admin scope or the operator's
+      // per-plugin opt-in; an internal allowModelOverride flag inherited from a
+      // parent dispatch never counts, so allowedModels bounds nested spawns (#48277).
       let policyModelOverride = false;
-      if (overrideRequested && !canClientUseModelOverride(scope?.client ?? null)) {
+      if (overrideRequested && !hasAdminScope(scope?.client)) {
         const policyAuth = authorizePluginModelOverride({
           pluginId: scope?.pluginId,
           provider: params.provider,
