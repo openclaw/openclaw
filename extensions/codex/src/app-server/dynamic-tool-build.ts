@@ -18,6 +18,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
@@ -110,10 +111,20 @@ export function resolveOpenClawCodingToolsSessionKeys(
 
 /** Returns the canonical channel used for Codex message routing and receipts. */
 export function resolveCodexMessageToolProvider(
-  params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    "messageChannel" | "messageProvider" | "trigger" | "inputProvenance"
+  >,
 ): string | undefined {
   const provider = params.messageChannel ?? params.messageProvider;
-  if (provider === "webchat") {
+  // Only strip the internal webchat binding for autonomous or inter-session turns,
+  // not for real WebChat UI conversations that need cross-context containment.
+  const isInternalChannel = normalizeMessageChannel(provider) === "webchat";
+  const isInternalTurn =
+    params.trigger === "heartbeat" ||
+    params.trigger === "cron" ||
+    params.inputProvenance?.kind === "inter_session";
+  if (isInternalChannel && isInternalTurn) {
     return undefined;
   }
   return provider;

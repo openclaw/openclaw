@@ -167,22 +167,92 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("discord");
   });
 
-  it("strips the internal webchat channel so heartbeat turns can send cross-provider", () => {
+  it("keeps the internal channel bound for real webchat user turns", () => {
+    // A genuine WebChat UI conversation (trigger "user" or undefined, no inter-session
+    // provenance) stays bound so cross-context containment still applies.
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "user",
+      }),
+    ).toBe("webchat");
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "manual",
+      }),
+    ).toBe("webchat");
     expect(
       resolveCodexMessageToolProvider({
         messageChannel: "webchat",
         messageProvider: "webchat",
       }),
+    ).toBe("webchat");
+  });
+
+  it("drops the internal channel binding for heartbeat and cron turns", () => {
+    // Autonomous scheduler turns are not bound to the internal webchat
+    // conversation, so cross-provider notifications (e.g. heartbeat -> Discord)
+    // are not treated as a cross-context leak (#102206).
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "heartbeat",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCodexMessageToolProvider({
+        messageProvider: "webchat",
+        trigger: "cron",
+      }),
     ).toBeUndefined();
   });
 
-  it("preserves a real delivery channel provider", () => {
+  it("drops the internal channel binding for sessions_send inter-session turns", () => {
+    // sessions_send/ln-injected turns arrive on the internal webchat channel with
+    // trigger "user"; only their inter-session provenance separates them from a
+    // real WebChat UI turn.
     expect(
       resolveCodexMessageToolProvider({
-        messageChannel: "discord",
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "user",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a real delivery channel bound even for internal triggers", () => {
+    // A heartbeat that delivers to a real channel is bound to that provider, not
+    // the internal channel, so the binding (and same-provider guard) is preserved.
+    expect(
+      resolveCodexMessageToolProvider({
         messageProvider: "discord",
+        trigger: "heartbeat",
       }),
     ).toBe("discord");
+  });
+
+  it("preserves webchat for other internal triggers without inter-session provenance", () => {
+    // memory, overflow, and other internal triggers preserve the webchat binding
+    // unless they have inter-session provenance, matching the conservative policy.
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "memory",
+      }),
+    ).toBe("webchat");
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        trigger: "overflow",
+      }),
+    ).toBe("webchat");
   });
 
   it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
