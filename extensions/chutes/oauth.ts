@@ -11,6 +11,7 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -21,7 +22,7 @@ const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const CHUTES_OAUTH_FETCH_TIMEOUT_MS = 10_000;
+const CHUTES_OAUTH_FETCH_TIMEOUT_MS = 30_000;
 
 type OAuthPrompt = {
   message: string;
@@ -130,7 +131,7 @@ async function fetchChutesUserInfo(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
-    signal: AbortSignal.timeout(params.requestTimeoutMs),
+    signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
   });
   if (!response.ok) {
     return null;
@@ -167,7 +168,7 @@ async function exchangeChutesCodeForTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
-    signal: AbortSignal.timeout(requestTimeoutMs),
+    signal: buildOAuthRequestSignal({ timeoutMs: requestTimeoutMs }),
   });
   if (!response.ok) {
     const detail = await readResponseTextLimited(
