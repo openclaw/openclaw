@@ -1207,25 +1207,35 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
-    const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
-      await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
-          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
-        return {
-          ...createGatewayAuxHandlers({
-            log,
-            activateRuntimeSecrets,
-            sharedGatewaySessionGenerationState,
-            resolveSharedGatewaySessionGenerationForConfig,
-            clients,
-            startChannel,
-            stopChannel,
-            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-            logChannels,
-          }),
-          coreGatewayHandlers: coreGatewayHandlersLocal,
-        };
-      });
+    const {
+      execApprovalManager,
+      pluginApprovalManager,
+      questionManager,
+      extraHandlers,
+      coreGatewayHandlers,
+    } = await startupTrace.measure("gateway.handlers", async () => {
+      const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
+        await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+      return {
+        ...createGatewayAuxHandlers({
+          log,
+          activateRuntimeSecrets,
+          sharedGatewaySessionGenerationState,
+          resolveSharedGatewaySessionGenerationForConfig,
+          clients,
+          startChannel,
+          stopChannel,
+          getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+          logChannels,
+        }),
+        coreGatewayHandlers: coreGatewayHandlersLocal,
+      };
+    });
+    // Bind the global question manager to the persistent gateway broadcast so the
+    // ask_user_question tool's pending/resolved/expired lifecycle reaches Control UI
+    // and channels even though the tool registers outside any request context.
+    const { bindQuestionManagerEmitter } = await import("./server-methods/question.js");
+    bindQuestionManagerEmitter({ manager: questionManager, broadcast });
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,

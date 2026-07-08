@@ -240,6 +240,12 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type QuestionAnswer,
+  QuestionAnswerSchema,
+  type QuestionListParams,
+  QuestionListParamsSchema,
+  type QuestionResolveParams,
+  QuestionResolveParamsSchema,
   type PluginApprovalRequestParams,
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
@@ -1031,6 +1037,10 @@ export const validateExecApprovalRequestParams = lazyCompile<ExecApprovalRequest
 export const validateExecApprovalResolveParams = lazyCompile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
+export const validateQuestionResolveParams = lazyCompile<QuestionResolveParams>(
+  QuestionResolveParamsSchema,
+);
+export const validateQuestionListParams = lazyCompile<QuestionListParams>(QuestionListParamsSchema);
 export const validatePluginApprovalRequestParams = lazyCompile<PluginApprovalRequestParams>(
   PluginApprovalRequestParamsSchema,
 );
