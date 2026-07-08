@@ -239,6 +239,7 @@ export function formatNodeRunToolResult(params: {
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const output = redactToolPayloadText(stdout || stderr || errorText);
   const aggregated = redactToolPayloadText([stdout, stderr, errorText].filter(Boolean).join("\n"));
+  const warnings = (params.warnings ?? []).map((warning) => redactToolPayloadText(warning));
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
   return {
@@ -247,7 +248,7 @@ export function formatNodeRunToolResult(params: {
         type: "text",
         text: renderExecUpdateText({
           tailText: output,
-          warnings: params.warnings ?? [],
+          warnings,
         }),
       },
     ],

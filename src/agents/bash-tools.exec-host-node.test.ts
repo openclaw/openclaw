@@ -2913,6 +2913,43 @@ describe("executeNodeHostCommand", () => {
     expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
   });
 
+  it("redacts secret-shaped node warnings before returning results", async () => {
+    callGatewayToolMock.mockImplementationOnce(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "ok\n",
+              stderr: "",
+              error: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "echo fake-secret",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [`warning leaked ${fakeSecretOutput}`],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+  });
+
   it("returns a non-empty placeholder for silent node exec results", async () => {
     callGatewayToolMock.mockImplementationOnce(
       async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
