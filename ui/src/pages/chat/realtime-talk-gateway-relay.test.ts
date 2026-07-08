@@ -789,6 +789,69 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("drops delayed final tool results when barge-in cancels relay playback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+    const speech = new Float32Array(4096).fill(0.25);
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: zeroPcmBase64(24000),
+      },
+    });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+
+    emitGatewayFrame({
+      event: "chat",
+      payload: { runId: "run-1", state: "final", message: { text: "ready" } },
+    });
+    await Promise.resolve();
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+
+    pumpMicrophone(speech);
+    pumpMicrophone(speech);
+    pumpMicrophone(speech);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+      [
+        "talk.session.cancelOutput",
+        {
+          sessionId: "relay-1",
+          reason: "barge-in",
+        },
+      ],
+    ]);
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    transport.stop();
+  });
+
   it("treats server relay tool results as terminal for active consult calls", async () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
