@@ -145,7 +145,9 @@ async function collectMemoryFilesFromDir(
       entry.kind === "file" &&
       isAllowedMemoryFilePath(entry.path, multimodal),
   });
-  files.push(...scan.entries.map((entry) => entry.path));
+  for (const entry of scan.entries) {
+    files.push(entry.path);
+  }
 }
 
 export async function listMemoryFiles(
@@ -428,28 +430,37 @@ export function chunkMarkdown(
       return;
     }
     let acc = 0;
-    const kept: Array<{ line: string; lineNo: number }> = [];
+    let startIndex = current.length;
     for (let i = current.length - 1; i >= 0; i -= 1) {
       const entry = current[i];
       if (!entry) {
         continue;
       }
       acc += estimateStringChars(entry.line) + 1;
-      kept.unshift(entry);
+      startIndex = i;
       if (acc >= overlapChars) {
         break;
       }
     }
-    current = kept;
+    current = current.slice(startIndex);
     currentChars = acc;
+  };
+
+  const appendSegment = (segment: string, lineNo: number) => {
+    const lineSize = estimateStringChars(segment) + 1;
+    if (currentChars + lineSize > maxChars && current.length > 0) {
+      flush();
+      carryOverlap();
+    }
+    current.push({ line: segment, lineNo });
+    currentChars += lineSize;
   };
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
-    const segments: string[] = [];
     if (line.length === 0) {
-      segments.push("");
+      appendSegment("", lineNo);
     } else {
       // First pass: slice at maxChars (preserves original behaviour for Latin).
       // Second pass: if a segment's *weighted* size still exceeds the budget
@@ -465,23 +476,14 @@ export function chunkMarkdown(
             if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
               end += 1;
             }
-            segments.push(coarse.slice(j, end));
+            appendSegment(coarse.slice(j, end), lineNo);
             j = end;
           }
         } else {
-          segments.push(coarse);
+          appendSegment(coarse, lineNo);
         }
         start += coarse.length;
       }
-    }
-    for (const segment of segments) {
-      const lineSize = estimateStringChars(segment) + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
-        flush();
-        carryOverlap();
-      }
-      current.push({ line: segment, lineNo });
-      currentChars += lineSize;
     }
   }
   flush();
