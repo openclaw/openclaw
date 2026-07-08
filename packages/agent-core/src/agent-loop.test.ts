@@ -1183,6 +1183,98 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
+  it("does not execute a prepared parallel tool after a later tool aborts the batch", async () => {
+    const controller = new AbortController();
+    const paidExecute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
+      return {
+        content: [{ type: "text", text: "charged" }],
+        details: { charged: true },
+      };
+    });
+    const abortingExecute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
+      return {
+        content: [{ type: "text", text: "should not run" }],
+        details: {},
+      };
+    });
+    const paidTool: AgentTool = {
+      name: "paid_generation",
+      label: "paid_generation",
+      description: "Represents a paid side-effectful tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: paidExecute,
+    };
+    const abortingTool: AgentTool = {
+      name: "abort_gate",
+      label: "abort_gate",
+      description: "Aborts during preparation",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: abortingExecute,
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-paid", name: paidTool.name, arguments: {} },
+          { type: "toolCall", id: "call-abort", name: abortingTool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const events: AgentEvent[] = [];
+    const preparedToolNames: string[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort mid batch", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [paidTool, abortingTool],
+      },
+      {
+        ...config,
+        beforeToolCall: async ({ toolCall }) => {
+          preparedToolNames.push(toolCall.name);
+          if (toolCall.name === abortingTool.name) {
+            await Promise.resolve();
+            controller.abort(new Error("user aborted"));
+          }
+          return undefined;
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(preparedToolNames).toEqual([paidTool.name, abortingTool.name]);
+    expect(paidExecute).not.toHaveBeenCalled();
+    expect(abortingExecute).not.toHaveBeenCalled();
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+
+    const endEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(
+      Object.fromEntries(endEvents.map((event) => [event.toolName, event.executionStarted])),
+    ).toEqual({
+      [paidTool.name]: false,
+      [abortingTool.name]: false,
+    });
+  });
+
   it("does not request another model turn when an async turn hook aborts the run", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
