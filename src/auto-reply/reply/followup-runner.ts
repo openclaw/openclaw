@@ -1454,7 +1454,11 @@ export function createFollowupRunner(params: {
           });
           replyOperation.fail("run_failed", exhaustionError);
           terminalRunFailed = true;
-        } else if (deferredLifecycleError || runResult.meta?.error) {
+        } else if (
+          deferredLifecycleError ||
+          runResult.meta?.error ||
+          runResult.meta?.nonDeliverableTerminalTurn
+        ) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
           replyOperation.fail("run_failed", terminalError);
