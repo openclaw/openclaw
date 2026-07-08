@@ -1,10 +1,9 @@
 // Matrix tests cover deps plugin behavior.
-import { EventEmitter } from "node:events";
+import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureMatrixCryptoRuntime,
   ensureMatrixSdkInstalled,
@@ -13,6 +12,70 @@ import {
 } from "./deps.js";
 
 const logStub = vi.fn();
+
+async function importDepsWithSpawnMock(
+  spawnMock: ReturnType<typeof vi.fn>,
+): Promise<typeof import("./deps.js")> {
+  vi.resetModules();
+  vi.doMock("node:child_process", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    return {
+      ...actual,
+      spawn: spawnMock,
+    };
+  });
+  return await import("./deps.js");
+}
+
+function waitForChildClose(proc: ChildProcessWithoutNullStreams) {
+  return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("timed out waiting for matrix command child close"));
+    }, 5_000);
+    timer.unref?.();
+    proc.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
+
+function waitForReadableData(stream: NodeJS.ReadableStream) {
+  return new Promise<void>((resolve, reject) => {
+    let cleanup = () => {};
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("timed out waiting for matrix command child output"));
+    }, 5_000);
+    timer.unref?.();
+    cleanup = () => {
+      clearTimeout(timer);
+      stream.off("data", onData);
+      stream.off("error", onError);
+    };
+    const onData = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    stream.once("data", onData);
+    stream.once("error", onError);
+  });
+}
+
+function waitForReadableErrorDispatch() {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.doUnmock("node:child_process");
+});
 
 function resolveTestNativeBindingFilename(): string | null {
   switch (process.platform) {
@@ -188,38 +251,77 @@ describe("runFixedCommandWithTimeout", () => {
     expect(result.stderr).toBe("b".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
   });
 
-  it("fails cleanly when bootstrap command stdio streams error", async () => {
+  it("settles real child stream errors after child close and terminates once", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+
     for (const streamName of ["stdout", "stderr"] as const) {
-      const proc = new EventEmitter() as EventEmitter & {
-        stdout: PassThrough;
-        stderr: PassThrough;
-        exitCode: number | null;
-        kill: (signal?: NodeJS.Signals) => boolean;
-      };
-      proc.stdout = new PassThrough();
-      proc.stderr = new PassThrough();
-      proc.exitCode = null;
-      const killMock = vi.fn((_signal?: NodeJS.Signals) => {
-        proc.exitCode = 143;
-        return true;
-      });
-      proc.kill = killMock;
-      const spawnMock = vi.fn(() => proc);
+      let proc: ChildProcessWithoutNullStreams | undefined;
+      let killSpy: ReturnType<typeof vi.spyOn> | undefined;
+      try {
+        const spawnMock = vi.fn(
+          (command: string, args: string[] | undefined, options: SpawnOptions | undefined) => {
+            proc = actual.spawn(command, args ?? [], options) as ChildProcessWithoutNullStreams;
+            return proc;
+          },
+        );
+        const { runFixedCommandWithTimeout: runWithMockedSpawn } =
+          await importDepsWithSpawnMock(spawnMock);
+        const exitListenersBefore = process.listenerCount("exit");
 
-      const resultPromise = runFixedCommandWithTimeout({
-        argv: ["matrix-bootstrap"],
-        cwd: process.cwd(),
-        timeoutMs: 10_000,
-        spawn: spawnMock,
-      });
+        const resultPromise = runWithMockedSpawn({
+          argv: [
+            process.execPath,
+            "-e",
+            [
+              "process.stdin.resume();",
+              'process.on("SIGTERM", () => {});',
+              'process.stdout.write("stdout ready\\n");',
+              'process.stderr.write("stderr ready\\n");',
+              "setInterval(() => {}, 1000);",
+            ].join(""),
+          ],
+          cwd: process.cwd(),
+          timeoutMs: 10_000,
+        });
+        if (!proc) {
+          throw new Error("expected matrix command helper to spawn a child process");
+        }
+        killSpy = vi.spyOn(proc, "kill");
+        const closePromise = waitForChildClose(proc);
+        await Promise.all([waitForReadableData(proc.stdout), waitForReadableData(proc.stderr)]);
+        let settled = false;
+        void resultPromise.then(() => {
+          settled = true;
+        });
+        const message = `synthetic parent ${streamName} read failure`;
 
-      expect(() => proc[streamName].emit("error", new Error("EPIPE"))).not.toThrow();
-      await expect(resultPromise).resolves.toStrictEqual({
-        code: 1,
-        stdout: "",
-        stderr: `${streamName} stream failed: EPIPE`,
-      });
-      expect(killMock).toHaveBeenCalledWith("SIGTERM");
+        proc[streamName].destroy(new Error(message));
+        await waitForReadableErrorDispatch();
+        expect(settled).toBe(false);
+        expect(process.listenerCount("exit")).toBe(exitListenersBefore + 1);
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith("SIGTERM");
+
+        const duplicateStreamName = streamName === "stdout" ? "stderr" : "stdout";
+        proc[duplicateStreamName].destroy(new Error("duplicate parent readable failure"));
+        await waitForReadableErrorDispatch();
+        expect(killSpy).toHaveBeenCalledTimes(1);
+
+        const result = await resultPromise;
+        const close = await closePromise;
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(`${streamName} stream failed: ${message}`);
+        expect(result.stderr).not.toContain("duplicate parent readable failure");
+        expect(close).toStrictEqual({ code: null, signal: "SIGKILL" });
+        expect(killSpy).toHaveBeenLastCalledWith("SIGKILL");
+        expect(process.listenerCount("exit")).toBe(exitListenersBefore);
+      } finally {
+        killSpy?.mockRestore();
+        if (proc && proc.exitCode === null && !proc.killed) {
+          proc.kill("SIGKILL");
+        }
+      }
     }
   });
 });

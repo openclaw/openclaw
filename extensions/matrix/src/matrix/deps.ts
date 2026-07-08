@@ -13,6 +13,7 @@ const REQUIRED_MATRIX_PACKAGES = [
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
 export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
+const MATRIX_STREAM_ERROR_KILL_GRACE_MS = 1_000;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -49,30 +50,6 @@ type CommandResult = {
   stderr: string;
 };
 
-type CommandReadable = {
-  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-};
-
-type CommandProcess = {
-  stdout?: CommandReadable | null;
-  stderr?: CommandReadable | null;
-  exitCode: number | null;
-  kill(signal?: NodeJS.Signals): boolean;
-  on(event: "error", listener: (error: Error) => void): unknown;
-  on(event: "close", listener: (code: number | null) => void): unknown;
-};
-
-type CommandSpawnFn = (
-  command: string,
-  args: string[],
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    stdio: ["ignore", "pipe", "pipe"];
-  },
-) => CommandProcess;
-
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
 function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
@@ -101,7 +78,6 @@ export async function runFixedCommandWithTimeout(params: {
   cwd: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
-  spawn?: CommandSpawnFn;
 }): Promise<CommandResult> {
   return await new Promise((resolve) => {
     const [command, ...args] = params.argv;
@@ -114,11 +90,7 @@ export async function runFixedCommandWithTimeout(params: {
       return;
     }
 
-    const spawnFn: CommandSpawnFn =
-      params.spawn ??
-      ((spawnCommand, spawnArgs, spawnOptions) =>
-        spawn(spawnCommand, spawnArgs, spawnOptions) as unknown as CommandProcess);
-    const proc = spawnFn(command, args, {
+    const proc = spawn(command, args, {
       cwd: params.cwd,
       env: { ...process.env, ...params.env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -128,6 +100,8 @@ export async function runFixedCommandWithTimeout(params: {
     let stderr = "";
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
+    let streamKillTimer: NodeJS.Timeout | null = null;
+    let streamErrorMessage: string | null = null;
     const killChildOnExit = () => {
       if (!settled && proc.exitCode === null) {
         proc.kill("SIGTERM");
@@ -142,6 +116,9 @@ export async function runFixedCommandWithTimeout(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
+      }
       process.off("exit", killChildOnExit);
       resolve(result);
     };
@@ -154,21 +131,28 @@ export async function runFixedCommandWithTimeout(params: {
       stderr = appendBoundedOutputTail(stderr, chunk);
     });
     const failReadableStream = (streamName: "stdout" | "stderr") => (error: Error) => {
+      if (settled || streamErrorMessage) {
+        return;
+      }
+      streamErrorMessage = `${streamName} stream failed: ${formatErrorMessage(error)}`;
       if (proc.exitCode === null) {
         proc.kill("SIGTERM");
       }
-      const message = `${streamName} stream failed: ${formatErrorMessage(error)}`;
-      finalize({
-        code: 1,
-        stdout,
-        stderr: stderr ? appendBoundedOutputTail(stderr, `\n${message}`) : message,
-      });
+      streamKillTimer = setTimeout(() => {
+        if (!settled && proc.exitCode === null) {
+          proc.kill("SIGKILL");
+        }
+      }, MATRIX_STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
     };
     proc.stdout?.on("error", failReadableStream("stdout"));
     proc.stderr?.on("error", failReadableStream("stderr"));
 
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 124,
         stdout,
@@ -177,6 +161,9 @@ export async function runFixedCommandWithTimeout(params: {
     }, params.timeoutMs);
 
     proc.on("error", (err) => {
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 1,
         stdout,
@@ -185,10 +172,15 @@ export async function runFixedCommandWithTimeout(params: {
     });
 
     proc.on("close", (code) => {
+      const streamErrorStderr = streamErrorMessage
+        ? stderr
+          ? appendBoundedOutputTail(stderr, `\n${streamErrorMessage}`)
+          : streamErrorMessage
+        : stderr;
       finalize({
-        code: code ?? 1,
+        code: streamErrorMessage ? 1 : (code ?? 1),
         stdout,
-        stderr,
+        stderr: streamErrorStderr,
       });
     });
   });
