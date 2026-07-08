@@ -2385,12 +2385,12 @@ async function agentCommandInternal(
           // Persist bootstrap context run kind so async completion wakes
           // (e.g. media generation) can resume cron runs with the original
           // task context instead of falling back to account defaults.
-          // Capture a pre-mutation snapshot: persistSessionEntry merges
-          // existing rows via projectSessionSnapshotChanges(initial, next),
-          // which skips fields where initial===next. Passing the same object
-          // as both args would produce a zero delta and drop the field.
-          const preCronMarkerEntry = sessionEntry ? { ...sessionEntry } : undefined;
           if (opts.bootstrapContextRunKind && sessionEntry) {
+            // Capture a pre-mutation snapshot: persistSessionEntry merges
+            // existing rows via projectSessionSnapshotChanges(initial, next),
+            // which skips fields where initial===next. Passing the same object
+            // as both args would produce a zero delta and drop the field.
+            const preCronMarkerEntry = { ...sessionEntry };
             sessionEntry.bootstrapContextRunKind = opts.bootstrapContextRunKind;
             if (sessionKey) {
               const persisted = await persistSessionEntry({
