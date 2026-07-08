@@ -133,10 +133,24 @@ function extensionContentType(logicalPath: string): string | null {
   return CONTENT_TYPES[extension] ?? null;
 }
 
+/**
+ * The strict security headers EVERY widget-route response must carry — 200 and
+ * 404 alike. A 404 is still an attacker-influenced response served from the
+ * widget origin, so it needs the same `connect-src 'none'` lockdown. Shared here
+ * so the two response paths can never drift apart again. Content-Type is set
+ * per-path (it differs) and is intentionally not included.
+ */
+function setSecurityHeaders(res: ServerResponse): void {
+  res.setHeader("Content-Security-Policy", WIDGET_CSP);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cache-Control", "no-store");
+}
+
 function notFound(res: ServerResponse): true {
   res.statusCode = 404;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader("X-Content-Type-Options", "nosniff");
+  setSecurityHeaders(res);
   res.end("not found");
   return true;
 }
@@ -224,10 +238,7 @@ export async function serveWidgetAsset(
 
   res.statusCode = 200;
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Security-Policy", WIDGET_CSP);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Cache-Control", "no-store");
+  setSecurityHeaders(res);
   if (req.method === "HEAD") {
     res.end();
   } else {

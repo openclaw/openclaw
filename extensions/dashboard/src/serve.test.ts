@@ -161,7 +161,10 @@ describe("serveWidgetAsset security jail", () => {
         const { res, captured } = fakeResponse();
         await serveWidgetAsset({ method: "GET", pathname }, res, { store, stateDir });
         expect(captured.statusCode).toBe(404);
-        expect(captured.headers["content-security-policy"]).toBeUndefined();
+        // A 404 is still an attacker-influenced response from the widget origin,
+        // so it MUST carry the same strict CSP as a 200 (invariant I1/I4).
+        expect(captured.headers["content-security-policy"]).toBe(WIDGET_CSP);
+        expect(captured.headers["referrer-policy"]).toBe("no-referrer");
       });
     });
   }
