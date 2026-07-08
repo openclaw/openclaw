@@ -7157,6 +7157,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Session conversation grammar
   - H3: Account-scoped conversation binding support
   - H2: Approvals and channel capabilities
+  - H3: Auth login methods
   - H3: Approval auth
   - H3: Payload lifecycle and setup guidance
   - H3: Native approval delivery

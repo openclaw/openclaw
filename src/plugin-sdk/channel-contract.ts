@@ -36,11 +36,13 @@ export type {
   ChannelDoctorLegacyConfigRule,
   ChannelDoctorSequenceResult,
   ChannelGatewayContext,
-  ChannelLoginMethod,
-  ChannelLoginMethodKind,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelOutboundPayloadHint,
   ChannelStatusAdapter,
 } from "../channels/plugins/types.adapters.js";
+export type {
+  ChannelLoginMethod,
+  ChannelLoginMethodKind,
+} from "../channels/plugins/channel-login-method.types.js";
 export type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

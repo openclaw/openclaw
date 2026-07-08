@@ -115,7 +115,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 33,
   "channel-reply-pipeline": 12,
   "channel-reply-options-runtime": 2,
-  "channel-runtime": 146,
+  "channel-runtime": 144,
   "interactive-runtime": 13,
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
