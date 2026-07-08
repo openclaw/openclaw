@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
+import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
@@ -91,6 +92,18 @@ describe("gateway method registry", () => {
 
     expect(registry.getScope("config.get")).toBe(READ_SCOPE);
     expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
+  });
+
+  it("scopes ask_user_question resolution to operator.approvals, not admin", () => {
+    // Regression: question.list/question.resolve must ride the same approvals
+    // scope as exec/plugin approvals so a non-admin approvals operator can answer
+    // a parked question; a missing descriptor would fall back to admin.
+    const specByName = new Map(CORE_GATEWAY_METHOD_SPECS.map((spec) => [spec.name, spec]));
+    expect(specByName.get("question.list")?.scope).toBe("operator.approvals");
+    expect(specByName.get("question.resolve")?.scope).toBe("operator.approvals");
+    expect(specByName.get("question.resolve")?.scope).toBe(
+      specByName.get("exec.approval.resolve")?.scope,
+    );
   });
 
   it("defaults handler-only plugin registries to admin scope", () => {

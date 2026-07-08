@@ -4,8 +4,8 @@ import { formatAgentHarnessUserInputPrompt } from "../agents/harness/user-input-
 // without the user having to notice the text stream. Reuses the durable outbound
 // delivery path (sendDurableMessageBatch); it does not invent a new send route.
 //
-// The button contract matches the standalone channel renderers
-// (extensions/telegram/src/question-keyboard.ts, extensions/slack/src/question-blocks.ts):
+// The button contract matches the Telegram channel renderer
+// (extensions/telegram/src/question-keyboard.ts):
 // each option runs `/answer <n>` and a free-text Other runs `/answer`. Telegram needs
 // a command-type action (native-command callback), while Slack restricts command-type
 // buttons to exec-approval commands, so Slack uses a callback-value action — the exact
