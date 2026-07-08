@@ -40,7 +40,6 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
 // ── Logging helpers (matches openclaw log format) ──────────────────────
 const BOLD = "\x1b[1m";
 const GREEN = "\x1b[32m";
-const YELLOW = "\x1b[33m";
 const CYAN = "\x1b[36m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
@@ -167,9 +166,7 @@ async function demoSubagentRetry(cfg: OpenClawConfig): Promise<void> {
         model,
         run: async (p: string, m: string) => {
           if (liveSwitchRetries === 0) {
-            warn(
-              `    live session model switch requested: ` + `${p}/${m} -> openrouter/deepseek-chat`,
-            );
+            warn(`    live session model switch requested: ${p}/${m} -> openrouter/deepseek-chat`);
             throw new LiveSessionModelSwitchError({
               provider: "openrouter",
               model: "deepseek-chat",
@@ -279,9 +276,7 @@ async function main(): Promise<void> {
 
   const cfg = makeCfg();
   info("Fallback chain: openai/gpt-4.1-mini → anthropic/claude-haiku-3-5");
-  info(
-    "LiveSessionModelSwitchError target: anthropic/claude-sonnet-4-6 " + "(NOT in candidate list)",
-  );
+  info("LiveSessionModelSwitchError target: anthropic/claude-sonnet-4-6 (NOT in candidate list)");
   info(
     "Expected behavior: runWithModelFallback re-throws LiveSessionModelSwitchError\n" +
       "                   (not wrapped as FailoverError), outer loop catches → retries → success.",
