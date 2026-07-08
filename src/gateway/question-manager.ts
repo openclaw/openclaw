@@ -199,6 +199,6 @@ export function getGlobalQuestionManager(): QuestionManager {
 }
 
 /** Test-only reset so suites do not leak pending records across cases. */
-export function __resetGlobalQuestionManagerForTest(): void {
+export function resetGlobalQuestionManagerForTest(): void {
   globalQuestionManager = null;
 }

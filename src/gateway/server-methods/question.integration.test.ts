@@ -28,11 +28,13 @@ function makeRespond() {
 function adminClient(): GatewayClient {
   return {
     connect: { scopes: ["operator.admin"], client: { id: "ui", displayName: "Control UI" } },
-  } as GatewayClient;
+  } as unknown as GatewayClient;
 }
 
 function unscopedClient(): GatewayClient {
-  return { connect: { scopes: ["operator.read"], client: { id: "reader" } } } as GatewayClient;
+  return {
+    connect: { scopes: ["operator.read"], client: { id: "reader" } },
+  } as unknown as GatewayClient;
 }
 
 const CONTEXT = {} as never;
@@ -88,7 +90,7 @@ describe("question resolve/list wire contract", () => {
 
     const last = calls.at(-1)!;
     expect(last.ok).toBe(false);
-    expect(String(JSON.stringify(last.error))).toContain("invalid question.resolve params");
+    expect(JSON.stringify(last.error)).toContain("invalid question.resolve params");
     // The tool promise is still parked because nothing valid resolved it.
     expect(manager.getSnapshot(record.id)?.status).toBe("pending");
     void wait; // still pending

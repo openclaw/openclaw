@@ -240,8 +240,6 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
-  type QuestionAnswer,
-  QuestionAnswerSchema,
   type QuestionListParams,
   QuestionListParamsSchema,
   type QuestionResolveParams,

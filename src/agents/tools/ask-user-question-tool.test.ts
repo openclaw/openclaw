@@ -4,8 +4,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  __resetGlobalQuestionManagerForTest,
   getGlobalQuestionManager,
+  resetGlobalQuestionManagerForTest,
 } from "../../gateway/question-manager.js";
 import { createAskUserQuestionTool } from "./ask-user-question-tool.js";
 import { ToolInputError } from "./common.js";
@@ -17,7 +17,7 @@ function parseResult(result: { content: Array<{ type: string; text?: string }> }
 
 describe("ask_user_question tool", () => {
   afterEach(() => {
-    __resetGlobalQuestionManagerForTest();
+    resetGlobalQuestionManagerForTest();
   });
 
   it("parks on a promise and returns answers once resolved from any surface", async () => {
