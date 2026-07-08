@@ -1639,6 +1639,7 @@ export function createFollowupRunner(params: {
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
         const tailEntry = sessionStore?.[continuationSessionKey] ?? activeSessionEntry;
         const chainState = loadContinuationChainState(tailEntry, turnTokens);
+        const continuationRuntimeConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
         const persistDispatchChainState = async (nextState: typeof chainState): Promise<void> => {
           if (!tailEntry) {
             return;
@@ -1695,7 +1696,8 @@ export function createFollowupRunner(params: {
             agentTo: queued.originatingTo ?? undefined,
             agentThreadId: queued.originatingThreadId ?? undefined,
           },
-          maxChainLength: resolveLiveContinuationRuntimeConfig(runtimeConfig).maxChainLength,
+          maxChainLength: continuationRuntimeConfig.maxChainLength,
+          config: continuationRuntimeConfig,
           // Hedge re-arm must see fresh chain state.
           loadFreshChainState: () => loadContinuationChainState(tailEntry, 0),
           persistChainState: persistDispatchChainState,

@@ -6460,6 +6460,85 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     expect(typeof (callArgs.continueWorkOpts as any).requestContinuation).toBe("function");
   });
 
+  it("passes resolved continuation config into followup continue_delegate dispatch", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-delegate-config-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:delegate-config-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-delegate-config",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = makeFollowupContinuationConfig(storePath);
+    runtimeConfig.agents!.defaults!.continuation = {
+      ...runtimeConfig.agents!.defaults!.continuation!,
+      maxChainLength: 17,
+      costCapTokens: 1234,
+      maxDelegatesPerTurn: 3,
+      crossSessionTargeting: "enabled",
+    };
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    const delegateDispatch = await import("../continuation/delegate-dispatch.js");
+    const dispatchSpy = vi
+      .spyOn(delegateDispatch, "dispatchToolDelegates")
+      .mockImplementationOnce(async (params) => ({
+        dispatched: 0,
+        rejected: 0,
+        chainState: params.chainState,
+      }));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      const dispatchCall = dispatchSpy.mock.calls[0]?.[0];
+      expect(dispatchCall?.maxChainLength).toBe(17);
+      expect(dispatchCall?.config).toMatchObject({
+        maxChainLength: 17,
+        costCapTokens: 1234,
+        maxDelegatesPerTurn: 3,
+        crossSessionTargeting: "enabled",
+      });
+    } finally {
+      dispatchSpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists followup continue_work chain state to the session store", async () => {
     const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-continue-work-"));
     const storePath = path.join(tmpDir, "sessions.json");
