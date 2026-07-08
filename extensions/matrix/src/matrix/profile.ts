@@ -27,11 +27,11 @@ export type MatrixProfileSyncResult = {
   convertedAvatarFromHttp: boolean;
 };
 
-export function isMatrixMxcUri(value: string): boolean {
+function isMatrixMxcUri(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value)).startsWith("mxc://");
 }
 
-export function isMatrixHttpAvatarUri(value: string): boolean {
+function isMatrixHttpAvatarUri(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value));
   return normalized.startsWith("https://") || normalized.startsWith("http://");
 }

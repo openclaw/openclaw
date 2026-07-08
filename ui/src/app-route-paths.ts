@@ -1,7 +1,7 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 
-export const APP_ROUTE_DEFINITIONS = {
+const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   overview: { path: "/overview" },
   activity: { path: "/activity" },

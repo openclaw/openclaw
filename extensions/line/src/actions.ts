@@ -10,7 +10,7 @@ export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL
   return truncateUtf16Safe(label, limit);
 }
 
-export function truncateLineActionData(data: string): string {
+function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 

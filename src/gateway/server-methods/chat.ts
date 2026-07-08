@@ -1595,7 +1595,7 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
   }));
 }
 
-export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
     typeof message === "object" &&

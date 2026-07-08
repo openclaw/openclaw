@@ -58,7 +58,7 @@ function dismiss(updateAvailable: UpdateAvailable) {
   }
 }
 
-export type UpdateBannerProps = {
+type UpdateBannerProps = {
   statusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
@@ -67,7 +67,7 @@ export type UpdateBannerProps = {
   onDismiss: () => void;
 };
 
-export class UpdateBanner extends LitElement {
+class UpdateBanner extends LitElement {
   override createRenderRoot() {
     return this;
   }

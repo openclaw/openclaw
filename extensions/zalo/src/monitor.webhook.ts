@@ -99,7 +99,7 @@ export class ZaloRetryableWebhookError extends Error {
   }
 }
 
-export async function processZaloReplayGuardedUpdate(params: {
+async function processZaloReplayGuardedUpdate(params: {
   target: ZaloWebhookTarget;
   update: ZaloUpdate;
   processUpdate: ZaloWebhookProcessUpdate;

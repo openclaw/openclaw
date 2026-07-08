@@ -51,7 +51,7 @@ function isTestEnv(): boolean {
   return Boolean(vitest);
 }
 
-export function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
+function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(message);
   if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
     return undefined;

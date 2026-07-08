@@ -7,6 +7,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
@@ -531,7 +532,7 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
-  it("falls back to OS temp when target workspace creation fails", async () => {
+  it("falls back to the OpenClaw temp root when target workspace creation fails", async () => {
     const gitDir = trackedTempDirs.make("openclaw-git-install-stage-fallback-");
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -568,7 +569,12 @@ describe("installPluginFromGitSpec", () => {
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
       expect(path.dirname(targetPrefix)).toBe(await fs.realpath(path.dirname(persistentRepoDir)));
-      expect(path.dirname(fallbackPrefix)).toBe(await fs.realpath(os.tmpdir()));
+      // withTempDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
+      // prefers /tmp/openclaw and only degrades to a uid-scoped os.tmpdir path when
+      // that is unsafe. Recompute it here so the assertion holds on every host.
+      expect(path.dirname(fallbackPrefix)).toBe(
+        await fs.realpath(resolvePreferredOpenClawTmpDir()),
+      );
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
     } finally {
       mkdtempSpy.mockRestore();
