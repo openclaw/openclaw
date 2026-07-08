@@ -88,6 +88,11 @@ function isTagNameChar(value: string): boolean {
   );
 }
 
+function isTagNameStartChar(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
 function isTagBoundary(value: string | undefined): boolean {
   return !value || isAsciiWhitespace(value) || value === ">" || value === "/";
 }
@@ -135,6 +140,11 @@ function findRawTextOpenTagStart(html: string, start: number, end: number): numb
     }
   }
   return -1;
+}
+
+function startsLikeHtmlTag(html: string, start: number): boolean {
+  const next = html[start + 1];
+  return next === "!" || next === "?" || next === "/" || isTagNameStartChar(next ?? "");
 }
 
 function findTagEnd(html: string, start: number): number {
@@ -187,7 +197,7 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
   while (pos < end && isTagNameChar(html[pos])) {
     pos += 1;
   }
-  if (pos === nameStart) {
+  if (pos === nameStart || !isTagNameStartChar(html[nameStart] ?? "")) {
     const rawTextStart = findRawTextOpenTagStart(html, start + 1, end + 1);
     if (rawTextStart !== -1) {
       return {
@@ -371,6 +381,14 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
 
     const read = readTagToken(html, i);
     if (!read) {
+      const rawTextStart = findRawTextOpenTagStart(html, i + 1, html.length);
+      if (rawTextStart !== -1) {
+        if (!startsLikeHtmlTag(html, i)) {
+          appendText(stack, decodeEntities(html.slice(i, rawTextStart)));
+        }
+        i = rawTextStart;
+        continue;
+      }
       appendText(stack, decodeEntities(html.slice(i)));
       break;
     }
