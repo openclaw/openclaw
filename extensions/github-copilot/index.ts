@@ -14,17 +14,16 @@ import {
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
-  DEFAULT_GITHUB_COPILOT_DOMAIN,
   ensureAuthProfileStore,
   listProfilesForProvider,
   normalizeGithubCopilotDomain,
   normalizeOptionalSecretInput,
-  resolveGithubCopilotDomain,
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveFirstGithubToken } from "./auth.js";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
 import {
@@ -399,15 +398,15 @@ export default definePluginEntry({
       const value = await ctx.prompter.text({
         message: "GitHub Enterprise domain (data residency)",
         placeholder: "your-org.ghe.com",
-        initialValue: current === DEFAULT_GITHUB_COPILOT_DOMAIN ? "" : current,
+        initialValue: current === PUBLIC_GITHUB_COPILOT_DOMAIN ? "" : current,
         validate: (raw) => {
           const trimmed = raw.trim();
           if (!trimmed) {
             return "Enter your GitHub Enterprise domain (for example your-org.ghe.com).";
           }
           if (
-            normalizeGithubCopilotDomain(trimmed) === DEFAULT_GITHUB_COPILOT_DOMAIN &&
-            trimmed.toLowerCase() !== DEFAULT_GITHUB_COPILOT_DOMAIN
+            normalizeGithubCopilotDomain(trimmed) === PUBLIC_GITHUB_COPILOT_DOMAIN &&
+            trimmed.toLowerCase() !== PUBLIC_GITHUB_COPILOT_DOMAIN
           ) {
             // GitHub's GHE docs list derived service hosts (api.<tenant>.ghe.com,
             // copilot-api.<tenant>.ghe.com) that users are likely to paste; point
@@ -429,7 +428,7 @@ export default definePluginEntry({
       domain: string,
     ): Promise<ProviderAuthResult> {
       const normalizedDomain = normalizeGithubCopilotDomain(domain);
-      const isEnterprise = normalizedDomain !== DEFAULT_GITHUB_COPILOT_DOMAIN;
+      const isEnterprise = normalizedDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
       // Domain the currently stored profile was actually minted under. This must
       // come from PERSISTED CONFIG ONLY (never COPILOT_GITHUB_DOMAIN): a
       // successful login writes its tenant to config (enterprise) or leaves it
@@ -444,7 +443,7 @@ export default definePluginEntry({
       // restored; github.com stays absent otherwise to avoid redundant noise.
       const configPatch = isEnterprise
         ? buildGithubCopilotDomainConfigPatch(normalizedDomain)
-        : previousDomain !== DEFAULT_GITHUB_COPILOT_DOMAIN
+        : previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN
           ? clearGithubCopilotDomainConfigPatch()
           : undefined;
 
@@ -534,7 +533,7 @@ export default definePluginEntry({
     }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      return await runGitHubCopilotDeviceAuth(ctx, DEFAULT_GITHUB_COPILOT_DOMAIN);
+      return await runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN);
     }
 
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
@@ -543,7 +542,7 @@ export default definePluginEntry({
         await ctx.prompter.note("Enterprise login cancelled.", "GitHub Copilot");
         return { profiles: [] };
       }
-      if (domain === DEFAULT_GITHUB_COPILOT_DOMAIN) {
+      if (domain === PUBLIC_GITHUB_COPILOT_DOMAIN) {
         await ctx.prompter.note(
           "github.com is the default — use the standard GitHub Copilot login instead of the enterprise (data residency) option.",
           "GitHub Copilot",

@@ -145,7 +145,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
     vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
       return {
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
-        DEFAULT_GITHUB_COPILOT_DOMAIN: "github.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
         applyAuthProfileConfig: (config: OpenClawConfig) => config,
         buildApiKeyCredential: (
@@ -179,27 +178,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         },
         normalizeOptionalSecretInput: (value: unknown) =>
           typeof value === "string" && value.trim() ? value.trim() : undefined,
-        resolveGithubCopilotDomain: (params?: {
-          env?: NodeJS.ProcessEnv;
-          config?: OpenClawConfig;
-        }) => {
-          const normalize = (raw: unknown) => {
-            const trimmed = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-            return trimmed === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(trimmed)
-              ? trimmed
-              : "github.com";
-          };
-          const fromEnv = params?.env?.COPILOT_GITHUB_DOMAIN?.trim();
-          if (fromEnv) {
-            return normalize(fromEnv);
-          }
-          const configDomain = (
-            params?.config?.models?.providers?.["github-copilot"]?.params as
-              | { githubDomain?: unknown }
-              | undefined
-          )?.githubDomain;
-          return normalize(configDomain);
-        },
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),

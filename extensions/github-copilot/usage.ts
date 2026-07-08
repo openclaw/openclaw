@@ -1,8 +1,5 @@
 // Github Copilot plugin module implements usage behavior.
-import {
-  buildCopilotIdeHeaders,
-  DEFAULT_GITHUB_COPILOT_DOMAIN,
-} from "openclaw/plugin-sdk/provider-auth";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
@@ -12,6 +9,7 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -25,7 +23,7 @@ export async function fetchCopilotUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  githubDomain: string = DEFAULT_GITHUB_COPILOT_DOMAIN,
+  githubDomain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
     `https://api.${githubDomain}/copilot_internal/user`,

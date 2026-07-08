@@ -142,8 +142,7 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
  */
 const COPILOT_PROVIDER_ID = "github-copilot";
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
+const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
 
 // Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
 // GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
@@ -212,15 +211,21 @@ function warnOnceOnRejectedConfigDomain(configured: string): void {
   );
 }
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export function resolveGithubCopilotDomain(params?: {
+// Provider-internal host resolver (env > explicit caller value > persisted
+// config), always passed through the fail-closed allowlist. Not exported: the
+// provider extension owns its own copy so the SDK surface stays minimal.
+function resolveGithubCopilotDomain(params?: {
   env?: NodeJS.ProcessEnv;
+  explicit?: string;
   config?: OpenClawConfig;
 }): string {
   const env = params?.env ?? process.env;
   const fromEnv = env.COPILOT_GITHUB_DOMAIN?.trim();
   if (fromEnv) {
     return normalizeGithubCopilotDomain(fromEnv);
+  }
+  if (params?.explicit) {
+    return normalizeGithubCopilotDomain(params.explicit);
   }
   return normalizeGithubCopilotDomain(readGithubCopilotDomainFromConfig(params?.config));
 }
@@ -415,11 +420,11 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const domain = normalizeGithubCopilotDomain(
-    env.COPILOT_GITHUB_DOMAIN?.trim() ||
-      params.githubDomain ||
-      readGithubCopilotDomainFromConfig(params.config),
-  );
+  const domain = resolveGithubCopilotDomain({
+    env,
+    explicit: params.githubDomain,
+    config: params.config,
+  });
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const tokenUrl = copilotTokenUrl(domain);
   const apiBaseFallback = copilotApiBaseFallback(domain);

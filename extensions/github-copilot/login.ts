@@ -11,15 +11,14 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import {
   applyAuthProfileConfig,
-  DEFAULT_GITHUB_COPILOT_DOMAIN,
   ensureAuthProfileStore,
   normalizeGithubCopilotDomain,
-  resolveGithubCopilotDomain,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 // Data-residency GitHub Enterprise support: the device flow, token exchange, and
@@ -289,7 +288,7 @@ type GitHubCopilotDeviceFlowIO = {
 
 export async function runGitHubCopilotDeviceFlow(
   io: GitHubCopilotDeviceFlowIO,
-  domain: string = DEFAULT_GITHUB_COPILOT_DOMAIN,
+  domain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<GitHubCopilotDeviceFlowResult> {
   const host = normalizeGithubCopilotDomain(domain);
   const device = await requestDeviceCode({ scope: "read:user", domain: host });
@@ -339,7 +338,7 @@ export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: strin
   const providers: NonNullable<typeof models.providers> = models.providers ?? {};
   const provider: NonNullable<(typeof providers)[string]> = providers["github-copilot"] ?? {};
   const params = provider.params;
-  const isDefault = domain === DEFAULT_GITHUB_COPILOT_DOMAIN;
+  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
   if (isDefault && !(params && "githubDomain" in params)) {
     return cfg;
   }
@@ -389,7 +388,7 @@ export async function githubCopilotLoginCommand(
   // runtime endpoint on the same tenant instead of minting a public token that
   // then 401s against api.<tenant>.
   const domain = resolveGithubCopilotDomain();
-  if (domain !== DEFAULT_GITHUB_COPILOT_DOMAIN) {
+  if (domain !== PUBLIC_GITHUB_COPILOT_DOMAIN) {
     note(
       `Using the GitHub Enterprise domain from COPILOT_GITHUB_DOMAIN (${domain}). Unset it to log in against github.com.`,
       stylePromptTitle("GitHub Copilot"),

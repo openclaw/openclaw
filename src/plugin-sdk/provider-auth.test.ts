@@ -572,59 +572,45 @@ describe("Copilot data-residency domain resolution", () => {
     delete process.env.COPILOT_GITHUB_DOMAIN;
   });
 
-  it("resolves domain by precedence env > config > default", async () => {
-    vi.resetModules();
-    const { resolveGithubCopilotDomain } = await import("./provider-auth.js");
-
-    expect(resolveGithubCopilotDomain({ env: {} })).toBe("github.com");
-    expect(
-      resolveGithubCopilotDomain({
-        env: {},
-        config: {
-          models: { providers: { "github-copilot": { params: { githubDomain: "cfg.ghe.com" } } } },
-        } as never,
-      }),
-    ).toBe("cfg.ghe.com");
-    expect(
-      resolveGithubCopilotDomain({
-        env: { COPILOT_GITHUB_DOMAIN: "env.ghe.com" },
-        config: {
-          models: { providers: { "github-copilot": { params: { githubDomain: "cfg.ghe.com" } } } },
-        } as never,
-      }),
-    ).toBe("env.ghe.com");
-  });
-
-  it("warns once when a persisted domain is rejected but stays silent for valid ones", async () => {
+  it("warns once when a configured domain is rejected during token resolution", async () => {
     vi.resetModules();
     const logWarn = vi.fn();
     vi.doMock("../logger.js", async () => {
       const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
       return { ...actual, logWarn };
     });
-    const { resolveGithubCopilotDomain } = await import("./provider-auth.js");
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ token: "tok", expires_at: "+2000000000" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
     const withDomain = (githubDomain: string) =>
       ({
         models: { providers: { "github-copilot": { params: { githubDomain } } } },
       }) as never;
+    const resolveWithConfigDomain = (githubDomain: string) =>
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        env: {},
+        config: withDomain(githubDomain),
+        fetchImpl,
+        cachePath: "/tmp/copilot-token-warn.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {},
+      });
 
     // Valid tenant + explicit public host never warn.
-    expect(resolveGithubCopilotDomain({ env: {}, config: withDomain("acme.ghe.com") })).toBe(
-      "acme.ghe.com",
-    );
-    expect(resolveGithubCopilotDomain({ env: {}, config: withDomain("github.com") })).toBe(
-      "github.com",
-    );
+    await resolveWithConfigDomain("acme.ghe.com");
+    await resolveWithConfigDomain("github.com");
     expect(logWarn).not.toHaveBeenCalled();
 
     // Typo (`.co`) fails the allowlist -> silent fallback -> warn once, not twice.
-    expect(resolveGithubCopilotDomain({ env: {}, config: withDomain("acme.ghe.co") })).toBe(
-      "github.com",
-    );
-    expect(resolveGithubCopilotDomain({ env: {}, config: withDomain("acme.ghe.co") })).toBe(
-      "github.com",
-    );
+    await resolveWithConfigDomain("acme.ghe.co");
+    await resolveWithConfigDomain("acme.ghe.co");
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("acme.ghe.co"));
 

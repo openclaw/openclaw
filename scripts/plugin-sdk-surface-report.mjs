@@ -169,7 +169,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "memory-host-core": 1,
   "memory-host-files": 7,
   "memory-host-status": 72,
-  "provider-auth": 22,
+  "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
   "provider-model-shared": 30,
@@ -195,17 +195,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10467,
+      10465,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5223,
+      5222,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3265,
+      3263,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
