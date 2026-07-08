@@ -75,14 +75,21 @@ After publish, re-fetch the advisory and confirm:
 
 - `state=published`
 - `published_at` is set
-- the description does not contain literal escaped `\\n`
+- the description does not contain a literal escaped `\n` (backslash + `n` as two characters)
 
 Verification pattern:
 
 ```bash
 advisory=$(gh api /repos/openclaw/openclaw/security-advisories/<GHSA>)
-echo "$advisory" | jq '{state,published_at}'
-echo "$advisory" | jq -r .description | rg '\\\\n'
+# printf, not echo: zsh/dash echo rewrites backslash escapes and can hide the
+# very \n this check exists to catch. rg exits 0 on match, so gate explicitly:
+# a bare rg would make the bad state look like the passing path.
+printf '%s' "$advisory" | jq '{state,published_at}'
+if printf '%s' "$advisory" | jq -r .description | rg -q '\\n'; then
+  printf 'FAIL: description contains a literal escaped \\n\n'
+else
+  printf 'PASS: description clean\n'
+fi
 ```
 
 ## Common GHSA footguns
