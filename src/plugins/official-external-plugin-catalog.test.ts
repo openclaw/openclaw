@@ -87,7 +87,7 @@ function signedHostedCatalogFeed(params?: {
   );
   const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
     payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
-    payload,
+    payloadBytes: Buffer.from(payload, "base64"),
   });
   const envelope: OfficialExternalPluginCatalogSignedEnvelope = {
     schemaVersion: 1,
@@ -98,7 +98,7 @@ function signedHostedCatalogFeed(params?: {
         keyId: params?.keyId ?? "acme-root",
         algorithm: "ed25519",
         signature: crypto
-          .sign(null, Buffer.from(signingInput, "utf8"), crypto.createPrivateKey(privateKey))
+          .sign(null, signingInput, crypto.createPrivateKey(privateKey))
           .toString("base64url"),
       },
     ],
