@@ -161,6 +161,24 @@ describe("execCommand", () => {
     expect(findDanglingSurrogates(result.stderr)).toEqual([]);
   });
 
+  it("retains a complete surrogate pair when it exactly fits the caller cap", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 2 });
+    child.stdout.emit("data", Buffer.from("A😀"));
+    wait.resolve(0);
+
+    const result = await resultPromise;
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("😀");
+    expect(result.stdoutTruncatedChars).toBe(1);
+    expect(findDanglingSurrogates(result.stdout)).toEqual([]);
+  });
+
   it("fails instead of silently truncating default exec output", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();
