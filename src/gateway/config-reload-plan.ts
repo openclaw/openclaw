@@ -116,6 +116,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  // ACP runtime backends are plugin services. Reload plugins when top-level ACP
+  // policy changes so newly configured backends activate without a process
+  // restart loop.
+  { prefix: "acp", kind: "hot", actions: ["reload-plugins"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
   { prefix: "plugins.load", kind: "restart" },

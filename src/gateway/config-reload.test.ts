@@ -314,6 +314,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("reloads plugins without restarting when ACP runtime config changes", () => {
+    const changedPaths = ["acp.enabled", "acp.backend", "acp.defaultAgent"];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("keeps installed channel plugin source changes restart-backed", () => {
     const plan = buildGatewayReloadPlan(["plugins.installs.telegram.installPath"]);
 
@@ -1616,6 +1627,50 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.hotReasons).toEqual(["plugins.entries.telegram.enabled"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("hot-reloads plugins when ACP config is added while the gateway is running", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      acp: { enabled: true, backend: "acpx", defaultAgent: "claude" },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "acp-runtime-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: previousConfig,
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "acp-runtime-1",
+      revision: 1,
+      fingerprint: "runtime-acp-runtime-1",
+      sourceFingerprint: "source-acp-runtime-1",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual(["acp"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.hotReasons).toEqual(["acp"]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();
