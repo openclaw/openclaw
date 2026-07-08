@@ -168,6 +168,18 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     });
   });
 
+  it("bounds nested render contexts from malformed repeated anchors", () => {
+    const rendered = htmlToMarkdown(`<a href=/x>t`.repeat(100)).text;
+
+    expect(rendered.match(/\[t]\(\/x\)/g)).toHaveLength(100);
+  });
+
+  it("closes stale anchors before structural content claims the rest of the page", () => {
+    expect(
+      htmlToMarkdown(`<a href=/promo>deal <p>Para one.</p><h1>Head</h1><p>Para two.</p>`).text,
+    ).toBe("[deal](/promo) Para one.\n\n# Head\nPara two.");
+  });
+
   it("uses the title as fallback content when an HTML shell has no body text", async () => {
     await expect(
       extractBasicHtmlContent({ html: `<title>Shell Page</title>`, extractMode: "markdown" }),

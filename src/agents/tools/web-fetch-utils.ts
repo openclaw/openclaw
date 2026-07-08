@@ -23,6 +23,9 @@ const BLOCK_BREAK_TAGS = new Set([
   "ul",
   "ol",
 ]);
+// Keep malformed nested markup from making end-of-document context unwind quadratic.
+// web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
+const MAX_RENDER_CONTEXT_DEPTH = 32;
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
@@ -396,6 +399,46 @@ function closeMatchingContext(
   return true;
 }
 
+function closeTopContext(stack: RenderContext[], state: { title?: string }): boolean {
+  if (stack.length < 2) {
+    return false;
+  }
+  const context = stack.pop();
+  const parent = stack[stack.length - 1];
+  if (!context || !parent) {
+    return false;
+  }
+  closeContext(context, parent, state);
+  return true;
+}
+
+function closeThroughContext(
+  stack: RenderContext[],
+  kind: RenderContext["kind"],
+  state: { title?: string },
+): boolean {
+  for (let i = stack.length - 1; i > 0; i -= 1) {
+    if (stack[i]?.kind === kind) {
+      while (stack.length > i) {
+        closeTopContext(stack, state);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function pushContext(
+  stack: RenderContext[],
+  context: Exclude<RenderContext, { kind: "root" }>,
+  state: { title?: string },
+): void {
+  while (stack.length >= MAX_RENDER_CONTEXT_DEPTH) {
+    closeTopContext(stack, state);
+  }
+  stack.push(context);
+}
+
 function closeRawTextTagEnd(html: string, tagName: string, contentStart: number): number {
   let closeStart = html.indexOf("</", contentStart);
   while (closeStart !== -1) {
@@ -486,33 +529,45 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
       i = closeRawTextTagEnd(html, token.name, i);
       continue;
     }
+    if (BLOCK_BREAK_TAGS.has(token.name)) {
+      if (closeThroughContext(stack, "anchor", state)) {
+        appendText(stack, " ");
+      }
+    }
     if (token.name === "br" || token.name === "hr") {
       appendText(stack, "\n");
       continue;
     }
     if (token.name === "title" && !token.selfClosing) {
-      stack.push({ kind: "title", parts: [] });
+      pushContext(stack, { kind: "title", parts: [] }, state);
       continue;
     }
     if (token.name === "a" && !token.selfClosing) {
-      stack.push({ kind: "anchor", href: readAttributeValue(token.raw, "href"), parts: [] });
+      closeThroughContext(stack, "anchor", state);
+      pushContext(
+        stack,
+        { kind: "anchor", href: readAttributeValue(token.raw, "href"), parts: [] },
+        state,
+      );
       continue;
     }
     if (/^h[1-6]$/.test(token.name) && !token.selfClosing) {
-      stack.push({ kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] });
+      closeThroughContext(stack, "anchor", state);
+      pushContext(
+        stack,
+        { kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] },
+        state,
+      );
       continue;
     }
     if (token.name === "li" && !token.selfClosing) {
-      stack.push({ kind: "list-item", parts: [] });
+      closeThroughContext(stack, "anchor", state);
+      pushContext(stack, { kind: "list-item", parts: [] }, state);
     }
   }
 
   while (stack.length > 1) {
-    const context = stack.pop();
-    const parent = stack[stack.length - 1];
-    if (context && parent) {
-      closeContext(context, parent, state);
-    }
+    closeTopContext(stack, state);
   }
 
   return {
