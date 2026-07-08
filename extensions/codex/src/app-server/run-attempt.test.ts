@@ -88,6 +88,7 @@ import {
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+import { CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON } from "./trajectory.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -1538,6 +1539,8 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("returns only a tool error for a declined native command without assistant text", async () => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session-declined-native-command.jsonl"),
@@ -1602,6 +1605,29 @@ describe("runCodexAppServerAttempt", () => {
       mutatingAction: true,
     });
     expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            data?: {
+              status?: string;
+              terminalError?: string;
+            };
+            type?: string;
+          },
+      );
+    const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
+    const sessionEnded = trajectoryEvents.find((event) => event.type === "session.ended");
+    expect(modelCompleted?.data?.terminalError).toBe(CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON);
+    expect(sessionEnded?.data).toMatchObject({
+      status: "error",
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {

@@ -41,12 +41,20 @@ const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16
 const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
+export const CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 type CodexTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
   "O_APPEND" | "O_CREAT" | "O_TRUNC" | "O_WRONLY"
 > &
   Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
+
+type CodexTrajectoryTerminalStatus = "success" | "error" | "interrupted";
+
+type CodexTrajectoryTerminal = {
+  status: CodexTrajectoryTerminalStatus;
+  terminalError?: typeof CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON;
+};
 
 /** Resolves secure append flags for trajectory runtime files. */
 export function resolveCodexTrajectoryAppendFlags(
@@ -66,6 +74,52 @@ export function resolveCodexTrajectoryPointerFlags(
     constants.O_WRONLY |
     (typeof noFollow === "number" ? noFollow : 0)
   );
+}
+
+function hasNonEmptyString(values?: readonly string[]): boolean {
+  return (values ?? []).some((value) => value.trim().length > 0);
+}
+
+function hasCodexTrajectoryDeliveryEvidence(result: EmbeddedRunAttemptResult): boolean {
+  return (
+    hasNonEmptyString(result.assistantTexts) ||
+    result.didSendViaMessagingTool ||
+    result.didDeliverSourceReplyViaMessageTool === true ||
+    result.didSendDeterministicApprovalPrompt === true ||
+    hasNonEmptyString(result.messagingToolSentTexts) ||
+    hasNonEmptyString(result.messagingToolSentMediaUrls) ||
+    (result.messagingToolSentTargets?.length ?? 0) > 0 ||
+    (result.messagingToolSourceReplyPayloads?.length ?? 0) > 0 ||
+    (result.toolMediaUrls?.length ?? 0) > 0 ||
+    result.hasToolMediaBlockReply === true ||
+    result.heartbeatToolResponse !== undefined ||
+    (result.clientToolCalls?.length ?? 0) > 0 ||
+    result.yieldDetected === true ||
+    (result.acceptedSessionSpawns?.length ?? 0) > 0 ||
+    (result.successfulCronAdds ?? 0) > 0 ||
+    result.toolMetas?.some((entry) => entry.asyncStarted === true) === true
+  );
+}
+
+export function resolveCodexTrajectoryTerminal(params: {
+  result: EmbeddedRunAttemptResult;
+  aborted: boolean;
+  timedOut: boolean;
+  promptError?: unknown;
+}): CodexTrajectoryTerminal {
+  if (params.promptError) {
+    return { status: "error" };
+  }
+  if (params.aborted || params.timedOut) {
+    return { status: "interrupted" };
+  }
+  if (params.result.lastToolError && !hasCodexTrajectoryDeliveryEvidence(params.result)) {
+    return {
+      status: "error",
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
+  return { status: "success" };
 }
 
 async function safeAppendTrajectoryFile(filePath: string, line: string): Promise<void> {
@@ -276,18 +330,27 @@ export function recordCodexTrajectoryCompletion(
     turnId: string;
     timedOut: boolean;
     yieldDetected?: boolean;
+    aborted?: boolean;
+    promptError?: unknown;
   },
 ): void {
   if (!recorder) {
     return;
   }
+  const terminal = resolveCodexTrajectoryTerminal({
+    result: params.result,
+    aborted: params.aborted ?? params.result.aborted,
+    timedOut: params.timedOut,
+    promptError: params.promptError ?? params.result.promptError,
+  });
   recorder.recordEvent("model.completed", {
     threadId: params.threadId,
     turnId: params.turnId,
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
-    aborted: params.result.aborted,
-    promptError: normalizeCodexTrajectoryError(params.result.promptError),
+    aborted: params.aborted ?? params.result.aborted,
+    promptError: normalizeCodexTrajectoryError(params.promptError ?? params.result.promptError),
+    terminalError: terminal.terminalError,
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,
