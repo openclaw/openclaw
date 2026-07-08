@@ -29,7 +29,7 @@ openclaw plugins install clawhub:<package-name>
 npm remains a supported direct-install path during the launch cutover:
 
 ```bash
-openclaw plugins install npm:<package-name>
+openclaw plugins install npm:<package-name> --acknowledge-non-clawhub-install
 ```
 
 Use [Manage plugins](/plugins/manage-plugins) for common install, update,
@@ -56,12 +56,12 @@ download surfaces until review and verification finish.
 
 Checklist before you publish:
 
-| Requirement          | Why                                                 |
-| -------------------- | --------------------------------------------------- |
-| Published on ClawHub | Users need `openclaw plugins install` hints to work |
-| Public GitHub repo   | Source review, issue tracking, transparency         |
-| Setup and usage docs | Users need to know how to configure it              |
-| Active maintenance   | Recent updates or responsive issue handling         |
+| Requirement          | Why                                         |
+| -------------------- | ------------------------------------------- |
+| Published on ClawHub | Users need plugin install hints to work     |
+| Public GitHub repo   | Source review, issue tracking, transparency |
+| Setup and usage docs | Users need to know how to configure it      |
+| Active maintenance   | Recent updates or responsive issue handling |
 
 Full publishing contract:
 

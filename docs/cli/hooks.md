@@ -73,11 +73,11 @@ Sets `hooks.internal.entries.<name>.enabled = false`. Restart the gateway afterw
 ## Install and update hook packs
 
 ```bash
-openclaw plugins install <package>        # npm by default
-openclaw plugins install npm:<package>    # npm only
-openclaw plugins install <package> --pin  # pin resolved version
-openclaw plugins install <path>           # local directory or archive
-openclaw plugins install -l <path>        # link a local directory instead of copying
+openclaw plugins install <package> --acknowledge-non-clawhub-install        # npm by default
+openclaw plugins install npm:<package> --acknowledge-non-clawhub-install    # npm only
+openclaw plugins install <package> --pin --acknowledge-non-clawhub-install  # pin resolved version
+openclaw plugins install <path> --acknowledge-non-clawhub-install           # local directory or archive
+openclaw plugins install -l <path> --acknowledge-non-clawhub-install        # link a local directory instead of copying
 
 openclaw plugins update <id>
 openclaw plugins update --all

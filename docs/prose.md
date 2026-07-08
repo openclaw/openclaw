@@ -53,7 +53,7 @@ spawn multiple sub-agents with explicit control flow.
 </Steps>
 
 From a repo checkout you can install the plugin directly:
-`openclaw plugins install ./extensions/open-prose`
+`openclaw plugins install ./extensions/open-prose --acknowledge-non-clawhub-install`
 
 ## Slash command
 

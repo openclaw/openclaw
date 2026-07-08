@@ -46,7 +46,8 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     if (!name) {
       return {
         action: "error",
-        message: "Usage: /plugins install <path|archive|npm-spec|git:repo|clawhub:pkg>",
+        message:
+          "Usage: /plugins install clawhub:<package>. Non-ClawHub sources must be installed from a trusted local shell with openclaw plugins install ... --acknowledge-non-clawhub-install.",
       };
     }
     return { action: "install", spec: name };

@@ -14,7 +14,7 @@ Microsoft Teams ships as a bundled plugin in current OpenClaw releases; no separ
 On an older build or a custom install that excludes bundled Teams, install the npm package directly:
 
 ```bash
-openclaw plugins install @openclaw/msteams
+openclaw plugins install npm:@openclaw/msteams --acknowledge-non-clawhub-install
 ```
 
 Use the bare package to follow the current official release tag. Pin an exact version only when you need a reproducible install.
@@ -22,7 +22,7 @@ Use the bare package to follow the current official release tag. Pin an exact ve
 Local checkout (running from a git repo):
 
 ```bash
-openclaw plugins install ./path/to/local/msteams-plugin
+openclaw plugins install ./path/to/local/msteams-plugin --acknowledge-non-clawhub-install
 ```
 
 Details: [Plugins](/tools/plugin)

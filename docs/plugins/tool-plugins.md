@@ -315,7 +315,7 @@ npm test
 From a separate OpenClaw checkout or installed CLI, install the package path:
 
 ```bash
-openclaw plugins install ./stock-quotes
+openclaw plugins install ./stock-quotes --acknowledge-non-clawhub-install
 openclaw plugins inspect stock-quotes --runtime
 ```
 
@@ -323,7 +323,7 @@ For a packaged smoke test, pack first and install the tarball:
 
 ```bash
 npm pack
-openclaw plugins install npm-pack:./openclaw-plugin-stock-quotes-0.1.0.tgz
+openclaw plugins install npm-pack:./openclaw-plugin-stock-quotes-0.1.0.tgz --acknowledge-non-clawhub-install
 openclaw plugins inspect stock-quotes --runtime --json
 ```
 

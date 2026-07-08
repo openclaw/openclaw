@@ -31,14 +31,14 @@ immediately.
   <Step title="Install from a directory, archive, or marketplace">
     ```bash
     # Local directory
-    openclaw plugins install ./my-bundle
+    openclaw plugins install ./my-bundle --acknowledge-non-clawhub-install
 
     # Archive
-    openclaw plugins install ./my-bundle.tgz
+    openclaw plugins install ./my-bundle.tgz --acknowledge-non-clawhub-install
 
     # Claude marketplace
     openclaw plugins marketplace list <source>
-    openclaw plugins install <plugin> --marketplace <source>
+    openclaw plugins install <plugin> --marketplace <source> --acknowledge-non-clawhub-install
     ```
 
     `<source>` is a local marketplace path/repo or a git/GitHub source.
@@ -261,7 +261,7 @@ dual-format packages from being partially installed as bundles.
 ## Runtime dependencies and cleanup
 
 - Third-party compatible bundles do not get startup `npm install` repair. They
-  should be installed through `openclaw plugins install` and ship everything
+  should be installed through the plugin install command and ship everything
   they need in the installed plugin directory.
 - OpenClaw-owned bundled plugins are either shipped lightweight in core or
   downloadable through the plugin installer. Gateway startup never runs a

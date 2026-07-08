@@ -78,7 +78,7 @@ bundled, official external, and source-only plugins, see
     ```
 
     If `plugins.allow` is set, the installed plugin id must be in that list
-    before the plugin can load. `openclaw plugins install` adds the installed
+    before the plugin can load. The install command adds the installed
     id to an existing `plugins.allow` list and removes the same id from
     `plugins.deny` so the explicit install can load after restart.
 

@@ -19,7 +19,7 @@ Tlon ships bundled in current OpenClaw releases; packaged builds do not need a s
 On an older build or custom install that excludes it, install from npm:
 
 ```bash
-openclaw plugins install @openclaw/tlon
+openclaw plugins install npm:@openclaw/tlon --acknowledge-non-clawhub-install
 ```
 
 Use the bare package name to track the current release tag. Pin a version (`@openclaw/tlon@x.y.z`)
@@ -28,7 +28,7 @@ only for reproducible installs.
 From a local checkout:
 
 ```bash
-openclaw plugins install ./path/to/local/tlon-plugin
+openclaw plugins install ./path/to/local/tlon-plugin --acknowledge-non-clawhub-install
 ```
 
 Details: [Plugins](/tools/plugin)

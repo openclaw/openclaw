@@ -376,10 +376,11 @@ describe("channels list", () => {
       channelId: "discord",
       label: "Discord",
       installSpec: "@openclaw/discord",
-      installCommand: "openclaw plugins install @openclaw/discord",
+      installCommand:
+        "openclaw plugins install @openclaw/discord --acknowledge-non-clawhub-install",
       doctorFixCommand: "openclaw doctor --fix",
       repairHint:
-        "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
+        "Install the official external plugin with: openclaw plugins install @openclaw/discord --acknowledge-non-clawhub-install, or run: openclaw doctor --fix.",
     });
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -407,7 +408,7 @@ describe("channels list", () => {
     expect(output).toContain("configured");
     expect(output).toContain("disabled");
     expect(output).toContain(
-      "run openclaw plugins install @openclaw/discord or openclaw doctor --fix",
+      "run openclaw plugins install @openclaw/discord --acknowledge-non-clawhub-install or openclaw doctor --fix",
     );
     expect(output).not.toContain("no configured chat channels");
   });
@@ -424,10 +425,11 @@ describe("channels list", () => {
       channelId: "discord",
       label: "Discord",
       installSpec: "@openclaw/discord",
-      installCommand: "openclaw plugins install @openclaw/discord",
+      installCommand:
+        "openclaw plugins install @openclaw/discord --acknowledge-non-clawhub-install",
       doctorFixCommand: "openclaw doctor --fix",
       repairHint:
-        "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
+        "Install the official external plugin with: openclaw plugins install @openclaw/discord --acknowledge-non-clawhub-install, or run: openclaw doctor --fix.",
     });
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,

@@ -1203,6 +1203,9 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors.at(-1)).toContain("--link is not supported with --marketplace.");
+    expect(runtimeErrors.at(-1)).toContain(
+      "openclaw plugins install --link <path> --acknowledge-non-clawhub-install",
+    );
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
   });
 
@@ -1212,6 +1215,9 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors.at(-1)).toContain("--force is not supported with --link.");
+    expect(runtimeErrors.at(-1)).toContain(
+      "openclaw plugins install --link <path> --acknowledge-non-clawhub-install",
+    );
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
@@ -2499,7 +2505,9 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("openclaw plugins install git:<repo>@<ref>");
+    expect(runtimeErrors.at(-1)).toContain(
+      "openclaw plugins install git:<repo>@<ref> --acknowledge-non-clawhub-install",
+    );
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {

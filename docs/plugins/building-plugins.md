@@ -184,7 +184,7 @@ local proof.
 
     ```bash
     npm pack --pack-destination /tmp
-    openclaw plugins install npm-pack:/tmp/<plugin-package>.tgz --force
+    openclaw plugins install npm-pack:/tmp/<plugin-package>.tgz --acknowledge-non-clawhub-install --force
     openclaw plugins inspect my-plugin --runtime --json
     ```
 

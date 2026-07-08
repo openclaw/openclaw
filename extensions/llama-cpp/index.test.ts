@@ -439,7 +439,7 @@ describe("llama.cpp provider plugin", () => {
     });
 
     expect(formatLlamaCppSetupError(err)).toContain(
-      "openclaw plugins install @openclaw/llama-cpp-provider",
+      "openclaw plugins install @openclaw/llama-cpp-provider --acknowledge-non-clawhub-install",
     );
   });
 });

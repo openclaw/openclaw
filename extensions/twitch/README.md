@@ -5,7 +5,7 @@ Twitch channel plugin for OpenClaw.
 ## Install (local checkout)
 
 ```bash
-openclaw plugins install ./path/to/local/twitch-plugin
+openclaw plugins install ./path/to/local/twitch-plugin --acknowledge-non-clawhub-install
 ```
 
 ## Install (npm)

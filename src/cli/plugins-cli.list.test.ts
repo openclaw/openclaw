@@ -188,7 +188,9 @@ describe("plugins cli list", () => {
     expect(output).toContain("Plugin configuration:");
     expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain("openclaw doctor --fix");
-    expect(output).toContain("openclaw plugins install @openclaw/codex");
+    expect(output).toContain(
+      "openclaw plugins install @openclaw/codex --acknowledge-non-clawhub-install",
+    );
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
@@ -213,7 +215,9 @@ describe("plugins cli list", () => {
     expect(output).toContain("Plugin configuration:");
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("openclaw doctor --fix");
-    expect(output).toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).toContain(
+      "openclaw plugins install @openclaw/acpx --acknowledge-non-clawhub-install",
+    );
     expect(output).not.toContain("No plugin issues detected.");
   });
 

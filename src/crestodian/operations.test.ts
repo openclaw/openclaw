@@ -620,6 +620,31 @@ describe("parseCrestodianOperation", () => {
     });
   });
 
+  it("allows explicit npm package names that look like local plugin suffixes", async () => {
+    const tempDir = opTempDirs.make("crestodian-plugin-install-npm-suffix-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
+      pluginRuntime.log(`installed ${spec}`);
+    });
+
+    const result = await executeCrestodianOperation(
+      { kind: "plugin-install", spec: "npm:foo.js" },
+      runtime,
+      {
+        approved: true,
+        deps: { runPluginInstall },
+      },
+    );
+
+    expect(result.applied).toBe(true);
+    const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
+    expect(installCall[0]).toBe("npm:foo.js");
+    expect(installCall[2]).toEqual({
+      acknowledgeNonClawHubInstall: true,
+    });
+  });
+
   it.each([
     ["npm-pack archive", "npm-pack:/tmp/demo.tgz"],
     ["local archive token", "demo.tgz"],

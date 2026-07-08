@@ -121,21 +121,21 @@ generated README for first-time ClawHub publishing and trusted-publisher setup.
 
 ```bash
 openclaw plugins search "calendar"                      # search ClawHub plugins
-openclaw plugins install <package>                       # source auto-detection
+openclaw plugins install <package> --acknowledge-non-clawhub-install                       # source auto-detection
 openclaw plugins install clawhub:<package>                # ClawHub only
-openclaw plugins install npm:<package>                    # npm only
-openclaw plugins install npm-pack:<path.tgz>               # local npm-pack tarball
-openclaw plugins install git:github.com/<owner>/<repo>     # git repo
-openclaw plugins install git:github.com/<owner>/<repo>@<ref>
-openclaw plugins install <path>                            # local path or archive
-openclaw plugins install -l <path>                         # link instead of copy
-openclaw plugins install <plugin>@<marketplace>             # marketplace shorthand
-openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
-openclaw plugins install <package> --force                  # overwrite existing install
-openclaw plugins install <package> --pin                    # pin resolved npm version
+openclaw plugins install npm:<package> --acknowledge-non-clawhub-install                    # npm only
+openclaw plugins install npm-pack:<path.tgz> --acknowledge-non-clawhub-install               # local npm-pack tarball
+openclaw plugins install git:github.com/<owner>/<repo> --acknowledge-non-clawhub-install     # git repo
+openclaw plugins install git:github.com/<owner>/<repo>@<ref> --acknowledge-non-clawhub-install
+openclaw plugins install <path> --acknowledge-non-clawhub-install                            # local path or archive
+openclaw plugins install -l <path> --acknowledge-non-clawhub-install                         # link instead of copy
+openclaw plugins install <plugin>@<marketplace> --acknowledge-non-clawhub-install          # marketplace shorthand
+openclaw plugins install <plugin> --marketplace <name> --acknowledge-non-clawhub-install     # marketplace (explicit)
+openclaw plugins install <package> --force --acknowledge-non-clawhub-install               # overwrite existing install
+openclaw plugins install <package> --pin --acknowledge-non-clawhub-install                 # pin resolved npm version
 openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install npm:<package> --acknowledge-non-clawhub-install
-openclaw plugins install <package> --dangerously-force-unsafe-install
+openclaw plugins install <package> --dangerously-force-unsafe-install --acknowledge-non-clawhub-install
 ```
 
 Maintainers testing setup-time installs can override automatic plugin install
@@ -213,7 +213,7 @@ non-npm sources are not rewritten.
 
     Use `npm:<package>` to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover unless they match an official plugin id.
 
-    Raw `@openclaw/*` specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin`.
+    Raw `@openclaw/*` specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin --acknowledge-non-clawhub-install`.
 
     Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
 
@@ -254,15 +254,15 @@ openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
 Bare npm-safe plugin specs install from npm by default during the launch cutover unless they match an official plugin id:
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+openclaw plugins install openclaw-codex-app-server --acknowledge-non-clawhub-install
 ```
 
 Use `npm:` to make npm-only resolution explicit:
 
 ```bash
-openclaw plugins install npm:openclaw-codex-app-server
-openclaw plugins install npm:@openclaw/discord@2026.5.20
-openclaw plugins install npm:@scope/plugin-name@1.0.1
+openclaw plugins install npm:openclaw-codex-app-server --acknowledge-non-clawhub-install
+openclaw plugins install npm:@openclaw/discord@2026.5.20 --acknowledge-non-clawhub-install
+openclaw plugins install npm:@scope/plugin-name@1.0.1 --acknowledge-non-clawhub-install
 ```
 
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
@@ -274,16 +274,16 @@ Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's 
 
 ```bash
 openclaw plugins marketplace list <marketplace-name>
-openclaw plugins install <plugin-name>@<marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name> --acknowledge-non-clawhub-install
 ```
 
 Use `--marketplace` to pass the marketplace source explicitly:
 
 ```bash
-openclaw plugins install <plugin-name> --marketplace <marketplace-name>
-openclaw plugins install <plugin-name> --marketplace <owner/repo>
-openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo>
-openclaw plugins install <plugin-name> --marketplace ./my-marketplace
+openclaw plugins install <plugin-name> --marketplace <marketplace-name> --acknowledge-non-clawhub-install
+openclaw plugins install <plugin-name> --marketplace <owner/repo> --acknowledge-non-clawhub-install
+openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo> --acknowledge-non-clawhub-install
+openclaw plugins install <plugin-name> --marketplace ./my-marketplace --acknowledge-non-clawhub-install
 ```
 
 <Tabs>
@@ -323,7 +323,7 @@ Use `-l`/`--link` to point at a local plugin directory without copying it (adds
 to `plugins.load.paths`):
 
 ```bash
-openclaw plugins install -l ./my-plugin
+openclaw plugins install -l ./my-plugin --acknowledge-non-clawhub-install
 ```
 
 `--link` is not supported with `--force` (linked plugins point at the source
@@ -476,7 +476,7 @@ openclaw plugins inspect <id> --json
 openclaw plugins inspect --all
 ```
 
-Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in the plugin install, plugin update, and `openclaw doctor --fix` flows.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 

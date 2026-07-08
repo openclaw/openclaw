@@ -532,7 +532,7 @@ export async function noteMemorySearchHealth(
         detail ? `Gateway probe: ${detail}` : null,
         "",
         "Fix (pick one):",
-        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
+        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider --acknowledge-non-clawhub-install")}`,
         `- Set a local GGUF model path in config`,
         suggestedRemoteProvider
           ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`

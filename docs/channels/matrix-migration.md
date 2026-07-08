@@ -20,7 +20,7 @@ You do not need to rename config keys or reinstall the plugin under a new name.
 The root `openclaw` package no longer bundles Matrix runtime code or Matrix SDK
 dependencies. If `openclaw channels status` shows Matrix is configured but the
 plugin is not installed, run `openclaw doctor --fix` or
-`openclaw plugins install @openclaw/matrix`; do not install Matrix SDK packages
+`openclaw plugins install clawhub:@openclaw/matrix`; do not install Matrix SDK packages
 into the root OpenClaw package.
 
 ## What the migration does automatically
@@ -194,7 +194,7 @@ The same three warnings also appear with the prefix `Legacy Matrix encrypted sta
 `Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.`
 
 - Meaning: OpenClaw found old encrypted Matrix state, but the Matrix plugin build is missing the crypto inspector module that inspects the old rust crypto store.
-- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install clawhub:@openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin --acknowledge-non-clawhub-install` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
 
 `- Failed creating a Matrix migration snapshot before repair: ...`
 
@@ -211,7 +211,7 @@ The same three warnings also appear with the prefix `Legacy Matrix encrypted sta
 `Matrix is installed from a custom path: ...`
 
 - Meaning: Matrix is pinned to a path install, so mainline updates do not automatically replace it with the default Matrix package.
-- What to do: reinstall with `openclaw plugins install @openclaw/matrix` when you want to return to the default Matrix plugin.
+- What to do: reinstall with `openclaw plugins install clawhub:@openclaw/matrix` when you want to return to the default Matrix plugin.
 
 ### Encrypted-state recovery messages
 
@@ -296,7 +296,7 @@ new backup key can load correctly after restart.
 `Matrix is installed from a custom path that no longer exists: ...`
 
 - Meaning: your plugin install record points at a local path that is gone.
-- What to do: reinstall with `openclaw plugins install @openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./path/to/local/matrix-plugin`. `openclaw doctor --fix` can also remove the stale Matrix plugin references for you.
+- What to do: reinstall with `openclaw plugins install clawhub:@openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./path/to/local/matrix-plugin --acknowledge-non-clawhub-install`. `openclaw doctor --fix` can also remove the stale Matrix plugin references for you.
 
 ## If encrypted history still does not come back
 

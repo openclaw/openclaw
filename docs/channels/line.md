@@ -20,13 +20,13 @@ Reactions and threads are not supported.
 Install LINE before configuring the channel:
 
 ```bash
-openclaw plugins install @openclaw/line
+openclaw plugins install clawhub:@openclaw/line
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./path/to/local/line-plugin
+openclaw plugins install ./path/to/local/line-plugin --acknowledge-non-clawhub-install
 ```
 
 ## Setup

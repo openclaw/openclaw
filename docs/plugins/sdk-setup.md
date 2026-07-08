@@ -518,7 +518,7 @@ const setupWizard: ChannelSetupWizard = {
 <Tabs>
   <Tab title="npm">
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    openclaw plugins install npm:@myorg/openclaw-my-plugin --acknowledge-non-clawhub-install
     ```
 
     Bare package specs install from npm during the launch cutover, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` for deterministic source selection — see [Manage plugins](/plugins/manage-plugins).
@@ -534,7 +534,7 @@ const setupWizard: ChannelSetupWizard = {
     direct npm install path during migration:
 
     ```bash
-    openclaw plugins install npm:@myorg/openclaw-my-plugin
+    openclaw plugins install npm:@myorg/openclaw-my-plugin --acknowledge-non-clawhub-install
     ```
 
   </Tab>
@@ -543,7 +543,7 @@ const setupWizard: ChannelSetupWizard = {
 **In-repo plugins:** place under the bundled plugin workspace tree; they are automatically discovered during build.
 
 <Info>
-For npm-sourced installs, `openclaw plugins install` installs the package into a per-plugin project under `~/.openclaw/npm/projects` with lifecycle scripts disabled (`--ignore-scripts`). Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
+For npm-sourced installs, the plugin install command installs the package into a per-plugin project under `~/.openclaw/npm/projects` with lifecycle scripts disabled (`--ignore-scripts`). Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
 
 <Note>

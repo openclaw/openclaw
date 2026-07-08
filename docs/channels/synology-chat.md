@@ -13,13 +13,13 @@ Status: official plugin, installed separately. Direct messages only; text and UR
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/synology-chat
+openclaw plugins install clawhub:@openclaw/synology-chat
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./path/to/local/synology-chat-plugin
+openclaw plugins install ./path/to/local/synology-chat-plugin --acknowledge-non-clawhub-install
 ```
 
 Details: [Plugins](/tools/plugin)

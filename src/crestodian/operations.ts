@@ -398,6 +398,19 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
   if (/\s/.test(trimmed)) {
     return "Crestodian plugin install accepts one npm or ClawHub package spec.";
   }
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("clawhub:")) {
+    return null;
+  }
+  if (lower.startsWith("npm:")) {
+    const npmSpec = trimmed.slice("npm:".length).trim();
+    if (!npmSpec) {
+      return "Crestodian plugin install accepts one npm or ClawHub package spec.";
+    }
+    return validateRegistryNpmSpec(npmSpec)
+      ? "Crestodian plugin install accepts npm or ClawHub package specs only."
+      : null;
+  }
   if (/^(?:\.{1,2}\/|\/|~\/|file:|git(?:\+ssh|\+https)?:|https?:)/i.test(trimmed)) {
     // Crestodian does not install local paths or URLs; those can execute arbitrary package code.
     return "Crestodian plugin install accepts npm or ClawHub package specs only.";
@@ -416,19 +429,7 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
   ) {
     return "Crestodian plugin install accepts npm or ClawHub package specs only.";
   }
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith("clawhub:")) {
-    return null;
-  }
-  const npmSpec = lower.startsWith("npm:") ? trimmed.slice("npm:".length).trim() : trimmed;
-  if (!npmSpec) {
-    return "Crestodian plugin install accepts one npm or ClawHub package spec.";
-  }
-  if (npmSpec.includes(":")) {
-    return "Crestodian plugin install accepts npm or ClawHub package specs only.";
-  }
-  const npmError = validateRegistryNpmSpec(npmSpec);
-  if (npmError) {
+  if (trimmed.includes(":") || validateRegistryNpmSpec(trimmed)) {
     return "Crestodian plugin install accepts npm or ClawHub package specs only.";
   }
   return null;
