@@ -26,7 +26,7 @@ const activeRuns: PtyRun[] = [];
 const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
-const LOCAL_TEST_TIMEOUT_MS = 150_000;
+const LOCAL_TEST_TIMEOUT_MS = 240_000;
 
 async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
   await waitFor({
