@@ -174,6 +174,43 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("accepts audio and video input modalities from generated plugin catalog shards", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "openrouter", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            apiKey: "OPENROUTER_API_KEY",
+            models: [
+              {
+                id: "minimax/minimax-m3",
+                name: "MiniMax M3",
+                input: ["text", "video", "audio"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ openrouter: { type: "api_key", key: "sk-test" } }),
+      modelsPath,
+      { pluginMetadataSnapshot: pluginOwnerSnapshot("openrouter", "openrouter") },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("openrouter", "minimax/minimax-m3")?.input).toEqual([
+      "text",
+      "video",
+      "audio",
+    ]);
+  });
+
   it("isolates invalid generated plugin catalog shards from valid models", () => {
     const modelsPath = writeModelsJsonWithPluginCatalogs({
       root: {
