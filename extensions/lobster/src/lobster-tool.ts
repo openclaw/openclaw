@@ -128,6 +128,10 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
   const resumeRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
   const stateJsonSignalsRunMode = stateJson !== undefined && !isEmptyJsonObject(stateJson);
 
+  if (resumeFlowId !== undefined || (resumeRevision !== undefined && resumeRevision !== 0)) {
+    throw new Error("run action does not accept flowId or flowExpectedRevision");
+  }
+
   const hasRunFields =
     controllerId !== undefined ||
     goal !== undefined ||
@@ -137,9 +141,6 @@ function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunPara
 
   if (!hasRunFields) {
     return null;
-  }
-  if (resumeFlowId !== undefined || (resumeRevision !== undefined && resumeRevision !== 0)) {
-    throw new Error("run action does not accept flowId or flowExpectedRevision");
   }
   if (!controllerId) {
     throw new Error("flowControllerId required when using managed TaskFlow run mode");
@@ -166,6 +167,12 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const approve = readOptionalBoolean(params.approve, "approve");
   const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
+  const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
+  const stateJsonDisallowed = stateJson !== undefined && !isEmptyJsonObject(stateJson);
+
+  if (runControllerId !== undefined || runGoal !== undefined || stateJsonDisallowed) {
+    throw new Error("resume action does not accept flowControllerId, flowGoal, or flowStateJson");
+  }
 
   const hasResumeFields =
     flowId !== undefined ||
@@ -175,11 +182,6 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
 
   if (!hasResumeFields) {
     return null;
-  }
-  const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
-  const stateJsonDisallowed = stateJson !== undefined && !isEmptyJsonObject(stateJson);
-  if (runControllerId !== undefined || runGoal !== undefined || stateJsonDisallowed) {
-    throw new Error("resume action does not accept flowControllerId, flowGoal, or flowStateJson");
   }
   if (!flowId) {
     throw new Error("flowId required when using managed TaskFlow resume mode");

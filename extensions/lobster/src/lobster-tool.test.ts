@@ -146,6 +146,28 @@ describe("lobster plugin tool", () => {
     expect(details.status).toBe("needs_approval");
   });
 
+  it.each([{ flowId: "flow-1" }, { flowExpectedRevision: 1 }])(
+    "rejects resume-only fields on run before the ordinary fallback",
+    async (resumeFields) => {
+      const runner = { run: vi.fn() };
+      const tool = createLobsterTool(fakeApi(), {
+        runner,
+        taskFlow: createFakeTaskFlow(),
+      });
+
+      await expect(
+        tool.execute("call-run-with-resume-fields", {
+          action: "run",
+          pipeline: "noop",
+          flowStateJson: "{}",
+          flowExpectedRevision: 0,
+          ...resumeFields,
+        }),
+      ).rejects.toThrow(/run action does not accept flowId or flowExpectedRevision/);
+      expect(runner.run).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps ordinary resume on the embedded runner when flow defaults are injected", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -178,6 +200,29 @@ describe("lobster plugin tool", () => {
     const details = requireRecord(res.details, "ordinary resume with flow defaults details");
     expect(details.ok).toBe(true);
     expect(details.status).toBe("ok");
+  });
+
+  it.each([
+    { flowControllerId: "tests/lobster" },
+    { flowGoal: "Run Lobster workflow" },
+    { flowStateJson: '{"lane":"email"}' },
+  ])("rejects run-only fields on resume before the ordinary fallback", async (runFields) => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-resume-with-run-fields", {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+        flowExpectedRevision: 0,
+        ...runFields,
+      }),
+    ).rejects.toThrow(/resume action does not accept flowControllerId, flowGoal, or flowStateJson/);
+    expect(runner.run).not.toHaveBeenCalled();
   });
 
   it("rejects resume with a non-default flow revision but no flowId", async () => {
