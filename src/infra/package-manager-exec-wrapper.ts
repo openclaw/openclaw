@@ -1,0 +1,290 @@
+// Parses package-manager exec wrappers that delegate to a concrete command.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
+import { parseInlineOptionToken } from "./inline-option-token.js";
+
+export const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
+  "--cache",
+  "--package",
+  "--prefix",
+  "--script-shell",
+  "--userconfig",
+  "--workspace",
+  "-p",
+  "-w",
+]);
+
+const NPM_EXEC_FLAG_OPTIONS = new Set([
+  "--no",
+  "--quiet",
+  "--ws",
+  "--workspaces",
+  "--yes",
+  "-q",
+  "-y",
+]);
+
+export const PNPM_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--dir",
+  "--filter",
+  "--reporter",
+  "--stream",
+  "--test-pattern",
+  "--workspace-concurrency",
+  "-C",
+]);
+
+export const PNPM_FLAG_OPTIONS = new Set([
+  "--aggregate-output",
+  "--color",
+  "--parallel",
+  "--recursive",
+  "--silent",
+  "--workspace-root",
+  "-r",
+  "-s",
+  "-w",
+]);
+
+export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
+
+function normalizeOptionFlag(token: string): string {
+  return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
+}
+
+export function normalizePackageManagerExecToken(token: string): string {
+  return normalizeExecutableToken(token).replace(/\.(?:c|m)?js$/i, "");
+}
+
+export type PackageManagerExecInvocation =
+  | { kind: "not-package-manager" }
+  | { kind: "not-exec" }
+  | { kind: "unsafe-exec" }
+  | { kind: "unwrapped"; argv: string[] };
+
+function firstSubcommandAfterOptions(
+  argv: string[],
+  params: {
+    optionsWithValue: ReadonlySet<string>;
+    flagOptions: ReadonlySet<string>;
+  },
+): string | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      return normalizeLowercaseStringOrEmpty(token);
+    }
+    const flag = normalizeOptionFlag(token);
+    if (params.optionsWithValue.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (params.flagOptions.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token === "exec") {
+        if (idx + 1 >= argv.length) {
+          return null;
+        }
+        const tail = argv.slice(idx + 1);
+        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
+        const firstExecArg = normalizeOptionFlag(normalizedTail[0] ?? "");
+        if (firstExecArg === "-c" || firstExecArg === "--shell-mode") {
+          return null;
+        }
+        return normalizedTail.length > 0 ? normalizedTail : null;
+      }
+      if (token === "dlx") {
+        return unwrapPnpmDlxInvocation(argv.slice(idx + 1));
+      }
+      if (token === "node") {
+        const tail = argv.slice(idx + 1);
+        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
+        return ["node", ...normalizedTail];
+      }
+      return null;
+    }
+    const flag = normalizeOptionFlag(token);
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
+  let idx = 0;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      const tail = argv.slice(idx + 1);
+      return tail.length > 0 ? tail : null;
+    }
+    if (!token.startsWith("-")) {
+      return argv.slice(idx);
+    }
+    const flag = normalizeOptionFlag(token);
+    if (flag === "-c" || flag === "--shell-mode") {
+      return null;
+    }
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapDirectPackageExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      return argv.slice(idx);
+    }
+    const flag = normalizeOptionFlag(token);
+    if (flag === "-c" || flag === "--call") {
+      return null;
+    }
+    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapNpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token !== "exec") {
+        return null;
+      }
+      idx += 1;
+      break;
+    }
+    const flag = normalizeOptionFlag(token);
+    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag) || flag === "-C") {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  if (idx >= argv.length) {
+    return null;
+  }
+  const tail = argv.slice(idx);
+  if (tail[0] === "--") {
+    return tail.length > 1 ? tail.slice(1) : null;
+  }
+  return unwrapDirectPackageExecInvocation(["npx", ...tail]);
+}
+
+export function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | null {
+  const resolution = resolveKnownPackageManagerExecInvocation(argv);
+  return resolution.kind === "unwrapped" ? resolution.argv : null;
+}
+
+export function resolveKnownPackageManagerExecInvocation(
+  argv: string[],
+): PackageManagerExecInvocation {
+  const executable = normalizePackageManagerExecToken(argv[0] ?? "");
+  switch (executable) {
+    case "npm": {
+      const unwrapped = unwrapNpmExecInvocation(argv);
+      if (unwrapped) {
+        return { kind: "unwrapped", argv: unwrapped };
+      }
+      return firstSubcommandAfterOptions(argv, {
+        optionsWithValue: new Set([...NPM_EXEC_OPTIONS_WITH_VALUE, "-C"]),
+        flagOptions: NPM_EXEC_FLAG_OPTIONS,
+      }) === "exec"
+        ? { kind: "unsafe-exec" }
+        : { kind: "not-exec" };
+    }
+    case "npx":
+    case "bunx": {
+      const unwrapped = unwrapDirectPackageExecInvocation(argv);
+      return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
+    }
+    case "pnpm": {
+      const unwrapped = unwrapPnpmExecInvocation(argv);
+      if (unwrapped) {
+        return { kind: "unwrapped", argv: unwrapped };
+      }
+      return ["exec", "dlx", "node"].includes(
+        firstSubcommandAfterOptions(argv, {
+          optionsWithValue: new Set([...PNPM_OPTIONS_WITH_VALUE, ...PNPM_DLX_OPTIONS_WITH_VALUE]),
+          flagOptions: PNPM_FLAG_OPTIONS,
+        }) ?? "",
+      )
+        ? { kind: "unsafe-exec" }
+        : { kind: "not-exec" };
+    }
+    default:
+      return { kind: "not-package-manager" };
+  }
+}
