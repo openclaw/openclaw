@@ -130,15 +130,26 @@ export function normalizeAgentHarnessUserInputAnswer(
 function parseKeyedAnswers(inputText: string): Map<string, string> {
   const answers = new Map<string, string>();
   for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
+    // The negative lookahead after the delimiter prevents splitting on:
+    //   - :// (URLs like https://example.com)
+    //   - :\  (Windows paths like C:\Users\foo)
+    const match = line.match(/^\s*([^:=-]+?)\s*[:=-](?!\/\/|\\)\s*(.+?)\s*$/);
     if (!match) {
       continue;
     }
     const key = match[1]?.trim().toLowerCase();
     const value = match[2]?.trim();
-    if (key && value) {
-      answers.set(key, value);
+    if (!key || !value) {
+      continue;
     }
+    // Skip purely numeric key+value pairs (time strings like "14:30", date
+    // fragments like "10-05") so they aren't mistaken for numbered-question
+    // answers. A numbered index like "1" paired with an alphabetic answer
+    // like "Hello" still matches because the value is non-numeric.
+    if (/^\d+$/.test(key) && /^\d+$/.test(value)) {
+      continue;
+    }
+    answers.set(key, value);
   }
   return answers;
 }
