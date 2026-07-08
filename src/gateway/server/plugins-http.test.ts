@@ -468,12 +468,14 @@ describe("createGatewayPluginRequestHandler", () => {
       }),
       log,
     });
-    const server = createServer(async (req, res) => {
-      const handled = await handler(req, res);
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("not found");
-      }
+    const server = createServer((req, res) => {
+      void (async () => {
+        const handled = await handler(req, res);
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("not found");
+        }
+      })();
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -512,7 +514,9 @@ describe("createGatewayPluginRequestHandler", () => {
       if (timeout) {
         clearTimeout(timeout);
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
