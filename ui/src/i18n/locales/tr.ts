@@ -487,6 +487,8 @@ export const tr: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1626,6 +1628,13 @@ export const tr: TranslationMap = {
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
+    mode: {
+      label: "Mode",
+      off: "Kapalı",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "Bölünmüş görünümü aç",
       splitRight: "Sağa böl",

@@ -483,6 +483,8 @@ export const ar: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1602,6 +1604,13 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    mode: {
+      label: "Mode",
+      off: "إيقاف",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "فتح العرض المقسّم",
       splitRight: "تقسيم إلى اليمين",

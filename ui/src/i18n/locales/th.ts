@@ -482,6 +482,8 @@ export const th: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1586,6 +1588,13 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    mode: {
+      label: "Mode",
+      off: "ปิด",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "เปิดมุมมองแบบแบ่ง",
       splitRight: "แบ่งไปทางขวา",

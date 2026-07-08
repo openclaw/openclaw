@@ -488,6 +488,8 @@ export const ru: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Отмена",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1633,6 +1635,13 @@ export const ru: TranslationMap = {
     updateNow: "Обновить сейчас",
     dismissUpdateBanner: "Скрыть баннер обновления",
     switchedSession: "Переключено на {session}",
+    mode: {
+      label: "Режим",
+      off: "Выкл.",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "Открыть разделенный вид",
       splitRight: "Разделить вправо",

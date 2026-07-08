@@ -485,6 +485,8 @@ export const fa: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1620,6 +1622,13 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    mode: {
+      label: "Mode",
+      off: "خاموش",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "باز کردن نمای تقسیم‌شده",
       splitRight: "تقسیم به راست",

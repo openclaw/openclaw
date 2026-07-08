@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -15,6 +15,7 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
+import "../../components/goal-editor.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -137,6 +138,18 @@ class ChatPane extends LitElement {
   // Questions dismissed locally (ESC/Dismiss) stay pending on the gateway and remain
   // answerable via /answer; we just stop showing the inline card for them.
   private readonly dismissedQuestionIds = new Set<string>();
+  // Goal-editor modal (opened from the composer mode selector).
+  private goalEditorOpen = false;
+
+  private openGoalEditor() {
+    this.goalEditorOpen = true;
+    this.requestUpdate();
+  }
+
+  private closeGoalEditor() {
+    this.goalEditorOpen = false;
+    this.requestUpdate();
+  }
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
@@ -941,6 +954,8 @@ class ChatPane extends LitElement {
           state.requestUpdate?.();
         },
         onOpenSplitView: this.onOpenSplitView,
+        onModeCommand: (command) => void state.handleSendChat(command),
+        onOpenGoalEditor: () => this.openGoalEditor(),
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
@@ -1067,7 +1082,16 @@ class ChatPane extends LitElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return html`${this.renderPaneHeader(state)}${renderChat(props)}`;
+    return html`${this.renderPaneHeader(state)}${renderChat(props)}${this.goalEditorOpen
+      ? html`<openclaw-goal-editor
+          .props=${{
+            goal: activeSessionRow?.goal ?? null,
+            busy: state.sending,
+            onSubmit: (command: string) => void state.handleSendChat(command),
+            onClose: () => this.closeGoalEditor(),
+          }}
+        ></openclaw-goal-editor>`
+      : nothing}`;
   }
 }
 

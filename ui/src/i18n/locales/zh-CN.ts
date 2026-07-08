@@ -481,6 +481,8 @@ export const zh_CN: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1581,6 +1583,13 @@ export const zh_CN: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
+    mode: {
+      label: "Mode",
+      off: "关闭",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "打开拆分视图",
       splitRight: "向右拆分",

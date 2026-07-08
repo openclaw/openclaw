@@ -54,6 +54,10 @@ type ChatControlsProps = {
   ) => void;
   onToggleCronSessions?: () => void;
   onOpenSplitView?: () => void;
+  /** Sends a mode command (/plan enter|exit) through the chat channel. */
+  onModeCommand?: (command: string) => void;
+  /** Opens the goal-editor modal (Goal mode). */
+  onOpenGoalEditor?: () => void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -179,6 +183,98 @@ function countHiddenCronSessions(
       row.key !== props.sessionKey &&
       isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId),
   ).length;
+}
+
+type ChatMode = "off" | "plan" | "goal";
+
+function modeIcon(mode: ChatMode) {
+  return mode === "plan" ? icons.scrollText : mode === "goal" ? icons.target : icons.circle;
+}
+
+function resolveChatMode(props: ChatControlsProps): ChatMode {
+  const row = props.sessionsResult?.sessions.find((session) => session.key === props.sessionKey);
+  if (row?.plan) {
+    return "plan";
+  }
+  if (row?.goal && row.goal.status !== "complete") {
+    return "goal";
+  }
+  return "off";
+}
+
+function selectChatMode(
+  props: ChatControlsProps,
+  current: ChatMode,
+  next: ChatMode,
+  details: HTMLDetailsElement | null,
+): void {
+  details?.removeAttribute("open");
+  if (next === current) {
+    return;
+  }
+  // Switching away from an active mode is a confirm — the modes are mutually exclusive.
+  if (current !== "off" && !globalThis.confirm(t("chat.mode.switchConfirm"))) {
+    return;
+  }
+  if (current === "plan") {
+    props.onModeCommand?.("/plan exit");
+  } else if (current === "goal") {
+    props.onModeCommand?.("/goal stop");
+  }
+  if (next === "plan") {
+    props.onModeCommand?.("/plan enter");
+  } else if (next === "goal") {
+    props.onOpenGoalEditor?.();
+  }
+}
+
+/** Composer mode selector (Off | Plan | Goal, mutually exclusive), between gear and model. */
+function renderModeSelector(props: ChatControlsProps) {
+  if (!props.onModeCommand && !props.onOpenGoalEditor) {
+    return "";
+  }
+  const mode = resolveChatMode(props);
+  const modes: ChatMode[] = ["off", "plan", "goal"];
+  return html`
+    <details class="chat-controls__inline-select chat-mode-select" data-chat-mode=${mode}>
+      <summary
+        class="btn btn--sm btn--icon chat-mode-select__trigger ${mode !== "off" ? "active" : ""}"
+        aria-label=${t("chat.mode.label")}
+        title=${t("chat.mode.label")}
+      >
+        ${modeIcon(mode)}
+      </summary>
+      <div
+        class="chat-controls__inline-select-menu chat-mode-select__menu"
+        role="radiogroup"
+        aria-label=${t("chat.mode.label")}
+      >
+        ${modes.map(
+          (option) => html`
+            <button
+              class="chat-mode-select__option ${mode === option ? "active" : ""}"
+              type="button"
+              role="radio"
+              aria-checked=${mode === option ? "true" : "false"}
+              data-chat-mode-option=${option}
+              @click=${(event: Event) =>
+                selectChatMode(
+                  props,
+                  mode,
+                  option,
+                  (event.currentTarget as HTMLElement).closest("details.chat-mode-select"),
+                )}
+            >
+              <span class="chat-mode-select__option-icon" aria-hidden="true">
+                ${modeIcon(option)}
+              </span>
+              <span>${t(`chat.mode.${option}`)}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </details>
+  `;
 }
 
 export function renderChatControls(props: ChatControlsProps) {
@@ -361,6 +457,7 @@ export function renderChatControls(props: ChatControlsProps) {
           : ""}
       </div>
     </div>
+    ${renderModeSelector(props)}
     <div
       class="chat-composer-model-control"
       @click=${() => {

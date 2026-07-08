@@ -484,6 +484,8 @@ export const pt_BR: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "Cancel",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1622,6 +1624,13 @@ export const pt_BR: TranslationMap = {
     updateNow: "Atualizar agora",
     dismissUpdateBanner: "Dispensar banner de atualização",
     switchedSession: "Mudou para {session}",
+    mode: {
+      label: "Mode",
+      off: "Desativada",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "Abrir visualização dividida",
       splitRight: "Dividir à direita",

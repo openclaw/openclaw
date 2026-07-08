@@ -160,3 +160,100 @@ describe("chat composer settings", () => {
     expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 });
+
+function sessionsWithRow(row: Record<string, unknown>) {
+  return {
+    ts: 0,
+    path: "",
+    count: 1,
+    defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
+    sessions: [{ key: "main", kind: "direct", updatedAt: 0, ...row }],
+  };
+}
+
+const PLAN_ROW = { plan: { schemaVersion: 1, status: "planning", enteredAt: 0, updatedAt: 0 } };
+const GOAL_ROW = {
+  goal: {
+    schemaVersion: 1,
+    id: "g1",
+    objective: "ship",
+    status: "active",
+    createdAt: 0,
+    updatedAt: 0,
+    tokenStart: 0,
+    tokensUsed: 0,
+    continuationTurns: 0,
+  },
+};
+
+describe("composer mode selector (U-V4)", () => {
+  it("is absent unless mode wiring is provided", () => {
+    const container = document.createElement("div");
+    render(renderChatControls(createProps()), container);
+    expect(container.querySelector(".chat-mode-select")).toBeNull();
+  });
+
+  it("reflects off/plan/goal from session state", () => {
+    const container = document.createElement("div");
+    const wiring = { onModeCommand: () => undefined, onOpenGoalEditor: () => undefined };
+
+    render(renderChatControls(createProps(wiring)), container);
+    expect(container.querySelector(".chat-mode-select")?.getAttribute("data-chat-mode")).toBe(
+      "off",
+    );
+    expect(container.querySelectorAll("[data-chat-mode-option]")).toHaveLength(3);
+
+    render(
+      renderChatControls(createProps({ ...wiring, sessionsResult: sessionsWithRow(PLAN_ROW) })),
+      container,
+    );
+    expect(container.querySelector(".chat-mode-select")?.getAttribute("data-chat-mode")).toBe(
+      "plan",
+    );
+
+    render(
+      renderChatControls(createProps({ ...wiring, sessionsResult: sessionsWithRow(GOAL_ROW) })),
+      container,
+    );
+    expect(container.querySelector(".chat-mode-select")?.getAttribute("data-chat-mode")).toBe(
+      "goal",
+    );
+  });
+
+  it("enters plan mode and opens the goal editor from Off with no confirm", () => {
+    const container = document.createElement("div");
+    const onModeCommand = vi.fn();
+    const onOpenGoalEditor = vi.fn();
+    const confirm = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+
+    render(renderChatControls(createProps({ onModeCommand, onOpenGoalEditor })), container);
+    container.querySelector<HTMLButtonElement>('[data-chat-mode-option="plan"]')!.click();
+    expect(onModeCommand).toHaveBeenCalledWith("/plan enter");
+    expect(confirm).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>('[data-chat-mode-option="goal"]')!.click();
+    expect(onOpenGoalEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms before switching away from an active mode (mutual exclusion)", () => {
+    const container = document.createElement("div");
+    const onModeCommand = vi.fn();
+    const onOpenGoalEditor = vi.fn();
+    const confirm = vi.spyOn(globalThis, "confirm");
+    const props = { onModeCommand, onOpenGoalEditor, sessionsResult: sessionsWithRow(PLAN_ROW) };
+
+    // Decline the confirm → nothing happens.
+    confirm.mockReturnValueOnce(false);
+    render(renderChatControls(createProps(props)), container);
+    container.querySelector<HTMLButtonElement>('[data-chat-mode-option="goal"]')!.click();
+    expect(onModeCommand).not.toHaveBeenCalled();
+    expect(onOpenGoalEditor).not.toHaveBeenCalled();
+
+    // Accept the confirm → exit plan, then open the goal editor.
+    confirm.mockReturnValueOnce(true);
+    render(renderChatControls(createProps(props)), container);
+    container.querySelector<HTMLButtonElement>('[data-chat-mode-option="goal"]')!.click();
+    expect(onModeCommand).toHaveBeenCalledWith("/plan exit");
+    expect(onOpenGoalEditor).toHaveBeenCalledTimes(1);
+  });
+});

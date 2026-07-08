@@ -484,6 +484,8 @@ export const hi: TranslationMap = {
     statusBudgetLimited: "Budget limited",
     statusComplete: "Complete",
     editTitle: "Edit goal",
+    setTitle: "Set goal",
+    cancel: "रद्द करें",
     objective: "Objective",
     budget: "Token budget",
     budgetPlaceholder: "Optional token budget",
@@ -1604,6 +1606,13 @@ export const hi: TranslationMap = {
     updateNow: "अभी अपडेट करें",
     dismissUpdateBanner: "अपडेट बैनर हटाएँ",
     switchedSession: "{session} पर स्विच किया गया",
+    mode: {
+      label: "मोड",
+      off: "बंद",
+      plan: "Plan mode",
+      goal: "Goal mode",
+      switchConfirm: "Switch mode? This stops the current mode.",
+    },
     splitView: {
       open: "स्प्लिट व्यू खोलें",
       splitRight: "दाईं ओर विभाजित करें",
