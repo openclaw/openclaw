@@ -1448,11 +1448,31 @@ async function runWithModelFallbackInternal<T>(
   ) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       appendFailedCandidateAttempt(failedAttempt);
-      return;
+    } else {
+      const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+      if (fallbackStep) {
+        await params.onFallbackStep?.(fallbackStep);
+      }
     }
-    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
-    if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+    // Emit failover diagnostic event so OTel/Prometheus traces surface the
+    // fallback chain even when trajectory logging is disabled.  Only emit
+    // when an actual next candidate exists — the terminal/last-candidate
+    // case is already emitted by the cooldown suspension branch with
+    // suspended=true so we avoid duplicating or creating false events for
+    // single-model runs or exhausted chains.
+    if (params.sessionId && failedAttempt.nextCandidate) {
+      const described = describeFailoverError(failedAttempt.error);
+      emitFailoverEvent({
+        sessionId: params.sessionId,
+        lane: params.lane,
+        fromProvider: failedAttempt.candidate.provider,
+        fromModel: failedAttempt.candidate.model,
+        toProvider: failedAttempt.nextCandidate.provider,
+        toModel: failedAttempt.nextCandidate.model,
+        reason: described.reason ?? "unknown",
+        cascadeDepth: failedAttempt.attempt - 1, // 0-based: 0 = primary fail
+        suspended: false,
+      });
     }
   };
 
