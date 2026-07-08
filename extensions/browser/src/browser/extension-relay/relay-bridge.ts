@@ -74,7 +74,7 @@ type ExtensionIdentity = {
   extensionVersion: string;
 };
 
-function toErrorPayload(id: number, sessionId: string | undefined, message: string, code = -32000) {
+function toErrorPayload(id: number | null, sessionId: string | undefined, message: string, code = -32000) {
   return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
 }
 
@@ -498,9 +498,13 @@ export class ExtensionRelayBridge {
       try {
         request = JSON.parse(raw) as CdpRequest;
       } catch {
+        client.socket.send(toErrorPayload(null, undefined, "Parse error", -32700));
         return;
       }
       if (typeof request?.id !== "number" || typeof request?.method !== "string") {
+        const id = typeof request?.id === "number" ? request.id : null;
+        const sessionId = typeof request?.sessionId === "string" ? request.sessionId : undefined;
+        client.socket.send(toErrorPayload(id, sessionId, "Invalid request", -32600));
         return;
       }
       void this.handleCdpRequest(client, request);

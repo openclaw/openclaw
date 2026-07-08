@@ -368,4 +368,59 @@ describe("ExtensionRelayBridge", () => {
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
   });
+
+  it("responds with JSON-RPC parse error for malformed JSON frames", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage("not valid json {");
+    await flush();
+
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  });
+
+  it("responds with JSON-RPC invalid-request error when method is missing", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 42, params: {} }));
+    await flush();
+
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: 42,
+      error: { code: -32600, message: "Invalid request" },
+    });
+  });
+
+  it("preserves sessionId in invalid-request error response", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 7, sessionId: "session-1" }));
+    await flush();
+
+    const frames = client.frames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      id: 7,
+      sessionId: "session-1",
+      error: { code: -32600, message: "Invalid request" },
+    });
+  });
 });
