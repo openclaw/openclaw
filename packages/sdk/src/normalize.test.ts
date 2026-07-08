@@ -32,3 +32,30 @@ describe("normalizeGatewayEvent terminal tool item status", () => {
     );
   });
 });
+
+describe("normalizeGatewayEvent id", () => {
+  it("keeps zero seq and ts components in the normalized event id", () => {
+    const event = normalizeGatewayEvent({
+      event: "agent",
+      seq: 0,
+      payload: {
+        runId: "r1",
+        sessionKey: "main",
+        ts: 0,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      },
+    });
+
+    expect(event.id).toBe("0:agent:r1:main:0");
+  });
+
+  it("still drops absent parts from the normalized event id", () => {
+    const event = normalizeGatewayEvent({
+      event: "health",
+      payload: { ts: 123 },
+    });
+
+    expect(event.id).toBe("local:health:123");
+  });
+});

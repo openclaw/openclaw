@@ -177,7 +177,11 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const taskId = readString(payload.taskId);
   const agentId = readString(payload.agentId);
   const ts = readNumber(payload.ts) ?? Date.now();
-  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(Boolean);
+  // Gateway seq starts at 0 and ts may be 0; only absent parts are dropped so
+  // zero values keep contributing to the replay/dedupe identity.
+  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
+    (part) => part !== undefined,
+  );
 
   return {
     version: 1,
