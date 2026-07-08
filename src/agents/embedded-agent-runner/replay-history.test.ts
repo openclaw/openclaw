@@ -318,6 +318,11 @@ describe("normalizeAssistantReplayContent", () => {
 
   it("marks commentary text before tool calls as undelivered in provider replay", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const signature = JSON.stringify({
+      v: 1,
+      id: "commentary-0",
+      phase: "commentary",
+    });
     const messages = [
       userMessage("hi"),
       bedrockAssistant(
@@ -325,11 +330,7 @@ describe("normalizeAssistantReplayContent", () => {
           {
             type: "text",
             text: "Please confirm the payment details before I continue.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "commentary-0",
-              phase: "commentary",
-            }),
+            textSignature: signature,
           },
           toolCall,
         ],
@@ -359,6 +360,43 @@ describe("normalizeAssistantReplayContent", () => {
     );
     expect(normalized.content[1]).toBe(toolCall);
     expect(out[2]).toBe(messages[2]);
+  });
+
+  it("marks commentary text as undelivered when tool-call turns replay with stop", () => {
+    const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          {
+            type: "text",
+            text: "I will check that now.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "commentary-0",
+              phase: "commentary",
+            }),
+          },
+          toolCall,
+        ],
+        "stop",
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ];
+
+    const out = normalizeAssistantReplayContent(messages);
+
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    const replayText = (normalized.content[0] as { text?: string }).text ?? "";
+    expect(replayText).toContain("was not delivered to the user/channel");
+    expect(replayText).toContain("I will check that now.");
+    expect(normalized.content[1]).toBe(toolCall);
   });
 
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {

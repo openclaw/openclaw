@@ -277,9 +277,7 @@ function formatUndeliveredCommentaryReplayContext(text: string): string {
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
   const sanitizedContent: unknown[] = [];
-  const markUndeliveredCommentary =
-    (message as { stopReason?: unknown }).stopReason === "toolUse" &&
-    hasReplayToolCallBlock(replayContent);
+  const markUndeliveredCommentary = hasReplayToolCallBlock(replayContent);
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
       sanitizedContent.push(block);
