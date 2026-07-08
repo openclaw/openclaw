@@ -44,6 +44,8 @@ function statusLabel(status: GoalChipStatus): string {
       return t("goal.statusBudgetLimited");
     case "complete":
       return t("goal.statusComplete");
+    default:
+      return status;
   }
 }
 

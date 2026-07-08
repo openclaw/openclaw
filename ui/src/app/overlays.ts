@@ -66,6 +66,8 @@ export function goalActionCommand(
           : "";
       return `/goal edit ${objective}${budget}`;
     }
+    default:
+      return "/goal status";
   }
 }
 
