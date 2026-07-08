@@ -25,6 +25,29 @@ function assertWorkspaceSize(serialized: string): void {
   }
 }
 
+/**
+ * Enforce the custom-widget approval invariant against the CURRENT document: a
+ * caller-supplied doc can never ELEVATE a widget to `approved`. Any registry
+ * entry that arrives `approved` but is not already `approved` in `current` is
+ * downgraded to `pending` (dropping the approval provenance). Approve stays the
+ * sole transition to `approved`, going through its own dedicated verb.
+ */
+export function reconcileReplaceApproval(
+  incoming: WorkspaceDoc,
+  current: WorkspaceDoc,
+): WorkspaceDoc {
+  const currentRegistry = current.widgetsRegistry ?? {};
+  const incomingRegistry = incoming.widgetsRegistry ?? {};
+  for (const [name, entry] of Object.entries(incomingRegistry)) {
+    if (entry.status === "approved" && currentRegistry[name]?.status !== "approved") {
+      entry.status = "pending";
+      delete entry.approvedBy;
+      delete entry.approvedAt;
+    }
+  }
+  return incoming;
+}
+
 async function readJsonFile(filePath: string): Promise<unknown> {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
@@ -88,6 +111,23 @@ export class DashboardStore {
     options: DashboardMutationOptions,
   ): Promise<DashboardMutationResult> {
     return await this.mutate(() => structuredClone(doc), options);
+  }
+
+  /**
+   * Like `replace`, but enforces the approval invariant against the CURRENT
+   * document inside the write lock (no TOCTOU): a caller-supplied doc can never
+   * elevate a custom widget to `approved`. Every UNTRUSTED whole-document write
+   * (the `dashboard.workspace.replace` gateway method) MUST use this; `replace`
+   * stays a trusted primitive for seeding, restore, and undo.
+   */
+  async replaceSanitized(
+    doc: WorkspaceDoc,
+    options: DashboardMutationOptions,
+  ): Promise<DashboardMutationResult> {
+    return await this.mutate(
+      (current) => reconcileReplaceApproval(structuredClone(doc), current),
+      options,
+    );
   }
 
   async undo(): Promise<WorkspaceDoc> {

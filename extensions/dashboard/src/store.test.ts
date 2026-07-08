@@ -149,3 +149,50 @@ async function viWaitFor(assertion: () => void): Promise<void> {
     }
   }
 }
+
+describe("DashboardStore.replaceSanitized — approval invariant", () => {
+  async function docWithWidget(
+    store: DashboardStore,
+    status: "pending" | "approved",
+  ): Promise<import("./schema.js").WorkspaceDoc> {
+    const doc = structuredClone(await store.read());
+    doc.widgetsRegistry = {
+      "custom-card": { status, createdBy: "agent:evil", approvedBy: "agent:evil" },
+    };
+    return doc;
+  }
+
+  it("downgrades a caller-supplied 'approved' widget to 'pending'", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new DashboardStore({ stateDir });
+      const { doc } = await store.replaceSanitized(await docWithWidget(store, "approved"), {
+        actor: "agent:evil",
+      });
+      const entry = doc.widgetsRegistry["custom-card"];
+      expect(entry?.status).toBe("pending");
+      expect(entry?.approvedBy).toBeUndefined();
+    });
+  });
+
+  it("preserves an already-approved widget across a sanitized replace", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new DashboardStore({ stateDir });
+      // Approve it through the trusted primitive first (as the approve verb would).
+      await store.replace(await docWithWidget(store, "approved"), { actor: "user" });
+      const { doc } = await store.replaceSanitized(await docWithWidget(store, "approved"), {
+        actor: "agent:evil",
+      });
+      expect(doc.widgetsRegistry["custom-card"]?.status).toBe("approved");
+    });
+  });
+
+  it("leaves the trusted `replace` primitive able to set approved (seed/restore)", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new DashboardStore({ stateDir });
+      const { doc } = await store.replace(await docWithWidget(store, "approved"), {
+        actor: "user",
+      });
+      expect(doc.widgetsRegistry["custom-card"]?.status).toBe("approved");
+    });
+  });
+});

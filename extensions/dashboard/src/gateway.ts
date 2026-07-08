@@ -700,7 +700,15 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
         const params = readParams(opts.params, ["doc", "actor"]);
         const actor = readOptionalActor(params);
         const doc = validateWorkspaceDoc(params.doc);
-        await respondWrite(opts, actor, undefined, async () => await store.replace(doc, { actor }));
+        // `replaceSanitized`, not `replace`: an untrusted whole-document write must
+        // not be able to elevate a custom widget to `approved` (approve is the sole
+        // transition to that state). See DashboardStore.replaceSanitized.
+        await respondWrite(
+          opts,
+          actor,
+          undefined,
+          async () => await store.replaceSanitized(doc, { actor }),
+        );
       } catch (error) {
         respondError(opts.respond, error);
       }
