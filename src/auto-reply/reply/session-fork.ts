@@ -20,6 +20,10 @@ const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-
 
 export type ParentForkDecision = SessionParentForkDecision;
 
+type ParentForkTokenCountResolution =
+  | { status: "resolved"; parentTokens?: number }
+  | { status: "timed-out" };
+
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
   agentId?: string;
@@ -95,6 +99,17 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
+function formatParentForkTokenProbeTimeoutMessage(): string {
+  return (
+    `Parent context size could not be verified within ${PARENT_FORK_TOKEN_COUNT_TIMEOUT_MS}ms; ` +
+    "starting with isolated context instead."
+  );
+}
+
+function formatParentForkTokenProbeUnavailableMessage(): string {
+  return "Parent context size could not be verified; starting with isolated context instead.";
+}
+
 function resolveParentForkStorePath(params: {
   agentId?: string;
   config?: OpenClawConfig;
@@ -109,12 +124,37 @@ export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens =
-    resolveFreshSessionTotalTokens(params.parentEntry) ??
-    (await resolveParentForkTokenCountWithTimeout({
-      parentEntry: params.parentEntry,
-      storePath: resolveParentForkStorePath(params),
-    }));
+  const freshParentTokens = resolveFreshSessionTotalTokens(params.parentEntry);
+  if (typeof freshParentTokens === "number" && freshParentTokens > maxTokens) {
+    return {
+      status: "skip",
+      reason: "parent-too-large",
+      maxTokens,
+      parentTokens: freshParentTokens,
+      message: formatParentForkTooLargeMessage({ parentTokens: freshParentTokens, maxTokens }),
+    };
+  }
+  if (typeof freshParentTokens === "number") {
+    return {
+      status: "fork",
+      maxTokens,
+      parentTokens: freshParentTokens,
+    };
+  }
+
+  const tokenCountResolution = await resolveParentForkTokenCountWithTimeout({
+    parentEntry: params.parentEntry,
+    storePath: resolveParentForkStorePath(params),
+  });
+  if (tokenCountResolution.status === "timed-out") {
+    return {
+      status: "skip",
+      reason: "parent-size-timeout",
+      maxTokens,
+      message: formatParentForkTokenProbeTimeoutMessage(),
+    };
+  }
+  const parentTokens = tokenCountResolution.parentTokens;
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -124,10 +164,18 @@ export async function resolveParentForkDecision(
       message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
     };
   }
+  if (typeof parentTokens !== "number") {
+    return {
+      status: "skip",
+      reason: "parent-size-unavailable",
+      maxTokens,
+      message: formatParentForkTokenProbeUnavailableMessage(),
+    };
+  }
   return {
     status: "fork",
     maxTokens,
-    ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+    parentTokens,
   };
 }
 
@@ -209,14 +257,22 @@ async function resolveParentForkTokenCount(params: {
 async function resolveParentForkTokenCountWithTimeout(params: {
   parentEntry: SessionEntry;
   storePath: string;
-}): Promise<number | undefined> {
-  let timeoutId: number | undefined;
-  const timeout = new Promise<undefined>((resolve) => {
-    timeoutId = setTimeout(resolve, PARENT_FORK_TOKEN_COUNT_TIMEOUT_MS);
+}): Promise<ParentForkTokenCountResolution> {
+  let timeoutId: Parameters<typeof clearTimeout>[0];
+  const tokenCount = resolveParentForkTokenCount(params).then((parentTokens) =>
+    typeof parentTokens === "number"
+      ? ({ status: "resolved", parentTokens } as const)
+      : ({ status: "resolved" } as const),
+  );
+  const timeout = new Promise<ParentForkTokenCountResolution>((resolve) => {
+    timeoutId = setTimeout(
+      () => resolve({ status: "timed-out" }),
+      PARENT_FORK_TOKEN_COUNT_TIMEOUT_MS,
+    );
   });
   try {
-    // Availability wins over exact sizing when transcript probing stalls.
-    return await Promise.race([resolveParentForkTokenCount(params), timeout]);
+    // Isolated context wins when parent sizing stalls or cannot be verified.
+    return await Promise.race([tokenCount, timeout]);
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);

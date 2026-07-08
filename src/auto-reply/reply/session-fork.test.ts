@@ -15,6 +15,8 @@ vi.mock("./session-fork.runtime.js", () => runtimeMocks);
 const roots: string[] = [];
 const parentTooLargeMessage =
   "Parent context is too large to fork (170000/100000 tokens); starting with isolated context instead.";
+const parentSizeTimeoutMessage =
+  "Parent context size could not be verified within 1000ms; starting with isolated context instead.";
 
 async function makeRoot(prefix: string): Promise<string> {
   // realpath first: macOS tmpdir is a /var -> /private/var symlink and the
@@ -54,7 +56,7 @@ describe("resolveParentForkDecision", () => {
     expect(runtimeMocks.resolveParentForkTokenCountRuntime).not.toHaveBeenCalled();
   });
 
-  it("continues with a fork decision when parent token probing stalls", async () => {
+  it("starts isolated when parent token probing stalls", async () => {
     vi.useFakeTimers();
     runtimeMocks.resolveParentForkTokenCountRuntime.mockReturnValue(new Promise(() => {}));
 
@@ -66,8 +68,10 @@ describe("resolveParentForkDecision", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(decision).resolves.toEqual({
-      status: "fork",
+      status: "skip",
+      reason: "parent-size-timeout",
       maxTokens: 100_000,
+      message: parentSizeTimeoutMessage,
     });
   });
 
@@ -161,5 +165,61 @@ describe("forkSessionEntryFromParent", () => {
     >;
     expect(stored[sessionKey]?.sessionId).toBe(result.fork.sessionId);
     expect(stored[sessionKey]?.sessionFile).toBe(result.fork.sessionFile);
+  });
+
+  it("does not read the parent transcript after a stalled parent size probe", async () => {
+    vi.useFakeTimers();
+    const root = await makeRoot("openclaw-session-fork-timeout-");
+    const activeStoreDir = path.join(root, "active-store");
+    await fs.mkdir(activeStoreDir, { recursive: true });
+    const storePath = path.join(activeStoreDir, "sessions.json");
+    const parentSessionKey = "agent:main:main";
+    const sessionKey = "agent:main:subagent:child";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [parentSessionKey]: {
+            sessionId: "parent-session",
+            sessionFile: path.join(activeStoreDir, "missing-parent.jsonl"),
+            updatedAt: 1,
+          },
+          [sessionKey]: { sessionId: "", updatedAt: 2 },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockReturnValue(new Promise(() => {}));
+
+    const resultPromise = forkSessionEntryFromParent({
+      agentId: "main",
+      decisionSkipPatch: () => ({
+        forkedFromParent: false,
+      }),
+      fallbackEntry: { sessionId: "", updatedAt: 2 },
+      parentSessionKey,
+      sessionKey,
+      storePath,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "decision-skip",
+      decision: {
+        status: "skip",
+        reason: "parent-size-timeout",
+        maxTokens: 100_000,
+        message: parentSizeTimeoutMessage,
+      },
+    });
+    if (result.status !== "skipped") {
+      throw new Error("expected skipped result");
+    }
+    expect(result.sessionEntry.forkedFromParent).toBe(false);
   });
 });

@@ -1394,6 +1394,12 @@ export type SessionParentForkDecision =
       maxTokens: number;
       parentTokens: number;
       message: string;
+    }
+  | {
+      status: "skip";
+      reason: "parent-size-timeout" | "parent-size-unavailable";
+      maxTokens: number;
+      message: string;
     };
 
 /** Transcript identity created for a child fork. */

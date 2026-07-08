@@ -437,12 +437,13 @@ export async function createGatewaySession(params: {
           storePath: parentSessionTarget.storePath,
         });
         if (forkDecision.status === "skip") {
+          const message =
+            forkDecision.reason === "parent-too-large"
+              ? `parent session is too large to fork (${forkDecision.parentTokens}/${forkDecision.maxTokens} tokens)`
+              : forkDecision.message;
           return {
             ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `parent session is too large to fork (${forkDecision.parentTokens}/${forkDecision.maxTokens} tokens)`,
-            ),
+            error: errorShape(ErrorCodes.INVALID_REQUEST, message),
           };
         }
         const fork = await forkSessionFromParent({

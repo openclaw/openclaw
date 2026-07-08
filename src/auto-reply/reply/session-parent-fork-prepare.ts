@@ -29,11 +29,15 @@ export async function prepareReplySessionParentFork(params: {
     storePath: params.storePath,
   });
   if (decision.status === "skip") {
-    // The parent branch is too large to inherit usefully. Start fresh and
-    // mark as handled so the thread does not retry this decision every turn.
+    // The parent branch is not safe to inherit. Start fresh and mark as
+    // handled so the thread does not retry this decision every turn.
+    const tokenDetails =
+      decision.reason === "parent-too-large"
+        ? ` parentTokens=${decision.parentTokens} maxTokens=${decision.maxTokens}`
+        : "";
     params.warn(
-      `skipping parent fork (parent too large): parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
-        `parentTokens=${decision.parentTokens} maxTokens=${decision.maxTokens}`,
+      `skipping parent fork (${decision.reason}): parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey}` +
+        tokenDetails,
     );
     return { ...params.sessionEntry, forkedFromParent: true };
   }
