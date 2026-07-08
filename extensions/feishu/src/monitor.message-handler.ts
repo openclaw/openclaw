@@ -6,6 +6,7 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { createSequentialQueue } from "./sequential-queue.js";
+import { isFeishuSourceMessageRecalled } from "./source-message-recall.js";
 import type { FeishuChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
@@ -189,6 +190,17 @@ export function createFeishuMessageReceiveHandler({
   });
 
   const dispatchFeishuMessage = async (event: FeishuMessageEvent, messageDedupeKey?: string) => {
+    if (
+      isFeishuSourceMessageRecalled({
+        channelRuntime,
+        accountId,
+        messageId: event.message.message_id,
+      })
+    ) {
+      releaseFeishuMessageProcessing(messageDedupeKey, accountId);
+      log(`feishu[${accountId}]: skipping recalled message ${event.message.message_id}`);
+      return;
+    }
     const sequentialKey = resolveSequentialKey({
       accountId,
       event,
@@ -246,6 +258,28 @@ export function createFeishuMessageReceiveHandler({
     }
   };
 
+  const filterRecalledEntries = (entries: FeishuMessageEvent[]): FeishuMessageEvent[] => {
+    const freshEntries: FeishuMessageEvent[] = [];
+    for (const entry of entries) {
+      if (
+        isFeishuSourceMessageRecalled({
+          channelRuntime,
+          accountId,
+          messageId: entry.message.message_id,
+        })
+      ) {
+        const dedupeKey = resolveFeishuMessageDedupeKey(entry);
+        releaseFeishuMessageProcessing(dedupeKey, accountId);
+        log(
+          `feishu[${accountId}]: dropping recalled debounced message ${entry.message.message_id}`,
+        );
+        continue;
+      }
+      freshEntries.push(entry);
+    }
+    return freshEntries;
+  };
+
   const inboundDebouncer = channelRuntime.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
     buildKey: (event) => {
@@ -266,15 +300,16 @@ export function createFeishuMessageReceiveHandler({
       return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
+      const activeEntries = filterRecalledEntries(entries);
+      const last = activeEntries.at(-1);
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
+      if (activeEntries.length === 1) {
         await dispatchFeishuMessage(last, resolveFeishuMessageDedupeKey(last));
         return;
       }
-      const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(entries);
+      const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
         if (!(await hasProcessedMessage(resolveFeishuMessageDedupeKey(entry), accountId, log))) {
@@ -340,6 +375,10 @@ export function createFeishuMessageReceiveHandler({
       // Feishu bot receive events identify their sender by open_id. Drop this
       // account's bot before it can consume a claim or debounce slot.
       log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
+      return;
+    }
+    if (isFeishuSourceMessageRecalled({ channelRuntime, accountId, messageId })) {
+      log(`feishu[${accountId}]: dropping recalled message ${messageId ?? "unknown"}`);
       return;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);

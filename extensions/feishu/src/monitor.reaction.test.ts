@@ -15,6 +15,7 @@ import {
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { bindFeishuSourceMessageRun } from "./source-message-recall.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async (_params: { event?: unknown }) => {}));
@@ -253,6 +254,25 @@ function mentionOpenIds(event: FeishuMessageEvent): string[] {
   );
 }
 
+function createRuntimeContexts(): PluginRuntime["channel"]["runtimeContexts"] {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId.trim()}\0${params.accountId?.trim() ?? ""}\0${params.capability.trim()}`;
+  return {
+    register: (params) => {
+      const key = keyFor(params);
+      contexts.set(key, params.context);
+      return {
+        dispose: () => {
+          contexts.delete(key);
+        },
+      };
+    },
+    get: (params) => contexts.get(keyFor(params)) as never,
+    watch: () => () => {},
+  };
+}
+
 function createFeishuMonitorRuntime(params?: {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
@@ -261,6 +281,7 @@ function createFeishuMonitorRuntime(params?: {
 }): PluginRuntime {
   return {
     channel: {
+      runtimeContexts: createRuntimeContexts(),
       commands: {
         isControlCommandMessage: params?.isControlCommandMessage ?? isControlCommandMessage,
       },
@@ -524,6 +545,35 @@ describe("monitorSingleAccount lifecycle", () => {
       | { stop: ReturnType<typeof vi.fn> }
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts active source-message runs when Feishu reports a recalled message", async () => {
+    handlers = {};
+    const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+      handlers = registered;
+    });
+    createEventDispatcherMock.mockReturnValue({ register });
+    const pluginRuntime = createFeishuMonitorRuntime();
+    setFeishuRuntime(pluginRuntime);
+    const binding = bindFeishuSourceMessageRun({
+      channelRuntime: pluginRuntime.channel,
+      accountId: "default",
+      messageId: "om_recalled_event",
+    });
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+      },
+    });
+
+    await handlers["im.message.recalled_v1"]?.({ message_id: "om_recalled_event" });
+
+    expect(binding?.abortSignal.aborted).toBe(true);
   });
 });
 

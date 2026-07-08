@@ -29,6 +29,7 @@ import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
@@ -48,6 +49,10 @@ export type FeishuReactionCreatedEvent = {
 
 type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
   reaction_id?: string;
+};
+
+type FeishuMessageRecalledEvent = {
+  message_id: string;
 };
 
 type ResolveReactionSyntheticEventParams = {
@@ -193,6 +198,16 @@ function parseFeishuBotRemovedChatId(value: unknown): string | null {
   return readString(value.chat_id) ?? null;
 }
 
+function parseFeishuMessageRecalledEventPayload(value: unknown): FeishuMessageRecalledEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const nestedMessage = isRecord(value.message) ? value.message : {};
+  const nestedEvent = isRecord(value.event) ? value.event : {};
+  const messageId = firstString(value.message_id, nestedMessage.message_id, nestedEvent.message_id);
+  return messageId ? { message_id: messageId } : null;
+}
+
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     const stringValue = readString(value);
@@ -315,6 +330,33 @@ function registerEventHandlers(
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
+    },
+    "im.message.recalled_v1": async (data) => {
+      await runFeishuHandler({
+        errorMessage: `feishu[${accountId}]: error handling recalled message event`,
+        task: async () => {
+          const event = parseFeishuMessageRecalledEventPayload(data);
+          if (!event) {
+            error(`feishu[${accountId}]: ignoring malformed message recalled payload`);
+            return;
+          }
+          const result = recallFeishuSourceMessage({
+            channelRuntime,
+            accountId,
+            messageId: event.message_id,
+          });
+          if (!result.recorded) {
+            log(
+              `feishu[${accountId}]: source message recall ${event.message_id} ignored without runtime context`,
+            );
+            return;
+          }
+          log(
+            `feishu[${accountId}]: source message recalled ${event.message_id} ` +
+              `(abortedRuns=${result.abortedRuns}, alreadyRecalled=${result.alreadyRecalled})`,
+          );
+        },
+      });
     },
     "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
       // Ignore p2p chat entry notifications — no action needed

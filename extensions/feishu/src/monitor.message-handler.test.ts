@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
@@ -27,12 +28,34 @@ function createTextEvent(params: {
   };
 }
 
-function createHandler() {
+function createRuntimeContexts(): PluginRuntime["channel"]["runtimeContexts"] {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId.trim()}\0${params.accountId?.trim() ?? ""}\0${params.capability.trim()}`;
+  return {
+    register: (params) => {
+      const key = keyFor(params);
+      contexts.set(key, params.context);
+      return {
+        dispose: () => {
+          contexts.delete(key);
+        },
+      };
+    },
+    get: (params) => contexts.get(keyFor(params)) as never,
+    watch: () => () => {},
+  };
+}
+
+function createHandler(options: { autoFlush?: boolean } = {}) {
   let onFlush: ((entries: FeishuMessageEvent[]) => Promise<void>) | undefined;
   const enqueue = vi.fn(async (event: FeishuMessageEvent) => {
-    await onFlush?.([event]);
+    if (options.autoFlush !== false) {
+      await onFlush?.([event]);
+    }
   });
   const channelRuntime = {
+    runtimeContexts: createRuntimeContexts(),
     commands: {
       isControlCommandMessage: () => false,
     },
@@ -58,7 +81,15 @@ function createHandler() {
     getBotOpenId: () => "ou_bot",
   });
 
-  return { handler, handleMessage, enqueue };
+  return {
+    handler,
+    handleMessage,
+    enqueue,
+    channelRuntime,
+    flush: async (entries: FeishuMessageEvent[]) => {
+      await onFlush?.(entries);
+    },
+  };
 }
 
 describe("createFeishuMessageReceiveHandler self-message filtering", () => {
@@ -108,5 +139,48 @@ describe("createFeishuMessageReceiveHandler self-message filtering", () => {
     expect(
       handleMessage.mock.calls.map(([params]) => params.event.sender.sender_id.open_id),
     ).toEqual(["ou_other_bot", "ou_user"]);
+  });
+
+  it("drops source messages recalled before the receive event is handled", async () => {
+    const { handler, handleMessage, enqueue, channelRuntime } = createHandler();
+
+    recallFeishuSourceMessage({
+      channelRuntime,
+      accountId: "default",
+      messageId: "om_recalled_before_receive",
+    });
+
+    await handler(
+      createTextEvent({
+        messageId: "om_recalled_before_receive",
+        senderOpenId: "ou_user",
+        senderType: "user",
+      }),
+    );
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it("drops source messages recalled while waiting in inbound debounce", async () => {
+    const { handler, handleMessage, enqueue, channelRuntime, flush } = createHandler({
+      autoFlush: false,
+    });
+    const event = createTextEvent({
+      messageId: "om_recalled_during_debounce",
+      senderOpenId: "ou_user",
+      senderType: "user",
+    });
+
+    await handler(event);
+    recallFeishuSourceMessage({
+      channelRuntime,
+      accountId: "default",
+      messageId: "om_recalled_during_debounce",
+    });
+    await flush([event]);
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(handleMessage).not.toHaveBeenCalled();
   });
 });
