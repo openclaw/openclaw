@@ -3,6 +3,13 @@ import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 /**
+ * Local non-blank string: requires at least one non-whitespace character.
+ * Runtime denylist normalization trims and drops blank/whitespace-only patterns,
+ * so the protocol edge must reject them too (mirrors cron.ts NonBlankString).
+ */
+const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+
+/**
  * Exec approval protocol schemas.
  *
  * These payloads cross the security-review boundary for command execution, so
@@ -26,7 +33,7 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
 /** One persisted deny-over-allow STOP entry forcing explicit approval. */
 export const ExecApprovalsDenylistEntrySchema = Type.Object(
   {
-    pattern: NonEmptyString,
+    pattern: NonBlankString,
     reason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

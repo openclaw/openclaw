@@ -83,6 +83,28 @@ describe("exec approvals protocol validators", () => {
     expect(validateExecApprovalsSetParams({ file: unknownField, baseHash: "abc123" })).toBe(false);
   });
 
+  it("rejects whitespace-only denylist patterns on defaults and agent entries", () => {
+    // Runtime normalization trims and drops these, so the protocol must reject
+    // them rather than persist a STOP rule that silently never fires.
+    const whitespaceDefault = {
+      version: 1 as const,
+      defaults: { denylist: [{ pattern: "   " }] },
+      agents: {},
+    };
+    expect(validateExecApprovalsSetParams({ file: whitespaceDefault, baseHash: "abc123" })).toBe(
+      false,
+    );
+
+    const whitespaceAgent = {
+      version: 1 as const,
+      defaults: {},
+      agents: { main: { denylist: [{ pattern: "\t\n" }] } },
+    };
+    expect(validateExecApprovalsSetParams({ file: whitespaceAgent, baseHash: "abc123" })).toBe(
+      false,
+    );
+  });
+
   it("accepts the shipped Windows node approval contract", () => {
     expect(
       validateExecApprovalsNodeSnapshot({
