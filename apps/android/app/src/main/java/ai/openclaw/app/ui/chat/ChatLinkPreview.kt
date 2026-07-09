@@ -9,7 +9,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Authenticator
 import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.HttpUrl
@@ -204,7 +203,7 @@ internal class LinkPreviewFetcher(
       val call = client.newCall(request)
       call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
 
-      val response = call.awaitResponse() ?: return null
+      val response = call.executeCancellable() ?: return null
       response.use {
         if (it.isRedirect) {
           if (redirects >= LINK_PREVIEW_MAX_REDIRECTS) return null
@@ -229,34 +228,23 @@ internal class LinkPreviewFetcher(
   }
 }
 
-private suspend fun Call.awaitResponse(): Response? =
+private suspend fun Call.executeCancellable(): Response? =
   suspendCancellableCoroutine { continuation ->
+    // execute() blocks this IO worker, so cancellation must close the Call from the cancelling thread.
     continuation.invokeOnCancellation { cancel() }
-    enqueue(
-      object : Callback {
-        override fun onFailure(
-          call: Call,
-          e: IOException,
-        ) {
-          if (continuation.isActive) {
-            continuation.resume(null)
-          }
-        }
-
-        override fun onResponse(
-          call: Call,
-          response: Response,
-        ) {
-          if (continuation.isActive) {
-            continuation.resume(response) { _, cancelledResponse, _ ->
-              cancelledResponse.close()
-            }
-          } else {
-            response.close()
-          }
-        }
-      },
-    )
+    val response =
+      try {
+        execute()
+      } catch (_: IOException) {
+        null
+      }
+    if (response != null) {
+      continuation.resume(response) { _, cancelledResponse, _ ->
+        cancelledResponse.close()
+      }
+    } else if (continuation.isActive) {
+      continuation.resume(null)
+    }
   }
 
 private suspend fun <T> Call.awaitBodyRead(block: () -> T?): T? =
