@@ -2,6 +2,7 @@
 import type {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
+  fetchWithTimeoutGuarded,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, vi, type Mock } from "vitest";
@@ -11,6 +12,7 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
 >[0];
 type FetchProviderOperationResponseParams = Parameters<typeof fetchProviderOperationResponse>[0];
 type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownloadResponse>[0];
+type FetchWithTimeoutGuardedParams = Parameters<typeof fetchWithTimeoutGuarded>;
 
 type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
@@ -25,6 +27,7 @@ interface MinimaxProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
   postJsonRequestMock: AnyMock;
   fetchWithTimeoutMock: AnyMock;
+  fetchWithTimeoutGuardedMock: AnyMock;
   fetchProviderOperationResponseMock: AnyMock;
   fetchProviderDownloadResponseMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
@@ -37,6 +40,7 @@ const minimaxProviderHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   postJsonRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   fetchProviderOperationResponseMock: vi.fn(),
   fetchProviderDownloadResponseMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
@@ -100,6 +104,24 @@ minimaxProviderHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
   },
 );
 
+minimaxProviderHttpMocks.fetchWithTimeoutGuardedMock.mockImplementation(
+  async (
+    url: FetchWithTimeoutGuardedParams[0],
+    init: FetchWithTimeoutGuardedParams[1],
+    timeoutMs: FetchWithTimeoutGuardedParams[2],
+    fetchFn: FetchWithTimeoutGuardedParams[3],
+  ) => ({
+    response: await minimaxProviderHttpMocks.fetchWithTimeoutMock(
+      url,
+      init,
+      timeoutMs ?? 60_000,
+      fetchFn,
+    ),
+    finalUrl: url,
+    release: vi.fn(async () => {}),
+  }),
+);
+
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: minimaxProviderHttpMocks.resolveApiKeyForProviderMock,
 }));
@@ -124,6 +146,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
         defaultTimeoutMs,
     fetchProviderDownloadResponse: minimaxProviderHttpMocks.fetchProviderDownloadResponseMock,
     fetchProviderOperationResponse: minimaxProviderHttpMocks.fetchProviderOperationResponseMock,
+    fetchWithTimeoutGuarded: minimaxProviderHttpMocks.fetchWithTimeoutGuardedMock,
     fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
     postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
     readProviderJsonResponse: actual.readProviderJsonResponse,
@@ -144,6 +167,7 @@ export function installMinimaxProviderHttpMockCleanup(): void {
     minimaxProviderHttpMocks.resolveApiKeyForProviderMock.mockClear();
     minimaxProviderHttpMocks.postJsonRequestMock.mockReset();
     minimaxProviderHttpMocks.fetchWithTimeoutMock.mockReset();
+    minimaxProviderHttpMocks.fetchWithTimeoutGuardedMock.mockClear();
     minimaxProviderHttpMocks.fetchProviderOperationResponseMock.mockClear();
     minimaxProviderHttpMocks.fetchProviderDownloadResponseMock.mockClear();
     minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();

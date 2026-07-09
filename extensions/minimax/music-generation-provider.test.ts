@@ -11,6 +11,7 @@ const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
 } = getMinimaxProviderHttpMocks();
 
@@ -48,6 +49,28 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<
     throw new Error(`expected mock call ${index}`);
   }
   return call[0] as Record<string, unknown>;
+}
+
+function expectMinimaxGuardedFetchCall(index: number, url: string) {
+  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
+  }
+  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
+  expect(actualUrl).toBe(url);
+  expect((init as RequestInit | undefined)?.method).toBe("GET");
+  expect(Number.isInteger(timeoutMs)).toBe(true);
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(fetchFn).toBe(fetch);
+  return {
+    options: options as Record<string, unknown> | undefined,
+  };
+}
+
+function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
+  expect(options).toEqual({
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
 }
 
 function streamedAudioResponse(bytes: string): Response {
@@ -444,5 +467,8 @@ describe("minimax music generation provider", () => {
     expect(postParams.allowPrivateNetwork).toBe(true);
     expect((postParams.headers as Headers).get("x-minimax-music-policy")).toBe("enabled");
     expect(postParams.url).toBe("https://api.minimaxi.com/v1/music_generation");
+    expectAllowPrivateNetworkPolicy(
+      expectMinimaxGuardedFetchCall(0, "https://example.com/portal.mp3").options,
+    );
   });
 });
