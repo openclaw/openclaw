@@ -171,16 +171,18 @@ describe("resolver-to-action channelId path", () => {
     // with case preserved (the return value of the Slack plugin's normalizeTarget callback)
     const normalized = normalizeSlackMessagingTarget(rawId);
     expect(normalized).toBe("channel:C08GQH53EJM");
+    // The `!` is safe because the expect above already asserted it is not undefined.
+    const normalizedId: string = normalized!;
 
     // Step 2: sanitizeGroupTargetId strips the channel: prefix
     // (this is what resolveActionTarget does in the core message-action-runner)
     const sanitizeId = (target: string) => target.replace(/^(channel|group):/i, "");
-    const stripped = sanitizeId(normalized);
+    const stripped = sanitizeId(normalizedId);
     expect(stripped).toBe("C08GQH53EJM");
 
     // Step 3: resolveSlackChannelId is what handleSlackMessageAction's
     // resolveChannelId calls to extract the channel ID for Slack API calls
-    const channelId = resolveSlackChannelId(normalized);
+    const channelId = resolveSlackChannelId(normalizedId);
     expect(channelId).toBe("C08GQH53EJM");
 
     // Step 4: Direct resolveSlackChannelId with the bare channel ID
@@ -198,12 +200,13 @@ describe("resolver-to-action channelId path", () => {
 
     const normalized = normalizeSlackMessagingTarget(rawId);
     expect(normalized).toBe("channel:c08gqh53ejm");
+    const normalizedId: string = normalized!;
 
     const sanitizeId = (target: string) => target.replace(/^(channel|group):/i, "");
-    const stripped = sanitizeId(normalized);
+    const stripped = sanitizeId(normalizedId);
     expect(stripped).toBe("c08gqh53ejm");
 
-    const channelId = resolveSlackChannelId(normalized);
+    const channelId = resolveSlackChannelId(normalizedId);
     expect(channelId).toBe("c08gqh53ejm");
   });
 
