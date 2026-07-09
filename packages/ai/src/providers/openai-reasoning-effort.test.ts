@@ -110,6 +110,27 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("ProviderDefault");
   });
 
+  it("matches canonical fallback map keys case-insensitively", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["ProviderLow", "ProviderHigh"],
+        reasoningEffortMap: {
+          HIGH: "ProviderHigh",
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "HIGH",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("ProviderHigh");
+  });
+
   it("preserves canonical-looking provider-native compat values mapped from canonical efforts", () => {
     const model = {
       provider: "example",

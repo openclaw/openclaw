@@ -153,7 +153,14 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   fallbackMap?: Record<string, string>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
-  const mapped = params.fallbackMap?.[requested];
+  // Config preserves map-key casing, so compare canonical keys after exact lookup.
+  const mapped =
+    params.fallbackMap?.[requested] ??
+    (params.fallbackMap
+      ? Object.entries(params.fallbackMap).find(
+          ([effort]) => normalizeOpenAIReasoningEffort(effort) === requested,
+        )?.[1]
+      : undefined);
   // Fallback maps emit provider-native payload labels; keep their case for exact compat lists.
   const normalized = mapped === undefined ? requested : mapped.trim();
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
