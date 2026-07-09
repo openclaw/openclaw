@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
@@ -19,6 +20,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -168,5 +170,46 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(withoutWorkspace?.requireApproval?.description).toBe(
       "Apply a pending workspace skill proposal into live workspace skills.",
     );
+  });
+
+  it("uses runtime config when lifecycle hook config is absent", async () => {
+    setRuntimeConfigSnapshot({
+      skills: {
+        workshop: {
+          approvalPolicy: "auto",
+        },
+      },
+    });
+
+    await expect(
+      resolveSkillWorkshopToolApproval({
+        toolName: "skill_workshop",
+        toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps explicit lifecycle hook config ahead of runtime config", async () => {
+    setRuntimeConfigSnapshot({
+      skills: {
+        workshop: {
+          approvalPolicy: "auto",
+        },
+      },
+    });
+
+    const result = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      config: {
+        skills: {
+          workshop: {
+            approvalPolicy: "pending",
+          },
+        },
+      },
+    });
+
+    expect(result?.requireApproval?.title).toBe("Reject workspace skill proposal");
   });
 });
