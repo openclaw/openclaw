@@ -854,6 +854,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Scope (messages.ackReactionScope)
   - H2: Text streaming
   - H2: Typing reaction fallback
+  - H2: Voice input
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Interactive replies
@@ -862,7 +863,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Events and operational behavior
   - H2: Configuration reference
   - H2: Troubleshooting
-  - H2: Attachment vision reference
+  - H2: Attachment media reference
   - H3: Supported media types
   - H3: Inbound pipeline
   - H3: Thread-root attachment inheritance
@@ -4200,6 +4201,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prerequisites
   - H2: Containerized gateway
   - H3: Manual flow
+  - H3: Upgrading container images
   - H3: Environment variables
   - H3: Observability
   - H3: Health checks
@@ -4468,6 +4470,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Podman and Tailscale
   - H2: Systemd (Quadlet, optional)
   - H2: Config, env, and storage
+  - H2: Upgrading images
   - H2: Useful commands
   - H2: Troubleshooting
   - H2: Related
@@ -7483,6 +7486,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/github-copilot
 - Headings:
   - H2: Three ways to use Copilot in OpenClaw
+  - H2: GitHub Enterprise (data residency)
   - H2: Optional flags
   - H2: Non-interactive onboarding
   - H2: Memory search embeddings
