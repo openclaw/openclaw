@@ -1697,6 +1697,7 @@
                   {
                     "group": "Node features",
                     "pages": [
+                      "nodes/computer-use",
                       "nodes/talk",
                       "nodes/voicewake",
                       "nodes/location-command"

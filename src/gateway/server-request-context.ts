@@ -143,6 +143,14 @@ export function createGatewayRequestContext(
       }
       return connIds;
     },
+    hasConnectedClientsForDevice: (deviceId: string) => {
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.connect.device?.id === deviceId && !gatewayClient.invalidated) {
+          return true;
+        }
+      }
+      return false;
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       for (const gatewayClient of params.clients) {

@@ -589,26 +589,90 @@ describe("package acceptance workflow", () => {
       ["npm_telegram", "Dispatch and monitor npm Telegram E2E"],
       ["performance", "Dispatch and monitor OpenClaw Performance"],
     ] as const;
-
-    for (const [jobName, stepName] of childDispatches) {
+    const dispatchScripts = childDispatches.map(([jobName, stepName]) => {
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
-      const script = workflowStep(job, stepName).run ?? "";
+      return workflowStep(job, stepName).run ?? "";
+    });
 
+    for (const script of dispatchScripts) {
       expect(script.match(/gh workflow run/gu)).toHaveLength(1);
       expect(script).not.toContain("gh_with_retry workflow run");
       expectTextToIncludeAll(script, [
         "A failed dispatch POST can still create a run. Never retry it",
         "set +e",
         "dispatch_status=$?",
+        'if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]',
+        "dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling.",
         'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
         ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
         "Multiple runs matched ${dispatch_run_name}; refusing to guess.",
         "The dispatch was not retried to avoid creating a duplicate child.",
         "adopted exact run ${run_id}",
       ]);
+      expect(script.indexOf("dispatch failed with non-ambiguous status")).toBeLessThan(
+        script.indexOf('run_id=""'),
+      );
+    }
+
+    const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
+    const transientPattern = parsedWorkflow.env?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN;
+    expect(transientPattern).toBeDefined();
+    const transientError = new RegExp(transientPattern ?? "", "u");
+    for (const message of [
+      "could not create workflow dispatch event: HTTP 500: Failed to run workflow dispatch",
+      "gh: HTTP 502",
+      "500 Internal Server Error",
+      "error connecting to api.github.com",
+      "context deadline exceeded",
+      "read: connection reset by peer",
+      "connect: connection refused",
+      "net/http: TLS handshake timeout",
+      "read: i/o timeout",
+      "network is unreachable",
+      "unexpected EOF",
+      'Post "https://api.github.com/repos/openclaw/openclaw/actions/workflows/ci.yml/dispatches": EOF',
+      "EOF",
+      "ETIMEDOUT",
+      "ECONNRESET",
+      "EAI_AGAIN",
+    ]) {
+      expect(transientError.test(message), message).toBe(true);
+    }
+    for (const message of [
+      "HTTP 400: Bad Request",
+      "HTTP 401: Bad credentials",
+      "HTTP 403: Resource not accessible by integration",
+      "HTTP 404: workflow not found",
+      "HTTP 422: Validation Failed",
+      "HTTP 429: too many requests",
+      "unknown flag --field",
+      "EOFError while parsing local input",
+    ]) {
+      expect(transientError.test(message), message).toBe(false);
+    }
+
+    const summaryScript =
+      workflowStep(
+        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
+        "Verify child workflow results",
+      ).run ?? "";
+    for (const script of [...dispatchScripts, summaryScript]) {
+      expect(script.match(/gh_with_retry\(\)/gu)).toHaveLength(1);
+      expectTextToIncludeAll(script, [
+        '"$output" == *"HTTP 429"*',
+        '"$output" == *"abuse detection"*',
+        '"$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN',
+        'return "$status"',
+      ]);
     }
 
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const retryCalls = workflow.split("\n").filter((line) => line.includes("gh_with_retry "));
+    expect(retryCalls).toHaveLength(28);
+    for (const call of retryCalls) {
+      expect(call).toMatch(/gh_with_retry (api|run view)/u);
+    }
+    expect(workflow).not.toMatch(/gh_with_retry (workflow run|run cancel)/u);
     expectTextToIncludeAll(workflow, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"',
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"',

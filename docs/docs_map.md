@@ -3583,6 +3583,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Node event trust boundaries (2026.3.31+)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
+  - H2: Silent pairing supersede cleanup
   - H2: Metadata-upgrade auto-approval
   - H2: QR pairing helpers
   - H2: Locality and forwarded headers
@@ -4678,6 +4679,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety + practical limits
   - H2: macOS screen video (OS-level)
   - H2: Related
+
+## nodes/computer-use.md
+
+- Route: /nodes/computer-use
+- Headings:
+  - H2: Requirements
+  - H2: The computer agent tool
+  - H2: The computer.act node command
+  - H2: Enable and arm
+  - H2: Safety
+  - H2: Relationship to other desktop-control paths
 
 ## nodes/images.md
 
