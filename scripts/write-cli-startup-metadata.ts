@@ -490,6 +490,7 @@ async function spawnText(
           reject(
             new Error(
               `${options.failureMessage}: ${outputStreamError.streamName} read error: ${outputStreamError.error.message}`,
+              { cause: outputStreamError.error },
             ),
           );
           return;
@@ -534,7 +535,9 @@ async function spawnText(
       scheduleKill();
     };
     const failOutputStream = (streamName: "stdout" | "stderr", error: Error) => {
-      if (outputStreamError) {
+      // Keep the first stop cause: killing for a timeout or output cap can make
+      // the stdio pipes fail secondarily while the child is shutting down.
+      if (outputStreamError || timedOut || outputExceeded) {
         return;
       }
       outputStreamError = { streamName, error };

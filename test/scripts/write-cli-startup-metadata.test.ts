@@ -150,6 +150,7 @@ describe("write-cli-startup-metadata", () => {
     async (streamName) => {
       const child = createSpawnTextChild();
       const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+      const streamError = new Error(`${streamName} pipe failed`);
 
       const render = __testing.spawnText(["--help"], {
         cwd: process.cwd(),
@@ -161,15 +162,36 @@ describe("write-cli-startup-metadata", () => {
         timeoutMs: 5_000,
       });
 
-      child[streamName].emit("error", new Error(`${streamName} pipe failed`));
+      child[streamName].emit("error", streamError);
       child.emit("close", null, "SIGTERM");
 
-      await expect(render).rejects.toThrow(
-        `render failed: ${streamName} read error: ${streamName} pipe failed`,
-      );
+      await expect(render).rejects.toMatchObject({
+        message: `render failed: ${streamName} read error: ${streamName} pipe failed`,
+        cause: streamError,
+      });
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     },
   );
+
+  it("preserves an output-limit failure when shutdown also errors a stream", async () => {
+    const child = createSpawnTextChild();
+    const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+    const render = __testing.spawnText(["--help"], {
+      cwd: process.cwd(),
+      env: process.env,
+      failureMessage: "render failed",
+      killGraceMs: 25,
+      maxOutputBytes: 5,
+      spawnProcess,
+      timeoutMs: 5_000,
+    });
+
+    child.stdout.emit("data", "123456");
+    child.stdout.emit("error", new Error("pipe closed during shutdown"));
+    child.emit("close", null, "SIGTERM");
+
+    await expect(render).rejects.toThrow("render failed: output exceeded 5 bytes");
+  });
 
   it("signals Windows command help render process trees with taskkill", () => {
     const childKill = vi.fn(() => true);
