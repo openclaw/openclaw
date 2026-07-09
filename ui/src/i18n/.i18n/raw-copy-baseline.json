@@ -2676,11 +2676,25 @@
       "text": "Claw"
     },
     {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "CPU"
+    },
+    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Dash"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "Disk"
     },
     {
       "count": 1,
@@ -2702,6 +2716,13 @@
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "M"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "Memory"
     },
     {
       "count": 1,
