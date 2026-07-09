@@ -37,6 +37,7 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -93,6 +94,7 @@ import {
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
+const ANTHROPIC_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
 
@@ -400,7 +402,8 @@ async function* iterateSseMessages(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
 ): AsyncGenerator<ServerSentEvent> {
-  const reader = body.getReader();
+  const rawReader = body.getReader();
+  const reader = createSseByteGuard(rawReader, { maxBytes: ANTHROPIC_SSE_STREAM_MAX_BYTES });
   const decoder = new TextDecoder();
   const state: SseDecoderState = { event: null, data: [], raw: [] };
   let buffer = "";
@@ -451,8 +454,16 @@ async function* iterateSseMessages(
       yield trailingEvent;
     }
   } finally {
-    reader.releaseLock();
+    rawReader.releaseLock();
   }
+}
+
+// Exported for testing only.
+export async function* iterateSseMessagesForTest(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<ServerSentEvent> {
+  yield* iterateSseMessages(body, signal);
 }
 
 async function* iterateAnthropicEvents(

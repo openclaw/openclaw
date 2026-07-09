@@ -22,7 +22,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
+import { iterateSseMessagesForTest, streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
   const body = events
@@ -2371,5 +2371,31 @@ describe("Anthropic provider", () => {
     } else {
       expect(capturedPayload).not.toHaveProperty("output_config");
     }
+  });
+
+  it("rejects oversized Anthropic SSE bodies", async () => {
+    const bigPayload = "x".repeat(16 * 1024 * 1024 + 1);
+
+    // Build an SSE response body whose content_block_delta text payload alone
+    // exceeds the 16 MiB guard, so the byte guard fires before the stream ends.
+    const body = new TextEncoder().encode(
+      `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "msg_1", model: "claude", usage: { input_tokens: 0, output_tokens: 0 } } })}\n\n` +
+        `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", content_block: { type: "text", index: 0 } })}\n\n` +
+        `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: bigPayload } })}\n\n` +
+        `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n` +
+        `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1, output_tokens: 1 } })}\n\n` +
+        `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+    );
+
+    // Collect all yielded events; the byte guard overflows on the first
+    // oversized chunk and the async generator throws.
+    await expect(
+      (async () => {
+        const events: unknown[] = [];
+        for await (const event of iterateSseMessagesForTest(new Response(body).body!)) {
+          events.push(event);
+        }
+      })(),
+    ).rejects.toThrow(/exceeds 16777216 bytes/);
   });
 });
