@@ -8,6 +8,7 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   return {
     loading: false,
     nodes: [],
+    lastError: null,
     devicesLoading: false,
     devicesError: null,
     devicesList: {

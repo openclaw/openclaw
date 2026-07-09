@@ -9,6 +9,7 @@ import type {
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
+  lastError: string | null;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
