@@ -63,6 +63,7 @@ export const ar: TranslationMap = {
     docs: "المستندات",
     theme: "السمة",
     colorMode: "وضع اللون",
+    colorModeOption: "وضع اللون: {mode}",
     resources: "الموارد",
     search: "بحث",
     save: "حفظ",
@@ -1538,6 +1539,15 @@ export const ar: TranslationMap = {
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
     archivedSessionDisabled: "استعِد هذه الجلسة لإرسال الرسائل.",
+    taskSuggestions: {
+      eyebrow: "متابعة مقترحة",
+      start: "البدء في شجرة عمل",
+      starting: "جارٍ البدء…",
+      dismiss: "تجاهل {title}",
+      project: "المشروع",
+      instructions: "التعليمات",
+      adminRequired: "يلزم وصول المسؤول لإنشاء شجرة عمل من هذا المشروع.",
+    },
     refreshTitle: "تحديث بيانات الدردشة",
     settings: "إعدادات الدردشة",
     usageRemaining: "الاستخدام المتبقي",

@@ -63,6 +63,7 @@ export const pl: TranslationMap = {
     docs: "Dokumentacja",
     theme: "Motyw",
     colorMode: "Tryb kolorów",
+    colorModeOption: "Tryb kolorów: {mode}",
     resources: "Zasoby",
     search: "Szukaj",
     save: "Zapisz",
@@ -1560,6 +1561,16 @@ export const pl: TranslationMap = {
   chat: {
     disconnected: "Rozłączono z Gateway.",
     archivedSessionDisabled: "Przywróć tę sesję, aby wysyłać wiadomości.",
+    taskSuggestions: {
+      eyebrow: "Sugerowane zadanie uzupełniające",
+      start: "Uruchom w drzewie roboczym",
+      starting: "Uruchamianie…",
+      dismiss: "Odrzuć {title}",
+      project: "Projekt",
+      instructions: "Instrukcje",
+      adminRequired:
+        "Dostęp administratora jest wymagany, aby utworzyć drzewo robocze z tego projektu.",
+    },
     refreshTitle: "Odśwież dane czatu",
     settings: "Ustawienia czatu",
     usageRemaining: "Pozostałe użycie",

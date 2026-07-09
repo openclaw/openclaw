@@ -126,6 +126,22 @@ describe("openclaw-tools update_plan gating", () => {
     expect(enabledTools).toContain("transcripts");
   });
 
+  it("registers task suggestions for gateway-backed sessions", () => {
+    const withoutSession = createFastToolNames({
+      config: {} as OpenClawConfig,
+      cwd: "/repo",
+    });
+    const withSession = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+    });
+
+    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("dismiss_task");
+    expect(withSession).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
+  });
+
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
     const fromRuntimeAllowlist = createOpenClawTools({

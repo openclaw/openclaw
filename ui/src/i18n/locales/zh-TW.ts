@@ -63,6 +63,7 @@ export const zh_TW: TranslationMap = {
     docs: "文檔",
     theme: "主題",
     colorMode: "色彩模式",
+    colorModeOption: "顏色模式：{mode}",
     resources: "資源",
     search: "搜尋",
     save: "儲存",
@@ -1519,6 +1520,15 @@ export const zh_TW: TranslationMap = {
   chat: {
     disconnected: "已斷開與網關的連接。",
     archivedSessionDisabled: "還原此工作階段以傳送訊息。",
+    taskSuggestions: {
+      eyebrow: "建議的後續任務",
+      start: "在工作樹中開始",
+      starting: "正在啟動…",
+      dismiss: "略過 {title}",
+      project: "專案",
+      instructions: "指示",
+      adminRequired: "需要管理員權限才能為此專案建立工作樹。",
+    },
     refreshTitle: "刷新聊天數據",
     settings: "聊天設定",
     usageRemaining: "剩餘用量",

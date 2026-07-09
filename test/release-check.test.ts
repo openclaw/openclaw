@@ -729,6 +729,18 @@ describe("collectMissingPackPaths", () => {
       const packageRoot = join(root, "openclaw");
       const distDir = join(packageRoot, "dist");
       mkdirSync(distDir, { recursive: true });
+      for (const relativePath of [
+        "facade-activation-check.runtime.js",
+        "extensions/image-generation-core/runtime-api.js",
+        "extensions/media-understanding-core/runtime-api.js",
+      ]) {
+        const filePath = join(distDir, relativePath);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, "export {};\n");
+      }
+      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
+        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      }
       writeFileSync(
         join(packageRoot, "package.json"),
         `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
@@ -823,6 +835,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       createPackedPluginSdkTypescriptSmokeProject({
         consumerDir,
         packageSpec: `file:${packageRoot}`,
+        aiPackageSpec: "file:/tmp/openclaw-ai.tgz",
       });
 
       const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
@@ -838,6 +851,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk"');
@@ -885,6 +899,11 @@ describe("resolvePackedTarballPath", () => {
   it("resolves one local npm pack tarball filename inside the pack destination", () => {
     expect(
       resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
     ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
   });
 

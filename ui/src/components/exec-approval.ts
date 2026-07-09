@@ -16,7 +16,7 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
-export type ExecApprovalProps = {
+type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
   error: string | null;
@@ -224,7 +224,7 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
   `;
 }
 
-export class ExecApproval extends LitElement {
+class ExecApproval extends LitElement {
   override createRenderRoot() {
     return this;
   }

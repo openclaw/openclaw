@@ -1,15 +1,20 @@
 import Darwin
 import Foundation
+import ImageIO
 import Markdown
+import Observation
 import SwiftUI
 
 let chatLinkPreviewTitleMaxCharacters = 120
 let chatLinkPreviewDescriptionMaxCharacters = 200
 let chatLinkPreviewBodyMaxBytes = 512 * 1024
+let chatLinkPreviewImageBodyMaxBytes = 1024 * 1024
+let chatLinkPreviewImageMaxPixelSize = 600
+let chatLinkPreviewImageMaxSourcePixels = 64 * 1024 * 1024
 private let chatLinkPreviewMaxRedirects = 3
 private let chatLinkPreviewTimeout: TimeInterval = 6
 private let chatLinkPreviewCacheEntries = 64
-private let chatLinkPreviewAccept = "text/html"
+private let chatLinkPreviewImageCacheEntries = 32
 
 struct ChatLinkPreviewMetadata: Equatable {
     let url: URL
@@ -20,6 +25,23 @@ struct ChatLinkPreviewMetadata: Equatable {
 
 enum ChatLinkPreviewResult: Equatable {
     case loaded(ChatLinkPreviewMetadata)
+    case failed
+}
+
+struct ChatLinkPreviewThumbnail: @unchecked Sendable {
+    let image: CGImage
+
+    var pixelWidth: Int {
+        self.image.width
+    }
+
+    var pixelHeight: Int {
+        self.image.height
+    }
+}
+
+enum ChatLinkPreviewImageResult: @unchecked Sendable {
+    case loaded(ChatLinkPreviewThumbnail)
     case failed
 }
 
@@ -68,7 +90,9 @@ private func chatFirstBareWebURL(in text: String) -> URL? {
 extension String {
     fileprivate func count(of character: Character) -> Int {
         self.reduce(into: 0) { count, current in
-            if current == character { count += 1 }
+            if current == character {
+                count += 1
+            }
         }
     }
 }
@@ -342,13 +366,48 @@ func chatLinkPreviewRedirectURL(
 }
 
 struct ChatLinkPreviewBodyAccumulator {
+    private let maxBytes: Int
     private(set) var data = Data()
 
+    init(maxBytes: Int = chatLinkPreviewBodyMaxBytes) {
+        self.maxBytes = maxBytes
+    }
+
     mutating func append(_ chunk: Data) -> Bool {
-        let remaining = chatLinkPreviewBodyMaxBytes - self.data.count
+        let remaining = self.maxBytes - self.data.count
         guard remaining > 0 else { return true }
         self.data.append(chunk.prefix(remaining))
-        return chunk.count >= remaining
+        return chunk.count > remaining
+    }
+}
+
+private enum ChatLinkPreviewFetchMode {
+    case metadata
+    case image
+
+    var accept: String {
+        switch self {
+        case .metadata: "text/html"
+        case .image: "image/*"
+        }
+    }
+
+    var allowedMIMETypes: Set<String> {
+        switch self {
+        case .metadata: ["text/html"]
+        case .image: ["image/jpeg", "image/png", "image/webp", "image/gif"]
+        }
+    }
+
+    var maxBodyBytes: Int {
+        switch self {
+        case .metadata: chatLinkPreviewBodyMaxBytes
+        case .image: chatLinkPreviewImageBodyMaxBytes
+        }
+    }
+
+    var rejectsCappedBody: Bool {
+        self == .image
     }
 }
 
@@ -374,16 +433,45 @@ final class ChatLinkPreviewFetcher: @unchecked Sendable {
     }
 
     func fetch(_ originalURL: URL) async -> ChatLinkPreviewResult {
+        guard let response = await self.fetchResponse(originalURL, mode: .metadata),
+              let html = String(bytes: response.data, encoding: .utf8)
+        else { return .failed }
+        return switch parseChatOpenGraph(html: html, baseURL: response.url) {
+        case let .loaded(metadata):
+            .loaded(ChatLinkPreviewMetadata(
+                url: originalURL,
+                title: metadata.title,
+                description: metadata.description,
+                imageURL: metadata.imageURL))
+        case .failed:
+            .failed
+        }
+    }
+
+    func fetchImage(_ originalURL: URL) async -> ChatLinkPreviewImageResult {
+        guard let response = await self.fetchResponse(originalURL, mode: .image),
+              let thumbnail = chatDecodeLinkPreviewThumbnail(
+                  response.data,
+                  mimeType: response.mimeType)
+        else { return .failed }
+        return .loaded(thumbnail)
+    }
+
+    private func fetchResponse(
+        _ originalURL: URL,
+        mode: ChatLinkPreviewFetchMode) async -> ChatLinkPreviewResponse?
+    {
         guard chatSafeWebURL(originalURL.absoluteString) != nil, self.hostPolicy(originalURL) else {
-            return .failed
+            return nil
         }
         let delegate = ChatLinkPreviewSessionDelegate(
+            mode: mode,
             hostPolicy: self.hostPolicy,
             connectionPolicy: self.connectionPolicy)
         let session = URLSession(configuration: self.configuration, delegate: delegate, delegateQueue: nil)
         var request = URLRequest(url: originalURL, timeoutInterval: self.timeout)
         request.httpMethod = "GET"
-        request.setValue(chatLinkPreviewAccept, forHTTPHeaderField: "Accept")
+        request.setValue(mode.accept, forHTTPHeaderField: "Accept")
         request.httpShouldHandleCookies = false
         let task = session.dataTask(with: request)
         let deadline = Task {
@@ -402,20 +490,7 @@ final class ChatLinkPreviewFetcher: @unchecked Sendable {
         deadline.cancel()
         session.finishTasksAndInvalidate()
 
-        guard
-            let response,
-            let html = String(bytes: response.data, encoding: .utf8)
-        else { return .failed }
-        return switch parseChatOpenGraph(html: html, baseURL: response.url) {
-        case let .loaded(metadata):
-            .loaded(ChatLinkPreviewMetadata(
-                url: originalURL,
-                title: metadata.title,
-                description: metadata.description,
-                imageURL: metadata.imageURL))
-        case .failed:
-            .failed
-        }
+        return response
     }
 
     private static func publicConnectionsOnly(_ addresses: [String?]) -> Bool {
@@ -442,16 +517,19 @@ extension URLSessionConfiguration {
 
 private struct ChatLinkPreviewResponse {
     let url: URL
+    let mimeType: String
     let data: Data
 }
 
 private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
+    private let mode: ChatLinkPreviewFetchMode
     private let hostPolicy: ChatLinkPreviewFetcher.HostPolicy
     private let connectionPolicy: ChatLinkPreviewFetcher.ConnectionPolicy
     private var continuation: CheckedContinuation<ChatLinkPreviewResponse?, Never>?
     private var responseURL: URL?
-    private var body = ChatLinkPreviewBodyAccumulator()
+    private var body: ChatLinkPreviewBodyAccumulator
+    private var responseMIMEType: String?
     private var redirectCount = 0
     private var remoteAddresses: [String?] = []
     private var bodyCapped = false
@@ -459,11 +537,14 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
     private var completed = false
 
     init(
+        mode: ChatLinkPreviewFetchMode,
         hostPolicy: @escaping ChatLinkPreviewFetcher.HostPolicy,
         connectionPolicy: @escaping ChatLinkPreviewFetcher.ConnectionPolicy)
     {
+        self.mode = mode
         self.hostPolicy = hostPolicy
         self.connectionPolicy = connectionPolicy
+        self.body = ChatLinkPreviewBodyAccumulator(maxBytes: mode.maxBodyBytes)
     }
 
     func start(_ continuation: CheckedContinuation<ChatLinkPreviewResponse?, Never>) {
@@ -497,7 +578,9 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
                 request: request,
                 redirectCount: self.redirectCount,
                 hostPolicy: self.hostPolicy)
-            if url != nil { self.redirectCount += 1 }
+            if url != nil {
+                self.redirectCount += 1
+            }
             return url
         }
         completionHandler(nextURL == nil ? nil : request)
@@ -511,24 +594,32 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
     {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
-              http.mimeType?.lowercased() == "text/html",
+              let mimeType = http.mimeType?.lowercased(),
+              self.mode.allowedMIMETypes.contains(mimeType),
               let url = http.url
         else {
             self.lock.withLock { self.failed = true }
             completionHandler(.cancel)
             return
         }
-        self.lock.withLock { self.responseURL = url }
+        self.lock.withLock {
+            self.responseURL = url
+            self.responseMIMEType = mimeType
+        }
         completionHandler(.allow)
     }
 
     func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let reachedCap = self.lock.withLock {
             let reachedCap = self.body.append(data)
-            if reachedCap { self.bodyCapped = true }
+            if reachedCap {
+                self.bodyCapped = true
+            }
             return reachedCap
         }
-        if reachedCap { dataTask.cancel() }
+        if reachedCap {
+            dataTask.cancel()
+        }
     }
 
     func urlSession(_: URLSession, task _: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
@@ -545,9 +636,14 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
             guard !self.failed,
                   error == nil || self.bodyCapped,
                   let responseURL,
+                  let responseMIMEType,
+                  !(self.mode.rejectsCappedBody && self.bodyCapped),
                   self.connectionPolicy(self.remoteAddresses)
             else { return nil }
-            return ChatLinkPreviewResponse(url: responseURL, data: self.body.data)
+            return ChatLinkPreviewResponse(
+                url: responseURL,
+                mimeType: responseMIMEType,
+                data: self.body.data)
         }
         self.complete(result)
     }
@@ -561,6 +657,34 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
         }
         continuation?.resume(returning: result)
     }
+}
+
+func chatDecodeLinkPreviewThumbnail(
+    _ data: Data,
+    mimeType: String,
+    maxSourcePixels: Int = chatLinkPreviewImageMaxSourcePixels) -> ChatLinkPreviewThumbnail?
+{
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+          CGImageSourceGetCount(source) > 0,
+          mimeType != "image/gif" || CGImageSourceGetCount(source) == 1,
+          let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+          let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+          let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+          width > 0,
+          height > 0,
+          height <= maxSourcePixels,
+          width <= maxSourcePixels / height
+    else { return nil }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: chatLinkPreviewImageMaxPixelSize,
+        kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return nil
+    }
+    return ChatLinkPreviewThumbnail(image: image)
 }
 
 @MainActor
@@ -583,6 +707,43 @@ final class ChatLinkPreviewStore {
             return cached
         }
         let result = await self.fetch(url)
+        guard !Task.isCancelled else { return result }
+        self.cache[url] = result
+        self.touch(url)
+        while self.recency.count > self.maxEntries, let evicted = self.recency.first {
+            self.recency.removeFirst()
+            self.cache.removeValue(forKey: evicted)
+        }
+        return result
+    }
+
+    private func touch(_ url: URL) {
+        self.recency.removeAll { $0 == url }
+        self.recency.append(url)
+    }
+}
+
+@MainActor
+final class ChatLinkPreviewImageStore {
+    typealias Fetch = @Sendable (URL) async -> ChatLinkPreviewImageResult
+
+    private let fetch: Fetch
+    private let maxEntries: Int
+    private var cache: [URL: ChatLinkPreviewImageResult] = [:]
+    private var recency: [URL] = []
+
+    init(maxEntries: Int = chatLinkPreviewImageCacheEntries, fetch: @escaping Fetch) {
+        self.maxEntries = maxEntries
+        self.fetch = fetch
+    }
+
+    func get(_ url: URL) async -> ChatLinkPreviewImageResult {
+        if let cached = self.cache[url] {
+            self.touch(url)
+            return cached
+        }
+        let result = await self.fetch(url)
+        guard !Task.isCancelled else { return result }
         self.cache[url] = result
         self.touch(url)
         while self.recency.count > self.maxEntries, let evicted = self.recency.first {
@@ -602,18 +763,67 @@ final class ChatLinkPreviewStore {
 private let chatLinkPreviewStore = ChatLinkPreviewStore(fetch: ChatLinkPreviewFetcher().fetch)
 
 @MainActor
+private let chatLinkPreviewImageStore = ChatLinkPreviewImageStore(fetch: ChatLinkPreviewFetcher().fetchImage)
+
+@MainActor
+@Observable
+final class ChatLinkPreviewModel {
+    typealias MetadataFetch = @Sendable (URL) async -> ChatLinkPreviewResult
+    typealias ImageFetch = @Sendable (URL) async -> ChatLinkPreviewImageResult
+
+    var expanded = false
+    private(set) var result: ChatLinkPreviewResult?
+    private(set) var imageResult: ChatLinkPreviewImageResult?
+    private let metadataFetch: MetadataFetch
+    private let imageFetch: ImageFetch
+
+    init(metadataFetch: @escaping MetadataFetch, imageFetch: @escaping ImageFetch) {
+        self.metadataFetch = metadataFetch
+        self.imageFetch = imageFetch
+    }
+
+    var imageURL: URL? {
+        guard case let .loaded(metadata) = self.result else { return nil }
+        return metadata.imageURL
+    }
+
+    func loadMetadata(_ url: URL) async {
+        guard self.expanded, self.result == nil else { return }
+        self.result = await self.metadataFetch(url)
+    }
+
+    func loadImage() async {
+        guard self.expanded,
+              self.imageResult == nil,
+              let imageURL = self.imageURL
+        else { return }
+        let result = await self.imageFetch(imageURL)
+        guard !Task.isCancelled else { return }
+        self.imageResult = result
+    }
+}
+
+@MainActor
 struct ChatLinkPreview: View {
     @Environment(\.openURL) private var openURL
     let url: URL
-    @State private var expanded = false
-    @State private var result: ChatLinkPreviewResult?
+    @State private var model: ChatLinkPreviewModel
+
+    init(url: URL) {
+        self.url = url
+        self._model = State(initialValue: ChatLinkPreviewModel(
+            metadataFetch: chatLinkPreviewStore.get,
+            imageFetch: chatLinkPreviewImageStore.get))
+    }
 
     var body: some View {
-        if self.expanded {
+        if self.model.expanded {
             self.expandedCard
                 .task(id: self.url) {
-                    guard self.result == nil else { return }
-                    self.result = await chatLinkPreviewStore.get(self.url)
+                    await self.model.loadMetadata(self.url)
+                }
+                .task(id: self.model.imageURL) {
+                    await self.model.loadImage()
                 }
         } else {
             self.collapsedChip
@@ -622,7 +832,7 @@ struct ChatLinkPreview: View {
 
     private var collapsedChip: some View {
         Button {
-            self.expanded = true
+            self.model.expanded = true
         } label: {
             HStack(spacing: 6) {
                 Text("Preview · \(self.domain)")
@@ -651,11 +861,20 @@ struct ChatLinkPreview: View {
             self.openURL(self.url)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
+                if case let .loaded(thumbnail) = self.model.imageResult {
+                    Image(decorative: thumbnail.image, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 120)
+                        .clipped()
+                        .accessibilityHidden(true)
+                }
                 Text(self.domain)
                     .font(OpenClawChatTypography.caption2)
                     .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.65))
                     .lineLimit(1)
-                switch self.result {
+                switch self.model.result {
                 case nil:
                     Text("Loading preview…")
                         .font(OpenClawChatTypography.caption)

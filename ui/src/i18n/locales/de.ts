@@ -63,6 +63,7 @@ export const de: TranslationMap = {
     docs: "Dokumentation",
     theme: "Design",
     colorMode: "Farbmodus",
+    colorModeOption: "Farbmodus: {mode}",
     resources: "Ressourcen",
     search: "Suchen",
     save: "Speichern",
@@ -1568,6 +1569,16 @@ export const de: TranslationMap = {
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     archivedSessionDisabled: "Stellen Sie diese Sitzung wieder her, um Nachrichten zu senden.",
+    taskSuggestions: {
+      eyebrow: "Vorgeschlagene Folgeaufgabe",
+      start: "In Worktree starten",
+      starting: "Wird gestartet…",
+      dismiss: "{title} verwerfen",
+      project: "Projekt",
+      instructions: "Anweisungen",
+      adminRequired:
+        "Administratorzugriff ist erforderlich, um einen Worktree für dieses Projekt zu erstellen.",
+    },
     refreshTitle: "Chat-Daten aktualisieren",
     settings: "Chat-Einstellungen",
     usageRemaining: "Verbleibende Nutzung",

@@ -206,6 +206,27 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("requires a startup migration checkpoint for foreground gateway startup", async () => {
+    await runEnsureConfigReady(["gateway"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+  });
+
+  it("does not require a startup migration checkpoint for gateway probes", async () => {
+    await runEnsureConfigReady(["gateway", "health"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it("runs doctor flow for legacy sessions without task sidecars", async () => {
     const root = useTempOpenClawHome();
     fs.mkdirSync(path.join(root, ".openclaw", "sessions"), { recursive: true });

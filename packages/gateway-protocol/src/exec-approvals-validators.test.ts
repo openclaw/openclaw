@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   validateExecApprovalRequestParams,
+  validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "./index.js";
@@ -42,6 +43,78 @@ describe("exec approvals protocol validators", () => {
         baseHash: "abc123",
       }),
     ).toBe(true);
+  });
+
+  it("accepts the shipped Windows node approval contract", () => {
+    expect(
+      validateExecApprovalsNodeSnapshot({
+        enabled: true,
+        hash: "sha256:current",
+        baseHash: "sha256:current",
+        defaultAction: "deny",
+        constraints: {
+          baseHashRequired: true,
+          defaultAllowAllowed: false,
+          broadAllowRulesAllowed: false,
+          dangerousAllowRulesAllowed: false,
+        },
+        rules: [{ pattern: "hostname", action: "allow", enabled: true }],
+      }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalsNodeSnapshot({ enabled: false, message: "No exec policy configured" }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "windows-node",
+        native: { defaultAction: "deny", rules: [] },
+        baseHash: "sha256:current",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects ambiguous or unsafe host-native approval payloads", () => {
+    for (const snapshot of [
+      {},
+      { hash: "sha256:current" },
+      { enabled: true, hash: "sha256:current", defaultAction: "deny" },
+      { enabled: true, hash: "sha256:current", defaultAction: "full", rules: [] },
+      {
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+        defaultAction: "deny",
+      },
+      {
+        enabled: true,
+        hash: "sha256:current",
+        defaultAction: "deny",
+        rules: [],
+        message: "mixed state",
+      },
+      { enabled: false, rules: [] },
+    ]) {
+      expect(validateExecApprovalsNodeSnapshot(snapshot)).toBe(false);
+    }
+
+    for (const params of [
+      { nodeId: "windows-node", native: {}, baseHash: "sha256:current" },
+      {
+        nodeId: "windows-node",
+        native: { defaultAction: "deny" },
+        baseHash: "sha256:current",
+      },
+      { nodeId: "windows-node", native: { defaultAction: "full" }, baseHash: "sha256:current" },
+      { nodeId: "windows-node", native: { rules: [] } },
+      {
+        nodeId: "windows-node",
+        native: { rules: [{ pattern: "", action: "allow" }] },
+        baseHash: "sha256:current",
+      },
+    ]) {
+      expect(validateExecApprovalsNodeSetParams(params)).toBe(false);
+    }
   });
 
   it("rejects unknown allowlist metadata", () => {

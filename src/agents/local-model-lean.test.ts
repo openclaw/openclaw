@@ -10,6 +10,7 @@ import {
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
+  shouldCatalogToolForLocalModelLean,
 } from "./local-model-lean.js";
 
 function tools(names: string[]): AnyAgentTool[] {
@@ -334,5 +335,10 @@ describe("local model lean tool filtering", () => {
     };
 
     expect(applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" })).toBe(cfg);
+  });
+
+  it("keeps exec outside the lean Tool Search catalog", () => {
+    expect(shouldCatalogToolForLocalModelLean({ name: "exec" } as AnyAgentTool)).toBe(false);
+    expect(shouldCatalogToolForLocalModelLean({ name: "read" } as AnyAgentTool)).toBe(true);
   });
 });

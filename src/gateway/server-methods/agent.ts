@@ -60,7 +60,7 @@ import {
 } from "../../agents/run-timeout-attribution.js";
 import {
   normalizeSpawnedRunMetadata,
-  resolveIngressWorkspaceOverrideForSpawnedRun,
+  resolveIngressWorkspaceOverrideForSessionRun,
 } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -97,6 +97,7 @@ import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
+  resolveAgentExplicitRecipientSession,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
@@ -1312,10 +1313,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     const ownerDeviceId =
       typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined;
     const reservePreAcceptedAgentDedupe = (sessionKey?: string, dedupeAgentId?: string) => {
-      if (agentDedupeReserved || !sessionKey) {
+      if (agentDedupeReserved) {
         return;
       }
-      const dedupeSessionResolvesGlobal = resolveSessionStoreKey({ cfg, sessionKey }) === "global";
+      const dedupeSessionResolvesGlobal = sessionKey
+        ? resolveSessionStoreKey({ cfg, sessionKey }) === "global"
+        : false;
       const acceptedAt = Date.now();
       const pendingTimeoutMs = resolveAgentTimeoutMs({
         cfg,
@@ -1331,8 +1334,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             reservationId: agentReservationId,
             status: "accepted" as const,
-            sessionKey,
-            ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(dedupeAgentId && (!sessionKey || dedupeSessionResolvesGlobal)
+              ? { agentId: dedupeAgentId }
+              : {}),
             controlUiVisible: !suppressVisibleSessionEffects,
             acceptedAt,
             dedupeKeys: agentDedupeKeys,
@@ -1347,7 +1352,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       agentDedupeReserved = true;
     };
-    const clearUnacceptedExecApprovalFollowupDedupe = () => {
+    const clearUnacceptedAgentDedupe = () => {
       if (!agentDedupeReserved || agentRunAccepted) {
         return;
       }
@@ -1504,8 +1509,50 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId = inferredAgentId;
       }
     }
+    const explicitRecipientChannel = normalizeMessageChannel(request.channel);
+    const explicitRecipient =
+      !requestedSessionKeyRaw &&
+      !requestedSessionId &&
+      agentId &&
+      explicitRecipientChannel &&
+      isDeliverableMessageChannel(explicitRecipientChannel) &&
+      requestedToRaw
+        ? { agentId, channel: explicitRecipientChannel, to: requestedToRaw }
+        : undefined;
+    let explicitRecipientSession:
+      | Awaited<ReturnType<typeof resolveAgentExplicitRecipientSession>>
+      | undefined;
+    if (explicitRecipient) {
+      // Route lookup can load provider-owned normalization. Reserve before awaiting it so retries
+      // cannot start a second run while the canonical session key is still being determined.
+      reservePreAcceptedAgentDedupe(undefined, explicitRecipient.agentId);
+      try {
+        explicitRecipientSession = await resolveAgentExplicitRecipientSession({
+          cfg,
+          agentId: explicitRecipient.agentId,
+          channel: explicitRecipient.channel,
+          to: explicitRecipient.to,
+          accountId: normalizeOptionalString(request.accountId),
+          threadId: request.threadId,
+        });
+      } catch (err) {
+        clearUnacceptedAgentDedupe();
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        return;
+      }
+    }
+    if (explicitRecipientSession?.error) {
+      clearUnacceptedAgentDedupe();
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, explicitRecipientSession.error.message),
+      );
+      return;
+    }
     let requestedSessionKey =
       requestedSessionKeyRaw ??
+      explicitRecipientSession?.sessionKey ??
       (!requestedSessionId
         ? resolveExplicitAgentSessionKey({
             cfg,
@@ -1541,6 +1588,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       requestedSessionKey &&
       respondUnavailableAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
     ) {
+      clearUnacceptedAgentDedupe();
       return;
     }
     // Drop an exec-approval followup whose session key was rebound by /new or
@@ -1594,7 +1642,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKey }) === "global"
         ? "global"
         : requestedSessionKey;
-    reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
+    if (preAcceptedReservedSessionKey) {
+      reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
+    }
     const preAttachmentSession = requestedSessionKey
       ? (() => {
           const loaded = loadSessionEntry(requestedSessionKey, {
@@ -1714,7 +1764,10 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
       const replyTo = normalizeOptionalString(request.replyTo) ?? "";
-      const to = sessionKeyFromTo ? "" : (requestedToRaw ?? "");
+      const recipientChannel = explicitRecipientSession?.channel ?? request.channel;
+      const recipientAccountId = explicitRecipientSession?.accountId ?? request.accountId;
+      const recipientThreadId = explicitRecipientSession?.threadId ?? request.threadId;
+      const to = sessionKeyFromTo ? "" : (explicitRecipientSession?.to ?? requestedToRaw ?? "");
       const explicitVoiceWakeSessionTarget =
         !agentId && requestedSessionKeyRaw
           ? (() => {
@@ -2169,7 +2222,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
           resetOverride: resolveChannelResetConfig({
             sessionCfg: cfgLocal.session,
-            channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
+            channel: entry?.lastChannel ?? entry?.channel ?? recipientChannel,
           }),
         });
         const lifecycleTimestamps = entry
@@ -2277,12 +2330,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           freshness: typeof freshness;
         };
         const requestDeliveryHint = normalizeDeliveryContext({
-          channel: request.channel?.trim(),
+          channel: recipientChannel?.trim(),
           to,
-          accountId: request.accountId?.trim(),
+          accountId: recipientAccountId?.trim(),
           // Pass threadId directly — normalizeDeliveryContext handles both
           // string and numeric threadIds (e.g., Matrix uses integers).
-          threadId: request.threadId,
+          threadId: recipientThreadId,
         });
         const buildSessionPatch = (
           freshEntry: SessionEntry | undefined,
@@ -2359,7 +2412,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             deliveryContext: effectiveDelivery,
           });
           const labelValue = normalizeOptionalString(request.label) || freshEntry?.label;
-          const channelValue = freshEntry?.channel ?? request.channel?.trim();
+          const channelValue = freshEntry?.channel ?? recipientChannel?.trim();
           const pluginOwnerId =
             freshEntry === undefined
               ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
@@ -2791,19 +2844,19 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const wantsDelivery = request.deliver === true;
       const explicitTo = replyTo || to || undefined;
-      const explicitThreadId = normalizeOptionalString(request.threadId);
-      const turnSourceChannel = normalizeOptionalString(request.channel);
+      const explicitThreadId = normalizeOptionalString(recipientThreadId);
+      const turnSourceChannel = normalizeOptionalString(recipientChannel);
       const turnSourceTo = to || undefined;
-      const turnSourceAccountId = normalizeOptionalString(request.accountId);
+      const turnSourceAccountId = normalizeOptionalString(recipientAccountId);
       const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
         cfg: cfgForAgent ?? cfg,
         agentId: activeSessionAgentId,
         currentSessionKey: resolvedSessionKey,
         sessionEntry,
-        requestedChannel: request.replyChannel ?? request.channel,
+        requestedChannel: request.replyChannel ?? recipientChannel,
         explicitTo,
         explicitThreadId,
-        accountId: request.replyAccountId ?? request.accountId,
+        accountId: request.replyAccountId ?? recipientAccountId,
         wantsDelivery,
         turnSourceChannel,
         turnSourceTo,
@@ -3315,9 +3368,10 @@ export const agentHandlers: GatewayRequestHandlers = {
                 }
               },
               // Internal-only: allow workspace override for spawned subagent runs.
-              workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
+              workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
                 spawnedBy: spawnedByValue,
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+                cwd: sessionEntry?.spawnedCwd,
               }),
               cwd: resolveSessionRuntimeCwd({
                 requestedCwd: request.cwd,
@@ -3368,7 +3422,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (!gatewayAdmissionTransferred) {
         gatewayWorkAdmission?.release();
       }
-      clearUnacceptedExecApprovalFollowupDedupe();
+      clearUnacceptedAgentDedupe();
     }
   },
   "agent.identity.get": ({ params, respond, context }) => {

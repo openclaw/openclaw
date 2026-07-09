@@ -63,6 +63,7 @@ export const ru: TranslationMap = {
     docs: "Документация",
     theme: "Тема",
     colorMode: "Цветовой режим",
+    colorModeOption: "Цветовой режим: {mode}",
     resources: "Ресурсы",
     search: "Поиск",
     save: "Сохранить",
@@ -1569,6 +1570,16 @@ export const ru: TranslationMap = {
   chat: {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",
+    taskSuggestions: {
+      eyebrow: "Предлагаемая следующая задача",
+      start: "Начать в рабочем дереве",
+      starting: "Запуск…",
+      dismiss: "Отклонить {title}",
+      project: "Проект",
+      instructions: "Инструкции",
+      adminRequired:
+        "Для создания рабочего дерева из этого проекта необходим доступ администратора.",
+    },
     refreshTitle: "Обновить данные чата",
     settings: "Настройки чата",
     usageRemaining: "Оставшееся использование",

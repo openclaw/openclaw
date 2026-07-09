@@ -3,6 +3,7 @@ import type {
   FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
+  SessionRunStatus,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
@@ -11,6 +12,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
@@ -61,10 +63,17 @@ export type SessionListOptions = {
   append?: boolean;
 };
 
-export type SessionRefreshOptions = SessionListOptions & {
+type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
   backgroundHydrate?: boolean;
+};
+
+export type SessionRunTerminal = {
+  sessionKeys: readonly string[];
+  runId?: string | null;
+  status: Exclude<SessionRunStatus, "running">;
+  endedAt: number;
 };
 
 export type SessionPatch = {
@@ -80,29 +89,29 @@ export type SessionPatch = {
   unread?: boolean;
 };
 
-export type SessionDeleteOptions = {
+type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
 };
 
-export type SessionDeleteTarget = {
+type SessionDeleteTarget = {
   key: string;
   agentId?: string;
 };
 
-export type SessionDeleteBatchResult = {
+type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
 };
 
-export type SessionCompactResult = {
+type SessionCompactResult = {
   ok?: boolean;
   compacted?: boolean;
   reason?: string;
   result?: { tokensBefore?: number; tokensAfter?: number };
 };
 
-export type SessionSteerResult = {
+type SessionSteerResult = {
   runId?: string;
   status?: unknown;
 };
@@ -111,7 +120,7 @@ export type SessionResetOptions = {
   agentId?: string | null;
 };
 
-export type SessionGateway = {
+type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -125,7 +134,7 @@ export type SessionGateway = {
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-export type SessionMessageSubscription = {
+type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
 };
@@ -139,6 +148,7 @@ export type SessionCapability = {
     options?: SessionReconcileOptions,
   ) => boolean;
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
+  reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
@@ -299,7 +309,7 @@ function requestSessionPatch(
   });
 }
 
-export function requestSessionDelete(
+function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
@@ -481,6 +491,66 @@ function canReconcileSessionEvent(options: SessionListOptions): boolean {
     options.includeUnknown !== false &&
     options.configuredAgentsOnly !== true
   );
+}
+
+export function reconcileSessionRunTerminal(
+  result: SessionsListResult | null,
+  terminal: SessionRunTerminal,
+): SessionsListResult | null {
+  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  if (!result || keys.length === 0) {
+    return result;
+  }
+  const runId = terminal.runId?.trim() || null;
+  let changed = false;
+  const sessions = result.sessions.map((row): GatewaySessionRow => {
+    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
+      return row;
+    }
+    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+      // Active rows without matching identity may describe a newer or embedded
+      // run. Only terminalize an active row when this event owns its run ID.
+      if (!runId || !row.activeRunIds?.includes(runId)) {
+        return row;
+      }
+    }
+    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
+    if (remainingRunIds?.length) {
+      changed = true;
+      return {
+        ...row,
+        activeRunIds: remainingRunIds,
+        hasActiveRun: true,
+        status: "running" as const,
+      };
+    }
+    const endedAt = row.endedAt ?? terminal.endedAt;
+    const runtimeMs =
+      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
+    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
+    const abortedLastRun = terminal.status === "killed" ? true : row.abortedLastRun;
+    if (
+      row.hasActiveRun === false &&
+      row.status === terminal.status &&
+      row.endedAt === endedAt &&
+      row.runtimeMs === runtimeMs &&
+      row.activeRunIds === activeRunIds &&
+      row.abortedLastRun === abortedLastRun
+    ) {
+      return row;
+    }
+    changed = true;
+    return {
+      ...row,
+      activeRunIds,
+      hasActiveRun: false,
+      status: terminal.status,
+      endedAt,
+      runtimeMs,
+      abortedLastRun,
+    };
+  });
+  return changed ? { ...result, sessions } : result;
 }
 
 export function createSessionCapability(gateway: SessionGateway): SessionCapability {
@@ -737,6 +807,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
     }
     return reconciled;
+  };
+
+  const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
+    const result = reconcileSessionRunTerminal(state.result, terminal);
+    if (result === state.result) {
+      return false;
+    }
+    publish({ ...state, result, error: null });
+    return true;
   };
 
   const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
@@ -1031,6 +1110,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     list: requestList,
     reconcile,
     reconcileChanged,
+    reconcileRunTerminal,
     refresh,
     create,
     patch,

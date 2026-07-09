@@ -321,6 +321,11 @@ private data class AndroidChatStores(
   val commandOutbox: ChatCommandOutbox,
 )
 
+internal enum class NodeRuntimeMode {
+  Live,
+  ScreenshotFixture,
+}
+
 private fun openAndroidChatStores(context: Context): AndroidChatStores {
   val database = ChatCacheDatabase.open(context.applicationContext)
   return AndroidChatStores(
@@ -334,6 +339,7 @@ class NodeRuntime private constructor(
   val prefs: SecurePrefs,
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
   chatStores: AndroidChatStores,
+  internal val mode: NodeRuntimeMode,
 ) {
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
@@ -363,6 +369,19 @@ class NodeRuntime private constructor(
     prefs = prefs,
     tlsFingerprintProbe = tlsFingerprintProbe,
     chatStores = openAndroidChatStores(context),
+    mode = NodeRuntimeMode.Live,
+  )
+
+  internal constructor(
+    context: Context,
+    prefs: SecurePrefs,
+    mode: NodeRuntimeMode,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
+    chatStores = openAndroidChatStores(context),
+    mode = mode,
   )
 
   internal constructor(
@@ -378,6 +397,7 @@ class NodeRuntime private constructor(
         transcriptCache = chatTranscriptCache,
         commandOutbox = RoomChatCommandOutbox(ChatCacheDatabase.open(context.applicationContext)),
       ),
+    mode = NodeRuntimeMode.Live,
   )
 
   /**
@@ -661,6 +681,10 @@ class NodeRuntime private constructor(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
+  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
+  // clear it so the newly connected gateway's canonical main agent wins again.
+  @Volatile private var selectedChatAgentId: String? = null
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -818,6 +842,7 @@ class NodeRuntime private constructor(
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
     _gatewayDefaultAgentId.value = null
     _gatewayAgents.value = emptyList()
+    selectedChatAgentId = null
     _modelCatalog.value = emptyList()
     _modelAuthProviders.value = emptyList()
     _modelCatalogRefreshing.value = false
@@ -979,28 +1004,39 @@ class NodeRuntime private constructor(
   }
 
   init {
-    scope.launch { notificationOutbox.deliver() }
-    DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      notificationOutbox.enqueue(
-        PendingNotificationNodeEvent(
-          event = event,
-          payloadJson = payloadJson,
-          gatewayId = prefs.gatewayRegistry.activeStableId.value,
-        ),
-      )
+    if (mode == NodeRuntimeMode.Live) {
+      scope.launch { notificationOutbox.deliver() }
+      DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
+        notificationOutbox.enqueue(
+          PendingNotificationNodeEvent(
+            event = event,
+            payloadJson = payloadJson,
+            gatewayId = prefs.gatewayRegistry.activeStableId.value,
+          ),
+        )
+      }
     }
   }
 
   private val chat: ChatController =
-    ChatController(
-      scope = scope,
-      session = operatorSession,
-      json = json,
-      transcriptCache = chatTranscriptCache,
-      cacheScope = ::chatCacheScope,
-      commandOutbox = chatCommandOutbox,
-      recordModelRecent = prefs::recordModelRecent,
-    ).also {
+    when (mode) {
+      NodeRuntimeMode.Live ->
+        ChatController(
+          scope = scope,
+          session = operatorSession,
+          json = json,
+          transcriptCache = chatTranscriptCache,
+          cacheScope = ::chatCacheScope,
+          commandOutbox = chatCommandOutbox,
+          recordModelRecent = prefs::recordModelRecent,
+        )
+      NodeRuntimeMode.ScreenshotFixture ->
+        ChatController(
+          scope = scope,
+          json = json,
+          requestGateway = AndroidScreenshotFixture::request,
+        )
+    }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
 
@@ -1267,6 +1303,7 @@ class NodeRuntime private constructor(
   }
 
   fun refreshHomeCanvasOverviewIfConnected() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (!operatorConnected) {
       updateHomeCanvasState()
       return
@@ -1287,22 +1324,26 @@ class NodeRuntime private constructor(
   }
 
   fun refreshModelCatalog() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshModelCatalogFromGateway()
     }
   }
 
   fun refreshTalkSetupReadiness() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch { refreshTalkSetupReadinessFromGateway() }
   }
 
   fun refreshAgents() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshAgentsFromGateway()
     }
   }
 
   fun refreshCronJobs() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshCronFromGateway()
     }
@@ -1323,24 +1364,28 @@ class NodeRuntime private constructor(
   }
 
   fun refreshUsage() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshUsageFromGateway()
     }
   }
 
   fun refreshSkills() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshSkillsFromGateway()
     }
   }
 
   fun refreshNodesDevices() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshNodesDevicesFromGateway()
     }
   }
 
   fun refreshExecApprovals() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshExecApprovalsFromGateway()
     }
@@ -1359,18 +1404,21 @@ class NodeRuntime private constructor(
   }
 
   fun refreshChannels() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshChannelsFromGateway()
     }
   }
 
   fun refreshDreaming() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshDreamingFromGateway()
     }
   }
 
   fun refreshHealthLogs() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshHealthLogsFromGateway()
     }
@@ -1538,20 +1586,60 @@ class NodeRuntime private constructor(
 
   fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
+  private fun applyScreenshotFixture() {
+    check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    _serverName.value = "OpenClaw Gateway"
+    _remoteAddress.value = "Mac Studio on local network"
+    _gatewayVersion.value = BuildConfig.VERSION_NAME
+    _gatewayDefaultAgentId.value = "main"
+    _gatewayAgents.value = AndroidScreenshotFixture.agents
+    _modelCatalog.value = AndroidScreenshotFixture.models
+    _modelAuthProviders.value = AndroidScreenshotFixture.providers
+    _talkSetupReadiness.value =
+      GatewayTalkSetupReadiness(
+        realtimeTalk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
+        dictation = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
+      )
+    _cronStatus.value =
+      GatewayCronStatus(
+        enabled = true,
+        jobs = 2,
+        nextWakeAtMs = 1_783_641_600_000,
+      )
+    _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
+    _channelsSummary.value = AndroidScreenshotFixture.channels
+    _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Approved
+    _mainSessionKey.value = AndroidScreenshotFixture.mainSessionKey
+    chat.applyMainSessionKey(AndroidScreenshotFixture.mainSessionKey)
+    updateStatus {
+      operatorConnected = true
+      operatorStatusText = "Connected"
+      _nodeConnected.value = true
+      nodeStatusText = "Connected"
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+    }
+    chat.refreshSessions(limit = 20)
+  }
+
   init {
-    if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
-      prefs.setVoiceWakeMode(VoiceWakeMode.Off)
-    }
-
-    if (prefs.voiceMicEnabled.value) {
-      setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
-    }
-
-    scope.launch(Dispatchers.Default) {
-      gateways.collect { list ->
-        seedLastDiscoveredGateway(list)
-        autoConnectIfNeeded()
+    if (mode == NodeRuntimeMode.Live) {
+      if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
+        prefs.setVoiceWakeMode(VoiceWakeMode.Off)
       }
+
+      if (prefs.voiceMicEnabled.value) {
+        setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
+      }
+
+      scope.launch(Dispatchers.Default) {
+        gateways.collect { list ->
+          seedLastDiscoveredGateway(list)
+          autoConnectIfNeeded()
+        }
+      }
+    } else {
+      applyScreenshotFixture()
     }
 
     scope.launch {
@@ -1576,6 +1664,7 @@ class NodeRuntime private constructor(
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (!value) {
       voiceLifecycleEpoch.incrementAndGet()
     }
@@ -1737,7 +1826,11 @@ class NodeRuntime private constructor(
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
-    connect(endpoint)
+    // Cold-start fallback only: discovery can emit late, so atomically claim the very first
+    // lifecycle intent. If any explicit connect/disconnect/switch intent already exists, stand
+    // down permanently instead of overriding the user's decision with a stale auto-connect.
+    if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
@@ -1854,6 +1947,7 @@ class NodeRuntime private constructor(
   }
 
   fun setVoiceScreenActive(active: Boolean) {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (!active) {
       stopManualVoiceSession()
     } else {
@@ -2626,10 +2720,7 @@ class NodeRuntime private constructor(
 
   fun connect(endpoint: GatewayEndpoint) {
     gatewayLifecycleIntentSeq.incrementAndGet()
-    launchGatewayLifecycle {
-      prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
-    }
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   fun connect(
@@ -2637,9 +2728,16 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
   ) {
     gatewayLifecycleIntentSeq.incrementAndGet()
+    launchConnect(endpoint, explicitAuth = auth)
+  }
+
+  private fun launchConnect(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+  ) {
     launchGatewayLifecycle {
       prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, auth))
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, explicitAuth))
     }
   }
 
@@ -2699,7 +2797,7 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
         "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
@@ -3090,6 +3188,17 @@ class NodeRuntime private constructor(
     chat.switchSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    val normalizedAgentId = agentId.trim()
+    if (normalizedAgentId.isEmpty()) return
+    stopMessageSpeech()
+    // Agent selection owns every main-session consumer; switching chat alone would
+    // leave Talk mode and the home canvas bound to the previous agent.
+    selectedChatAgentId = normalizedAgentId
+    syncMainSessionKey(normalizedAgentId)
+    chat.switchSession(_mainSessionKey.value)
+  }
+
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
@@ -3250,7 +3359,6 @@ class NodeRuntime private constructor(
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
       val parsed = parseHexColorArgb(raw)
       publishGatewayData(gatewayScope) {
-        syncMainSessionKey(gatewayDefaultAgentId.value)
         _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
         updateHomeCanvasState()
       }
@@ -3320,7 +3428,9 @@ class NodeRuntime private constructor(
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
         _gatewayAgents.value = agents
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        selectedChatAgentId = selectedAgentId
+        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
         updateHomeCanvasState()
       }
     } catch (_: Throwable) {

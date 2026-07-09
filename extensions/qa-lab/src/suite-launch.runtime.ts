@@ -52,7 +52,7 @@ export type QaSuiteRuntimeResult =
       result: QaUnifiedSuiteResult;
     };
 
-export type QaUnifiedSuiteResult = {
+type QaUnifiedSuiteResult = {
   evidencePath: string;
   outputDir: string;
   report: string;

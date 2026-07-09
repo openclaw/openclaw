@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -191,6 +192,22 @@ internal fun ChatComposer(
   val sendBusy = pendingRunCount > 0
   val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
   val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
+  val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
+  val sendCurrentInput = {
+    val message = input.trim()
+    val action = resolveSheetComposerSendAction(input = message)
+    if (action.sendMessage || attachments.isNotEmpty()) {
+      input = ""
+      sendScope.launch {
+        val accepted = onSend(message)
+        // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+        // restore it unless the user already started typing something new.
+        if (!accepted && input.isEmpty()) {
+          input = message
+        }
+      }
+    }
+  }
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
@@ -216,17 +233,34 @@ internal fun ChatComposer(
     } else if (preparingVoiceNote) {
       VoiceNotePreparing()
     } else {
-      OutlinedTextField(
+      ChatTextFieldValueAdapter(
         value = input,
         onValueChange = { input = it },
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-        minLines = 2,
-        maxLines = 5,
-        textStyle = mobileBodyStyle().copy(color = mobileText),
-        shape = RoundedCornerShape(14.dp),
-        colors = chatTextFieldColors(),
-      )
+        keyHandler = hardwareEnterHandler,
+      ) { textFieldValue, updateTextFieldValue ->
+        OutlinedTextField(
+          value = textFieldValue,
+          onValueChange = updateTextFieldValue,
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                hardwareEnterHandler.handle(
+                  event = event,
+                  sendEnabled = canSend,
+                  textEmpty = textFieldValue.text.isEmpty(),
+                  compositionActive = textFieldValue.composition != null,
+                  onSend = sendCurrentInput,
+                )
+              },
+          placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
+          minLines = 2,
+          maxLines = 5,
+          textStyle = mobileBodyStyle().copy(color = mobileText),
+          shape = RoundedCornerShape(14.dp),
+          colors = chatTextFieldColors(),
+        )
+      }
     }
 
     VoiceNoteRecorderError(voiceNoteState)
@@ -321,21 +355,7 @@ internal fun ChatComposer(
       Spacer(modifier = Modifier.weight(1f))
 
       Button(
-        onClick = {
-          val message = input.trim()
-          val action = resolveSheetComposerSendAction(input = message)
-          if (action.sendMessage || attachments.isNotEmpty()) {
-            input = ""
-            sendScope.launch {
-              val accepted = onSend(message)
-              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
-              // restore it unless the user already started typing something new.
-              if (!accepted && input.isEmpty()) {
-                input = message
-              }
-            }
-          }
-        },
+        onClick = sendCurrentInput,
         enabled = canSend && !recordingVoiceNote && !preparingVoiceNote,
         modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),

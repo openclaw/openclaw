@@ -6,6 +6,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
@@ -167,8 +168,9 @@ describe("provider local service", () => {
       },
     );
 
+    const sentinel = mintSecretSentinel("health-secret", { label: "local-health-probe" });
     const lease = await ensureModelProviderLocalService(model, {
-      Authorization: "Bearer health-secret",
+      Authorization: `Bearer ${sentinel}`,
       "X-Tenant": "acme",
     });
 
@@ -185,6 +187,30 @@ describe("provider local service", () => {
     ).toBe(true);
     lease?.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("rejects unknown sentinels before starting a local service", async () => {
+    const port = await freePort();
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-unknown-auth",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["--version"],
+        readyTimeoutMs: 1_000,
+      },
+    );
+
+    await expect(
+      ensureModelProviderLocalService(model, { Authorization: `Bearer ${unknown}` }),
+    ).rejects.toThrow(
+      `Secret sentinel ${unknown} is not registered in this process; refusing to probe local model provider health`,
+    );
   });
 
   it("cancels local service health probe response bodies", async () => {

@@ -4,6 +4,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 import { MAX_BUFFERED_BYTES } from "../server-constants.js";
 import {
   attachGatewayWsForTest,
+  createGatewayWsTestLogger,
   createGatewayWsTestRequestContext,
   createGatewayWsTestSocket,
   createResolvedGatewayTokenAuth,
@@ -47,18 +48,20 @@ async function connectTestWs(
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
   } = {},
 ) {
+  const logWsControl = createGatewayWsTestLogger();
   const connected = attachGatewayWsForTest({
     attach: attachGatewayWsConnectionHandler,
     clients: params.clients,
     headers: params.headers,
     host: params.host,
-    options: params.options,
+    options: { ...params.options, logWsControl: logWsControl as never },
     socket: params.socket,
   });
   await waitForLazyMessageHandler();
 
   return {
     clients: connected.clients,
+    logWsControl,
     socket: connected.socket,
     passed: firstAttachedHandlerParams(),
   };
@@ -195,6 +198,76 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+  });
+
+  it("keeps handshake phase advancement monotonic", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      advanceHandshakePhase: (phase: string) => void;
+    };
+
+    handlerParams.advanceHandshakePhase("auth_credentials_received");
+    handlerParams.advanceHandshakePhase("auth_validated");
+    handlerParams.advanceHandshakePhase("auth_credentials_received");
+    socket.emit("close", 1006, Buffer.from("client disappeared"));
+
+    const [message, context] = logWsControl.warn.mock.calls[0] as [string, { phase?: string }];
+    expect(message).toContain("phase=auth_validated");
+    expect(context).toMatchObject({ phase: "auth_validated" });
+  });
+
+  it("includes the last completed handshake phase in pre-connect close logs", async () => {
+    const { socket, logWsControl } = await connectTestWs();
+
+    socket.emit("close", 1006, Buffer.from("client disappeared"));
+
+    expect(logWsControl.warn).toHaveBeenCalled();
+    const [message, context] = logWsControl.warn.mock.calls[0] as [string, { phase?: string }];
+    expect(message).toContain("closed before connect");
+    expect(message).toContain("phase=ws_upgrade_started");
+    expect(context).toMatchObject({ phase: "ws_upgrade_started" });
+  });
+
+  it("includes the last completed handshake phase on preauth timeout logs", async () => {
+    vi.useFakeTimers();
+    const { logWsControl } = await connectTestWs({
+      options: { preauthHandshakeTimeoutMs: 100 },
+    });
+
+    vi.advanceTimersByTime(150);
+
+    expect(logWsControl.warn).toHaveBeenCalledWith(expect.stringContaining("handshake timeout"));
+    expect(logWsControl.warn).toHaveBeenCalledWith(
+      expect.stringContaining("phase=ws_upgrade_started"),
+    );
+  });
+
+  it("omits handshake phase metadata after the connection is ready", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      advanceHandshakePhase: (phase: string) => void;
+      setClient: (client: never) => boolean;
+      setHandshakeState: (state: "pending" | "connected" | "failed") => void;
+    };
+
+    handlerParams.advanceHandshakePhase("auth_credentials_received");
+    handlerParams.advanceHandshakePhase("auth_validated");
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: "ready-client",
+        usesSharedGatewayAuth: false,
+      } as never),
+    ).toBe(true);
+    handlerParams.setHandshakeState("connected");
+    handlerParams.advanceHandshakePhase("session_attached");
+    handlerParams.advanceHandshakePhase("hello_payload_prepared");
+    handlerParams.advanceHandshakePhase("ready");
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(logWsControl.warn).not.toHaveBeenCalled();
   });
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {

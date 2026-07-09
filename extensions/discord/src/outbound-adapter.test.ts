@@ -239,6 +239,27 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("keeps webhook persona usernames on a UTF-16 boundary", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "hello from persona",
+      accountId: "default",
+      threadId: "thread-1",
+      identity: { name: `${"a".repeat(79)}🚀tail` },
+    });
+
+    const options = mockObjectArg(
+      hoisted.sendWebhookMessageDiscordMock,
+      "sendWebhookMessageDiscord",
+      0,
+      1,
+    );
+    expect(options.username).toBe("a".repeat(79));
+  });
+
   it("falls back to bot send for silent delivery on bound threads", async () => {
     mockDiscordBoundThreadManager(hoisted);
 
@@ -567,12 +588,14 @@ describe("discordOutbound", () => {
   it.each([
     {
       name: "implicit first-mode",
+      mediaUrl: "/tmp/render.mp4",
       replyToIdSource: "implicit" as const,
       replyToMode: "first" as const,
       expectedReplies: [{ messageId: "reply-1", scope: "first" }, undefined],
     },
     {
       name: "implicit all-mode",
+      mediaUrl: "/tmp/render.mp4",
       replyToIdSource: "implicit" as const,
       replyToMode: "all" as const,
       expectedReplies: [
@@ -582,6 +605,17 @@ describe("discordOutbound", () => {
     },
     {
       name: "explicit first-mode",
+      mediaUrl: "/tmp/render.mp4",
+      replyToIdSource: "explicit" as const,
+      replyToMode: "first" as const,
+      expectedReplies: [
+        { messageId: "reply-1", scope: "all" },
+        { messageId: "reply-1", scope: "all" },
+      ],
+    },
+    {
+      name: "encoded URL extension",
+      mediaUrl: "https://cdn.discordapp.com/attachments/1/render%2Emp4?ex=1",
       replyToIdSource: "explicit" as const,
       replyToMode: "first" as const,
       expectedReplies: [
@@ -594,7 +628,7 @@ describe("discordOutbound", () => {
       cfg: {},
       to: "channel:123456",
       text: "rendered clip",
-      mediaUrl: "/tmp/render.mp4",
+      mediaUrl: testCase.mediaUrl,
       accountId: "default",
       replyToId: "reply-1",
       replyToIdSource: testCase.replyToIdSource,
@@ -618,7 +652,7 @@ describe("discordOutbound", () => {
     expect(mediaCall[1]).toBe("");
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
-    expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
+    expect(mediaOptions.mediaUrl).toBe(testCase.mediaUrl);
     expect(mediaOptions.reply).toEqual(testCase.expectedReplies[1]);
   });
 

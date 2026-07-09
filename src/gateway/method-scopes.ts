@@ -68,13 +68,8 @@ export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
 }
 
-/** Returns true when a method requires admin operator scope. */
-export function isAdminOnlyMethod(method: string): boolean {
-  return resolveScopedMethod(method) === ADMIN_SCOPE;
-}
-
 /** Resolves the required static operator scope for a gateway method, if one exists. */
-export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
+function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   return resolveScopedMethod(method);
 }
 
@@ -101,6 +96,13 @@ function resolveSessionsPatchRequiredScopes(params: unknown): OperatorScope[] {
   }
   const safeOnly = Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key));
   return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
+}
+
+function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [WRITE_SCOPE];
+  }
+  return Object.hasOwn(params, "cwd") ? [ADMIN_SCOPE] : [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -155,7 +157,42 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
   }
+  if (method === "sessions.create") {
+    return resolveSessionsCreateRequiredScopes(params);
+  }
+  if (method === "sessions.delete") {
+    return resolveSessionsDeleteRequiredScopes(params);
+  }
   return [WRITE_SCOPE];
+}
+
+/**
+ * sessions.delete params a write-scoped archive-then-delete request may carry.
+ * Internal controls (emitLifecycleHooks, expected* CAS guards) stay admin-only
+ * — fail closed on anything outside this set.
+ */
+const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "agentId",
+  "deleteTranscript",
+  "archivedOnly",
+]);
+
+function resolveSessionsDeleteRequiredScopes(params: unknown): OperatorScope[] {
+  // archivedOnly is the explicit archive-then-delete opt-in: write scope may
+  // delete only already-archived sessions (the handler enforces the state,
+  // both pre-lock and under the lifecycle lock). Everything else — including
+  // internal fallback/synthetic dispatch, which never sets the flag, and any
+  // request carrying internal-only params — keeps requiring admin.
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [ADMIN_SCOPE];
+  }
+  const record = params as { archivedOnly?: unknown };
+  if (record.archivedOnly !== true) {
+    return [ADMIN_SCOPE];
+  }
+  const safeOnly = Object.keys(params).every((key) => SESSIONS_DELETE_WRITE_SCOPE_FIELDS.has(key));
+  return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
 }
 
 function findMissingOperatorScope(
@@ -193,9 +230,23 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
+    if (method === "sessions.create") {
+      const missingScope = findMissingOperatorScope(
+        resolveSessionsCreateRequiredScopes(params),
+        scopes,
+      );
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    }
     if (method === "sessions.patch") {
       const missingScope = findMissingOperatorScope(
         resolveSessionsPatchRequiredScopes(params),
+        scopes,
+      );
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    }
+    if (method === "sessions.delete") {
+      const missingScope = findMissingOperatorScope(
+        resolveSessionsDeleteRequiredScopes(params),
         scopes,
       );
       return missingScope ? { allowed: false, missingScope } : { allowed: true };

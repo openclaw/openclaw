@@ -205,6 +205,24 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawhubPromotionClaims {
+  claimed_at_ms: number;
+  ends_at_ms: number;
+  model_keys_json: string;
+  provider: string | null;
+  slug: string;
+}
+
+export interface ClawhubPromotionsFeedState {
+  etag: string | null;
+  feed_sequence: number | null;
+  last_checked_at_ms: number | null;
+  notified_slugs_json: Generated<string>;
+  payload_json: string | null;
+  state_key: string;
+  updated_at_ms: number;
+}
+
 export interface CommandLogEntries {
   action: string;
   entry_json: string;
@@ -328,6 +346,8 @@ export interface CronJobs {
   stagger_ms: number | null;
   state_json: Generated<string>;
   store_key: string;
+  trigger_once: number | null;
+  trigger_script: string | null;
   updated_at: number;
   wake_mode: string;
 }
@@ -1051,6 +1071,8 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  clawhub_promotion_claims: ClawhubPromotionClaims;
+  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;

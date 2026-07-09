@@ -63,6 +63,7 @@ export const ja_JP: TranslationMap = {
     docs: "ドキュメント",
     theme: "テーマ",
     colorMode: "カラーモード",
+    colorModeOption: "カラーモード: {mode}",
     resources: "リソース",
     search: "検索",
     save: "保存",
@@ -1563,6 +1564,15 @@ export const ja_JP: TranslationMap = {
   chat: {
     disconnected: "Gateway から切断されました。",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",
+    taskSuggestions: {
+      eyebrow: "提案されたフォローアップ",
+      start: "ワークツリーで開始",
+      starting: "開始中…",
+      dismiss: "{title} を閉じる",
+      project: "プロジェクト",
+      instructions: "指示",
+      adminRequired: "このプロジェクトからワークツリーを作成するには管理者権限が必要です。",
+    },
     refreshTitle: "チャットデータを更新",
     settings: "チャット設定",
     usageRemaining: "残りの使用量",

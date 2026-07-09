@@ -63,6 +63,7 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     theme: "主题",
     colorMode: "颜色模式",
+    colorModeOption: "颜色模式：{mode}",
     resources: "资源",
     search: "搜索",
     save: "保存",
@@ -1517,6 +1518,15 @@ export const zh_CN: TranslationMap = {
   chat: {
     disconnected: "已断开与网关的连接。",
     archivedSessionDisabled: "恢复此会话以发送消息。",
+    taskSuggestions: {
+      eyebrow: "建议的后续任务",
+      start: "在工作树中开始",
+      starting: "正在启动…",
+      dismiss: "忽略 {title}",
+      project: "项目",
+      instructions: "说明",
+      adminRequired: "需要管理员权限才能为此项目创建工作树。",
+    },
     refreshTitle: "刷新聊天数据",
     settings: "聊天设置",
     usageRemaining: "剩余用量",

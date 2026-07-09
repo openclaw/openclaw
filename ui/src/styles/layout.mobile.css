@@ -93,6 +93,7 @@
 @media (max-width: 1100px) {
   .shell,
   .shell--nav-collapsed {
+    --shell-topbar-height: 58px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
     grid-template-areas:
@@ -149,11 +150,45 @@
 
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
      the desktop rail toggle makes no sense once the sidebar is a drawer. */
-  .topbar-nav-toggle {
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
-  .sidebar-collapse-toggle {
+  .topbar {
+    display: flex;
+  }
+
+  .topnav-shell {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    gap: 10px;
+  }
+
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
+  }
+
+  .sidebar-brand__actions {
     display: none;
   }
 
@@ -243,29 +278,34 @@
 
   /* Topbar */
   .topbar {
+    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
   .topnav-shell {
-    flex-wrap: wrap;
     gap: 10px;
   }
 
   .topnav-shell__actions {
     min-width: 0;
-    flex: 1 1 auto;
-    justify-content: space-between;
-    gap: 10px;
-    align-items: stretch;
+    justify-content: flex-end;
   }
 
   .topnav-shell__content {
-    display: none;
-    width: 100%;
+    display: flex;
+    justify-content: center;
   }
 
-  .topbar-nav-toggle {
+  .topnav-shell .dashboard-header {
+    display: none;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
@@ -273,6 +313,20 @@
     gap: 6px;
     width: auto;
     flex-wrap: nowrap;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
   }
 
   .topbar-theme-mode {
@@ -693,12 +747,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
-  .theme-orb__trigger {
-    width: 26px;
-    height: 26px;
-    font-size: 13px;
-  }
 }
 
 /* Small mobile */
@@ -744,17 +792,6 @@
   .btn {
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
-  }
-
-  .topbar-status .pill {
-    padding: 3px 6px;
-    font-size: 12px; /* was 10px */
-  }
-
-  .theme-orb__trigger {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
   }
 }
 

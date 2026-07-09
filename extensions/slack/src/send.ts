@@ -177,7 +177,7 @@ export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackS
   }
 }
 
-export function getSlackDefaultSendIdentity(accountId: string): SlackSendIdentity | undefined {
+function getSlackDefaultSendIdentity(accountId: string): SlackSendIdentity | undefined {
   const normalizedAccountId = normalizeOptionalString(accountId);
   return normalizedAccountId ? slackDefaultSendIdentities.get(normalizedAccountId) : undefined;
 }

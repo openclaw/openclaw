@@ -63,6 +63,7 @@ export const nl: TranslationMap = {
     docs: "Docs",
     theme: "Thema",
     colorMode: "Kleurmodus",
+    colorModeOption: "Kleurmodus: {mode}",
     resources: "Bronnen",
     search: "Zoeken",
     save: "Opslaan",
@@ -1562,6 +1563,15 @@ export const nl: TranslationMap = {
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
     archivedSessionDisabled: "Herstel deze sessie om berichten te verzenden.",
+    taskSuggestions: {
+      eyebrow: "Voorgestelde vervolgtaak",
+      start: "Start in een worktree",
+      starting: "Starten…",
+      dismiss: "{title} negeren",
+      project: "Project",
+      instructions: "Instructies",
+      adminRequired: "Beheerderstoegang is vereist om vanuit dit project een worktree te maken.",
+    },
     refreshTitle: "Chatgegevens vernieuwen",
     settings: "Chatinstellingen",
     usageRemaining: "Resterend gebruik",
