@@ -209,10 +209,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
           html.openclaw-native-macos .sidebar-shell {
             padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
           }
-          html.openclaw-native-macos .sidebar-shell__header {
-            padding-left: 10px !important;
-            padding-right: 8px !important;
-          }
         }
         """
         let script = """

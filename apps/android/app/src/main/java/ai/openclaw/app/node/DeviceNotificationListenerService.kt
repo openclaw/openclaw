@@ -27,7 +27,18 @@ private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
   // Notification extras can include long previews; cap before sending over node events.
-  return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+  return normalized.takeUtf16Safe(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+}
+
+private fun String.takeUtf16Safe(maxChars: Int): String {
+  if (length <= maxChars) return this
+  val end =
+    if (maxChars > 0 && Character.isHighSurrogate(this[maxChars - 1])) {
+      maxChars - 1
+    } else {
+      maxChars
+    }
+  return take(end)
 }
 
 /**

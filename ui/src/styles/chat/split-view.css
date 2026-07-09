@@ -38,6 +38,10 @@ openclaw-chat-pane {
   overflow: hidden;
 }
 
+.chat-split-view__pane--active {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
 .chat-split-view--narrow .chat-split-view__pane {
   min-height: 0;
 }
@@ -107,21 +111,39 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__header {
+.chat-split-toolbar {
+  position: fixed;
+  top: var(--safe-area-top);
+  right: calc(58px + var(--safe-area-right));
+  left: calc(var(--shell-nav-width) + 12px + var(--safe-area-left));
+  z-index: 41;
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  min-width: 0;
-  min-height: 36px;
-  padding: 4px 6px 4px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  height: var(--shell-topbar-height);
 }
 
-.chat-pane__header.chat-pane--active {
-  border-top: 2px solid var(--accent);
-  padding-top: 2px;
+.chat-split-toolbar__pane {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 10px;
+}
+
+.chat-split-toolbar__pane + .chat-split-toolbar__pane {
+  border-left: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.chat-split-toolbar__pane--active {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* Pane controls replace the breadcrumb hierarchy in split mode, while the
+   shell keeps ownership of the one shared toolbar row and its global action. */
+.shell--chat:has(.chat-split-toolbar) .topnav-shell__content {
+  visibility: hidden;
 }
 
 .chat-pane__session-label {
@@ -153,6 +175,25 @@ openclaw-chat-pane {
   height: 28px;
   min-height: 28px;
   padding: 5px;
+}
+
+.chat-open-split-view {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+@media (max-width: 1100px) {
+  .chat-split-toolbar {
+    right: calc(62px + var(--safe-area-right));
+    left: calc(62px + var(--safe-area-left));
+  }
 }
 
 @media (max-width: 1099px) {

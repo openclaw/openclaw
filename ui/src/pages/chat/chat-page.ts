@@ -4,8 +4,11 @@ import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/resizable-divider.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
@@ -49,6 +52,7 @@ export class ChatPage extends LitElement {
   @state() private dropIndicator: DropIndicator | null = null;
 
   private mediaQuery: MediaQueryList | null = null;
+  private sessionsCleanup: (() => void) | null = null;
   // Light-DOM enter/leave events bubble from every nested child, so only clear
   // the shared preview after the whole balanced drag has left the page.
   private dragDepth = 0;
@@ -65,6 +69,7 @@ export class ChatPage extends LitElement {
     this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
+    this.sessionsCleanup = this.context?.sessions?.subscribe(() => this.requestUpdate()) ?? null;
     this.addEventListener("dragenter", this.handleDragEnter);
     this.addEventListener("dragover", this.handleDragOver);
     this.addEventListener("dragleave", this.handleDragLeave);
@@ -76,6 +81,8 @@ export class ChatPage extends LitElement {
   override disconnectedCallback() {
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
+    this.sessionsCleanup?.();
+    this.sessionsCleanup = null;
     this.removeEventListener("dragenter", this.handleDragEnter);
     this.removeEventListener("dragover", this.handleDragOver);
     this.removeEventListener("dragleave", this.handleDragLeave);
@@ -88,6 +95,12 @@ export class ChatPage extends LitElement {
   override updated(changedProperties: Map<PropertyKey, unknown>) {
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
+    }
+    for (const select of this.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")) {
+      const sessionKey = select.dataset.sessionKey;
+      if (sessionKey && select.value !== sessionKey) {
+        select.value = sessionKey;
+      }
     }
   }
 
@@ -371,24 +384,105 @@ export class ChatPage extends LitElement {
   };
 
   private renderPane(pane: ChatSplitPane, active: boolean, weight: number) {
-    // Narrow viewports render only the active pane, so splitting there would
-    // create invisible panes; keep session switching and close available.
-    const canSplit = !this.narrow;
     return html`
       <openclaw-chat-pane
-        class="chat-split-view__pane"
+        class="chat-split-view__pane ${active ? "chat-split-view__pane--active" : ""}"
         style="flex: ${weight} 1 0"
         .paneId=${pane.id}
         .sessionKey=${pane.sessionKey}
         .active=${active}
-        .chrome=${"pane"}
         .draft=${active ? this.data?.draft : undefined}
         .onFocusPane=${this.handleFocusPane}
         .onPaneSessionChange=${this.handlePaneSessionChange}
-        .onSplitRight=${canSplit ? this.handleSplitRight : undefined}
-        .onSplitDown=${canSplit ? this.handleSplitDown : undefined}
-        .onClosePane=${this.handleClosePane}
       ></openclaw-chat-pane>
+    `;
+  }
+
+  private renderSplitToolbar(layout: ChatSplitLayout) {
+    const sessions = this.context?.sessions?.state.result?.sessions ?? [];
+    const panes = this.narrow
+      ? [findPane(layout, layout.activePaneId)?.pane].filter(
+          (pane): pane is ChatSplitPane => pane != null,
+        )
+      : panesOf(layout);
+    return html`
+      <div class="chat-split-toolbar">
+        ${panes.map((pane) => {
+          const active = pane.id === layout.activePaneId;
+          const currentSession = sessions.find((row) => row.key === pane.sessionKey);
+          const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
+          return html`
+            <div
+              class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
+              @pointerdown=${() => this.handleFocusPane(pane.id)}
+              @focusin=${() => this.handleFocusPane(pane.id)}
+            >
+              <label class="chat-pane__session-label">
+                <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
+                <select
+                  class="chat-pane__session-select"
+                  data-session-key=${pane.sessionKey}
+                  aria-label=${t("chat.splitView.sessionSelect")}
+                  .value=${pane.sessionKey}
+                  @change=${(event: Event) => {
+                    const nextSessionKey = (event.target as HTMLSelectElement).value;
+                    if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
+                      this.handlePaneSessionChange(pane.id, nextSessionKey);
+                    }
+                  }}
+                >
+                  ${options.map(
+                    (row) => html`
+                      <option value=${row.key}>
+                        ${resolveSessionDisplayName(
+                          row.key,
+                          sessions.find((session) => session.key === row.key),
+                        )}
+                      </option>
+                    `,
+                  )}
+                </select>
+              </label>
+              <div class="chat-pane__actions">
+                ${!this.narrow
+                  ? html`
+                      <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                        <button
+                          class="btn btn--ghost btn--icon"
+                          type="button"
+                          aria-label=${t("chat.splitView.splitDown")}
+                          @click=${() => this.handleSplitDown(pane.id)}
+                        >
+                          ${icons.panelBottomOpen}
+                        </button>
+                      </openclaw-tooltip>
+                      <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                        <button
+                          class="btn btn--ghost btn--icon"
+                          type="button"
+                          aria-label=${t("chat.splitView.splitRight")}
+                          @click=${() => this.handleSplitRight(pane.id)}
+                        >
+                          ${icons.panelRightOpen}
+                        </button>
+                      </openclaw-tooltip>
+                    `
+                  : nothing}
+                <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.closePane")}
+                    @click=${() => this.handleClosePane(pane.id)}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
     `;
   }
 
@@ -472,6 +566,7 @@ export class ChatPage extends LitElement {
     const indicator = this.dropIndicator;
     return html`
       <div class="chat-split-view__drop-container">
+        ${this.layout ? this.renderSplitToolbar(this.layout) : nothing}
         ${this.layout
           ? this.renderSplitLayout(this.layout)
           : html`
@@ -479,13 +574,25 @@ export class ChatPage extends LitElement {
                 .paneId=${"single"}
                 .sessionKey=${this.data?.sessionKey ?? ""}
                 .active=${true}
-                .chrome=${"none"}
                 .draft=${this.data?.draft}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
-                .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
               ></openclaw-chat-pane>
             `}
+        ${!this.layout && !this.narrow
+          ? html`
+              <openclaw-tooltip .content=${t("chat.splitView.open")}>
+                <button
+                  class="btn btn--sm btn--icon chat-open-split-view"
+                  type="button"
+                  aria-label=${t("chat.splitView.open")}
+                  @click=${this.openSplitView}
+                >
+                  ${icons.panelRightOpen}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
         ${indicator
           ? html`<div
               class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"

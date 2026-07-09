@@ -1,5 +1,6 @@
 // Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
+import type { Block, KnownBlock } from "@slack/web-api";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -20,6 +21,7 @@ import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
+import type { SlackEventScope } from "./event-scope.js";
 import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
@@ -50,6 +52,7 @@ export async function deliverReplies(params: {
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
+  mediaMaxBytes?: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
@@ -71,8 +74,35 @@ export async function deliverReplies(params: {
    * before reporting the terminal outcome.
    */
   deferMessageSentHooks?: true;
+  /** Validated non-serializable client scope for an enterprise listener turn. */
+  eventScope?: SlackEventScope;
 }) {
   let latestResult: SlackSendResult | undefined;
+  const sendReply = async (input: {
+    text: string;
+    threadTs?: string | undefined;
+    mediaUrl?: string | undefined;
+    blocks?: (Block | KnownBlock)[] | undefined;
+  }): Promise<SlackSendResult> => {
+    return await sendMessageSlack(params.target, input.text, {
+      cfg: params.cfg,
+      token: params.token,
+      threadTs: input.threadTs,
+      accountId: params.accountId,
+      mediaUrl: input.mediaUrl,
+      blocks: input.blocks,
+      ...(params.eventScope
+        ? {
+            client: params.eventScope.client,
+            enterpriseEventScope: params.eventScope,
+            textLimit: params.textLimit,
+            ...(params.mediaMaxBytes !== undefined ? { mediaMaxBytes: params.mediaMaxBytes } : {}),
+          }
+        : {}),
+      ...(params.identity ? { identity: params.identity } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    });
+  };
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
       continue;
@@ -133,14 +163,10 @@ export async function deliverReplies(params: {
       }
       let result: SlackSendResult;
       try {
-        result = await sendMessageSlack(params.target, trimmed, {
-          cfg: params.cfg,
-          token: params.token,
+        result = await sendReply({
+          text: trimmed,
           threadTs,
-          accountId: params.accountId,
           ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-          ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       } catch (error) {
         emitFailed(trimmed, error);
@@ -171,24 +197,16 @@ export async function deliverReplies(params: {
             }
           : undefined,
         sendText: async (trimmed) => {
-          lastResult = await sendMessageSlack(params.target, trimmed, {
-            cfg: params.cfg,
-            token: params.token,
+          lastResult = await sendReply({
+            text: trimmed,
             threadTs,
-            accountId: params.accountId,
-            ...(params.identity ? { identity: params.identity } : {}),
-            ...(params.metadata ? { metadata: params.metadata } : {}),
           });
         },
         sendMedia: async ({ mediaUrl, caption }) => {
-          lastResult = await sendMessageSlack(params.target, caption ?? "", {
-            cfg: params.cfg,
-            token: params.token,
+          lastResult = await sendReply({
+            text: caption ?? "",
             mediaUrl,
             threadTs,
-            accountId: params.accountId,
-            ...(params.identity ? { identity: params.identity } : {}),
-            ...(params.metadata ? { metadata: params.metadata } : {}),
           });
         },
       });

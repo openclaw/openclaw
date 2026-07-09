@@ -7,6 +7,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
   deleteDeliveryQueueEntry,
+  failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -248,4 +249,23 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+}
+
+export type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
+
+/** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
+export async function failPendingDelivery(
+  params: {
+    id: string;
+    expectedStatus: "pending";
+    lastError: string;
+    entry: QueuedDelivery;
+  },
+  stateDir?: string,
+): Promise<FailPendingDeliveryResult> {
+  return failPendingDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    ...params,
+    stateDir,
+  });
 }

@@ -23,7 +23,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
