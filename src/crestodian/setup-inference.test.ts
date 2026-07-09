@@ -552,16 +552,24 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("runs the codex plugin ensure step only after a passing test", async () => {
-    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
-    const ensureCodex = vi.fn(async () => ({
-      cfg: {},
-      required: false,
-      installed: false,
-    }));
-    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
-      meta: { finalAssistantVisibleText: "OK" },
-    }));
+  it("installs the codex runtime before exercising its harness", async () => {
+    const events: string[] = [];
+    const applySetup = vi.fn(async () => {
+      events.push("persist-setup");
+      return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
+    });
+    const ensureCodex = vi.fn(async () => {
+      events.push("install-plugin");
+      return { cfg: {}, required: true, installed: true, status: "installed" as const };
+    });
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
+      events.push("live-test");
+      return { meta: { finalAssistantVisibleText: "OK" } };
+    });
+    const updateConfig = vi.fn(async (updater: (config: OpenClawConfig) => OpenClawConfig) => {
+      events.push("persist-plugin");
+      return updater({});
+    });
     const result = await activateSetupInference({
       kind: "codex-cli",
       surface: "gateway",
@@ -570,15 +578,73 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         applySetup: applySetup as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        updateConfig: updateConfig as never,
         createTempDir: makeTempDir,
       },
     });
     expect(result.ok).toBe(true);
     expect(ensureCodex).toHaveBeenCalledOnce();
+    expect(events).toEqual(["install-plugin", "live-test", "persist-plugin", "persist-setup"]);
     // Harness selection: codex tests run embedded with the codex harness.
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessId: "codex",
       provider: "openai",
     });
+  });
+
+  it("does not run or persist when the codex runtime install fails", async () => {
+    const runEmbeddedAgent = vi.fn();
+    const applySetup = vi.fn();
+    const updateConfig = vi.fn();
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        ensureCodexRuntimePlugin: vi.fn(async () => ({
+          cfg: {},
+          required: true,
+          installed: false,
+          status: "failed" as const,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        applySetup: applySetup as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("does not persist codex setup when the live test fails", async () => {
+    const applySetup = vi.fn();
+    const updateConfig = vi.fn();
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        ensureCodexRuntimePlugin: vi.fn(async () => ({
+          cfg: {},
+          required: true,
+          installed: true,
+          status: "installed" as const,
+        })) as never,
+        runEmbeddedAgent: vi.fn(async () => {
+          throw new Error("401 invalid_api_key");
+        }) as never,
+        applySetup: applySetup as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "auth" });
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
   });
 });

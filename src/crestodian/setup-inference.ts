@@ -587,6 +587,34 @@ export async function activateSetupInference(
       return { ok: false, status: "unavailable", error: plan.error };
     }
 
+    let persistCodexPlugin = false;
+    if (params.kind === "codex-cli") {
+      const ensureCodex =
+        deps.ensureCodexRuntimePlugin ??
+        (await import("../commands/codex-runtime-plugin-install.js"))
+          .ensureCodexRuntimePluginForModelSelection;
+      const ensured = await ensureCodex({
+        cfg,
+        model: plan.modelRef,
+        prompter: createQuickstartNotePrompter(params.runtime),
+        runtime: params.runtime,
+        workspaceDir: tempDir,
+      });
+      if (!ensured.installed) {
+        return {
+          ok: false,
+          status: ensured.status === "timed_out" ? "timeout" : "unavailable",
+          error:
+            ensured.status === "timed_out"
+              ? "Codex runtime plugin installation timed out. Try again."
+              : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
+        };
+      }
+      // Harness discovery needs the package on disk for the live test. Keep
+      // config and the default model untouched until that completion succeeds.
+      persistCodexPlugin = ensured.required;
+    }
+
     if (plan.manualAuth) {
       const staged = await persistManualAuthProfiles(plan.manualAuth.profiles, testAgentDir);
       if (!staged) {
@@ -603,25 +631,10 @@ export async function activateSetupInference(
       return test;
     }
 
-    // Test passed — persist. Codex routes openai/* through the Codex plugin,
-    // so make sure it is installed/enabled before the model ref lands in config.
-    if (params.kind === "codex-cli") {
-      const ensureCodex =
-        deps.ensureCodexRuntimePlugin ??
-        (await import("../commands/codex-runtime-plugin-install.js"))
-          .ensureCodexRuntimePluginForModelSelection;
-      const ensured = await ensureCodex({
-        cfg,
-        model: plan.modelRef,
-        prompter: createQuickstartNotePrompter(params.runtime),
-        runtime: params.runtime,
-        workspaceDir: tempDir,
-      });
-      if (ensured.required) {
-        const updateConfig =
-          deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-        await updateConfig((current) => enablePluginInConfig(current, "codex").config);
-      }
+    if (persistCodexPlugin) {
+      const updateConfig =
+        deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
+      await updateConfig((current) => enablePluginInConfig(current, "codex").config);
     }
     if (plan.manualAuth) {
       const manualAuth = plan.manualAuth;
