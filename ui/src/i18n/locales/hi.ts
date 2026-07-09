@@ -81,6 +81,12 @@ export const hi: TranslationMap = {
     waitForScan: "स्कैन की प्रतीक्षा करें",
     logout: "लॉग आउट",
   },
+  nativeLinkMenu: {
+    label: "लिंक कार्रवाइयाँ",
+    openInline: "Sidebar में खोलें",
+    openExternal: "Default Browser में खोलें",
+    copy: "लिंक कॉपी करें",
+  },
   channels: {
     health: {
       title: "चैनल स्वास्थ्य",
@@ -267,6 +273,7 @@ export const hi: TranslationMap = {
     model: "मॉडल",
     provider: "प्रदाता",
     runtime: "रनटाइम",
+    runDuration: "चलने की अवधि",
     surface: "सतह",
     subject: "विषय",
     room: "रूम",
@@ -284,6 +291,7 @@ export const hi: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "चैट खोलें",
     archiveSession: "सत्र संग्रहीत करें",
     restoreSession: "सत्र बहाल करें",
     deleteSessionMenu: "Delete…",
@@ -653,6 +661,56 @@ export const hi: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Codex फ़्लीट",
+    title: "आपके सभी कंप्यूटरों के सेशन",
+    subtitle: "इस Gateway और सेशन शेयर करने वाले हर कनेक्टेड कंप्यूटर के Codex सेशन का केवल-पढ़ने योग्य व्यू।",
+    summaryLabel: "Codex सेशन सारांश",
+    summary: {
+      sessions: "सेशन",
+      onlineHosts: "ऑनलाइन",
+      hosts: "होस्ट",
+    },
+    searchLabel: "Codex सेशन खोजें",
+    searchPlaceholder: "सेशन के शीर्षक खोजें",
+    scopeLabel: "सेशन आर्काइव फ़िल्टर",
+    scope: {
+      active: "सक्रिय",
+      archived: "आर्काइव किया गया",
+    },
+    refresh: "रिफ्रेश करें",
+    disconnected: "Codex सेशन रीफ़्रेश करने के लिए Gateway से फिर से कनेक्ट करें।",
+    partial: "अनुपलब्ध होस्ट: {count}। अन्य होस्ट उपलब्ध हैं।",
+    loading: "Codex सेशन लोड हो रहे हैं…",
+    loadMore: "और लोड करें",
+    loadingMore: "लोड हो रहा है…",
+    untitled: "बिना शीर्षक वाला Codex सेशन",
+    threadId: "थ्रेड",
+    status: {
+      active: "सक्रिय",
+      idle: "निष्क्रिय",
+      archived: "आर्काइव किया गया",
+      notLoaded: "संग्रहीत",
+      systemError: "सिस्टम त्रुटि",
+      unknown: "अज्ञात",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "नोड",
+      connected: "कनेक्टेड",
+      offline: "ऑफ़लाइन",
+      unavailable: "सेशन कैटलॉग उपलब्ध नहीं है",
+      sessionCount: "{count} दिखाए गए",
+    },
+    empty: {
+      title: "कोई Codex होस्ट नहीं मिला",
+      subtitle:
+        "Gateway या किसी पेयर किए गए कंप्यूटर पर Codex सेशन शेयरिंग चालू करें, फिर इस व्यू को रीफ़्रेश करें।",
+      search: "इस होस्ट पर कोई सेशन आपकी खोज से मेल नहीं खाता।",
+      active: "इस होस्ट पर कोई सक्रिय सेशन नहीं है।",
+      archived: "इस होस्ट पर कोई आर्काइव किया गया सेशन नहीं है।",
+    },
   },
   logbook: {
     duration: {

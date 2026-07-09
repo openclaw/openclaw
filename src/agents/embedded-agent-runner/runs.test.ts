@@ -491,6 +491,39 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "capable prompt into an incapable run",
+      handleMode: undefined,
+      requestMode: "gateway" as const,
+    },
+    {
+      label: "incapable prompt into a capable run",
+      handleMode: "gateway" as const,
+      requestMode: undefined,
+    },
+  ])("rejects $label", ({ handleMode, requestMode }) => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-task-suggestions", {
+      ...createRunHandle(),
+      taskSuggestionDeliveryMode: handleMode,
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-task-suggestions", "continue", {
+      steeringMode: "all",
+      taskSuggestionDeliveryMode: requestMode,
+    });
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-task-suggestions",
+      reason: "task_suggestion_delivery_mode_mismatch",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
   it("defaults active embedded steering to all pending messages", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-default-steer", {

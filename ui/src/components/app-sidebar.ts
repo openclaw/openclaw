@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
@@ -23,6 +23,7 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import "./session-menu.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -55,6 +56,7 @@ import {
   compareSessionRowsByUpdatedAt,
   resolveSessionNavigation,
   searchForSession,
+  type SessionCapability,
 } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -68,9 +70,12 @@ import {
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
+import type { SessionMenuAction } from "./session-menu.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -90,7 +95,6 @@ type SidebarSessionMenuState = {
   session: SidebarRecentSession;
   x: number;
   y: number;
-  submenuLeft: boolean;
 };
 
 type SidebarSessionGroupMenuState = {
@@ -160,11 +164,7 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-class AppSidebar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class AppSidebar extends OpenClawLightDomElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
@@ -186,11 +186,10 @@ class AppSidebar extends LitElement {
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
-  @state() private sessionGroupSubmenuOpen = false;
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   @state() private draggingSessionKey: string | null = null;
   @state() private draggingSessionGroup: string | null = null;
@@ -204,27 +203,50 @@ class AppSidebar extends LitElement {
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
 
-  private stopSessionsSubscription: (() => void) | undefined;
-  private stopSessionCreatedSubscription: (() => void) | undefined;
-  private stopAgentsSubscription: (() => void) | undefined;
-  private stopAgentSelectionSubscription: (() => void) | undefined;
-  private stopGatewaySubscription: (() => void) | undefined;
+  private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
+  private sessionsSource: SessionCapability | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
 
+  constructor() {
+    super();
+    this.subscriptions
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.updateGatewayClient(gateway.snapshot),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.synchronizeSessions(sessions),
+      )
+      .effect(
+        () => this.context?.sessions,
+        (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (agentSelection, notify) => agentSelection.subscribe(notify),
+      );
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
-    this.startSubscriptions();
   }
 
   override disconnectedCallback() {
@@ -232,58 +254,12 @@ class AppSidebar extends LitElement {
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
-    this.stopSessionCreatedSubscription?.();
-    this.stopSessionCreatedSubscription = undefined;
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopAgentSelectionSubscription?.();
-    this.stopAgentSelectionSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
     this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
     super.disconnectedCallback();
-  }
-
-  private startSubscriptions() {
-    const context = this.context;
-    if (
-      !context ||
-      this.stopSessionsSubscription ||
-      this.stopSessionCreatedSubscription ||
-      this.stopAgentsSubscription ||
-      this.stopAgentSelectionSubscription ||
-      this.stopGatewaySubscription
-    ) {
-      return;
-    }
-    this.updateGatewayClient(context.gateway.snapshot);
-    this.updateSessions(context.sessions.state);
-    this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
-      this.updateSessions(snapshot);
-    });
-    this.stopSessionCreatedSubscription = context.sessions.subscribeCreated((key) => {
-      this.promoteCreatedSession(key);
-    });
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateGatewayClient(snapshot);
-      this.requestUpdate();
-    });
-  }
-
-  override updated() {
-    this.startSubscriptions();
   }
 
   private readonly updateSessions = (snapshot: {
@@ -305,6 +281,15 @@ class AppSidebar extends LitElement {
       this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
     }
   };
+
+  private synchronizeSessions(sessions: SessionCapability) {
+    if (sessions !== this.sessionsSource) {
+      this.sessionRowsByAgent = {};
+      this.sessionCreatedOrder.clear();
+      this.sessionsSource = sessions;
+    }
+    this.updateSessions(sessions.state);
+  }
 
   private updateGatewayClient(snapshot: {
     client: GatewayBrowserClient | null;
@@ -581,37 +566,16 @@ class AppSidebar extends LitElement {
     y: number,
     trigger: HTMLElement | null = null,
   ) {
-    const menuWidth = 240;
-    const menuMaxHeight = 460;
     this.closeCustomizeMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
-    this.sessionGroupSubmenuOpen = false;
-    const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
-    this.sessionMenu = {
-      session,
-      x: clampedX,
-      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
-      submenuLeft: clampedX + menuWidth * 2 + 4 > window.innerWidth - 8,
-    };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-session-menu__item")?.focus();
-    });
+    this.sessionMenu = { session, x, y };
   }
 
-  private closeSessionMenu(options: { restoreFocus?: boolean } = {}) {
-    const trigger = this.sessionMenuTrigger;
+  private closeSessionMenu() {
     this.sessionMenuTrigger = null;
     this.sessionMenu = null;
-    this.sessionGroupSubmenuOpen = false;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    if (options.restoreFocus) {
-      trigger?.focus();
-    }
   }
 
   private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
@@ -629,9 +593,7 @@ class AppSidebar extends LitElement {
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(
-        ".sidebar-session-group-menu .sidebar-session-menu__item",
-      )?.focus();
+      this.querySelector<HTMLElement>(".sidebar-session-group-menu .session-menu__item")?.focus();
     });
   }
 
@@ -924,13 +886,12 @@ class AppSidebar extends LitElement {
       return;
     }
     const menu = this.querySelector(
-      ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
     );
     if (menu && path.includes(menu)) {
       return;
     }
     this.closeCustomizeMenu();
-    this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
   };
@@ -939,7 +900,6 @@ class AppSidebar extends LitElement {
     if (event.key === "Escape") {
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
-      this.closeSessionMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
     }
@@ -1011,8 +971,6 @@ class AppSidebar extends LitElement {
     }
     const { session } = menu;
     const context = this.context;
-    // Guards both Archive and Delete: agent main sessions and active runs are
-    // protected from casual retirement in this menu.
     const archiveAllowed = canArchiveSessionRow(
       session,
       resolveUiConfiguredMainKey({
@@ -1020,190 +978,62 @@ class AppSidebar extends LitElement {
         hello: context?.gateway.snapshot.hello,
       }),
     );
-    const groups = this.knownSessionGroups();
     return html`
-      <div
-        class="sidebar-session-menu"
-        role="menu"
-        aria-label=${t("chat.sidebar.sessionMenu", { session: session.label })}
-        style="left: ${menu.x}px; top: ${menu.y}px;"
-      >
-        <button
-          type="button"
-          class="sidebar-session-menu__item"
-          role="menuitem"
-          ?disabled=${!this.connected}
-          @click=${() => {
-            this.closeSessionMenu();
-            void this.patchSession(session, { pinned: !session.pinned });
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.pin}</span>
-          <span class="sidebar-session-menu__text"
-            >${session.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}</span
-          >
-        </button>
-        <button
-          type="button"
-          class="sidebar-session-menu__item"
-          role="menuitem"
-          ?disabled=${!this.connected}
-          @click=${() => {
-            this.closeSessionMenu();
-            void this.patchSession(session, { unread: !session.unread });
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true"
-            >${session.unread ? icons.eye : icons.circle}</span
-          >
-          <span class="sidebar-session-menu__text"
-            >${session.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}</span
-          >
-        </button>
-        <button
-          type="button"
-          class="sidebar-session-menu__item"
-          role="menuitem"
-          ?disabled=${!this.connected}
-          @click=${() => {
-            this.closeSessionMenu();
-            this.renameSession(session);
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.edit}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
-        </button>
-        <button
-          type="button"
-          class="sidebar-session-menu__item"
-          role="menuitem"
-          ?disabled=${!this.connected || this.sessionsLoading}
-          @click=${() => {
-            this.closeSessionMenu();
-            void this.forkSession(session);
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.copy}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.forkSession")}</span>
-        </button>
-        <div
-          class="sidebar-session-menu__submenu-host"
-          @pointerenter=${() => {
-            this.sessionGroupSubmenuOpen = true;
-          }}
-          @pointerleave=${() => {
-            this.sessionGroupSubmenuOpen = false;
-          }}
-        >
-          <button
-            type="button"
-            class="sidebar-session-menu__item"
-            role="menuitem"
-            aria-haspopup="menu"
-            aria-expanded=${String(this.sessionGroupSubmenuOpen)}
-            ?disabled=${!this.connected}
-            @click=${() => {
-              this.sessionGroupSubmenuOpen = !this.sessionGroupSubmenuOpen;
-            }}
-          >
-            <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.folder}</span>
-            <span class="sidebar-session-menu__text">${t("sessionsView.moveToGroupMenu")}</span>
-            <span class="sidebar-session-menu__chevron" aria-hidden="true"
-              >${icons.chevronRight}</span
-            >
-          </button>
-          ${this.sessionGroupSubmenuOpen
-            ? html`
-                <div
-                  class="sidebar-session-menu sidebar-session-menu__submenu ${menu.submenuLeft
-                    ? "sidebar-session-menu__submenu--left"
-                    : ""}"
-                  role="menu"
-                  aria-label=${t("sessionsView.moveToGroupMenu")}
-                >
-                  ${groups.map(
-                    (group) => html`
-                      <button
-                        type="button"
-                        class="sidebar-session-menu__item"
-                        role="menuitem"
-                        @click=${() => {
-                          this.closeSessionMenu();
-                          if (session.category !== group) {
-                            void this.patchSession(session, { category: group });
-                          }
-                        }}
-                      >
-                        <span class="sidebar-session-menu__check" aria-hidden="true"
-                          >${session.category === group ? icons.check : nothing}</span
-                        >
-                        <span class="sidebar-session-menu__text">${group}</span>
-                      </button>
-                    `,
-                  )}
-                  <button
-                    type="button"
-                    class="sidebar-session-menu__item"
-                    role="menuitem"
-                    @click=${() => {
-                      this.closeSessionMenu();
-                      this.createSessionGroup(session);
-                    }}
-                  >
-                    <span class="sidebar-session-menu__check" aria-hidden="true"></span>
-                    <span class="sidebar-session-menu__text">${t("sessionsView.newGroup")}</span>
-                  </button>
-                  ${session.category
-                    ? html`
-                        <div class="sidebar-session-menu__separator" role="separator"></div>
-                        <button
-                          type="button"
-                          class="sidebar-session-menu__item"
-                          role="menuitem"
-                          @click=${() => {
-                            this.closeSessionMenu();
-                            void this.patchSession(session, { category: null });
-                          }}
-                        >
-                          <span class="sidebar-session-menu__check" aria-hidden="true"></span>
-                          <span class="sidebar-session-menu__text"
-                            >${t("sessionsView.removeFromGroup")}</span
-                          >
-                        </button>
-                      `
-                    : nothing}
-                </div>
-              `
-            : nothing}
-        </div>
-        <div class="sidebar-session-menu__separator" role="separator"></div>
-        <button
-          type="button"
-          class="sidebar-session-menu__item"
-          role="menuitem"
-          ?disabled=${!this.connected || !archiveAllowed}
-          @click=${() => {
-            this.closeSessionMenu();
-            void this.patchSession(session, { archived: true });
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.archive}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.archiveSession")}</span>
-        </button>
-        <button
-          type="button"
-          class="sidebar-session-menu__item sidebar-session-menu__item--destructive"
-          role="menuitem"
-          ?disabled=${!this.connected || !archiveAllowed}
-          @click=${() => {
-            this.closeSessionMenu();
-            void this.deleteSession(session);
-          }}
-        >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.trash}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.deleteSessionMenu")}</span>
-        </button>
-      </div>
+      <openclaw-session-menu
+        .session=${{
+          key: session.key,
+          label: session.label,
+          pinned: session.pinned,
+          unread: session.unread,
+          archived: false,
+          category: session.category ?? null,
+        }}
+        .x=${menu.x}
+        .y=${menu.y}
+        .trigger=${this.sessionMenuTrigger}
+        .disabled=${!this.connected}
+        .forkDisabled=${this.sessionsLoading}
+        .archiveAllowed=${archiveAllowed}
+        .groups=${this.knownSessionGroups()}
+        .canOpenChat=${true}
+        .workboard=${null}
+        .onClose=${() => this.closeSessionMenu()}
+        .onAction=${(action: SessionMenuAction) => {
+          switch (action.kind) {
+            case "open-chat":
+              this.selectSession(session.key);
+              break;
+            case "toggle-pin":
+              void this.patchSession(session, { pinned: !session.pinned });
+              break;
+            case "toggle-unread":
+              void this.patchSession(session, { unread: !session.unread });
+              break;
+            case "rename":
+              this.renameSession(session);
+              break;
+            case "fork":
+              void this.forkSession(session);
+              break;
+            case "workboard":
+              break;
+            case "move-to-group":
+              if (action.category === null || session.category !== action.category) {
+                void this.patchSession(session, { category: action.category });
+              }
+              break;
+            case "new-group":
+              this.createSessionGroup(session);
+              break;
+            case "toggle-archived":
+              void this.patchSession(session, { archived: true });
+              break;
+            case "delete":
+              void this.deleteSession(session);
+              break;
+          }
+        }}
+      ></openclaw-session-menu>
     `;
   }
 
@@ -1214,14 +1044,14 @@ class AppSidebar extends LitElement {
     }
     return html`
       <div
-        class="sidebar-session-menu sidebar-session-group-menu"
+        class="session-menu sidebar-session-group-menu"
         role="menu"
         aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
         style="left: ${menu.x}px; top: ${menu.y}px;"
       >
         <button
           type="button"
-          class="sidebar-session-menu__item"
+          class="session-menu__item"
           role="menuitem"
           ?disabled=${!this.connected}
           @click=${() => {
@@ -1229,25 +1059,25 @@ class AppSidebar extends LitElement {
             this.renameSessionGroupFromMenu(menu.group);
           }}
         >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.edit}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
+          <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+          <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
         </button>
         <button
           type="button"
-          class="sidebar-session-menu__item"
+          class="session-menu__item"
           role="menuitem"
           @click=${() => {
             this.closeSessionGroupMenu();
             this.createSessionGroup();
           }}
         >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.folder}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.newGroup")}</span>
+          <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+          <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
         </button>
-        <div class="sidebar-session-menu__separator" role="separator"></div>
+        <div class="session-menu__separator" role="separator"></div>
         <button
           type="button"
-          class="sidebar-session-menu__item sidebar-session-menu__item--destructive"
+          class="session-menu__item session-menu__item--destructive"
           role="menuitem"
           ?disabled=${!this.connected}
           @click=${() => {
@@ -1255,8 +1085,8 @@ class AppSidebar extends LitElement {
             this.deleteSessionGroupFromMenu(menu.group);
           }}
         >
-          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.trash}</span>
-          <span class="sidebar-session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
+          <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
+          <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
         </button>
       </div>
     `;
@@ -1291,14 +1121,14 @@ class AppSidebar extends LitElement {
                 this.closeSessionSortMenu({ restoreFocus: true });
               }}
             >
-              <span class="sidebar-session-menu__check" aria-hidden="true">
+              <span class="session-menu__check" aria-hidden="true">
                 ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
               </span>
-              <span class="sidebar-session-menu__text">${option.label}</span>
+              <span class="session-menu__text">${option.label}</span>
             </button>
           `,
         )}
-        <div class="sidebar-session-menu__separator" role="separator"></div>
+        <div class="session-menu__separator" role="separator"></div>
         <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
         ${SIDEBAR_SESSION_SORT_OPTIONS.map(
           (option) => html`
@@ -1312,10 +1142,10 @@ class AppSidebar extends LitElement {
                 this.closeSessionSortMenu({ restoreFocus: true });
               }}
             >
-              <span class="sidebar-session-menu__check" aria-hidden="true">
+              <span class="session-menu__check" aria-hidden="true">
                 ${this.sessionSortMode === option.mode ? icons.check : nothing}
               </span>
-              <span class="sidebar-session-menu__text">${t(option.labelKey)}</span>
+              <span class="session-menu__text">${t(option.labelKey)}</span>
             </button>
           `,
         )}
@@ -1493,13 +1323,18 @@ class AppSidebar extends LitElement {
             </button>
             <button
               class="session-action"
-              data-sidebar-session-menu="true"
+              data-session-menu="true"
               type="button"
               title=${t("chat.sidebar.openSessionMenu")}
               aria-label=${t("chat.sidebar.openSessionMenu")}
               aria-haspopup="menu"
+              aria-expanded=${String(this.sessionMenu?.session.key === session.key)}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
+                if (this.sessionMenu?.session.key === session.key) {
+                  this.closeSessionMenu();
+                  return;
+                }
                 const trigger = event.currentTarget as HTMLElement;
                 const rect = trigger.getBoundingClientRect();
                 this.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);

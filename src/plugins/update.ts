@@ -733,6 +733,9 @@ function resolveBridgeInstallRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
 }): { pluginId: string; record: PluginInstallRecord } | undefined {
   for (const pluginId of getExternalizedBundledPluginLookupIds(params.bridge)) {
+    if (!Object.hasOwn(params.installs, pluginId)) {
+      continue;
+    }
     const record = params.installs[pluginId];
     if (record) {
       return { pluginId, record };
@@ -1171,7 +1174,7 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
   if (installs && Object.hasOwn(installs, fromId)) {
     const nextInstalls = { ...installs };
     const record = nextInstalls[fromId];
-    if (record && !(toId in nextInstalls)) {
+    if (record && !Object.hasOwn(nextInstalls, toId)) {
       nextInstalls[toId] = record;
     }
     delete nextInstalls[fromId];
@@ -1183,10 +1186,11 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
     const nextEntries = { ...entries };
     const entry = nextEntries[fromId];
     if (entry) {
-      nextEntries[toId] = nextEntries[toId]
+      const existingEntry = Object.hasOwn(nextEntries, toId) ? nextEntries[toId] : undefined;
+      nextEntries[toId] = existingEntry
         ? {
             ...entry,
-            ...nextEntries[toId],
+            ...existingEntry,
           }
         : entry;
     }
@@ -1447,7 +1451,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const record = installs[pluginId];
+    const record = Object.hasOwn(installs, pluginId) ? installs[pluginId] : undefined;
     if (!record) {
       outcomes.push({
         pluginId,

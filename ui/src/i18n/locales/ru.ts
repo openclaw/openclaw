@@ -81,6 +81,12 @@ export const ru: TranslationMap = {
     waitForScan: "Ожидание сканирования",
     logout: "Выйти",
   },
+  nativeLinkMenu: {
+    label: "Действия со ссылкой",
+    openInline: "Открыть в боковой панели",
+    openExternal: "Открыть в браузере по умолчанию",
+    copy: "Копировать ссылку",
+  },
   channels: {
     health: {
       title: "Состояние канала",
@@ -270,6 +276,7 @@ export const ru: TranslationMap = {
     model: "Модель",
     provider: "Поставщик",
     runtime: "Среда выполнения",
+    runDuration: "Продолжительность выполнения",
     surface: "Поверхность",
     subject: "Тема",
     room: "Комната",
@@ -287,6 +294,7 @@ export const ru: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Открыть чат",
     archiveSession: "Архивировать сеанс",
     restoreSession: "Восстановить сеанс",
     deleteSessionMenu: "Delete…",
@@ -660,6 +668,57 @@ export const ru: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Парк Codex",
+    title: "Сеансы на всех ваших компьютерах",
+    subtitle:
+      "Сеансы Codex на этом Gateway и всех подключённых компьютерах с общим доступом. Только для чтения.",
+    summaryLabel: "Сводка сеансов Codex",
+    summary: {
+      sessions: "сеансы",
+      onlineHosts: "в сети",
+      hosts: "хосты",
+    },
+    searchLabel: "Поиск сеансов Codex",
+    searchPlaceholder: "Поиск по названиям сеансов",
+    scopeLabel: "Фильтр архива сеансов",
+    scope: {
+      active: "Активно",
+      archived: "В архиве",
+    },
+    refresh: "Обновить",
+    disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Codex.",
+    partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
+    loading: "Загрузка сеансов Codex…",
+    loadMore: "Загрузить ещё",
+    loadingMore: "Загрузка…",
+    untitled: "Сеанс Codex без названия",
+    threadId: "Ветка",
+    status: {
+      active: "Активно",
+      idle: "Бездействует",
+      archived: "В архиве",
+      notLoaded: "Сохранён",
+      systemError: "Системная ошибка",
+      unknown: "Неизвестно",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Узел",
+      connected: "Подключено",
+      offline: "Не в сети",
+      unavailable: "Каталог сеансов недоступен",
+      sessionCount: "{count} показано",
+    },
+    empty: {
+      title: "Хосты Codex не найдены",
+      subtitle:
+        "Включите общий доступ к сеансам Codex на Gateway или сопряжённом компьютере, затем обновите эту страницу.",
+      search: "Ни один сеанс на этом хосте не соответствует поиску.",
+      active: "На этом хосте нет активных сеансов.",
+      archived: "На этом хосте нет архивных сеансов.",
+    },
   },
   logbook: {
     duration: {

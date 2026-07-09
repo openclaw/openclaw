@@ -1270,6 +1270,10 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.run.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+          : {}),
+        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),

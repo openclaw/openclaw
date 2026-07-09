@@ -1,4 +1,4 @@
-// Control UI tests cover session management through the sidebar and the command palette.
+// Control UI tests cover session management through the sidebar, Sessions page, and command palette.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
@@ -364,6 +364,53 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+  it("archives a session from the Sessions page context menu and kebab", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.click({ button: "right" });
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await menu.getByRole("menuitem", { name: "Archive session" }).click();
+      const patch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:research" && params.archived === true,
+      );
+      expect(requireRecord(patch.params)).toMatchObject({
+        archived: true,
+        key: "agent:main:research",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renames, deletes, and toggles sidebar session groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({

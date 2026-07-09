@@ -555,6 +555,26 @@ describe("updateNpmInstalledPlugins", () => {
     }
   });
 
+  it("does not treat inherited prototype names as install records", async () => {
+    const config: OpenClawConfig = { plugins: { installs: {} } };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["constructor"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "constructor",
+        status: "skipped",
+        message: 'No install record for "constructor".',
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "skips integrity drift checks for unpinned npm specs during dry-run updates",
@@ -5375,6 +5395,49 @@ describe("syncPluginsForUpdateChannel", () => {
     expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "path",
     });
+  });
+
+  it("migrates already-externalized records to prototype-named plugin ids", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-constructor",
+          pluginId: "constructor",
+          npmSpec: "constructor",
+          channelIds: [],
+        },
+      ],
+      config: {
+        plugins: {
+          entries: {
+            "legacy-constructor": { enabled: true },
+          },
+          installs: {
+            "legacy-constructor": {
+              source: "npm",
+              spec: "constructor",
+              installPath: "/tmp/constructor",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(Object.hasOwn(result.config.plugins?.entries ?? {}, "constructor")).toBe(true);
+    expect(result.config.plugins?.entries?.["constructor"]).toEqual({ enabled: true });
+    expect(Object.hasOwn(result.config.plugins?.installs ?? {}, "constructor")).toBe(true);
+    expectRecordFields(result.config.plugins?.installs?.["constructor"], {
+      source: "npm",
+      spec: "constructor",
+      installPath: "/tmp/constructor",
+    });
+    expect(result.config.plugins?.entries?.["legacy-constructor"]).toBeUndefined();
+    expect(result.config.plugins?.installs?.["legacy-constructor"]).toBeUndefined();
   });
 
   it("removes stale bundled load paths for already-externalized npm installs", async () => {
