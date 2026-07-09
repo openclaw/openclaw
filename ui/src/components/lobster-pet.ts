@@ -1,11 +1,13 @@
-// Decorative lobster that perches on the composer while the prompt is empty.
+// Decorative lobster pet that perches on the sidebar footer and mirrors
+// gateway status: it idles (naps, waves, wanders) when nothing is running,
+// scurries while runs are active, and paces worriedly while disconnected.
 // Drawn in the smooth OpenClaw lobster style (see the dreams scene and
-// icons.lobster), not pixel art. Look and personality are seeded per session +
-// page load so every new session hatches a slightly different lobster.
+// icons.lobster). Look and personality are seeded per session + page load so
+// every new session hatches a slightly different lobster.
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
-export type ComposerLobsterAct =
+export type LobsterPetAct =
   | "wave"
   | "snip"
   | "hop"
@@ -16,39 +18,41 @@ export type ComposerLobsterAct =
   | "scuttle"
   | "startle";
 
-export type ComposerLobsterPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+export type LobsterPetMode = "idle" | "busy" | "offline";
 
-export type ComposerLobsterPalette = {
+export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+
+export type LobsterPetPalette = {
   id: "crimson" | "coral" | "teal" | "violet" | "ink" | "gold";
   shell: string;
   claw: string;
 };
 
-export type ComposerLobsterAccessory = "none" | "crown" | "sprout" | "patch";
+export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
 
-export type ComposerLobsterAntennae = "perky" | "droopy";
+export type LobsterPetAntennae = "perky" | "droopy";
 
-export type ComposerLobsterLook = {
-  palette: ComposerLobsterPalette;
+export type LobsterPetLook = {
+  palette: LobsterPetPalette;
   scale: number;
-  accessory: ComposerLobsterAccessory;
-  antennae: ComposerLobsterAntennae;
+  accessory: LobsterPetAccessory;
+  antennae: LobsterPetAntennae;
   side: "left" | "right";
   spotPct: number;
   facing: 1 | -1;
-  personality: ComposerLobsterPersonalityId;
+  personality: LobsterPetPersonalityId;
   blinkDelayS: number;
 };
 
-type PersonalityProfile = {
-  // [min, max] idle delay before the next act.
+type ActProfile = {
+  // [min, max] delay before the next act.
   delayMs: [number, number];
-  acts: Array<[ComposerLobsterAct, number]>;
+  acts: Array<[LobsterPetAct, number]>;
 };
 
-// Act windows mirror the CSS animation durations in composer-lobster.css so
-// jsdom tests and browsers clear acts on the same clock without animationend.
-export const COMPOSER_LOBSTER_ACT_DURATION_MS: Record<ComposerLobsterAct, number> = {
+// Act windows mirror the CSS animation durations in lobster-pet.css so jsdom
+// tests and browsers clear acts on the same clock without animationend.
+export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   wave: 1400,
   snip: 1000,
   hop: 750,
@@ -60,7 +64,7 @@ export const COMPOSER_LOBSTER_ACT_DURATION_MS: Record<ComposerLobsterAct, number
   startle: 750,
 };
 
-const PERSONALITIES: Record<ComposerLobsterPersonalityId, PersonalityProfile> = {
+const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
   sleepy: {
     delayMs: [6000, 12000],
     acts: [
@@ -104,7 +108,30 @@ const PERSONALITIES: Record<ComposerLobsterPersonalityId, PersonalityProfile> = 
   },
 };
 
-const PALETTES: Array<[ComposerLobsterPalette, number]> = [
+// Busy and offline override the personality: the pet is a status indicator
+// first. Busy scurries (no naps mid-run); offline paces and peeks.
+export const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
+  busy: {
+    delayMs: [2200, 4500],
+    acts: [
+      ["scuttle", 40],
+      ["hop", 20],
+      ["snip", 20],
+      ["wave", 12],
+      ["spin", 8],
+    ],
+  },
+  offline: {
+    delayMs: [2800, 5600],
+    acts: [
+      ["scuttle", 55],
+      ["peek", 30],
+      ["hop", 15],
+    ],
+  },
+};
+
+const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 30],
   [{ id: "coral", shell: "#d0836a", claw: "#de9b80" }, 30],
   [{ id: "teal", shell: "#2fbfa7", claw: "#5cd9c4" }, 12],
@@ -113,14 +140,14 @@ const PALETTES: Array<[ComposerLobsterPalette, number]> = [
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
 ];
 
-const ACCESSORIES: Array<[ComposerLobsterAccessory, number]> = [
+const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
   ["none", 62],
   ["sprout", 14],
   ["patch", 14],
   ["crown", 10],
 ];
 
-const PERSONALITY_IDS: Array<[ComposerLobsterPersonalityId, number]> = [
+const PERSONALITY_IDS: Array<[LobsterPetPersonalityId, number]> = [
   ["sleepy", 25],
   ["zoomy", 25],
   ["friendly", 25],
@@ -133,9 +160,9 @@ const SCALES: Array<[number, number]> = [
   [2.5, 20],
 ];
 
-// Keep the perch off the composer center so the "new messages" pill and the
-// send affordances never sit under the sprite.
-const SPOT_ZONES = { left: [10, 34], right: [64, 86] } as const;
+// Keep the perch off the footer center so tooltips and the theme toggle
+// never sit under the sprite.
+const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 const ENTER_MS = 450;
 
 function fnv1a(value: string): number {
@@ -177,16 +204,16 @@ function randomBetween(rng: () => number, min: number, max: number): number {
 // while re-renders within a load stay stable for a given session key.
 const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);
 
-export function composerLobsterSeed(sessionKey: string): number {
+export function lobsterPetSeed(sessionKey: string): number {
   return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
-export function createComposerLobsterLook(seed: number): ComposerLobsterLook {
+export function createLobsterPetLook(seed: number): LobsterPetLook {
   const rng = mulberry32(seed);
   const palette = pickWeighted(rng, PALETTES);
   const scale = pickWeighted(rng, SCALES);
   const accessory = pickWeighted(rng, ACCESSORIES);
-  const antennae: ComposerLobsterAntennae = rng() < 0.6 ? "perky" : "droopy";
+  const antennae: LobsterPetAntennae = rng() < 0.6 ? "perky" : "droopy";
   const side = rng() < 0.5 ? "left" : "right";
   const zone = SPOT_ZONES[side];
   const spotPct = Math.round(randomBetween(rng, zone[0], zone[1]));
@@ -194,6 +221,16 @@ export function createComposerLobsterLook(seed: number): ComposerLobsterLook {
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
   return { palette, scale, accessory, antennae, side, spotPct, facing, personality, blinkDelayS };
+}
+
+export function resolveLobsterPetMode(
+  connected: boolean,
+  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
+): LobsterPetMode {
+  if (!connected) {
+    return "offline";
+  }
+  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
 
 function prefersReducedMotion(): boolean {
@@ -204,7 +241,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-const ACCESSORY_SPRITES: Record<Exclude<ComposerLobsterAccessory, "none">, TemplateResult> = {
+const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
   crown: svg`
     <path
       d="M46 12 L46 2 L53 8 L60 0 L67 8 L74 2 L74 12 Q60 8 46 12 Z"
@@ -225,7 +262,7 @@ const ACCESSORY_SPRITES: Record<Exclude<ComposerLobsterAccessory, "none">, Templ
   `,
 };
 
-const ANTENNAE_SPRITES: Record<ComposerLobsterAntennae, TemplateResult> = {
+const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
       <path d="M46 14 Q38 4 31 7" />
@@ -242,10 +279,10 @@ const ANTENNAE_SPRITES: Record<ComposerLobsterAntennae, TemplateResult> = {
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
-function renderLobsterSvg(look: ComposerLobsterLook) {
+function renderLobsterSvg(look: LobsterPetLook) {
   return svg`
     <svg
-      class="composer-lobster__svg"
+      class="lobster-pet__svg"
       viewBox="0 0 120 105"
       preserveAspectRatio="xMidYMax meet"
       aria-hidden="true"
@@ -271,8 +308,8 @@ function renderLobsterSvg(look: ComposerLobsterLook) {
       <g class="lob-eye-open">
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
-        <circle cx="46.5" cy="30.5" r="2.2" fill="#00e5cc" />
-        <circle cx="76.5" cy="30.5" r="2.2" fill="#00e5cc" />
+        <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+        <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
       </g>
       <g
         class="lob-eye-closed"
@@ -289,20 +326,20 @@ function renderLobsterSvg(look: ComposerLobsterLook) {
   `;
 }
 
-export class ComposerLobster extends LitElement {
+export class LobsterPet extends LitElement {
   override createRenderRoot() {
     return this;
   }
 
   @property({ attribute: false }) seed = 0;
-  @property({ attribute: false }) active = false;
+  @property({ attribute: false }) mode: LobsterPetMode = "idle";
 
-  @state() private act: ComposerLobsterAct | null = null;
+  @state() private act: LobsterPetAct | null = null;
   @state() private spotPct = 80;
   @state() private facing: 1 | -1 = 1;
   @state() private entering = false;
 
-  private look: ComposerLobsterLook | null = null;
+  private look: LobsterPetLook | null = null;
   private rng: () => number = mulberry32(0);
   private idleTimer: number | null = null;
   private actEndTimer: number | null = null;
@@ -323,19 +360,21 @@ export class ComposerLobster extends LitElement {
   override willUpdate(changed: Map<PropertyKey, unknown>) {
     const seedChanged = this.look === null || changed.has("seed");
     if (seedChanged) {
-      this.look = createComposerLobsterLook(this.seed);
+      this.look = createLobsterPetLook(this.seed);
       this.rng = mulberry32(this.seed ^ 0x9e3779b9);
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
-    }
-    if (seedChanged || changed.has("active")) {
-      // Reset the act loop inside the update pass; deferring the `entering`
-      // flip to updated() would chain a second update and trip lit's
-      // change-in-update warning.
+      // Reset the act loop inside the update pass; deferring state flips to
+      // updated() would chain a second update and trip lit's change-in-update
+      // warning.
       this.clearTimers();
       this.act = null;
-      this.entering = this.active && !prefersReducedMotion();
+      this.entering = !prefersReducedMotion();
       this.restartPending = this.entering;
+    } else if (changed.has("mode") && !prefersReducedMotion()) {
+      // Status flips get an immediate reaction; the act-end timer then
+      // reschedules from the new mode's pool.
+      this.performAct("startle");
     }
   }
 
@@ -353,14 +392,15 @@ export class ComposerLobster extends LitElement {
 
   private readonly handleVisibilityChange = () => {
     if (document.hidden) {
-      this.goDormant();
-    } else if (this.active) {
+      this.clearTimers();
+      this.act = null;
+    } else {
       this.scheduleNextAct();
     }
   };
 
   private readonly handlePoke = () => {
-    if (!this.active || prefersReducedMotion()) {
+    if (prefersReducedMotion()) {
       return;
     }
     this.performAct("startle");
@@ -377,10 +417,11 @@ export class ComposerLobster extends LitElement {
     this.enterTimer = null;
   }
 
-  private goDormant() {
-    this.clearTimers();
-    this.act = null;
-    this.entering = false;
+  private actProfile(): ActProfile | null {
+    if (this.mode === "busy" || this.mode === "offline") {
+      return LOBSTER_PET_MODE_ACTS[this.mode];
+    }
+    return this.look ? PERSONALITIES[this.look.personality] : null;
   }
 
   private scheduleNextAct() {
@@ -394,18 +435,22 @@ export class ComposerLobster extends LitElement {
     ) {
       return;
     }
-    const profile = PERSONALITIES[this.look.personality];
+    const profile = this.actProfile();
+    if (!profile) {
+      return;
+    }
     const delay = randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
-      if (!this.active || !this.look) {
+      const nextProfile = this.actProfile();
+      if (!nextProfile || document.hidden) {
         return;
       }
-      this.performAct(pickWeighted(this.rng, PERSONALITIES[this.look.personality].acts));
+      this.performAct(pickWeighted(this.rng, nextProfile.acts));
     }, delay);
   }
 
-  private performAct(act: ComposerLobsterAct) {
+  private performAct(act: LobsterPetAct) {
     this.clearTimers();
     this.entering = false;
     if (act === "scuttle") {
@@ -415,10 +460,8 @@ export class ComposerLobster extends LitElement {
     this.actEndTimer = window.setTimeout(() => {
       this.actEndTimer = null;
       this.act = null;
-      if (this.active) {
-        this.scheduleNextAct();
-      }
-    }, COMPOSER_LOBSTER_ACT_DURATION_MS[act]);
+      this.scheduleNextAct();
+    }, LOBSTER_PET_ACT_DURATION_MS[act]);
   }
 
   private startScuttle() {
@@ -442,10 +485,10 @@ export class ComposerLobster extends LitElement {
       return nothing;
     }
     const classes = [
-      "composer-lobster",
-      this.active ? "" : "composer-lobster--away",
-      this.entering ? "composer-lobster--entering" : "",
-      this.act ? `composer-lobster--act-${this.act}` : "",
+      "lobster-pet",
+      `lobster-pet--${this.mode}`,
+      this.entering ? "lobster-pet--entering" : "",
+      this.act ? `lobster-pet--act-${this.act}` : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -460,20 +503,20 @@ export class ComposerLobster extends LitElement {
     ].join(";");
     return html`
       <div class=${classes} style=${style} aria-hidden="true" @pointerdown=${this.handlePoke}>
-        <div class="composer-lobster__body">
+        <div class="lobster-pet__body">
           ${renderLobsterSvg(look)}
-          <span class="composer-lobster__z" style="--i:0">z</span>
-          <span class="composer-lobster__z" style="--i:1">z</span>
-          <span class="composer-lobster__z" style="--i:2">Z</span>
-          <span class="composer-lobster__bubble" style="--i:0"></span>
-          <span class="composer-lobster__bubble" style="--i:1"></span>
-          <span class="composer-lobster__bubble" style="--i:2"></span>
+          <span class="lobster-pet__z" style="--i:0">z</span>
+          <span class="lobster-pet__z" style="--i:1">z</span>
+          <span class="lobster-pet__z" style="--i:2">Z</span>
+          <span class="lobster-pet__bubble" style="--i:0"></span>
+          <span class="lobster-pet__bubble" style="--i:1"></span>
+          <span class="lobster-pet__bubble" style="--i:2"></span>
         </div>
       </div>
     `;
   }
 }
 
-if (!customElements.get("openclaw-composer-lobster")) {
-  customElements.define("openclaw-composer-lobster", ComposerLobster);
+if (!customElements.get("openclaw-lobster-pet")) {
+  customElements.define("openclaw-lobster-pet", LobsterPet);
 }

@@ -1,12 +1,17 @@
 /* ============================================
-   Composer lobster – decorative pet that
-   perches on the prompt while it is empty.
+   Lobster pet – decorative status mascot that
+   perches on the sidebar footer.
    ============================================ */
 
-/* Host is a zero-layout overlay strip above the composer box. Its bottom
-   edge sits 3px inside the box so feet dangle over the border, and
-   overflow: hidden makes duck/peek/enter moves read as "behind the prompt". */
-openclaw-composer-lobster {
+/* The footer bar is the pet's ledge. */
+.sidebar-shell__footer {
+  position: relative;
+}
+
+/* Host is a zero-layout overlay strip above the footer bar. Its bottom edge
+   sits 3px inside the footer so feet dangle over the divider, and
+   overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
+openclaw-lobster-pet {
   position: absolute;
   left: 0;
   right: 0;
@@ -17,7 +22,12 @@ openclaw-composer-lobster {
   pointer-events: none;
 }
 
-.composer-lobster {
+/* The collapsed rail has no room for a pet. */
+.sidebar--collapsed openclaw-lobster-pet {
+  display: none;
+}
+
+.lobster-pet {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
@@ -29,29 +39,21 @@ openclaw-composer-lobster {
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
-  transition:
-    left 1.15s ease-in-out,
-    transform 0.3s ease-in,
-    opacity 0.24s ease;
+  transition: left 1.15s ease-in-out;
 }
 
-.composer-lobster--away {
-  opacity: 0;
-  visibility: hidden;
-  transform: translateX(-50%) translateY(105%);
-  transition:
-    transform 0.3s ease-in,
-    opacity 0.2s ease 0.1s,
-    visibility 0s linear 0.3s;
+/* Disconnected pets lose their teal eye glow. */
+.lobster-pet--offline {
+  --lob-glint: #8a949d;
 }
 
-.composer-lobster__body {
+.lobster-pet__body {
   position: relative;
   width: 100%;
   height: 100%;
 }
 
-.composer-lobster__svg {
+.lobster-pet__svg {
   display: block;
   width: 100%;
   height: 100%;
@@ -59,8 +61,8 @@ openclaw-composer-lobster {
   transform-origin: 50% 100%;
 }
 
-.composer-lobster:not(.composer-lobster--away) .composer-lobster__svg {
-  animation: composer-lobster-breathe 3.4s ease-in-out infinite;
+.lobster-pet .lobster-pet__svg {
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
 }
 
 .lob-claw {
@@ -77,73 +79,73 @@ openclaw-composer-lobster {
 
 /* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
 
-.composer-lobster .lob-eye-closed {
+.lobster-pet .lob-eye-closed {
   opacity: 0;
 }
 
 /* Exclude the nap act: a running blink animation would out-cascade the nap
    opacity rules below and keep the eyes open mid-nap. */
-.composer-lobster:not(.composer-lobster--away, .composer-lobster--act-nap) .lob-eye-open {
-  animation: composer-lobster-blink-open 5.2s linear infinite;
+.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-open {
+  animation: lobster-pet-blink-open 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-.composer-lobster:not(.composer-lobster--away, .composer-lobster--act-nap) .lob-eye-closed {
-  animation: composer-lobster-blink-closed 5.2s linear infinite;
+.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-closed {
+  animation: lobster-pet-blink-closed 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-/* ---- Entrance: pops up from behind the composer edge ---- */
+/* ---- Entrance: pops up from behind the footer ledge ---- */
 
-.composer-lobster--entering .composer-lobster__body {
-  animation: composer-lobster-enter 0.45s ease-out;
+.lobster-pet--entering .lobster-pet__body {
+  animation: lobster-pet-enter 0.45s ease-out;
 }
 
 /* ---- Acts ---- */
 
-.composer-lobster--act-wave .lob-claw--r {
-  animation: composer-lobster-wave 1.4s ease-in-out;
+.lobster-pet--act-wave .lob-claw--r {
+  animation: lobster-pet-wave 1.4s ease-in-out;
 }
 
-.composer-lobster--act-snip .lob-claw {
-  animation: composer-lobster-snip 0.5s ease-in-out 2;
+.lobster-pet--act-snip .lob-claw {
+  animation: lobster-pet-snip 0.5s ease-in-out 2;
 }
 
-.composer-lobster--act-hop .composer-lobster__body {
-  animation: composer-lobster-hop 0.75s ease-in-out;
+.lobster-pet--act-hop .lobster-pet__body {
+  animation: lobster-pet-hop 0.75s ease-in-out;
 }
 
-.composer-lobster--act-spin .composer-lobster__body {
-  animation: composer-lobster-spin 0.95s ease-in-out;
+.lobster-pet--act-spin .lobster-pet__body {
+  animation: lobster-pet-spin 0.95s ease-in-out;
 }
 
-.composer-lobster--act-peek .composer-lobster__body {
-  animation: composer-lobster-peek 1.7s ease-in-out;
+.lobster-pet--act-peek .lobster-pet__body {
+  animation: lobster-pet-peek 1.7s ease-in-out;
 }
 
-.composer-lobster--act-scuttle .composer-lobster__body {
-  animation: composer-lobster-waddle 0.3s ease-in-out infinite;
+.lobster-pet--act-scuttle .lobster-pet__body {
+  animation: lobster-pet-waddle 0.3s ease-in-out infinite;
 }
 
-.composer-lobster--act-startle .composer-lobster__body {
-  animation: composer-lobster-startle 0.75s ease-out;
+.lobster-pet--act-startle .lobster-pet__body {
+  animation: lobster-pet-startle 0.75s ease-out;
 }
 
-.composer-lobster--act-startle .lob-claw {
-  animation: composer-lobster-snip 0.38s ease-in-out 2;
+.lobster-pet--act-startle .lob-claw {
+  animation: lobster-pet-snip 0.38s ease-in-out 2;
 }
 
 /* ---- Nap: eyes shut, z's drift up ---- */
 
-.composer-lobster--act-nap .lob-eye-open {
+.lobster-pet--act-nap .lob-eye-open {
   opacity: 0;
 }
 
-.composer-lobster--act-nap .lob-eye-closed {
+.lobster-pet--act-nap .lob-eye-closed {
   opacity: 1;
 }
 
-.composer-lobster__z {
+.lobster-pet__z {
   position: absolute;
   left: 58%;
   bottom: 72%;
@@ -156,14 +158,14 @@ openclaw-composer-lobster {
   pointer-events: none;
 }
 
-.composer-lobster--act-nap .composer-lobster__z {
-  animation: composer-lobster-z 2s ease-out infinite;
+.lobster-pet--act-nap .lobster-pet__z {
+  animation: lobster-pet-z 2s ease-out infinite;
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
 /* ---- Bubbles ---- */
 
-.composer-lobster__bubble {
+.lobster-pet__bubble {
   position: absolute;
   left: 30%;
   bottom: 55%;
@@ -175,14 +177,14 @@ openclaw-composer-lobster {
   pointer-events: none;
 }
 
-.composer-lobster--act-bubble .composer-lobster__bubble {
-  animation: composer-lobster-bubble 1.6s ease-out;
+.lobster-pet--act-bubble .lobster-pet__bubble {
+  animation: lobster-pet-bubble 1.6s ease-out;
   animation-delay: calc(var(--i, 0) * 0.42s);
 }
 
 /* ---- Keyframes ---- */
 
-@keyframes composer-lobster-breathe {
+@keyframes lobster-pet-breathe {
   0%,
   100% {
     transform: scaleX(var(--lob-face, 1)) scaleY(1);
@@ -192,7 +194,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-blink-open {
+@keyframes lobster-pet-blink-open {
   0%,
   93% {
     opacity: 1;
@@ -207,7 +209,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-blink-closed {
+@keyframes lobster-pet-blink-closed {
   0%,
   93% {
     opacity: 0;
@@ -222,7 +224,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-enter {
+@keyframes lobster-pet-enter {
   from {
     transform: translateY(105%);
   }
@@ -231,7 +233,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-wave {
+@keyframes lobster-pet-wave {
   0%,
   100% {
     transform: translateY(0) rotate(0deg);
@@ -246,7 +248,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-snip {
+@keyframes lobster-pet-snip {
   0%,
   100% {
     transform: scale(1);
@@ -256,7 +258,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-hop {
+@keyframes lobster-pet-hop {
   0%,
   100% {
     transform: translateY(0);
@@ -272,7 +274,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-spin {
+@keyframes lobster-pet-spin {
   from {
     transform: rotateY(0deg);
   }
@@ -281,7 +283,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-peek {
+@keyframes lobster-pet-peek {
   0%,
   100% {
     transform: translateY(0);
@@ -295,7 +297,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-waddle {
+@keyframes lobster-pet-waddle {
   0%,
   100% {
     transform: translateY(0) rotate(2.5deg);
@@ -305,7 +307,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-startle {
+@keyframes lobster-pet-startle {
   0% {
     transform: translateY(0);
   }
@@ -324,7 +326,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-z {
+@keyframes lobster-pet-z {
   0% {
     opacity: 0;
     transform: translate(0, 0);
@@ -338,7 +340,7 @@ openclaw-composer-lobster {
   }
 }
 
-@keyframes composer-lobster-bubble {
+@keyframes lobster-pet-bubble {
   0% {
     opacity: 0;
     transform: translate(0, 0) scale(0.6);
@@ -353,18 +355,9 @@ openclaw-composer-lobster {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  openclaw-composer-lobster .composer-lobster,
-  openclaw-composer-lobster .composer-lobster * {
+  openclaw-lobster-pet .lobster-pet,
+  openclaw-lobster-pet .lobster-pet * {
     animation: none !important;
     transition: none !important;
-  }
-}
-
-/* Short-landscape composers cap `.agent-chat__input` height and scroll it
-   (see layout.css), which clips children above the box. Vertical space is
-   scarce there anyway, so the mascot sits this mode out. */
-@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  openclaw-composer-lobster {
-    display: none;
   }
 }
