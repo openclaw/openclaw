@@ -1131,17 +1131,22 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     stateDir,
     environment: env,
   });
-  let existing: Record<string, string>;
+  let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
-    ({ environment: existing } = await readSystemdEnvironmentFile(envFilePath));
+    existingFile = await readSystemdEnvironmentFile(envFilePath);
   } catch {
     return;
   }
   const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
-    Object.entries(existing).filter(([key]) => {
+    Object.entries(existingFile.environment).filter(([key, value]) => {
       const normalized = normalizeSystemdEnvironmentKey(key);
-      return !normalized || !managedKeys.has(normalized);
+      if (normalized && managedKeys.has(normalized)) {
+        return false;
+      }
+      return (
+        existingFile.escapedShellReferenceKeys.has(key) || !isUnresolvedShellReference(value)
+      );
     }),
   );
   if (Object.keys(remaining).length === 0) {

@@ -2019,7 +2019,13 @@ describe("systemd service install and uninstall", () => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
       await fs.writeFile(
         nodeEnvFilePath,
-        "OPENCLAW_GATEWAY_TOKEN=stale-node-token\nOPENCLAW_GATEWAY_PASSWORD=stale-password\nOPENROUTER_API_KEY=operator-key\n",
+        [
+          "OPENCLAW_GATEWAY_TOKEN=stale-node-token",
+          "OPENCLAW_GATEWAY_PASSWORD=stale-password",
+          "OPENROUTER_API_KEY=operator-key",
+          "LLM_API_KEY=$SECRET_FROM_SHELL",
+          "LITERAL_API_KEY=\\$SECRET_FROM_SHELL",
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -2044,7 +2050,7 @@ describe("systemd service install and uninstall", () => {
       }
       expect(accessError?.code).toBe("ENOENT");
       await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(
-        "OPENROUTER_API_KEY=operator-key\n",
+        'OPENROUTER_API_KEY=operator-key\nLITERAL_API_KEY="\\$SECRET_FROM_SHELL"\n',
       );
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
