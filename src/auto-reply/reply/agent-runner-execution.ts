@@ -2543,6 +2543,7 @@ async function runAgentTurnWithFallbackInternal(
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                    taskSuggestionDeliveryMode: params.followupRun.run.taskSuggestionDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,

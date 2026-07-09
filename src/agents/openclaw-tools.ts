@@ -4,7 +4,10 @@
  * Creates the per-run tool inventory from config, channel context, sandbox policy, auth stores, and plugin tools.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -173,6 +176,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Action sink available for model-proposed follow-up tasks. */
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
@@ -472,7 +477,7 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
-    ...(!embedded && taskSuggestionSessionKey
+    ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
           sessionKey: taskSuggestionSessionKey,
           agentId: sessionAgentId,

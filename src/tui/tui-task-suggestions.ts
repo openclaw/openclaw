@@ -1,0 +1,409 @@
+// Presents model-proposed follow-up tasks that belong to the active TUI session.
+import {
+  SelectList,
+  Text,
+  type Component,
+  type OverlayHandle,
+  type SelectItem,
+} from "@earendil-works/pi-tui";
+import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { selectListTheme, theme } from "./theme/theme.js";
+import type { TuiBackend } from "./tui-backend.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
+
+type TaskSelector = Component & {
+  onSelect?: (item: SelectItem) => void;
+  onCancel?: () => void;
+  onSelectionChange?: (item: SelectItem) => void;
+  setSelectedIndex?: (index: number) => void;
+};
+
+type TaskSuggestionControllerDeps = {
+  client: Pick<
+    TuiBackend,
+    "listTaskSuggestions" | "acceptTaskSuggestion" | "dismissTaskSuggestion"
+  >;
+  chatLog: { addSystem: (line: string) => void };
+  getAgentId: () => string;
+  getSessionKey: () => string;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
+  requestRender: () => void;
+  onAccepted: (sessionKey: string) => Promise<void> | void;
+  createSelector?: (items: SelectItem[]) => TaskSelector;
+};
+
+const TASK_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const TASK_INSTRUCTION_VIEWPORT_LINES = 6;
+const TASK_INSTRUCTION_PAGE_LINES = TASK_INSTRUCTION_VIEWPORT_LINES - 1;
+const PAGE_UP_INPUT = "\u001b[5~";
+const PAGE_DOWN_INPUT = "\u001b[6~";
+
+const TASK_ACTIONS = [
+  {
+    value: "accept",
+    label: "Start in worktree",
+    description: "Create an isolated session and begin this task",
+  },
+  {
+    value: "dismiss",
+    label: "Dismiss",
+    description: "Leave the repository untouched",
+  },
+] satisfies SelectItem[];
+
+function clean(text: string): string {
+  return sanitizeTaskText(text.replace(/\s+/g, " ").trim());
+}
+
+function sanitizeTaskText(text: string): string {
+  return sanitizeRenderableText(text.replace(TASK_BIDI_CONTROL_RE, ""));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Parses the task suggestion shape carried by Gateway list and event payloads. */
+export function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const required = ["id", "title", "prompt", "tldr", "cwd", "sessionKey"] as const;
+  if (required.some((field) => typeof value[field] !== "string" || !value[field].trim())) {
+    return null;
+  }
+  if (typeof value.createdAt !== "number" || value.createdAt < 0) {
+    return null;
+  }
+  return {
+    id: (value.id as string).trim(),
+    title: (value.title as string).trim(),
+    prompt: (value.prompt as string).trim(),
+    tldr: (value.tldr as string).trim(),
+    cwd: (value.cwd as string).trim(),
+    sessionKey: (value.sessionKey as string).trim(),
+    ...(typeof value.agentId === "string" && value.agentId.trim()
+      ? { agentId: value.agentId.trim() }
+      : {}),
+    createdAt: value.createdAt,
+  };
+}
+
+class TaskPrompt implements Component {
+  private readonly title: Text;
+  private readonly metadata: Text;
+  private readonly summary: Text;
+  private readonly instructionLabel = new Text(theme.system("Instructions:"));
+  private readonly instructions: Text;
+  private readonly instructionPosition = new Text();
+  private readonly confirmation = new Text();
+  private instructionOffset = 0;
+  private instructionLineCount = 0;
+
+  constructor(
+    suggestion: TaskSuggestion,
+    private readonly selector: TaskSelector,
+    private readonly requestRender: () => void,
+  ) {
+    this.title = new Text(theme.header(`Suggested follow-up: ${clean(suggestion.title)}`));
+    this.metadata = new Text(theme.dim(`Project: ${clean(suggestion.cwd)}`));
+    this.summary = new Text(theme.system(`Why: ${clean(suggestion.tldr)}`));
+    this.instructions = new Text(theme.system(sanitizeTaskText(suggestion.prompt.trim())));
+  }
+
+  setConfirmation(text: string): void {
+    this.confirmation.setText(theme.accent(text));
+  }
+
+  invalidate(): void {
+    for (const component of [
+      this.title,
+      this.metadata,
+      this.summary,
+      this.instructionLabel,
+      this.instructions,
+      this.instructionPosition,
+      this.confirmation,
+      this.selector,
+    ]) {
+      component.invalidate();
+    }
+  }
+
+  render(width: number): string[] {
+    const instructionLines = this.instructions.render(width);
+    this.instructionLineCount = instructionLines.length;
+    const maxInstructionOffset = Math.max(
+      0,
+      instructionLines.length - TASK_INSTRUCTION_VIEWPORT_LINES,
+    );
+    this.instructionOffset = Math.min(this.instructionOffset, maxInstructionOffset);
+    const visibleInstructions = instructionLines.slice(
+      this.instructionOffset,
+      this.instructionOffset + TASK_INSTRUCTION_VIEWPORT_LINES,
+    );
+    if (instructionLines.length > TASK_INSTRUCTION_VIEWPORT_LINES) {
+      const visibleEnd = this.instructionOffset + visibleInstructions.length;
+      this.instructionPosition.setText(
+        theme.dim(
+          `Instructions ${this.instructionOffset + 1}-${visibleEnd} of ${instructionLines.length} · PgUp/PgDn to inspect`,
+        ),
+      );
+    } else {
+      this.instructionPosition.setText("");
+    }
+    const instructionPosition = this.instructionPosition.render(width);
+    const confirmation = this.confirmation.render(width);
+    return [
+      ...this.title.render(width).slice(0, 2),
+      ...this.metadata.render(width).slice(0, 2),
+      ...this.summary.render(width).slice(0, 2),
+      ...this.instructionLabel.render(width),
+      ...visibleInstructions,
+      ...(instructionPosition.some((line) => line.trim()) ? instructionPosition : []),
+      ...(confirmation.some((line) => line.trim()) ? ["", ...confirmation] : []),
+      "",
+      ...this.selector.render(width),
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (data === PAGE_UP_INPUT || data === PAGE_DOWN_INPUT) {
+      const maxOffset = Math.max(0, this.instructionLineCount - TASK_INSTRUCTION_VIEWPORT_LINES);
+      const delta =
+        data === PAGE_UP_INPUT ? -TASK_INSTRUCTION_PAGE_LINES : TASK_INSTRUCTION_PAGE_LINES;
+      const nextOffset = Math.min(maxOffset, Math.max(0, this.instructionOffset + delta));
+      if (nextOffset !== this.instructionOffset) {
+        this.instructionOffset = nextOffset;
+        this.instructions.invalidate();
+        this.requestRender();
+      }
+      return;
+    }
+    this.selector.handleInput?.(data);
+  }
+}
+
+/** Coordinates Gateway task-suggestion events with the active TUI overlay. */
+export function createTuiTaskSuggestionController(deps: TaskSuggestionControllerDeps) {
+  const createSelector =
+    deps.createSelector ??
+    ((items: SelectItem[]) => new SelectList(items, items.length, selectListTheme));
+  const suggestions = new Map<string, TaskSuggestion>();
+  const hiddenIds = new Set<string>();
+  let activeId: string | null = null;
+  let activeOverlay: OverlayHandle | null = null;
+  let revision = 0;
+  let disposed = false;
+  let refreshInFlight: Promise<void> | null = null;
+  let refreshAgain = false;
+
+  const closeActive = () => {
+    if (activeOverlay) {
+      deps.closeOverlay(activeOverlay);
+      activeOverlay = null;
+    }
+    activeId = null;
+  };
+
+  const remove = (id: string) => {
+    revision += 1;
+    suggestions.delete(id);
+    hiddenIds.delete(id);
+    if (activeId === id) {
+      closeActive();
+    }
+  };
+
+  const matchesSession = (suggestion: TaskSuggestion) =>
+    suggestion.sessionKey === deps.getSessionKey() &&
+    (suggestion.sessionKey !== "global" || suggestion.agentId === deps.getAgentId());
+
+  const presentNext = () => {
+    if (disposed || activeId) {
+      return;
+    }
+    const suggestion = [...suggestions.values()]
+      .toSorted((left, right) => left.createdAt - right.createdAt)
+      .find((entry) => !hiddenIds.has(entry.id) && matchesSession(entry));
+    if (!suggestion) {
+      return;
+    }
+
+    activeId = suggestion.id;
+    const selector = createSelector(TASK_ACTIONS.slice());
+    selector.setSelectedIndex?.(1);
+    let acceptArmed = false;
+    let prompt: TaskPrompt | null = null;
+
+    const resolve = async (action: "accept" | "dismiss") => {
+      if (activeId !== suggestion.id) {
+        return;
+      }
+      closeActive();
+      hiddenIds.add(suggestion.id);
+      deps.requestRender();
+      try {
+        if (action === "accept") {
+          if (!deps.client.acceptTaskSuggestion) {
+            throw new Error("task suggestion acceptance is unavailable");
+          }
+          const result = await deps.client.acceptTaskSuggestion(suggestion.id);
+          remove(suggestion.id);
+          deps.chatLog.addSystem(`follow-up task started in ${result.key}`);
+          if (matchesSession(suggestion)) {
+            await deps.onAccepted(result.key);
+          }
+        } else {
+          if (!deps.client.dismissTaskSuggestion) {
+            throw new Error("task suggestion dismissal is unavailable");
+          }
+          const result = await deps.client.dismissTaskSuggestion(suggestion.id);
+          if (!result.dismissed) {
+            throw new Error("task suggestion is no longer pending");
+          }
+          remove(suggestion.id);
+          deps.chatLog.addSystem("follow-up task dismissed");
+        }
+      } catch (error) {
+        hiddenIds.delete(suggestion.id);
+        deps.chatLog.addSystem(`follow-up task failed: ${formatErrorMessage(error)}`);
+        void refresh().catch((refreshError: unknown) => {
+          deps.chatLog.addSystem(
+            `task suggestion refresh failed: ${formatErrorMessage(refreshError)}`,
+          );
+        });
+      }
+      presentNext();
+      if (!disposed) {
+        deps.requestRender();
+      }
+    };
+
+    selector.onSelectionChange = () => {
+      acceptArmed = false;
+      prompt?.setConfirmation("");
+    };
+    selector.onSelect = (item) => {
+      if (item.value === "dismiss") {
+        void resolve("dismiss");
+        return;
+      }
+      if (item.value !== "accept") {
+        return;
+      }
+      if (acceptArmed) {
+        void resolve("accept");
+        return;
+      }
+      acceptArmed = true;
+      prompt?.setConfirmation("Press Enter again to start this task in a worktree.");
+      deps.requestRender();
+    };
+    selector.onCancel = () => {
+      hiddenIds.add(suggestion.id);
+      closeActive();
+      deps.chatLog.addSystem("follow-up task hidden; suggestion remains pending");
+      presentNext();
+      deps.requestRender();
+    };
+    prompt = new TaskPrompt(suggestion, selector, deps.requestRender);
+    activeOverlay = deps.openOverlay(prompt);
+    deps.requestRender();
+  };
+
+  const refresh = async (): Promise<void> => {
+    if (disposed || !deps.client.listTaskSuggestions) {
+      return;
+    }
+    if (refreshInFlight) {
+      refreshAgain = true;
+      return await refreshInFlight;
+    }
+    refreshInFlight = (async () => {
+      do {
+        refreshAgain = false;
+        const startRevision = revision;
+        const listed = await deps.client.listTaskSuggestions?.();
+        if (disposed || !listed) {
+          return;
+        }
+        // An event raced this snapshot. Retry instead of resurrecting resolved work.
+        if (revision !== startRevision) {
+          refreshAgain = true;
+          continue;
+        }
+        suggestions.clear();
+        for (const value of listed) {
+          const suggestion = parseTuiTaskSuggestion(value);
+          if (suggestion) {
+            suggestions.set(suggestion.id, suggestion);
+          }
+        }
+        for (const id of hiddenIds) {
+          if (!suggestions.has(id)) {
+            hiddenIds.delete(id);
+          }
+        }
+      } while (refreshAgain);
+      if (activeId && !suggestions.has(activeId)) {
+        closeActive();
+      }
+      presentNext();
+      deps.requestRender();
+    })();
+    try {
+      await refreshInFlight;
+    } finally {
+      refreshInFlight = null;
+    }
+  };
+
+  return {
+    handleEvent(event: string, payload: unknown) {
+      if (disposed || event !== "task.suggestion" || !isRecord(payload)) {
+        return;
+      }
+      if (payload.action === "created") {
+        const suggestion = parseTuiTaskSuggestion(payload.suggestion);
+        if (suggestion) {
+          revision += 1;
+          hiddenIds.delete(suggestion.id);
+          suggestions.set(suggestion.id, suggestion);
+          presentNext();
+        }
+        return;
+      }
+      if (payload.action === "resolved" && typeof payload.taskId === "string") {
+        remove(payload.taskId);
+        presentNext();
+        deps.requestRender();
+      }
+    },
+    refresh,
+    sessionChanged() {
+      if (disposed) {
+        return;
+      }
+      hiddenIds.clear();
+      const active = activeId ? suggestions.get(activeId) : undefined;
+      if (active && !matchesSession(active)) {
+        closeActive();
+      }
+      presentNext();
+      deps.requestRender();
+    },
+    dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      suggestions.clear();
+      hiddenIds.clear();
+      closeActive();
+      deps.requestRender();
+    },
+  };
+}

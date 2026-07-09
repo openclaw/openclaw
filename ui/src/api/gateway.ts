@@ -784,7 +784,11 @@ export class GatewayBrowserClient {
       role: plan.role,
       scopes: plan.scopes,
       device: plan.device,
-      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS, GATEWAY_CLIENT_CAPS.INLINE_WIDGETS],
+      caps: [
+        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+        GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      ],
       auth: plan.auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

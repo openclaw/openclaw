@@ -15,6 +15,8 @@ import {
   type SessionsListParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
@@ -145,7 +147,7 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
-      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -327,6 +329,27 @@ export class GatewayChatClient implements TuiBackend {
       id,
       decision,
     });
+  }
+
+  async listTaskSuggestions() {
+    if (this.hello?.features?.methods?.includes("taskSuggestions.list") !== true) {
+      return [];
+    }
+    const result = await this.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {});
+    return result.suggestions;
+  }
+
+  async acceptTaskSuggestion(taskId: string) {
+    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
+      taskId,
+    });
+  }
+
+  async dismissTaskSuggestion(taskId: string) {
+    return await this.client.request<{ taskId: string; dismissed: boolean }>(
+      "taskSuggestions.dismiss",
+      { taskId },
+    );
   }
 }
 

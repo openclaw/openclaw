@@ -161,6 +161,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
+    execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,

@@ -6,6 +6,8 @@ import type {
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
+  TaskSuggestion,
+  TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
@@ -195,5 +197,8 @@ export type TuiBackend = {
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
+  acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
+  dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;
   runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

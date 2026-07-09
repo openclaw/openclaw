@@ -1422,6 +1422,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -3898,6 +3899,7 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
         cancel: abortActiveRunExternally,
         abort: (reason) => abortActiveRunExternally(reason),
       };

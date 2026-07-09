@@ -19,6 +19,7 @@ import type {
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -153,6 +154,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;
