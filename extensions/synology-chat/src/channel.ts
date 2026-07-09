@@ -181,6 +181,7 @@ type SynologyChatPlugin = Omit<
   outbound: {
     deliveryMode: "gateway";
     textChunkLimit: number;
+    sanitizeText?: (params: { text: string; payload: { text: string } }) => string;
     sendText: (ctx: SynologyChannelSendTextContext) => Promise<SynologyChatOutboundResult>;
     sendMedia: (ctx: SynologyChannelSendMediaContext) => Promise<SynologyChatOutboundResult>;
   };
