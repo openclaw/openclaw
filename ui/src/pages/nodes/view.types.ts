@@ -3,6 +3,7 @@ import type {
   DevicePairingList,
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
+  InventoryRemovalRequest,
 } from "../../lib/nodes/index.ts";
 
 export type NodesProps = {
@@ -26,12 +27,15 @@ export type NodesProps = {
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onRefresh: () => void;
-  onDevicesRefresh: () => void;
   onDevicePairSetupOpen: () => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;
   onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
+  onNodeApprove: (requestId: string) => void;
+  onNodeReject: (requestId: string) => void;
+  onInventoryRemove: (entry: InventoryRemovalRequest) => void;
+  onInventoryCleanup: (entries: InventoryRemovalRequest[]) => void;
   onLoadConfig: () => void;
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;
