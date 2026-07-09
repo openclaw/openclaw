@@ -23,6 +23,7 @@ import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runti
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -1210,7 +1211,7 @@ export async function prepareSlackMessage(params: {
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const senderName = await resolveSenderName();
-  const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+  const preview = truncateUtf16Safe(rawBody.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
     : `Slack message in ${roomLabel} from ${senderName}`;
