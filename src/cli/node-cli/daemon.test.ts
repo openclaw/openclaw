@@ -1,7 +1,7 @@
 // Node daemon tests cover node daemon command runtime behavior and errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { runNodeDaemonStatus } from "./daemon.js";
+import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -25,6 +25,12 @@ const mocks = vi.hoisted(() => {
       exit: vi.fn(),
     },
     service,
+    buildNodeInstallPlan: vi.fn(async () => ({
+      programArguments: ["node", "node-host"],
+      environment: {},
+      environmentValueSources: {},
+    })),
+    loadNodeHostConfig: vi.fn(),
   };
 });
 
@@ -34,6 +40,14 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../../daemon/node-service.js", () => ({
   resolveNodeService: () => mocks.service,
+}));
+
+vi.mock("../../commands/node-daemon-install-helpers.js", () => ({
+  buildNodeInstallPlan: mocks.buildNodeInstallPlan,
+}));
+
+vi.mock("../../node-host/config.js", () => ({
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 vi.mock("../../daemon/runtime-hints.js", () => ({
@@ -70,7 +84,75 @@ vi.mock("../daemon-cli/shared.js", async () => {
     }),
     formatRuntimeStatus: (runtime: GatewayServiceRuntime | undefined) => runtime?.status ?? "",
     resolveRuntimeStatusColor: () => "",
+    failIfNixDaemonInstallMode: () => false,
   };
+});
+
+describe("runNodeDaemonInstall", () => {
+  beforeEach(() => {
+    mocks.runtime.log.mockClear();
+    mocks.runtime.error.mockClear();
+    mocks.runtime.writeJson.mockClear();
+    mocks.runtime.exit.mockClear();
+    mocks.service.install.mockReset().mockResolvedValue(undefined);
+    mocks.service.isLoaded.mockReset().mockResolvedValue(false);
+    mocks.buildNodeInstallPlan.mockReset().mockResolvedValue({
+      programArguments: ["node", "node-host"],
+      environment: {},
+      environmentValueSources: {},
+    });
+    mocks.loadNodeHostConfig.mockReset().mockResolvedValue({
+      gateway: {
+        host: "saved-gateway.local",
+        port: 18789,
+        contextPath: "/saved",
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+      },
+    });
+  });
+
+  it.each([
+    ["host", { host: "new-gateway.local" }],
+    ["port", { port: 19_001 }],
+  ])("does not inherit saved TLS when %s explicitly retargets the gateway", async (_name, opts) => {
+    await runNodeDaemonInstall({ ...opts, force: true });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tls: false,
+        tlsFingerprint: undefined,
+      }),
+    );
+  });
+
+  it("inherits saved TLS when the gateway endpoint is unchanged", async () => {
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "saved-gateway.local",
+        port: 18789,
+        contextPath: "/saved",
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+      }),
+    );
+  });
+
+  it.each([
+    ["host", { host: "saved-gateway.local" }],
+    ["port", { port: 18_789 }],
+  ])("keeps saved TLS when explicit %s resolves to the saved endpoint", async (_name, opts) => {
+    await runNodeDaemonInstall({ ...opts, force: true });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+      }),
+    );
+  });
 });
 
 describe("runNodeDaemonStatus", () => {

@@ -408,6 +408,29 @@ function parseEnvironmentFileSpecs(raw: string): string[] {
   return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
+function decodeSystemdEnvironmentFileValue(value: string, quoted: boolean): string {
+  let decoded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char !== "\\") {
+      decoded += char;
+      continue;
+    }
+    const next = value[index + 1];
+    if (next === undefined) {
+      decoded += char;
+      continue;
+    }
+    if (quoted && !['"', "\\", "`", "$"].includes(next)) {
+      decoded += `${char}${next}`;
+    } else {
+      decoded += next;
+    }
+    index += 1;
+  }
+  return decoded;
+}
+
 function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
   const trimmed = rawLine.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
@@ -427,9 +450,35 @@ function parseEnvironmentFileLine(rawLine: string): { key: string; value: string
     ((value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'")))
   ) {
+    const quote = value[0];
     value = value.slice(1, -1);
+    if (quote === '"') {
+      value = decodeSystemdEnvironmentFileValue(value, true);
+    }
+  } else {
+    value = decodeSystemdEnvironmentFileValue(value, false);
   }
   return { key, value };
+}
+
+function serializeSystemdEnvironmentFileValue(value: string): string {
+  // EnvironmentFile double quotes only unescape \", \\, \`, and \$. Escape
+  // exactly that set so credentials survive systemd parsing byte-for-byte.
+  if (!/[\s\\'"`$]/u.test(value)) {
+    return value;
+  }
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("`", "\\`")
+    .replaceAll("$", "\\$");
+  return `"${escaped}"`;
+}
+
+function serializeSystemdEnvironmentFile(environment: Record<string, string>): string {
+  return Object.entries(environment)
+    .map(([key, value]) => `${key}=${serializeSystemdEnvironmentFileValue(value)}`)
+    .join("\n");
 }
 
 async function readSystemdEnvironmentFile(pathname: string): Promise<Record<string, string>> {
@@ -1030,9 +1079,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     return { environmentFiles: [], environmentKeys };
   }
 
-  const content = Object.entries(merged)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
+  const content = serializeSystemdEnvironmentFile(merged);
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);
@@ -1054,7 +1101,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   } catch {
     return;
   }
-  const managedKeys = new Set([normalizeSystemdEnvironmentKey("OPENCLAW_GATEWAY_TOKEN")]);
+  const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
     Object.entries(existing).filter(([key]) => {
       const normalized = normalizeSystemdEnvironmentKey(key);
@@ -1065,9 +1112,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     await fs.rm(envFilePath, { force: true });
     return;
   }
-  const content = Object.entries(remaining)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
+  const content = serializeSystemdEnvironmentFile(remaining);
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);
 }
