@@ -214,10 +214,11 @@ describe("isExecCompletionEvent", () => {
 
 describe("buildExecEventPrompt truncation", () => {
   it("does not split surrogate pairs in long event text", () => {
-    const emojiLine = `result: aa🚀${"b".repeat(8_000)}`;
-    const result = buildExecEventPrompt([emojiLine]);
-    expect(result).not.toContain("�");
-    expect(result.length).toBeLessThanOrEqual(8_500); // body + notice
+    const safePrefix = "x".repeat(7_999);
+    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
+
+    expect(result).toContain(`${safePrefix}\n\n[truncated]`);
+    expect(result).not.toContain("🚀tail");
   });
 
   it("passes through short event text unchanged", () => {

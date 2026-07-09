@@ -90,7 +90,7 @@ function buildStartupMemoryDateStamps(params: {
     : [...localWindow, utcTodayStamp];
 }
 
-export function trimStartupMemoryContent(content: string, maxChars: number): string {
+function trimStartupMemoryContent(content: string, maxChars: number): string {
   const trimmed = content.trim();
   if (trimmed.length <= maxChars) {
     return trimmed;
