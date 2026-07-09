@@ -1193,13 +1193,8 @@ function finishRetiredCronTaskRuns(
 async function persistClaimedCronRunStart(
   state: CronServiceState,
   params: { jobId: string; reservedAtMs: number; startedAt: number },
-): Promise<boolean> {
+): Promise<CronJob | undefined> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
-    if (job?.state.runningAtMs !== params.reservedAtMs) {
-      return false;
-    }
     // Task maintenance recovers interrupted cron task rows by matching the run
     // id timestamp to this durable marker; persist the claimed start before
     // creating the task row so a later restart has one stable key.
@@ -1211,10 +1206,13 @@ async function persistClaimedCronRunStart(
     });
     if (!claimed) {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      return false;
+      return undefined;
     }
-    job.state.runningAtMs = params.startedAt;
-    return true;
+    // Reload after the CAS so execution uses config and delivery writebacks
+    // ordered before the durable claim, not the stale reservation-plan object.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
+    return job?.state.runningAtMs === params.startedAt ? job : undefined;
   });
 }
 
@@ -1426,22 +1424,28 @@ export async function onTimer(state: CronServiceState) {
       reservedAtMs: number;
       activeJobGeneration: number;
     }): Promise<TimedCronRunOutcome | undefined> => {
-      const { id, job, reservedAtMs, activeJobGeneration } = params;
+      const { id, job: plannedJob, reservedAtMs, activeJobGeneration } = params;
       const startedAt = state.deps.nowMs();
-      const activeJobMarker = markCronJobActive(job.id, {
-        preserveAcrossGenerationAdvance: job.sessionTarget === "main",
-      });
-      const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+      let job = plannedJob;
+      let activeJobMarker: CronActiveJobMarker | undefined;
+      let jobTimeoutMs = resolveCronJobTimeoutMs(job);
       let taskRunId: string | undefined;
 
       try {
-        const claimed = await persistClaimedCronRunStart(state, {
+        const claimedJob = await persistClaimedCronRunStart(state, {
           jobId: id,
           reservedAtMs,
           startedAt,
         });
+        if (!claimedJob) {
+          return undefined;
+        }
+        job = claimedJob;
+        jobTimeoutMs = resolveCronJobTimeoutMs(job);
+        activeJobMarker = markCronJobActive(job.id, {
+          preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+        });
         if (
-          !claimed ||
           stopAdmittingDueJobs ||
           state.stopped ||
           state.restartRecoveryPending ||
@@ -1449,9 +1453,7 @@ export async function onTimer(state: CronServiceState) {
           !isCronActiveJobMarkerCurrent(activeJobMarker)
         ) {
           clearCronJobActive(job.id, activeJobMarker);
-          if (claimed) {
-            await releaseClaimedCronRunStart(state, { jobId: id, startedAt });
-          }
+          await releaseClaimedCronRunStart(state, { jobId: id, startedAt });
           return undefined;
         }
         job.state.runningAtMs = startedAt;
@@ -1969,49 +1971,52 @@ async function runStartupCatchupCandidate(
   activeJobGeneration: number,
 ): Promise<TimedCronRunOutcome | undefined> {
   const startedAt = state.deps.nowMs();
-  const activeJobMarker = markCronJobActive(candidate.job.id, {
-    preserveAcrossGenerationAdvance: candidate.job.sessionTarget === "main",
-  });
+  let job = candidate.job;
+  let activeJobMarker: CronActiveJobMarker | undefined;
   let taskRunId: string | undefined;
   try {
-    const claimed = await persistClaimedCronRunStart(state, {
+    const claimedJob = await persistClaimedCronRunStart(state, {
       jobId: candidate.jobId,
       reservedAtMs: candidate.reservedAtMs,
       startedAt,
     });
+    if (!claimedJob) {
+      return undefined;
+    }
+    job = claimedJob;
+    activeJobMarker = markCronJobActive(job.id, {
+      preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+    });
     if (
-      !claimed ||
       state.stopped ||
       state.restartRecoveryPending ||
       getCronActiveJobGeneration() !== activeJobGeneration ||
       !isCronActiveJobMarkerCurrent(activeJobMarker)
     ) {
-      clearCronJobActive(candidate.job.id, activeJobMarker);
-      if (claimed) {
-        await releaseClaimedCronRunStart(state, { jobId: candidate.jobId, startedAt });
-      }
+      clearCronJobActive(job.id, activeJobMarker);
+      await releaseClaimedCronRunStart(state, { jobId: candidate.jobId, startedAt });
       return undefined;
     }
-    candidate.job.state.runningAtMs = startedAt;
-    candidate.job.state.lastError = undefined;
+    job.state.runningAtMs = startedAt;
+    job.state.lastError = undefined;
     taskRunId = tryCreateCronTaskRun({
       state,
-      job: candidate.job,
+      job,
       startedAt,
     });
     emit(state, {
-      jobId: candidate.job.id,
+      jobId: job.id,
       action: "started",
-      job: candidate.job,
+      job,
       runAtMs: startedAt,
     });
-    const result = await executeJobCoreWithTimeout(state, candidate.job, {
+    const result = await executeJobCoreWithTimeout(state, job, {
       runId: taskRunId,
       activeJobMarker,
     });
     return {
       jobId: candidate.jobId,
-      job: candidate.job,
+      job,
       taskRunId,
       activeJobMarker,
       status: result.status,
@@ -2034,7 +2039,7 @@ async function runStartupCatchupCandidate(
   } catch (err) {
     return {
       jobId: candidate.jobId,
-      job: candidate.job,
+      job,
       taskRunId,
       activeJobMarker,
       status: "error",
@@ -2087,8 +2092,7 @@ async function applyStartupCatchupOutcomes(
         outcomes,
       );
       const deferredJobs =
-        !state.restartRecoveryPending &&
-        getCronActiveJobGeneration() === plan.activeJobGeneration
+        !state.restartRecoveryPending && getCronActiveJobGeneration() === plan.activeJobGeneration
           ? plan.deferredJobs
           : [];
       for (const result of finalizedOutcomes) {

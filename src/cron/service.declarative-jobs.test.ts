@@ -6,6 +6,7 @@ import {
   installCronTestHooks,
 } from "./service.test-harness.js";
 import type { CronAddResult } from "./service/state.js";
+import { loadCronStore, updateCronJobDeliveryTargets } from "./store.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
 const logger = createNoopLogger();
@@ -189,6 +190,40 @@ describe("CronService declarative jobs", () => {
         }),
       ).rejects.toThrow("scope changed");
       expect(await cron.readJob(created.id)).toMatchObject({ displayName: "Daily report" });
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("enforces an unchanged explicit delivery target after concurrent writeback", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+    const originalTarget = "@legacy-target";
+    const rewrittenTarget = "-100123456";
+
+    try {
+      const input = declaration({
+        delivery: { mode: "announce", channel: "telegram", to: originalTarget },
+      });
+      const created = declarativeResult(await cron.add(input));
+      let racedWriteback = false;
+      const unchanged = declarativeResult(
+        await cron.add(input, {
+          matchesExisting: () => {
+            if (!racedWriteback) {
+              racedWriteback = true;
+              void updateCronJobDeliveryTargets(storePath, (delivery) =>
+                delivery.to === originalTarget ? rewrittenTarget : undefined,
+              );
+            }
+            return true;
+          },
+        }),
+      );
+
+      expect(unchanged).toMatchObject({ id: created.id, created: false, updated: false });
+      expect((await loadCronStore(storePath)).jobs[0]?.delivery?.to).toBe(originalTarget);
     } finally {
       cron.stop();
     }

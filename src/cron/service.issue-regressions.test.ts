@@ -226,10 +226,12 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("keeps telegram delivery target writeback after an unrelated cron update", async () => {
+  it("keeps telegram delivery target writeback across cached writes and reads", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const originalTarget = "https://t.me/obviyus";
+    const intermediateTarget = "-10011111/2222";
     const rewrittenTarget = "-10012345/6789";
+    const laterTarget = "-10054321/9876";
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
     const targetJob = await cron.add({
       name: "target-writeback",
@@ -249,13 +251,39 @@ describe("Cron issue regressions", () => {
       payload: { kind: "systemEvent", text: "before" },
     });
 
-    await expect(
-      updateCronJobDeliveryTargets(store.storePath, (delivery) =>
-        delivery.channel === "telegram" && delivery.to === originalTarget
-          ? rewrittenTarget
-          : undefined,
-      ),
-    ).resolves.toEqual({ updatedJobs: 1 });
+    const explicitlyRestoredTargetJob = await cron.updateWithPrecondition(
+      targetJob.id,
+      { delivery: { to: originalTarget } },
+      async () => {
+        await expect(
+          updateCronJobDeliveryTargets(store.storePath, (delivery) =>
+            delivery.to === originalTarget ? intermediateTarget : undefined,
+          ),
+        ).resolves.toEqual({ updatedJobs: 1 });
+      },
+    );
+    expect(explicitlyRestoredTargetJob.delivery?.to).toBe(originalTarget);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.delivery?.to).toBe(originalTarget);
+
+    const updatedTargetJob = await cron.updateWithPrecondition(
+      targetJob.id,
+      { payload: { kind: "agentTurn", message: "target-updated" } },
+      async () => {
+        await expect(
+          updateCronJobDeliveryTargets(store.storePath, (delivery) =>
+            delivery.channel === "telegram" && delivery.to === originalTarget
+              ? rewrittenTarget
+              : undefined,
+          ),
+        ).resolves.toEqual({ updatedJobs: 1 });
+      },
+    );
+    expect(updatedTargetJob.delivery?.to).toBe(rewrittenTarget);
+    expect(
+      (await cron.list({ includeDisabled: true })).find((job) => job.id === targetJob.id)?.delivery
+        ?.to,
+    ).toBe(rewrittenTarget);
+
     await cron.update(siblingJob.id, {
       payload: { kind: "systemEvent", text: "after" },
     });
@@ -269,7 +297,46 @@ describe("Cron issue regressions", () => {
       text: "after",
     });
 
+    await expect(
+      updateCronJobDeliveryTargets(store.storePath, (delivery) =>
+        delivery.channel === "telegram" && delivery.to === rewrittenTarget
+          ? laterTarget
+          : undefined,
+      ),
+    ).resolves.toEqual({ updatedJobs: 1 });
+    expect(cron.getJob(targetJob.id)?.delivery?.to).toBe(laterTarget);
+    expect(
+      (await cron.list({ includeDisabled: true })).find((job) => job.id === targetJob.id)?.delivery
+        ?.to,
+    ).toBe(laterTarget);
+
     cron.stop();
+  });
+
+  it("invalidates another loaded service after a same-process full-store write", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const originalTarget = "https://t.me/obviyus";
+    const rewrittenTarget = "-10012345/6789";
+    const writer = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    const job = await writer.add({
+      name: "shared-store-writer",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "target" },
+      delivery: { mode: "announce", channel: "telegram", to: originalTarget },
+    });
+    const reader = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    expect((await reader.readJob(job.id))?.delivery?.to).toBe(originalTarget);
+
+    await writer.update(job.id, { delivery: { to: rewrittenTarget } });
+
+    expect(reader.getJob(job.id)?.delivery?.to).toBe(rewrittenTarget);
+    expect((await reader.readJob(job.id))?.delivery?.to).toBe(rewrittenTarget);
+
+    writer.stop();
+    reader.stop();
   });
 
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {

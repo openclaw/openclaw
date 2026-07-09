@@ -31,7 +31,7 @@ import {
   resetCronActiveJobs,
 } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore, updateCronJobDeliveryTargets } from "../store.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -2794,6 +2794,64 @@ describe("cron service timer regressions", () => {
 
       release.resolve({ status: "ok", summary: "done" });
       await missedJobs;
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("preserves delivery target writeback when startup catch-up finalizes", async () => {
+    resetTaskRegistryForTests();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T08:59:40.000Z");
+      const originalTarget = "@legacy-target";
+      const rewrittenTarget = "-100123456";
+      const job = createDueIsolatedJob({
+        id: "startup-target-writeback",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      const siblingJob = createDueIsolatedJob({
+        id: "startup-target-writeback-sibling",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      job.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: originalTarget,
+      };
+      siblingJob.delivery = structuredClone(job.delivery);
+      await saveCronStore(store.storePath, { version: 1, jobs: [job, siblingJob] });
+
+      const executedTargets: Array<string | undefined> = [];
+
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => missedAt + 60_000,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async (params: { job: CronJob }) => {
+          executedTargets.push(params.job.delivery?.to);
+          if (params.job.id === job.id) {
+            await updateCronJobDeliveryTargets(store.storePath, (delivery) =>
+              delivery.to === originalTarget ? rewrittenTarget : undefined,
+            );
+          }
+          return { status: "ok" as const, summary: "done", delivered: true };
+        }),
+      });
+
+      await runMissedJobs(state);
+
+      expect(executedTargets).toEqual([originalTarget, rewrittenTarget]);
+      expect(requireJob(state, job.id).delivery?.to).toBe(rewrittenTarget);
+      expect(requireJob(state, siblingJob.id).delivery?.to).toBe(rewrittenTarget);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.map((entry) => entry.delivery?.to),
+      ).toEqual([rewrittenTarget, rewrittenTarget]);
     } finally {
       resetTaskRegistryForTests();
     }

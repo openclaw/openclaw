@@ -18,6 +18,7 @@ import {
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,
+  saveCronJobsStore,
   saveCronStore,
   updateCronJobDeliveryTargets,
 } from "./store.js";
@@ -570,6 +571,51 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state.runningAtMs).toBeUndefined();
     expect(loaded.jobs[0]?.state.lastError).toBe("concurrent runtime state");
     expect(loaded.jobs[0]?.delivery?.to).toBe("-100123456");
+  });
+
+  it("does not merge a concurrent target across delivery route changes", async () => {
+    const store = await makeStorePath();
+    const base = makeStore("job-route-conflict", true);
+    base.jobs[0].delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "@legacy-target",
+    };
+    await saveCronStore(store.storePath, base);
+
+    const concurrentRoute = structuredClone(base);
+    concurrentRoute.jobs[0].delivery = {
+      mode: "announce",
+      channel: "slack",
+      to: "C123",
+    };
+    await saveCronStore(store.storePath, concurrentRoute);
+
+    const unrelatedUpdate = structuredClone(base);
+    unrelatedUpdate.jobs[0].name = "Unrelated update";
+    let persisted = await saveCronJobsStore(store.storePath, unrelatedUpdate, {
+      baseStore: base,
+    });
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      channel: "telegram",
+      to: "@legacy-target",
+    });
+
+    await saveCronStore(store.storePath, base);
+    await updateCronJobDeliveryTargets(store.storePath, () => "-100123456");
+    const desiredRoute = structuredClone(base);
+    if (!desiredRoute.jobs[0].delivery) {
+      throw new Error("expected delivery");
+    }
+    desiredRoute.jobs[0].delivery.channel = "slack";
+    persisted = await saveCronJobsStore(store.storePath, desiredRoute, { baseStore: base });
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      channel: "slack",
+      to: "@legacy-target",
+    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.delivery).toEqual(
+      persisted.jobs[0]?.delivery,
+    );
   });
 
   it("round-trips agent-turn external content provenance through SQLite", async () => {

@@ -301,6 +301,7 @@ function mergeConcurrentDeliveryTargets(params: {
   store: CronStoreFile;
   baseStore?: CronStoreFile;
   currentRows: CronJobRow[];
+  deliveryTargetWriteJobIds?: ReadonlySet<string>;
 }): CronStoreFile {
   if (!params.baseStore) {
     return params.store;
@@ -313,15 +314,23 @@ function mergeConcurrentDeliveryTargets(params: {
       currentJobsById.set(job.id, job);
     }
   }
+  const hasSameTargetRoute = (left: CronDelivery, right: CronDelivery) =>
+    left.mode === right.mode &&
+    left.channel === right.channel &&
+    left.accountId === right.accountId &&
+    left.threadId === right.threadId;
   return {
     ...params.store,
     jobs: params.store.jobs.map((job) => {
       const baseJob = baseJobsById.get(job.id);
       const currentJob = currentJobsById.get(job.id);
       if (
+        params.deliveryTargetWriteJobIds?.has(job.id) ||
         !baseJob?.delivery ||
         !job.delivery ||
         !currentJob?.delivery ||
+        !hasSameTargetRoute(baseJob.delivery, job.delivery) ||
+        !hasSameTargetRoute(baseJob.delivery, currentJob.delivery) ||
         job.delivery.to !== baseJob.delivery.to ||
         currentJob.delivery.to === job.delivery.to
       ) {
@@ -344,11 +353,13 @@ export function replaceCronRows(
   storeKey: string,
   store: CronStoreFile,
   baseStore?: CronStoreFile,
-): void {
+  deliveryTargetWriteJobIds?: ReadonlySet<string>,
+): CronStoreFile {
   const mergedStore = mergeConcurrentDeliveryTargets({
     store,
     baseStore,
     currentRows: baseStore ? loadCronRows(db, storeKey) : [],
+    deliveryTargetWriteJobIds,
   });
   executeSqliteQuerySync(
     db,
@@ -366,6 +377,7 @@ export function replaceCronRows(
         .values(bindCronJobRow(storeKey, normalized, index)),
     );
   }
+  return mergedStore;
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
