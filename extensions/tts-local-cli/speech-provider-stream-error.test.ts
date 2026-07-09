@@ -40,7 +40,7 @@ function createMockChild(): MockChild {
   stdin.end = () => {};
   stdin.write = () => {};
   child.stdin = stdin;
-  child.kill = (signal?: string) => {
+  child.kill = () => {
     child.killed = true;
     return true;
   };
