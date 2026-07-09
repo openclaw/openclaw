@@ -958,6 +958,108 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("preserves media metadata when debounced with a follow-up text message", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId("debounce-image-1"),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: { imageMessage: { mimetype: "image/jpeg" } },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-image-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "caption after image",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 1);
+      const inbound = inboundMessage(onMessage);
+      expect(inbound.payload.body).toBe("<media:image>\ncaption after image");
+      expect(inbound.payload.media).toMatchObject({
+        path: expect.any(String),
+        type: "image/jpeg",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves location metadata when debounced with a follow-up text message", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId("debounce-location-1"),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: {
+              locationMessage: {
+                degreesLatitude: -27.59487,
+                degreesLongitude: -48.548219,
+                name: "test location",
+              },
+            },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-location-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "details after location",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 1);
+      const inbound = inboundMessage(onMessage);
+      expect(inbound.payload.body).toContain("-27.594870, -48.548219");
+      expect(inbound.payload.body).toContain("details after location");
+      expect(inbound.payload.location).toMatchObject({
+        latitude: -27.59487,
+        longitude: -48.548219,
+        name: "test location",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets a drained debounced inbound reply before closing the socket", async () => {
     vi.useFakeTimers();
     try {

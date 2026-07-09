@@ -502,6 +502,8 @@ export async function attachWebInboxToSocket(
       }
       return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
+  const firstDefined = <T>(values: Array<T | undefined>): T | undefined =>
+    values.find((value): value is T => value !== undefined);
 
   const finalizeInboundDelivery = async (
     entries: QueuedInboundMessage[],
@@ -579,6 +581,9 @@ export async function attachWebInboxToSocket(
             .map((entry) => entry.payload.commandBody ?? entry.payload.body)
             .filter(Boolean)
             .join("\n");
+          const combinedStructuredContext = orderedEntries.flatMap(
+            (entry) => entry.payload.untrustedStructuredContext ?? [],
+          );
           const combinedMentions =
             mentioned.size > 0
               ? {
@@ -599,7 +604,12 @@ export async function attachWebInboxToSocket(
               ...last.payload,
               body: combinedBody,
               commandBody: combinedCommandBody,
+              media: firstDefined(orderedEntries.map((entry) => entry.payload.media)),
+              location: firstDefined(orderedEntries.map((entry) => entry.payload.location)),
+              untrustedStructuredContext:
+                combinedStructuredContext.length > 0 ? combinedStructuredContext : undefined,
             },
+            quote: firstDefined(orderedEntries.map((entry) => entry.quote)),
             group: combinedGroup,
             event: {
               ...last.event,
