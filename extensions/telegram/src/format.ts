@@ -1500,6 +1500,9 @@ export function splitTelegramHtmlChunks(
   let currentBlockCount = 0;
   let currentMediaCount = 0;
   let chunkHasPayload = false;
+  // Set when tag overhead fills an empty chunk and rich formatting is stripped.
+  // Close tags are skipped so the segment is delivered as bounded plain text.
+  let strippedTagsForPlainTextFallback = false;
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
@@ -1523,12 +1526,13 @@ export function splitTelegramHtmlChunks(
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
         if (!chunkHasPayload) {
-          // Tag overhead fills the entire chunk with no room for text.
-          // Still deliver content to avoid complete message loss — Telegram
-          // accepts oversized chunks in practice.
-          chunkHasPayload = true;
-          current += remaining;
-          break;
+          // Tag overhead fills the entire chunk; strip rich formatting and
+          // retry as plain text so message content is still delivered within
+          // the chunk limit.
+          openTags.length = 0;
+          strippedTagsForPlainTextFallback = true;
+          resetCurrent();
+          continue;
         }
         flushCurrent();
         continue;
@@ -1593,7 +1597,11 @@ export function splitTelegramHtmlChunks(
       }
     }
 
-    current += rawTag;
+    // Skip orphan close tags after stripping formatting for plain-text fallback.
+    // openTags was cleared so the close tag has no matching open tag.
+    if (!strippedTagsForPlainTextFallback || !isClosing || openTags.length > 0) {
+      current += rawTag;
+    }
     if (isSelfClosing) {
       chunkHasPayload = true;
     }

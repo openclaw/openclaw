@@ -635,12 +635,12 @@ describe("markdownToTelegramHtml", () => {
     expect(containsLoneSurrogate(output)).toBe(false);
   });
 
-  it("delivers content instead of throwing when tag overhead fills the chunk", () => {
+  it("delivers content as plain text when tag overhead fills the chunk", () => {
     const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
     expect(chunks).toHaveLength(1);
-    // Content is delivered even though the chunk exceeds the limit;
-    // throwing would cause complete message loss.
-    expect(chunks[0]).toContain("x");
+    // Rich formatting stripped; content delivered as bounded plain text.
+    // The existing send.ts plain-text fallback path is preserved.
+    expect(chunks[0]).toBe("x");
   });
 
   it("does not split an astral char across the chunk boundary", () => {
