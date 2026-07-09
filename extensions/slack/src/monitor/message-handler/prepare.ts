@@ -1546,7 +1546,7 @@ export async function prepareSlackMessage(params: {
         },
       },
       history:
-        isRoomish && shouldRequireMention
+        isRoomish && ctx.historyLimit > 0
           ? {
               isGroup: true,
               historyKey,

@@ -1338,6 +1338,42 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     }
   });
 
+  it("finalizes room history for open-channel turns after replies", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.historyLimit = 5;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "new user request",
+        ts: "500.100",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.requireMention).toBe(false);
+    expect(prepared.turn.history).toEqual({
+      isGroup: true,
+      historyKey: prepared.historyKey,
+      historyMap: slackCtx.channelHistories,
+      limit: 5,
+    });
+    expect(slackCtx.channelHistories.get(prepared.historyKey)).toEqual([
+      expect.objectContaining({
+        body: "new user request",
+        messageId: "500.100",
+        sender: "Alice",
+      }),
+    ]);
+  });
+
   it("records skipped no-mention shared images as pending history media", async () => {
     const originalFetch = globalThis.fetch;
     const mockFetch = vi.fn(async () => {
