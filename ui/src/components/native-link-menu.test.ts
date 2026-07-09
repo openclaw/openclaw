@@ -57,11 +57,9 @@ describe("native link menu", () => {
     });
     const items = menuItems(menu);
 
-    expect(items.map((item) => item.textContent?.trim())).toEqual([
-      "Open in Sidebar",
-      "Open in Default Browser",
-      "Copy Link",
-    ]);
+    expect(
+      items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
 
     items[0]?.click();
     expect(calls).toEqual(["close", "inline"]);
@@ -74,11 +72,27 @@ describe("native link menu", () => {
     await menu.updateComplete;
 
     expect(menu.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Link-Aktionen");
-    expect(menuItems(menu).map((item) => item.textContent?.trim())).toEqual([
-      "In der Seitenleiste öffnen",
-      "Im Standardbrowser öffnen",
-      "Link kopieren",
-    ]);
+    expect(
+      menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);
+  });
+
+  it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) => calls.push(action),
+    });
+
+    const hints = menuItems(menu).map(
+      (item) => item.querySelector(".session-menu__shortcut")?.textContent,
+    );
+    expect(hints).toEqual(["S", "B", "C"]);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true }),
+    );
+    expect(calls).toEqual(["close", "copy"]);
   });
 
   it("closes on Escape and outside pointerdown while preserving trigger clicks", async () => {
