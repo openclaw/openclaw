@@ -480,7 +480,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Node pairing, invoke, and pending work">
-    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, and `node.pair.verify` cover node pairing and bootstrap verification.
+    - `node.pair.list`, `node.pair.approve`, `node.pair.reject`, and `node.pair.remove` cover node capability approvals. `node.pair.request` and `node.pair.verify` were removed in 2026.7 together with the standalone node pairing store; pending requests are created by the Gateway during node connects.
     - `node.list` and `node.describe` return known/connected node state.
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
