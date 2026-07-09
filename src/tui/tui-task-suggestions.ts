@@ -269,7 +269,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     activeSelector = selector;
     activeActionKey = actionKey;
     const dismissIndex = actions.findIndex((action) => action.value === "dismiss");
-    selector.setSelectedIndex?.(dismissIndex >= 0 ? dismissIndex : 0);
+    selector.setSelectedIndex?.(Math.max(dismissIndex, 0));
     let acceptArmed = false;
     let prompt: TaskPrompt | null = null;
 
