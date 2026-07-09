@@ -38,7 +38,7 @@ channel is the communication surface.
 
 - OpenClaw with the bundled `codex` plugin available. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.142.0` or newer. The plugin manages a compatible
+- Codex app-server `0.143.0` or newer. The plugin manages a compatible
   binary by default, so a `codex` command on `PATH` does not affect normal
   startup.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -900,10 +900,10 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use Codex app-server `0.142.0` or newer.
+**The app-server is rejected:** use Codex app-server `0.143.0` or newer.
 Same-version prereleases or build-suffixed versions such as
-`0.142.0-alpha.2` or `0.142.0+custom` are rejected because OpenClaw tests
-the stable `0.142.0` protocol floor.
+`0.143.0-alpha.2` or `0.143.0+custom` are rejected because OpenClaw tests
+the stable `0.143.0` protocol floor.
 
 **`/codex status` cannot connect:** check that the bundled `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is
