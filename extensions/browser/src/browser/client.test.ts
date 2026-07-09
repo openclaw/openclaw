@@ -392,7 +392,9 @@ describe("browser client", () => {
   });
 
   it("marks internally selected close targets as exact", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ ok: true }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await browserCloseTabByRawTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
