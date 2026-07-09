@@ -37,8 +37,29 @@ function readUiCss(): string {
 
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Runtime", "Updated", "Tokens", "Actions"];
+  const overviewTiles = [
+    ["3", "Sessions"],
+    ["1", "Live"],
+    ["1", "Unread"],
+    ["123k", "Tokens"],
+  ]
+    .map(
+      ([value, label]) => `
+        <div class="sessions-overview__tile">
+          <span class="sessions-overview__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /></svg>
+          </span>
+          <span class="sessions-overview__meta">
+            <span class="sessions-overview__value">${value}</span>
+            <span class="sessions-overview__label">${label}</span>
+          </span>
+        </div>
+      `,
+    )
+    .join("");
   return `
     <section class="card">
+      <div class="sessions-overview">${overviewTiles}</div>
       <div class="data-table-wrapper">
         <div class="data-table-container">
           <table class="data-table sessions-table">
@@ -69,10 +90,18 @@ function sessionsTableHtml() {
                 <td class="data-table-checkbox-col"><input type="checkbox" /></td>
                 <td class="data-table-key-col">
                   <div class="mono session-key-cell" aria-label="agent:main:main">
-                    <span class="session-key-cell__primary">
-                      <a class="session-link">agent:main:main</a>
-                      <span class="session-label-chip">triage</span>
+                    <span class="session-avatar session-avatar--direct" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                      <span class="session-avatar__status"></span>
                     </span>
+                    <div class="session-key-cell__text">
+                      <span class="session-key-cell__primary">
+                        <a class="session-link">agent:main:main</a>
+                        <span class="session-label-chip">triage</span>
+                      </span>
+                    </div>
                   </div>
                 </td>
                 <td><span class="data-table-badge data-table-badge--direct">direct</span></td>
@@ -84,7 +113,14 @@ function sessionsTableHtml() {
                 </td>
                 <td class="session-runtime-cell"><span class="mono">claude-cli (fallback none)</span></td>
                 <td>now</td>
-                <td class="session-token-cell">123456 / 200000</td>
+                <td class="session-token-cell">
+                  <div class="session-tokens">
+                    <span class="session-tokens__value">123k / 200k</span>
+                    <span class="session-context-meter session-context-meter--ok" role="img" aria-label="62% of context used (123,456 / 200,000 tokens)">
+                      <span class="session-context-meter__fill" style="width: 62%"></span>
+                    </span>
+                  </div>
+                </td>
                 <td class="session-actions-cell">
                   <div class="session-actions">
                     <button class="session-details-toggle" type="button" aria-expanded="true">
