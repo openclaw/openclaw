@@ -52,6 +52,7 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -763,6 +764,8 @@ type DeliverOutboundPayloadsCoreParams = {
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Recovery already ran provider admission after its pending-row re-read. */
+  deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */
   deliveryQueueStateDir?: string;
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
@@ -1340,6 +1343,18 @@ export async function deliverOutboundPayloadsInternal(
     throw new Error(
       `Required durable message send is unsupported for ${channel}: unknown-send reconciliation requires exactly one payload`,
     );
+  }
+  if (params.deferredDeliveryAdmissionPassed !== true) {
+    const admission = resolveDeferredDeliveryAdmission({
+      cfg: params.cfg,
+      channel,
+      to,
+      accountId: params.accountId,
+      phase: "live",
+    });
+    if (admission.status === "permanent_rejection") {
+      throw new Error(admission.reason);
+    }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);

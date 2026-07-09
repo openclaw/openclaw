@@ -124,6 +124,10 @@
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
   }
 
+  .sidebar-resizer {
+    display: none;
+  }
+
   .shell--nav-drawer-open .shell-nav,
   .shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
     transform: translateX(0);
