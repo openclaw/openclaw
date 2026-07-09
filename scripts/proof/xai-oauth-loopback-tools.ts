@@ -1,10 +1,11 @@
 // Real-behavior proof: OAuth-only xAI tools on the CLI-backend loopback path.
 //
-// This script exercises the actual gateway tool-resolution path
-// (resolveGatewayScopedTools -> createOpenClawTools -> plugin registry) with a
-// real xAI plugin registration and an OAuth-only auth profile store. It prints
-// the resulting tool surface in MCP tools/list JSON-RPC form. All tokens, keys,
-// account IDs, phone numbers, IPs, and non-public endpoints are redacted.
+// This script builds a real plugin registry containing the bundled xAI plugin,
+// activates it, and then exercises the actual gateway tool-resolution path
+// (resolveGatewayScopedTools -> createOpenClawTools -> plugin registry) with an
+// OAuth-only auth profile store. It prints the resulting tool surface in MCP
+// tools/list JSON-RPC form. All tokens, keys, account IDs, phone numbers, IPs,
+// and non-public endpoints are redacted.
 
 import xaiPlugin from "../../extensions/xai/index.js";
 import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
@@ -12,7 +13,9 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "../../src/gateway/tool-resolution.js";
 import { buildPluginApi } from "../../src/plugins/api-builder.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import type { PluginToolRegistration } from "../../src/plugins/registry-types.js";
 import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import type { OpenClawPluginToolFactory } from "../../src/plugins/types.js";
 
 function createXaiOAuthProfileStore(): AuthProfileStore {
   return {
@@ -41,10 +44,35 @@ async function main(): Promise<void> {
     runtime: {} as never,
     logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
     resolvePath: (input: string) => input,
+    handlers: {
+      registerTool: (tool, opts) => {
+        const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
+        const factory: OpenClawPluginToolFactory = typeof tool === "function" ? tool : () => tool;
+        if (typeof tool !== "function") {
+          names.push(tool.name);
+        }
+        const registration: PluginToolRegistration = {
+          pluginId: "xai",
+          pluginName: "xai",
+          factory,
+          names: [...new Set(names.filter((name) => name.length > 0))],
+          declaredNames: [],
+          optional: opts?.optional === true,
+          source: "bundled",
+        };
+        registry.tools.push(registration);
+      },
+    },
   });
 
   xaiPlugin.register(api);
   setActivePluginRegistry(registry, "proof", "default", "/tmp/xai-oauth-proof");
+
+  console.log("[xai-oauth-loopback-proof] registered plugin tool count:", registry.tools.length);
+  console.log(
+    "[xai-oauth-loopback-proof] registered plugin tool names:",
+    registry.tools.flatMap((entry) => entry.names).join(", ") || "(none)",
+  );
 
   const authProfileStore = createXaiOAuthProfileStore();
   const result = resolveGatewayScopedTools({
