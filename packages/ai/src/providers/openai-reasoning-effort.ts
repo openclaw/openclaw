@@ -153,8 +153,9 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   fallbackMap?: Record<string, string>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
-  const mapped = params.fallbackMap?.[requested] ?? requested;
-  const normalized = normalizeOpenAIReasoningEffort(mapped);
+  const mapped = params.fallbackMap?.[requested];
+  // Fallback maps emit provider-native payload labels; keep their case for exact compat lists.
+  const normalized = mapped === undefined ? requested : mapped.trim();
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;

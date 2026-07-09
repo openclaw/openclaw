@@ -110,6 +110,28 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("ProviderDefault");
   });
 
+  it("preserves canonical-looking provider-native compat values mapped from canonical efforts", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["LOW", "MEDIUM", "HIGH"],
+        reasoningEffortMap: {
+          high: "HIGH",
+        },
+      },
+    };
+
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual(["LOW", "MEDIUM", "HIGH"]);
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "HIGH",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("HIGH");
+  });
+
   it("omits unsupported disabled reasoning instead of falling back to enabled effort", () => {
     const model = { provider: "groq", id: "openai/gpt-oss-120b" };
 
