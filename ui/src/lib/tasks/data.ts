@@ -2,7 +2,7 @@ import { t } from "../../i18n/index.ts";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
+type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
 type TaskTimestamp = number | string;
 
 export type TaskSummary = {
