@@ -111,4 +111,26 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
   });
+
+  it("matches mixed-case requested efforts against supported lists (#102908)", () => {
+    const model = { provider: "openai", id: "gpt-5.6" };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "High" })).toBe("high");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "XHIGH" })).toBe("xhigh");
+    // Mixed case must also keep the disabled semantics, not fall through the ladder.
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "None" })).toBeUndefined();
+  });
+
+  it("folds case in compat-declared supported efforts (#102908)", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.3",
+      compat: { supportedReasoningEfforts: ["Low", "MEDIUM", "High"] },
+    };
+
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual(["low", "medium", "high"]);
+    // On main the mixed-case list fails .includes(), so "low" mis-ladders to a
+    // different effort instead of matching the declared "Low".
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "low" })).toBe("low");
+  });
 });

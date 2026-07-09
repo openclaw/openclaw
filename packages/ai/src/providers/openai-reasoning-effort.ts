@@ -5,7 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  normalizeStringEntries,
+  normalizeStringEntriesLower,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
@@ -59,7 +59,10 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
 
 /** Normalize user-facing reasoning effort names to API effort names. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
-  return effort === "minimal" ? "minimal" : effort;
+  // Effort names are matched against lowercase supported lists and sent to the API
+  // lowercase; fold case here so "High"/"XHIGH" from user-authored config or plugin
+  // callers match instead of silently falling through the support ladder (#102908).
+  return normalizeLowercaseStringOrEmpty(effort);
 }
 
 function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
@@ -73,8 +76,10 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!Array.isArray(raw)) {
     return undefined;
   }
+  // Compat lists come from user-authored model config; fold case so entries like
+  // "High" match the lowercase effort names used everywhere else (#102908).
   const supported = uniqueStrings(
-    normalizeStringEntries(raw.filter((value) => typeof value === "string")),
+    normalizeStringEntriesLower(raw.filter((value) => typeof value === "string")),
   );
   return supported.length > 0 ? supported : undefined;
 }
