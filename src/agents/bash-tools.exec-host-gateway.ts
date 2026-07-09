@@ -26,6 +26,7 @@ import {
   resolveApprovalAuditTrustPath,
   resolveExecutionTargetTrustPath,
   resolveAllowAlwaysPersistenceDecision,
+  resolveDurableExecApprovalRequirement,
   resolveExecApprovalUnavailableDecisions,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
@@ -511,6 +512,12 @@ export async function processGatewayAllowlist(
     commandText: params.command,
   });
   const allowlistAuthorizationSatisfied = analysisOk && allowlistEval.allowlistSatisfied;
+  const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
+    durableApprovalSatisfied,
+    allowlistAuthorizationSatisfied,
+    allowlist: approvals.allowlist,
+    commandText: params.command,
+  });
   const shouldPrepareAllowlistExecution =
     hostSecurity === "allowlist" || fallbackSecurity === "allowlist";
   const gatewayEnforcedCommand =
@@ -573,10 +580,7 @@ export async function processGatewayAllowlist(
     }
     return { ...state, approvedByAsk: true, deniedReason: null };
   };
-  const exactCommandDurableApproval =
-    durableApprovalSatisfied &&
-    !allowlistAuthorizationSatisfied &&
-    exactCommandDurableApprovalSatisfied;
+  const exactCommandDurableApproval = durableApprovalRequirement === "exact-command";
   const commitExecutionAuthorization = (options: {
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
@@ -598,7 +602,7 @@ export async function processGatewayAllowlist(
           policyAuthorization && allowlistEval.segmentSatisfiedBy.includes("skills"),
         requireExactCommandApproval: policyAuthorization && exactCommandDurableApproval,
         requireDurableAllowlistApproval:
-          policyAuthorization && durableApprovalSatisfied && !exactCommandDurableApproval,
+          policyAuthorization && durableApprovalRequirement === "segment-allowlist",
       },
       ...(options.allowAlwaysDecision ? { allowAlwaysDecision: options.allowAlwaysDecision } : {}),
     });

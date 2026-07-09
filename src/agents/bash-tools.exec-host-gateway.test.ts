@@ -3,6 +3,7 @@
  * Covers allowlist misses, auto-review, strict inline eval, diagnostics
  * follow-ups, and gateway approval result routing.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,10 @@ const INLINE_EVAL_HIT = {
   flag: "-c",
   argv: ["python3", "-c", "print(1)"],
 };
+
+function exactCommandMarker(command: string): string {
+  return `=command:${crypto.createHash("sha256").update(command.trim()).digest("hex").slice(0, 16)}`;
+}
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
@@ -878,6 +883,54 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("does not bind current policy to redundant exact-command trust", async () => {
+    const command = "cd .";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    hasDurableExecApprovalMock.mockReturnValue(true);
+    hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: authorizationPlan.groups.flatMap((group) =>
+        group.candidates.map((candidate) => candidate.sourceSegment),
+      ),
+      segmentAllowlistEntries: [null],
+      segmentSatisfiedBy: ["safeBuiltins"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({ command });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ execCommandOverride: command });
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          source: "current-policy",
+          requireExactCommandApproval: false,
+          requireDurableAllowlistApproval: false,
+        }),
+      }),
+    );
+  });
+
   it("keeps unrenderable allowlist plans on the human approval path", async () => {
     const command = "ls *.ts";
     await configurePlanBackedCommand({
@@ -1022,7 +1075,7 @@ describe("processGatewayAllowlist", () => {
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: {
-        allowlist: [],
+        allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
         agent: {
           security: "allowlist",
           ask: "off",
@@ -1498,6 +1551,7 @@ EOF`,
   });
 
   it("allows durable exact-command trust to bypass the synchronous allowlist miss", async () => {
+    const command = "node --version";
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
@@ -1510,12 +1564,19 @@ EOF`,
     hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
     buildEnforcedShellCommandMock.mockReturnValue({
       ok: true,
-      command: "node --version",
+      command,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
     });
 
-    const result = await runGatewayAllowlist({
-      command: "node --version",
-    });
+    const result = await runGatewayAllowlist({ command });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({ execCommandOverride: undefined });

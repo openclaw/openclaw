@@ -1976,6 +1976,28 @@ export function hasExactCommandDurableExecApproval(params: {
   );
 }
 
+export type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
+
+/** Names the durable grant that must still exist when execution commits. */
+export function resolveDurableExecApprovalRequirement(params: {
+  durableApprovalSatisfied: boolean;
+  allowlistAuthorizationSatisfied: boolean;
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): DurableExecApprovalRequirement | null {
+  // Do not bind execution to an incidental durable grant when current policy
+  // already authorizes every segment through allowlist, safe-bin, builtin, or skill trust.
+  if (!params.durableApprovalSatisfied || params.allowlistAuthorizationSatisfied) {
+    return null;
+  }
+  return hasExactCommandDurableExecApproval({
+    allowlist: params.allowlist,
+    commandText: params.commandText,
+  })
+    ? "exact-command"
+    : "segment-allowlist";
+}
+
 function hasSegmentDurableExecApproval(params: {
   analysisOk: boolean;
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
