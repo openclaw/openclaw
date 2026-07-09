@@ -33,7 +33,7 @@ export function resolveAssistantLiveChatInput(
   };
 }
 
-export function capLiveAssistantBuffer(text: string): string {
+function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;
   }
