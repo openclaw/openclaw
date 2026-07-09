@@ -5899,7 +5899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2096,
+      "line": 2099,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -5907,7 +5907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2096,
+      "line": 2099,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
