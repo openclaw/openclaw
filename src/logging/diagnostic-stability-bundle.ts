@@ -1,6 +1,7 @@
 // Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import process from "node:process";
 import v8 from "node:v8";
 import { resolveStateDir } from "../config/paths.js";
@@ -207,7 +208,7 @@ function readErrorMessage(error: unknown): string | undefined {
     return undefined;
   }
   return sanitized.length > MAX_SAFE_ERROR_MESSAGE_LENGTH
-    ? `${sanitized.slice(0, MAX_SAFE_ERROR_MESSAGE_LENGTH)}...`
+    ? `${truncateUtf16Safe(sanitized, MAX_SAFE_ERROR_MESSAGE_LENGTH)}...`
     : sanitized;
 }
 
