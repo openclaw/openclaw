@@ -268,10 +268,110 @@ export function scanTopLevelChars(
       continue;
     }
 
+    // Heredoc: <<[-]DELIM or <<[-]'DELIM' or <<[-]"DELIM"
+    // Skip the entire heredoc body so stage separators (; && ||) inside
+    // the heredoc are not mis-parsed as top-level separators.
+    if (char === "<" && command[i + 1] === "<") {
+      const heredocEnd = findHeredocEnd(command, i + 2);
+      if (heredocEnd !== -1) {
+        i = heredocEnd - 1;
+        continue;
+      }
+    }
+
     if (visit(char, i) === false) {
       return;
     }
   }
+}
+
+/**
+ * Given a position immediately after `<<`, parses the heredoc delimiter and
+ * returns the index of the character after the closing delimiter line.
+ * Returns -1 if the heredoc syntax is not recognized or the end is not found.
+ */
+function findHeredocEnd(command: string, start: number): number {
+  let i = start;
+  // skip whitespace
+  while (i < command.length && (command[i] === " " || command[i] === "\t")) {
+    i += 1;
+  }
+  // optional dash for <<- (tab-indented closing delimiter allowed)
+  let tabIndentAllowed = false;
+  if (i < command.length && command[i] === "-") {
+    tabIndentAllowed = true;
+    i += 1;
+  }
+  // optional whitespace after dash
+  while (i < command.length && (command[i] === " " || command[i] === "\t")) {
+    i += 1;
+  }
+  // Parse delimiter: optionally quoted
+  let quoteChar: "'" | '"' | undefined;
+  if (i < command.length && (command[i] === "'" || command[i] === '"')) {
+    quoteChar = command[i] as "'" | '"';
+    i += 1;
+  }
+  const delimStart = i;
+  while (i < command.length && command[i] !== "\n" && command[i] !== " " && command[i] !== "\t") {
+    if (quoteChar && command[i] === quoteChar) {
+      break;
+    }
+    i += 1;
+  }
+  const delimEnd = i;
+  // if delimited was quoted, expect closing quote
+  if (quoteChar && i < command.length && command[i] === quoteChar) {
+    i += 1;
+  }
+  const delim = command.slice(delimStart, delimEnd);
+  if (!delim) return -1;
+
+  /**
+   * Checks whether the given position starts with the heredoc delimiter
+   * (optionally preceded by tabs when <<- is used). The rest of the line
+   * must be empty or whitespace-only.
+   */
+  function isClosingDelimiterLine(pos: number): number | undefined {
+    let k = pos;
+    // <<- allows leading tabs
+    if (tabIndentAllowed) {
+      while (k < command.length && command[k] === "\t") {
+        k += 1;
+      }
+    }
+    // Must be at start of line now
+    let j = 0;
+    while (k + j < command.length && j < delim.length && command[k + j] === delim[j]) {
+      j += 1;
+    }
+    if (j !== delim.length) return undefined;
+    // Matched delimiter — rest of line must be whitespace-only or EOF
+    let after = k + j;
+    if (after >= command.length || command[after] === "\n" || command[after] === "\r") {
+      return after;
+    }
+    // Allow trailing whitespace then newline
+    while (after < command.length && (command[after] === " " || command[after] === "\t")) {
+      after += 1;
+    }
+    if (after >= command.length || command[after] === "\n" || command[after] === "\r") {
+      return after;
+    }
+    return undefined;
+  }
+
+  // Scan forward for the delimiter on its own line
+  while (i < command.length) {
+    const lineStart = command.indexOf("\n", i);
+    if (lineStart === -1) return -1;
+    const closingPos = isClosingDelimiterLine(lineStart + 1);
+    if (closingPos !== undefined) {
+      return closingPos;
+    }
+    i = lineStart + 1;
+  }
+  return -1;
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
