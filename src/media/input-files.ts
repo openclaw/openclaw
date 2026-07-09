@@ -1,4 +1,3 @@
-// Input file helpers normalize inline, fetched, and local media inputs.
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -6,6 +5,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+// Input file helpers normalize inline, fetched, and local media inputs.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -273,7 +274,7 @@ function clampText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return text.slice(0, maxChars);
+  return truncateUtf16Safe(text, maxChars);
 }
 
 function withInputFileTimeout<T>(params: {
