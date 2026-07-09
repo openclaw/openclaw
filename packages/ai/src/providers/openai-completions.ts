@@ -504,6 +504,17 @@ export const streamOpenAICompletions: StreamFunction<
               }
             }
           }
+
+          // Surface refusal text when content is absent (safety refusals,
+          // structured-output refusals). Mirrors the agent-transport handling.
+          const refusalText = deltaFields.refusal;
+          if (
+            typeof refusalText === "string" &&
+            refusalText.trim().length > 0 &&
+            output.content.length === 0
+          ) {
+            appendTextDelta(refusalText);
+          }
         }
       }
 
