@@ -12,11 +12,11 @@ import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
-  hasExactCommandDurableExecApproval,
   maxAsk,
   minSecurity,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
+  resolveDurableExecApprovalRequirement,
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
@@ -120,6 +120,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
   approvalGrantSource: "explicit-approval" | "auto-review" | null;
   durableApprovalSatisfied: boolean;
+  durableApprovalRequirement: ReturnType<typeof resolveDurableExecApprovalRequirement>;
   strictInlineEval: boolean;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
@@ -579,6 +580,12 @@ async function evaluateSystemRunPolicyPhase(
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
   });
+  const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
+    durableApprovalSatisfied,
+    allowlistAuthorizationSatisfied,
+    allowlist: approvals.allowlist,
+    commandText: parsed.commandText,
+  });
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
@@ -782,6 +789,7 @@ async function evaluateSystemRunPolicyPhase(
     policy,
     approvalGrantSource,
     durableApprovalSatisfied,
+    durableApprovalRequirement,
     strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
@@ -944,13 +952,6 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const exactCommandDurableApproval =
-    phase.durableApprovalSatisfied &&
-    !phase.allowlistAuthorizationSatisfied &&
-    hasExactCommandDurableExecApproval({
-      allowlist: phase.approvals.allowlist,
-      commandText: phase.commandText,
-    });
   const authorizationSource: ExecApprovalUsageAuthorization["source"] =
     phase.approvalSource === "ask-fallback"
       ? "ask-fallback"
@@ -963,8 +964,8 @@ async function executeSystemRunPhase(
     ask: phase.ask,
     allowlistSatisfied: phase.allowlistAuthorizationSatisfied || phase.durableApprovalSatisfied,
     requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
-    requireExactCommandApproval: exactCommandDurableApproval,
-    requireDurableAllowlistApproval: phase.durableApprovalSatisfied && !exactCommandDurableApproval,
+    requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
+    requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
   };
   const allowAlwaysDecision =
     phase.policy.approvalDecision === "allow-always"
