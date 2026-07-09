@@ -43,7 +43,7 @@ import { monitorTlonProvider } from "./index.js";
 describe("monitorTlonProvider authentication retry", () => {
   it("uses the shared abort-aware sleep for retry backoff", async () => {
     const controller = new AbortController();
-    const runtime = { error: vi.fn(), log: vi.fn() } as RuntimeEnv;
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
     authenticateMock.mockRejectedValueOnce(new Error("login failed"));
     sleepWithAbortMock.mockRejectedValueOnce(new Error("aborted"));
 
