@@ -441,6 +441,11 @@ export const hi: TranslationMap = {
     noEvents: "अभी कोई इवेंट नहीं।",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "लॉब्स्टर की विज़िट",
+      lobsterVisitsOn: "कभी-कभी आ जाता है",
+      lobsterVisitsOff: "कभी नहीं आता",
+    },
     security: {
       browserEnabled: "ब्राउज़र सक्षम",
       toolProfile: "टूल प्रोफ़ाइल",
@@ -483,6 +488,10 @@ export const hi: TranslationMap = {
     settingsGroupConnections: "कनेक्शन",
     settingsGroupAgents: "एजेंट और टूल्स",
     settingsGroupSystem: "सिस्टम",
+    settingsSearchLabel: "सेटिंग खोजें",
+    settingsSearchPlaceholder: "सेटिंग खोजें…",
+    settingsSearchNoResults: "कोई मेल खाती सेटिंग नहीं मिली।",
+    settingsSearchClear: "सेटिंग की खोज साफ़ करें",
     exitSettings: "ऐप पर वापस जाएँ",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
@@ -601,7 +610,9 @@ export const hi: TranslationMap = {
   },
   tasksPage: {
     active: "सक्रिय",
+    activeSub: "कतारबद्ध और चल रहे बैकग्राउंड कार्य।",
     recent: "हाल के",
+    recentSub: "नवीनतम पूर्ण, विफल और रद्द किए गए कार्य।",
     loading: "कार्य लोड हो रहे हैं…",
     empty: "अभी तक कोई पृष्ठभूमि कार्य नहीं है.",
     emptyActive: "कोई कतारबद्ध या चल रहा कार्य नहीं है.",
@@ -1814,10 +1825,6 @@ export const hi: TranslationMap = {
       retrySend: "भेजने का पुनः प्रयास करें",
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
     },
-    modelPicker: {
-      faster: "तेज़",
-      smarter: "अधिक बुद्धिमान",
-    },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",
       reason: "नया सेटअप कोड जनरेट करने के लिए /pair qr फिर से चलाएँ।",
@@ -2012,8 +2019,7 @@ export const hi: TranslationMap = {
     },
     summary: {
       enabled: "सक्षम",
-      yes: "हाँ",
-      no: "नहीं",
+      scheduler: "शेड्यूलर",
       jobs: "जॉब्स",
       nextWake: "अगला वेक",
       refreshing: "रीफ़्रेश हो रहा है...",

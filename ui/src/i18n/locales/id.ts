@@ -442,6 +442,11 @@ export const id: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Kunjungan lobster",
+      lobsterVisitsOn: "Mampir sesekali",
+      lobsterVisitsOff: "Tidak pernah berkunjung",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -484,6 +489,10 @@ export const id: TranslationMap = {
     settingsGroupConnections: "Koneksi",
     settingsGroupAgents: "Agen & Alat",
     settingsGroupSystem: "Sistem",
+    settingsSearchLabel: "Cari pengaturan",
+    settingsSearchPlaceholder: "Cari pengaturan…",
+    settingsSearchNoResults: "Tidak ada pengaturan yang cocok.",
+    settingsSearchClear: "Hapus pencarian pengaturan",
     exitSettings: "Kembali ke aplikasi",
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
@@ -602,7 +611,9 @@ export const id: TranslationMap = {
   },
   tasksPage: {
     active: "Aktif",
+    activeSub: "Pekerjaan latar belakang yang masuk antrean dan sedang berjalan.",
     recent: "Terbaru",
+    recentSub: "Tugas terbaru yang selesai, gagal, dan dibatalkan.",
     loading: "Memuat tugas…",
     empty: "Belum ada tugas latar belakang.",
     emptyActive: "Tidak ada tugas dalam antrean atau sedang berjalan.",
@@ -1833,10 +1844,6 @@ export const id: TranslationMap = {
       retrySend: "Coba kirim lagi",
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
-    modelPicker: {
-      faster: "Lebih cepat",
-      smarter: "Lebih cerdas",
-    },
     pairingQrExpired: {
       title: "QR pemasangan kedaluwarsa",
       reason: "Jalankan /pair qr lagi untuk membuat kode pengaturan baru.",
@@ -2032,8 +2039,7 @@ export const id: TranslationMap = {
     },
     summary: {
       enabled: "Diaktifkan",
-      yes: "Ya",
-      no: "Tidak",
+      scheduler: "Penjadwal",
       jobs: "Tugas",
       nextWake: "Bangun berikutnya",
       refreshing: "Memuat ulang...",
