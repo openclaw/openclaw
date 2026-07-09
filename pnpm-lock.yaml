@@ -1378,6 +1378,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../../packages/normalization-core
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
@@ -1984,7 +1987,11 @@ importers:
         specifier: 5.6.2
         version: 5.6.2
 
-  packages/tool-call-repair: {}
+  packages/tool-call-repair:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/web-content-core: {}
 
