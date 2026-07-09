@@ -5,16 +5,25 @@ import UIKit
 
 @MainActor
 final class LocationService: NSObject, CLLocationManagerDelegate, LocationServiceCommon {
+    typealias LocationRequestFactory = @MainActor (
+        _ desiredAccuracy: CLLocationAccuracy,
+        _ allowsBackgroundLocationUpdates: Bool,
+        _ onFinish: @escaping @MainActor (LocationOneShotRequest) -> Void) -> LocationOneShotRequest
+
     enum Error: Swift.Error {
         case timeout
         case unavailable
     }
 
     private let manager = CLLocationManager()
+    private let locationRequestFactory: LocationRequestFactory
     private var authWaitID: UUID?
     private var authWaitRequiresDeterminedStatus = false
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private var activeLocationRequests: [CLLocationAccuracy: LocationOneShotRequest] = [:]
+    private var cachedOneShotLocation: CLLocation?
+    private var backgroundLocationUpdatesEnabled = false
     private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
@@ -28,7 +37,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         set { self.locationContinuation = newValue }
     }
 
-    override init() {
+    override convenience init() {
+        self.init { desiredAccuracy, allowsBackgroundLocationUpdates, onFinish in
+            LocationOneShotRequest(
+                desiredAccuracy: desiredAccuracy,
+                allowsBackgroundLocationUpdates: allowsBackgroundLocationUpdates,
+                onFinish: onFinish)
+        }
+    }
+
+    init(locationRequestFactory: @escaping LocationRequestFactory) {
+        self.locationRequestFactory = locationRequestFactory
         super.init()
         self.configureLocationManager()
     }
@@ -64,15 +83,53 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         timeoutMs: Int?) async throws -> CLLocation
     {
         _ = params
-        return try await LocationCurrentRequest.resolve(
+        if let cached = self.cachedOneShotLocation(maxAgeMs: maxAgeMs) {
+            return cached
+        }
+        let requestedAccuracy = LocationCurrentRequest.accuracyValue(desiredAccuracy)
+        let location = try await LocationCurrentRequest.resolve(
             manager: self.manager,
             desiredAccuracy: desiredAccuracy,
             maxAgeMs: maxAgeMs,
             timeoutMs: timeoutMs,
-            request: { try await self.requestLocationOnce() },
+            request: { try await self.requestLocationOnce(desiredAccuracy: requestedAccuracy) },
             withTimeout: { timeoutMs, operation in
                 try await self.withTimeout(timeoutMs: timeoutMs, operation: operation)
             })
+        self.cachedOneShotLocation = location
+        return location
+    }
+
+    func requestLocationOnce() async throws -> CLLocation {
+        try await self.requestLocationOnce(desiredAccuracy: self.manager.desiredAccuracy)
+    }
+
+    private func requestLocationOnce(desiredAccuracy: CLLocationAccuracy) async throws -> CLLocation {
+        let request =
+            self.activeLocationRequests[desiredAccuracy] ?? self.makeLocationOneShotRequest(
+                desiredAccuracy: desiredAccuracy)
+        return try await request.location()
+    }
+
+    private func makeLocationOneShotRequest(desiredAccuracy: CLLocationAccuracy) -> LocationOneShotRequest {
+        let request = self
+            .locationRequestFactory(desiredAccuracy, self.backgroundLocationUpdatesEnabled) { [weak self] request in
+                if self?.activeLocationRequests[desiredAccuracy] === request {
+                    self?.activeLocationRequests[desiredAccuracy] = nil
+                }
+            }
+        self.activeLocationRequests[desiredAccuracy] = request
+        return request
+    }
+
+    private func cachedOneShotLocation(maxAgeMs: Int?) -> CLLocation? {
+        guard let maxAgeMs,
+              let cached = self.cachedOneShotLocation,
+              Date().timeIntervalSince(cached.timestamp) * 1000 <= Double(maxAgeMs)
+        else {
+            return nil
+        }
+        return cached
     }
 
     private func requestAuthorization(
@@ -164,7 +221,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     }
 
     func setBackgroundLocationUpdatesEnabled(_ enabled: Bool) {
+        self.backgroundLocationUpdatesEnabled = enabled
         self.manager.allowsBackgroundLocationUpdates = enabled
+        for request in self.activeLocationRequests.values {
+            request.setBackgroundLocationUpdatesEnabled(enabled)
+        }
     }
 
     func setAuthorizationChangeHandler(
@@ -214,6 +275,149 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
             guard let cont = self.locationContinuation else { return }
             self.locationContinuation = nil
             cont.resume(throwing: err)
+        }
+    }
+}
+
+@MainActor
+final class LocationOneShotRequest: NSObject, CLLocationManagerDelegate {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<CLLocation, Swift.Error>
+    }
+
+    private let manager: CLLocationManager?
+    private let startRequest: @MainActor () -> Void
+    private let stopRequest: @MainActor () -> Void
+    private let onFinish: @MainActor (LocationOneShotRequest) -> Void
+    private var waiters: [Waiter] = []
+    private var didStart = false
+    private var didFinish = false
+
+    init(
+        desiredAccuracy: CLLocationAccuracy,
+        allowsBackgroundLocationUpdates: Bool,
+        onFinish: @escaping @MainActor (LocationOneShotRequest) -> Void)
+    {
+        let manager = CLLocationManager()
+        self.manager = manager
+        self.startRequest = {
+            manager.requestLocation()
+        }
+        self.stopRequest = {
+            manager.stopUpdatingLocation()
+            manager.delegate = nil
+        }
+        self.onFinish = onFinish
+        super.init()
+        manager.desiredAccuracy = desiredAccuracy
+        manager.allowsBackgroundLocationUpdates = allowsBackgroundLocationUpdates
+        manager.delegate = self
+    }
+
+    init(
+        startRequest: @escaping @MainActor () -> Void,
+        stopRequest: @escaping @MainActor () -> Void,
+        onFinish: @escaping @MainActor (LocationOneShotRequest) -> Void)
+    {
+        self.manager = nil
+        self.startRequest = startRequest
+        self.stopRequest = stopRequest
+        self.onFinish = onFinish
+        super.init()
+    }
+
+    func location() async throws -> CLLocation {
+        let waiterID = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                self.addWaiter(id: waiterID, continuation: continuation)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelWaiter(id: waiterID)
+            }
+        }
+    }
+
+    func complete(with locations: [CLLocation]) {
+        if let latest = locations.last {
+            self.finish(.success(latest))
+        } else {
+            self.finish(.failure(LocationService.Error.unavailable))
+        }
+    }
+
+    func fail(with error: Swift.Error) {
+        self.finish(.failure(error))
+    }
+
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool) {
+        self.manager?.allowsBackgroundLocationUpdates = enabled
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let locs = locations
+        Task { @MainActor in
+            self.complete(with: locs)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
+        let err = error
+        Task { @MainActor in
+            self.fail(with: err)
+        }
+    }
+
+    private func addWaiter(
+        id: UUID,
+        continuation: CheckedContinuation<CLLocation, Swift.Error>)
+    {
+        guard !self.didFinish else {
+            continuation.resume(throwing: LocationService.Error.unavailable)
+            return
+        }
+        self.waiters.append(Waiter(id: id, continuation: continuation))
+        guard !self.didStart else { return }
+        self.didStart = true
+        self.startRequest()
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = self.waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = self.waiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
+        if self.waiters.isEmpty {
+            self.finishWithoutWaiters()
+        }
+    }
+
+    private func finishWithoutWaiters() {
+        guard !self.didFinish else { return }
+        self.didFinish = true
+        self.stopRequest()
+        self.onFinish(self)
+    }
+
+    private func finish(_ result: Result<CLLocation, Swift.Error>) {
+        guard !self.didFinish else { return }
+        self.didFinish = true
+        let waiters = self.waiters
+        self.waiters.removeAll()
+        self.stopRequest()
+        self.onFinish(self)
+        for waiter in waiters {
+            switch result {
+            case let .success(location):
+                waiter.continuation.resume(returning: location)
+            case let .failure(error):
+                waiter.continuation.resume(throwing: error)
+            }
         }
     }
 }
