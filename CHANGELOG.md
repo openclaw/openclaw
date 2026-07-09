@@ -1650,7 +1650,6 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #102256** ci: temporarily disable QA smoke again. Thanks @RomneyDa.
 - **PR #99776** policy: preview review-required gateway repairs. Thanks @giodl73-repo.
 - **PR #101881** Fix container image upgrade migrations before gateway readiness. Related #98565. Thanks @sallyom and @jacobtomlinson.
-
 ## 2026.6.11
 
 We heard the feedback. v2026.6.11 focuses on the rough edges that make OpenClaw feel less dependable, with fixes for misplaced replies, stuck sends, reconnects, model setup failures, and safer admin defaults.
