@@ -84,8 +84,8 @@ flowchart LR
 
 ## One-screen comparison
 
-| Tool | Elective choice | Work goes to | Return / successor shape | Main guardrails |
-| --- | --- | --- | --- | --- |
-| `continue_work()` | Continue this task later | Same session | `[continuation:wake]` or active-turn continuation note | opt-in, chain cap, cost cap, delay bounds |
-| `continue_delegate()` | Shard this work outward | Fresh child session(s) | normal, silent, silent-wake, or post-compaction completion envelope | width cap, chain cap, cost cap, targeting gate |
-| `request_compaction()` | Compact at a chosen seam | Current session lifecycle | successor session receives prepared context after compaction | tool-only, current-session-only, async after turn |
+| Tool                   | Elective choice          | Work goes to              | Return / successor shape                                            | Main guardrails                                   |
+| ---------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------------- | ------------------------------------------------- |
+| `continue_work()`      | Continue this task later | Same session              | `[continuation:wake]` or active-turn continuation note              | opt-in, chain cap, cost cap, delay bounds         |
+| `continue_delegate()`  | Shard this work outward  | Fresh child session(s)    | normal, silent, silent-wake, or post-compaction completion envelope | width cap, chain cap, cost cap, targeting gate    |
+| `request_compaction()` | Compact at a chosen seam | Current session lifecycle | successor session receives prepared context after compaction        | tool-only, current-session-only, async after turn |
