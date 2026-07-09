@@ -247,6 +247,38 @@ struct SettingsViewSmokeTests {
             result: .confirmed(nil)) == .loaded(nil))
     }
 
+    @Test func `Crestodian preserves same route and resets for gateway changes`() {
+        let stateDir = URL(fileURLWithPath: "/Users/tester/.openclaw")
+        let directA = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-a"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+        let directB = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-b"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+
+        #expect(directA != directB)
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .crestodian,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: false, resetsCrestodian: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .general,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: true, resetsCrestodian: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .crestodian,
+            previousGatewayID: directA,
+            currentGatewayID: directB) == .init(clearsPrevious: true, resetsCrestodian: true))
+    }
+
     @Test func `about settings builds body`() {
         let view = AboutSettings(updater: nil)
         _ = view.body

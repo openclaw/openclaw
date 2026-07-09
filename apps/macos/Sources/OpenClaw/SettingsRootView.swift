@@ -9,7 +9,9 @@ struct SettingsRootView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var cachedTabs: Set<SettingsTab>
     @State private var inferenceConfiguration: InferenceConfiguration
+    @State private var trackedInferenceGatewayID: String?
     @State private var inferenceRefreshTrigger = InferenceRefreshTrigger.invalidate(UUID())
+    @State private var crestodianChatIdentity = UUID()
     @State private var deferredTab: SettingsTab?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
@@ -31,6 +33,7 @@ struct SettingsRootView: View {
         self._inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
             .loaded($0)
         } ?? .loading)
+        self._trackedInferenceGatewayID = State(initialValue: nil)
         self._deferredTab = State(initialValue: nil)
     }
 
@@ -69,6 +72,7 @@ struct SettingsRootView: View {
             }
             self.cacheSelectedTab()
             self.updatePermissionMonitoring(for: self.selectedTab)
+            self.trackedInferenceGatewayID = MacChatTranscriptCache.currentGatewayID()
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
             if !enabled, self.selectedTab == .debug {
@@ -93,8 +97,15 @@ struct SettingsRootView: View {
             self.scheduleInferenceRefresh(clearPrevious: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .openclawConfigDidChange)) { _ in
-            // Keep an active chat mounted while same-route config truth is revalidated.
-            self.scheduleInferenceRefresh(clearPrevious: self.selectedTab != .crestodian)
+            let gatewayID = MacChatTranscriptCache.currentGatewayID()
+            let plan = Self.configRefreshPlan(
+                selectedTab: self.selectedTab,
+                previousGatewayID: self.trackedInferenceGatewayID,
+                currentGatewayID: gatewayID)
+            self.trackedInferenceGatewayID = gatewayID
+            self.scheduleInferenceRefresh(
+                clearPrevious: plan.clearsPrevious,
+                resetCrestodian: plan.resetsCrestodian)
         }
         .onDisappear { self.stopPermissionMonitoring() }
         .task {
@@ -102,7 +113,8 @@ struct SettingsRootView: View {
             await self.refreshPerms()
         }
         .onChange(of: self.state.connectionMode) { _, _ in
-            self.scheduleInferenceRefresh(clearPrevious: true)
+            self.trackedInferenceGatewayID = MacChatTranscriptCache.currentGatewayID()
+            self.scheduleInferenceRefresh(clearPrevious: true, resetCrestodian: true)
         }
         .task(id: self.inferenceRefreshTrigger) {
             guard !self.isPreview else { return }
@@ -213,7 +225,8 @@ struct SettingsRootView: View {
         case .voiceWake:
             AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
         case .crestodian:
-            AnyView(CrestodianSettings(isActive: self.selectedTab == tab))
+            AnyView(CrestodianSettings(isActive: self.selectedTab == tab)
+                .id(self.crestodianChatIdentity))
         case .channels:
             AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
         case .skills:
@@ -356,6 +369,22 @@ struct SettingsRootView: View {
         }
     }
 
+    struct ConfigRefreshPlan: Equatable {
+        let clearsPrevious: Bool
+        let resetsCrestodian: Bool
+    }
+
+    static func configRefreshPlan(
+        selectedTab: SettingsTab,
+        previousGatewayID: String?,
+        currentGatewayID: String?) -> ConfigRefreshPlan
+    {
+        let routeChanged = previousGatewayID != currentGatewayID
+        return ConfigRefreshPlan(
+            clearsPrevious: routeChanged || selectedTab != .crestodian,
+            resetsCrestodian: routeChanged)
+    }
+
     static func configurationAfterInferenceRefresh(
         current: InferenceConfiguration,
         result: InferenceRefreshResult) -> InferenceConfiguration
@@ -366,7 +395,12 @@ struct SettingsRootView: View {
         }
     }
 
-    private func scheduleInferenceRefresh(clearPrevious: Bool) {
+    private func scheduleInferenceRefresh(clearPrevious: Bool, resetCrestodian: Bool = false) {
+        if resetCrestodian {
+            // Crestodian sessions are gateway-owned. Re-key the cached detail so a route
+            // change cannot send old conversation state to a new endpoint.
+            self.crestodianChatIdentity = UUID()
+        }
         if clearPrevious {
             // Preserve an active or pending Crestodian request while config truth is revalidated.
             // A confirmed model restores it; a confirmed missing model leaves General selected.
