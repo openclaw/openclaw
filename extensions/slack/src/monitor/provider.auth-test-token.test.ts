@@ -35,10 +35,12 @@ describe("auth.test boot call", () => {
     const runtimeLog = vi.fn();
     const client = getSlackClient();
     client.auth.test.mockResolvedValueOnce({
+      app_id: "A1",
       user_id: "UUSER",
       user: "human-installer",
       team_id: "T1",
       team: "OpenClaw",
+      is_enterprise_install: false,
     });
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
@@ -73,10 +75,12 @@ describe("auth.test boot call", () => {
     });
     const client = getSlackClient();
     client.auth.test.mockResolvedValueOnce({
+      app_id: "A1",
       user_id: "UUSER",
       user: "human-installer",
       team_id: "T1",
       team: "OpenClaw",
+      is_enterprise_install: false,
     });
     client.conversations.info.mockResolvedValueOnce({
       channel: { name: "general", is_channel: true },
@@ -119,6 +123,54 @@ describe("auth.test boot call", () => {
       expect.stringContaining(
         "required-mention channels will fail closed without another trusted activation signal",
       ),
+    );
+  });
+
+  it("preserves workspace startup when auth.test omits app_id", async () => {
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      user_id: "UBOT",
+      bot_id: "BBOT",
+      team_id: "T1",
+      is_enterprise_install: false,
+    });
+
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
+  });
+
+  it("starts an org-wide Socket Mode account when auth.test omits app_id", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enterpriseOrgInstall: true,
+          dmPolicy: "disabled",
+          groupPolicy: "open",
+        },
+      },
+    });
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      appToken: "xapp-1-A1-opaque",
+    });
+    await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
+  });
+
+  it("rejects enterprise startup with the default pairing DM policy", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enterpriseOrgInstall: true,
+        },
+      },
+    });
+
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    await expect(monitor.run).rejects.toThrow(
+      /supports DMs only with dm\.enabled=false.*dmPolicy="open"/,
     );
   });
 });
