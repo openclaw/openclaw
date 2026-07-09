@@ -866,7 +866,7 @@ describe("sessions view", () => {
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
   });
 
   it("renders the checkpoint count on the details disclosure", async () => {
@@ -1248,5 +1248,206 @@ describe("sessions view", () => {
     const emptyCell = container.querySelector(".data-table-empty-cell");
     expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
     expect(emptyCell?.querySelector("button")).toBeNull();
+  });
+
+  it("summarizes loaded sessions in the overview tiles", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "direct",
+              updatedAt: 2,
+              hasActiveRun: true,
+              status: "running",
+              totalTokens: 1200,
+            },
+            {
+              key: "agent:main:idle",
+              kind: "cron",
+              updatedAt: 1,
+              unread: true,
+              totalTokens: 300,
+            },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tiles = Array.from(container.querySelectorAll(".sessions-overview__tile"));
+    const readTile = (tile: Element) => [
+      tile.querySelector(".sessions-overview__label")?.textContent?.trim(),
+      tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
+    ];
+    expect(tiles.map(readTile)).toEqual([
+      ["Sessions", "2"],
+      ["Live", "1"],
+      ["Unread", "1"],
+      ["Tokens", "1.5k"],
+    ]);
+    expect(tiles[1]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+    expect(tiles[2]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+  });
+
+  it("renders a context meter with usage tone on the tokens cell", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 180_000,
+            contextTokens: 200_000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      "90% of context used (180,000 / 200,000 tokens)",
+    );
+    expect(container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width).toBe(
+      "90%",
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("180k / 200k");
+  });
+
+  it("keeps stale token snapshots out of the warning tones", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 180_000,
+            totalTokensFresh: false,
+            contextTokens: 200_000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--stale")).toBe(true);
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(false);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      "~90% of context used (180,000 / 200,000 tokens, approximate)",
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
+      "~180k / 200k",
+    );
+  });
+
+  it("reports the overview token sum as unavailable or partial when snapshots are missing", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            { key: "agent:main:a", kind: "direct", updatedAt: 2, totalTokens: 1200 },
+            { key: "agent:main:b", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tokensTile = container.querySelector(".sessions-overview__tile--tokens");
+    expect(tokensTile?.querySelector(".sessions-overview__value")?.textContent?.trim()).toBe(
+      "~1.2k",
+    );
+
+    render(
+      renderSessions(
+        buildProps(buildMultiResult([{ key: "agent:main:b", kind: "direct", updatedAt: 1 }])),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container
+        .querySelector(".sessions-overview__tile--tokens .sessions-overview__value")
+        ?.textContent?.trim(),
+    ).toBe("n/a");
+  });
+
+  it("omits the context meter when a session reports no context window", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 4200,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-context-meter")).toBeNull();
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("4.2k");
+  });
+
+  it("renders kind avatars with a live status dot", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "cron",
+              updatedAt: 2,
+              hasActiveRun: true,
+              status: "running",
+            },
+            { key: "agent:main:idle", kind: "direct", updatedAt: 1, hasActiveRun: false },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const avatars = Array.from(container.querySelectorAll(".session-avatar"));
+    expect(avatars.map((avatar) => [...avatar.classList])).toEqual([
+      ["session-avatar", "session-avatar--cron"],
+      ["session-avatar", "session-avatar--direct"],
+    ]);
+    expect(avatars[0]?.querySelector(".session-avatar__status")).not.toBeNull();
+    expect(avatars[1]?.querySelector(".session-avatar__status")).toBeNull();
+  });
+
+  it("shows skeleton rows during the initial load", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({ ...buildProps(buildMultiResult([])), result: null, loading: true }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
+    expect(container.querySelector(".data-table-empty-cell")).toBeNull();
+    expect(container.querySelector(".sessions-overview")).toBeNull();
   });
 });
