@@ -840,6 +840,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Choosing a transport
   - H3: Relay mode
+  - H3: Enterprise Grid org-wide installs
+  - H4: Socket Mode
+  - H4: HTTP Request URLs
   - H2: Install
   - H2: Quick setup
   - H2: Socket Mode transport tuning
@@ -8730,6 +8733,22 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recommended blocked destinations
   - H2: Limits
 
+## specs/01-agent-tool-timeout-budgets.md
+
+- Route: /specs/01-agent-tool-timeout-budgets
+- Headings:
+  - H1: Feature Spec: Agent Tool Timeout Budgets
+  - H2: Goal and Scope
+  - H2: Context
+  - H2: Approach and Touchpoints
+  - H2: Acceptance Criteria
+  - H2: Phases and Dependencies
+  - H2: Validation Plan
+  - H2: Done Criteria
+  - H2: Open Items and Risks
+  - H2: Manual Notes
+  - H2: Changelog
+
 ## specs/claw-supervisor.md
 
 - Route: /specs/claw-supervisor
@@ -8748,6 +8767,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Implementation Plan
   - H2: Acceptance Tests
   - H2: Open Questions
+
+## specs/codex-v2.md
+
+- Route: /specs/codex-v2
+- Headings:
+  - H1: Codex Plugin Integration
+  - H2: Summary
+  - H2: Goals
+  - H2: Non-Goals
+  - H2: Proposed User Model
+  - H2: Defaults
+  - H2: Fast Follow
 
 ## start/bootstrapping.md
 
