@@ -4,6 +4,7 @@ import { calculateCost } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
 import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { normalizeImageForAnthropic } from "../media/anthropic-inline-images.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -253,7 +254,7 @@ function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): 
   return name;
 }
 
-function convertContentBlocks(
+async function convertContentBlocks(
   content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   >,
@@ -280,12 +281,13 @@ function convertContentBlocks(
         hasTextBlock = true;
       }
     } else {
+      const normalizedImage = await normalizeImageForAnthropic(block);
       blocks.push({
         type: "image" as const,
         source: {
           type: "base64",
-          media_type: block.mimeType,
-          data: block.data,
+          media_type: normalizedImage.mimeType,
+          data: normalizedImage.data,
         },
       });
     }
@@ -300,7 +302,7 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertAnthropicMessages(
+async function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
@@ -327,20 +329,24 @@ function convertAnthropicMessages(
             type: "image";
             source: { type: "base64"; media_type: string; data: string };
           }
-      > = msg.content.map((item) =>
-        item.type === "text"
-          ? {
+      > = await Promise.all(
+        msg.content.map(async (item) => {
+          if (item.type === "text") {
+            return {
               type: "text",
               text: sanitizeTransportPayloadText(item.text),
-            }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: item.mimeType,
-                data: item.data,
-              },
+            };
+          }
+          const normalizedImage = await normalizeImageForAnthropic(item);
+          return {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: normalizedImage.mimeType,
+              data: normalizedImage.data,
             },
+          };
+        }),
       );
       let filteredBlocks = model.input.includes("image")
         ? blocks
@@ -440,7 +446,7 @@ function convertAnthropicMessages(
         {
           type: "tool_result",
           tool_use_id: toolResult.toolCallId,
-          content: convertContentBlocks(toolResult.content),
+          content: await convertContentBlocks(toolResult.content),
           is_error: toolResult.isError,
         },
       ];
@@ -453,7 +459,7 @@ function convertAnthropicMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: await convertContentBlocks(nextMsg.content),
           is_error: nextMsg.isError,
         });
         j += 1;
@@ -799,7 +805,7 @@ function createAnthropicTransportClient(params: {
   };
 }
 
-function buildAnthropicParams(
+async function buildAnthropicParams(
   model: AnthropicTransportModel,
   context: Context,
   isOAuthToken: boolean,
@@ -824,7 +830,7 @@ function buildAnthropicParams(
   const params: Record<string, unknown> = {
     model: resolveAnthropicRequestModelId(model),
     messages: ensureNonEmptyAnthropicMessages(
-      convertAnthropicMessages(context.messages, model, isOAuthToken, {
+      await convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
       }),
     ),
@@ -975,7 +981,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        let params = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        let params = await buildAnthropicParams(model, context, isOAuthToken, transportOptions);
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;

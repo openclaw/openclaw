@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 
@@ -247,6 +248,45 @@ describe("Anthropic provider", () => {
       {
         type: "text",
         text: "Dynamic suffix",
+      },
+    ]);
+  });
+
+  it("normalizes unsupported inline image MIME types before Anthropic payloads", async () => {
+    let capturedPayload: unknown;
+    const png = await createSolidPngBuffer(8, 8, { r: 0x20, g: 0x40, b: 0x80 });
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", data: png.toString("base64"), mimeType: "image/tiff" }],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(
+      (capturedPayload as { messages: Array<{ content: unknown[] }> }).messages[0]?.content,
+    ).toMatchObject([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/jpeg",
+        },
       },
     ]);
   });

@@ -1,5 +1,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -133,6 +134,7 @@ function makeAnthropicTransportModel(
     name?: string;
     provider?: string;
     baseUrl?: string;
+    input?: string[];
     reasoning?: boolean;
     maxTokens?: number;
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
@@ -148,7 +150,7 @@ function makeAnthropicTransportModel(
       provider: params.provider ?? "anthropic",
       baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
-      input: ["text"],
+      input: params.input ?? ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
@@ -1855,6 +1857,39 @@ describe("anthropic transport stream", () => {
       },
     ]);
     expect(toolResult.is_error).toBe(false);
+  });
+
+  it("normalizes unsupported image MIME types before Anthropic transport payloads", async () => {
+    const png = await createSolidPngBuffer(8, 8, { r: 0x60, g: 0x90, b: 0xc0 });
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", data: png.toString("base64"), mimeType: "image/tiff" }],
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    expect(userMessage.content).toMatchObject([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/jpeg",
+        },
+      },
+    ]);
   });
 
   it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
