@@ -44,7 +44,7 @@ try {
   reapZombies();
   log("  PASS: reapZombies() completed without error");
 } catch (err) {
-  log(`  FAIL: reapZombies() threw: ${err}`);
+  log(`  FAIL: reapZombies() threw: ${String(err)}`);
   process.exit(1);
 }
 

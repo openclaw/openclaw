@@ -34,6 +34,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
+  "src/process/zombie-reaper.proof.ts",
   "src/tasks/task-registry-control.runtime.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
