@@ -88,6 +88,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
+  lastDispatchOneTurnModelOverride: undefined as string | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -244,12 +245,14 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
         thinkingLevelOverride?: string;
+        oneTurnModelOverride?: string;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
       mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+      mockState.lastDispatchOneTurnModelOverride = params.replyOptions?.oneTurnModelOverride;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -846,6 +849,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.lastDispatchThinkingLevelOverride = undefined;
+    mockState.lastDispatchOneTurnModelOverride = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -912,6 +916,29 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
     });
+  });
+
+  it("treats /model with trailing text as a one-turn chat.send model override", async () => {
+    createTranscriptFixture("openclaw-chat-send-one-turn-model-");
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-one-turn-model",
+      message: "/model openai/gpt-5.5 explain this diff",
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx).toBeDefined();
+    });
+    expect(mockState.lastDispatchOneTurnModelOverride).toBe("openai/gpt-5.5");
+    expect(mockState.lastDispatchCtx?.Body).toBe("explain this diff");
+    expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("explain this diff");
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("explain this diff");
+    expect(mockState.lastDispatchCtx?.RawBody).toBe("/model openai/gpt-5.5 explain this diff");
   });
 
   it("broadcasts session metadata changes before later command dispatch failure", async () => {

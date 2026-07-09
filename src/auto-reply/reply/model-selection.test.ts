@@ -990,6 +990,70 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
+  it("uses one-turn overrides without persisting over stored session overrides", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "inferencer/deepseek-v3-4bit-mlx": {},
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const sessionEntry = makeEntry({
+      providerOverride: "kimi-coding",
+      modelOverride: "kimi-code",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
+      hasOneTurnModelOverride: true,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("kimi-coding");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("kimi-code");
+  });
+
+  it("rejects one-turn overrides outside the agent allowlist", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "inferencer/deepseek-v3-4bit-mlx": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider,
+        defaultModel,
+        provider: "openai",
+        model: "gpt-4o",
+        hasModelDirective: false,
+        hasOneTurnModelOverride: true,
+      }),
+    ).rejects.toThrow('Model override "openai/gpt-4o" is not allowed for this agent.');
+  });
+
   it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
     const cfg = {
       agents: {

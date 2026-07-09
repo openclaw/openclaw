@@ -49,6 +49,7 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { extractModelDirective } from "../../auto-reply/model.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -4451,8 +4452,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       const preparedUserTurnMediaPromise =
         normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
       const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
+      const inlineModelDirective = suppressCommandInterpretation
+        ? { cleaned: parsedMessage, hasDirective: false as const }
+        : extractModelDirective(parsedMessage);
+      const oneTurnModelOverride =
+        inlineModelDirective.hasDirective &&
+        inlineModelDirective.rawModel &&
+        !inlineModelDirective.rawProfile &&
+        !inlineModelDirective.rawRuntime &&
+        inlineModelDirective.cleaned.trim().length > 0
+          ? inlineModelDirective.rawModel
+          : undefined;
+      const effectiveParsedMessage = oneTurnModelOverride
+        ? inlineModelDirective.cleaned
+        : parsedMessage;
       const baseUserTurnInput: UserTurnInput = {
-        text: rawMessage,
+        text: effectiveParsedMessage.trim(),
         timestamp: now,
         idempotencyKey: `${clientRunId}:user`,
         ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
@@ -4471,14 +4486,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         explicitOriginTargetsPlugin && parsedImages.length > 0
           ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
           : Promise.resolve({});
-
-      const trimmedMessage = parsedMessage.trim();
-      const commandBody = parsedMessage;
+      const trimmedMessage = effectiveParsedMessage.trim();
+      const commandBody = effectiveParsedMessage;
       const commandSource =
         !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
+        ? [systemProvenanceReceipt, effectiveParsedMessage].filter(Boolean).join("\n\n")
+        : effectiveParsedMessage;
       const queuedFollowupOwnerDeviceId = normalizeOptionalText(client?.connect?.device?.id);
       const queuedFollowupOwnerConnId = normalizeOptionalText(client?.connId);
       const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
@@ -4814,6 +4828,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     : {}),
                   requestedSessionId,
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
+                  ...(oneTurnModelOverride ? { oneTurnModelOverride } : {}),
                   abortSignal: activeRunAbort.controller.signal,
                   // Keep a Gateway-owned cancel identity after this chat.send
                   // terminalizes while the prompt waits in followup/collect queue.

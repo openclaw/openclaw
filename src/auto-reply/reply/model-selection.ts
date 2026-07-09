@@ -203,6 +203,7 @@ export async function createModelSelectionState(params: {
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog =
     params.hasModelDirective ||
+    hasOneTurnModelOverride ||
     Boolean(
       hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard,
     );
@@ -408,7 +409,20 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  if (!params.hasModelDirective && !hasOneTurnModelOverride) {
+  if (hasOneTurnModelOverride) {
+    const normalizedOneTurnSelection = normalizeRuntimeModelRef(provider, model);
+    const oneTurnKey = modelKey(
+      normalizedOneTurnSelection.provider,
+      normalizedOneTurnSelection.model,
+    );
+    if (!visibilityPolicy.allowsKey(oneTurnKey)) {
+      throw new Error(
+        `Model override "${modelKey(provider, model)}" is not allowed for this agent.`,
+      );
+    }
+    provider = normalizedOneTurnSelection.provider;
+    model = normalizedOneTurnSelection.model;
+  } else if (!params.hasModelDirective) {
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,
