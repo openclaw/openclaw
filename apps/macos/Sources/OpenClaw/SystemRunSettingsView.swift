@@ -454,7 +454,9 @@ final class ExecApprovalsSettingsModel {
     }
 
     func label(for id: String) -> String {
-        if id == Self.defaultsScopeId { return "Defaults" }
+        if id == Self.defaultsScopeId {
+            return "Defaults"
+        }
         return id
     }
 
@@ -475,7 +477,9 @@ final class ExecApprovalsSettingsModel {
             guard let raw = entry["id"] as? String else { continue }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            if !seen.insert(trimmed).inserted { continue }
+            if !seen.insert(trimmed).inserted {
+                continue
+            }
             ids.append(trimmed)
             if (entry["default"] as? Bool) == true, defaultId == nil {
                 defaultId = trimmed
@@ -583,22 +587,20 @@ final class ExecApprovalsSettingsModel {
     @discardableResult
     func addEntry(_ pattern: String) -> ExecAllowlistPatternValidationReason? {
         guard !self.isDefaultsScope else { return nil }
-        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
-        case let .valid(normalizedPattern):
-            self.entries.append(ExecAllowlistEntry(pattern: normalizedPattern, lastUsedAt: nil))
-            let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-            self.allowlistValidationMessage = rejected.first?.reason.message
-            return rejected.first?.reason
-        case let .invalid(reason):
-            self.allowlistValidationMessage = reason.message
-            return reason
+        let rejected = ExecApprovalsStore.addAllowlistEntry(
+            agentId: self.selectedAgentId,
+            pattern: pattern)
+        if rejected == nil {
+            self.loadSettings(for: self.selectedAgentId)
         }
+        self.allowlistValidationMessage = rejected?.message
+        return rejected
     }
 
     @discardableResult
     func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) -> ExecAllowlistPatternValidationReason? {
         guard !self.isDefaultsScope else { return nil }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return nil }
+        guard self.entries.contains(where: { $0.id == id }) else { return nil }
         var next = entry
         switch ExecApprovalHelpers.validateAllowlistPattern(next.pattern) {
         case let .valid(normalizedPattern):
@@ -607,18 +609,22 @@ final class ExecApprovalsSettingsModel {
             self.allowlistValidationMessage = reason.message
             return reason
         }
-        self.entries[index] = next
-        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-        self.allowlistValidationMessage = rejected.first?.reason.message
-        return rejected.first?.reason
+        let rejected = ExecApprovalsStore.updateAllowlistEntry(
+            agentId: self.selectedAgentId,
+            id: id,
+            pattern: next.pattern)
+        if rejected == nil {
+            self.loadSettings(for: self.selectedAgentId)
+        }
+        self.allowlistValidationMessage = rejected?.message
+        return rejected
     }
 
     func removeEntry(id: UUID) {
         guard !self.isDefaultsScope else { return }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
-        self.entries.remove(at: index)
-        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-        self.allowlistValidationMessage = rejected.first?.reason.message
+        guard self.entries.contains(where: { $0.id == id }) else { return }
+        ExecApprovalsStore.removeAllowlistEntry(agentId: self.selectedAgentId, id: id)
+        self.loadSettings(for: self.selectedAgentId)
     }
 
     func entry(for id: UUID) -> ExecAllowlistEntry? {
