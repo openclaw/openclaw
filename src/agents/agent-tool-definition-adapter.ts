@@ -83,11 +83,10 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
 
 function describeToolExecutionError(err: unknown): {
   message: string;
-  stack?: string;
 } {
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    return { message };
   }
   return { message: String(err) };
 }
