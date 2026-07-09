@@ -759,6 +759,77 @@ describe("official external plugin catalog", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps signed SQLite snapshot replacement monotonic under concurrent writes", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-race-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const newer = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:10.000Z",
+        sequence: 10,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v10",
+            kind: "plugin",
+            openclaw: { plugin: { id: "signed-refresh-proof-v10" } },
+          },
+        ],
+      },
+    });
+    const older = signedHostedCatalogFeed({
+      privateKeyPem: newer.privateKeyPem,
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:09.000Z",
+        sequence: 9,
+        entries: [
+          {
+            name: "@openclaw/signed-refresh-proof-v9",
+            kind: "plugin",
+            openclaw: { plugin: { id: "signed-refresh-proof-v9" } },
+          },
+        ],
+      },
+    });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir: tempDir,
+    });
+    const trust = {
+      mode: "signed" as const,
+      signedBy: "acme-root",
+      signatureCount: 1,
+      threshold: 1,
+      verifiedAt: "2026-06-22T04:05:06.000Z",
+    };
+    const snapshotFor = (body: string, sequence: number, generatedAt: string) => ({
+      body,
+      metadata: {
+        url,
+        status: 200,
+        checksum: "sha256:" + crypto.createHash("sha256").update(body).digest("hex"),
+      },
+      savedAt: "2026-06-22T04:05:06.000Z",
+      trust,
+      monotonic: { mode: "signed-feed" as const, sequence, generatedAt },
+    });
+
+    try {
+      await Promise.allSettled([
+        snapshotStore.write(snapshotFor(older.body, 9, "2026-06-22T00:00:09.000Z")),
+        snapshotStore.write(snapshotFor(newer.body, 10, "2026-06-22T00:00:10.000Z")),
+      ]);
+
+      const snapshot = await snapshotStore.read(url);
+      expect(snapshot?.body).toBe(newer.body);
+      expect(snapshot?.trust).toMatchObject(trust);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when a signed feed profile receives unsigned JSON", async () => {
     const fetchImpl = vi.fn(
       async () =>

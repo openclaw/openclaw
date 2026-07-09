@@ -185,6 +185,7 @@ export type HostedOfficialExternalPluginCatalogSnapshot = {
   metadata: HostedOfficialExternalPluginCatalogMetadata;
   savedAt: string;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
+  monotonic?: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
 };
 
 export type HostedOfficialExternalPluginCatalogSnapshotStore = {
@@ -198,6 +199,12 @@ export type HostedOfficialExternalPluginCatalogTrustState = {
   signatureCount: number;
   threshold: number;
   verifiedAt: string;
+};
+
+export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
+  mode: "signed-feed";
+  sequence: number;
+  generatedAt: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -1092,8 +1099,23 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         metadata,
         savedAt: verifiedAt,
         ...(parsed.trust ? { trust: parsed.trust } : {}),
+        ...(parsed.trust?.mode === "signed"
+          ? {
+              monotonic: {
+                mode: "signed-feed",
+                sequence: parsed.feed.sequence,
+                generatedAt: parsed.feed.generatedAt,
+              },
+            }
+          : {}),
       })
       .catch((err: unknown) => {
+        if (
+          err instanceof Error &&
+          err.message.includes("hosted catalog signed feed sequence is older")
+        ) {
+          throw err;
+        }
         if (params?.requireSnapshotWrite) {
           throw new HostedCatalogSnapshotWriteError(err);
         }
