@@ -573,7 +573,7 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
-  it("does not let catalog xhigh compat override binary thinking providers", () => {
+  it("honors catalog compat supportedReasoningEfforts alongside binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [
       {
@@ -584,8 +584,8 @@ describe("listThinkingLevels", () => {
       },
     ];
 
-    expect(listThinkingLevels("zai", "glm-4.7", catalog)).toEqual(["off", "low"]);
-    expect(listThinkingLevelLabels("zai", "glm-4.7", catalog)).toEqual(["off", "on"]);
+    expect(listThinkingLevels("zai", "glm-4.7", catalog)).toEqual(["off", "low", "xhigh"]);
+    expect(listThinkingLevelLabels("zai", "glm-4.7", catalog)).toEqual(["off", "on", "xhigh"]);
   });
 
   it("maps stale unsupported levels to the largest profile level", () => {

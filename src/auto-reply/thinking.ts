@@ -241,6 +241,17 @@ export function resolveThinkingProfile(params: {
   if (binaryDecision !== true && catalogSupportsXHigh(context.compat)) {
     appendProfileLevel(profile, "xhigh");
   }
+  // Models with explicit compat.supportedReasoningEfforts may declare
+  // multi-level support even when the provider defaults to binary (on/off)
+  // thinking. Append any additional supported levels from compat metadata.
+  if (Array.isArray(context.compat?.supportedReasoningEfforts)) {
+    for (const effort of context.compat.supportedReasoningEfforts) {
+      const normalized = normalizeThinkLevel(effort ?? "");
+      if (normalized && !profile.levels.some((e) => e.id === normalized)) {
+        appendProfileLevel(profile, normalized);
+      }
+    }
+  }
   const policyContext = {
     provider: context.normalizedProvider,
     modelId: context.modelKey || context.modelId,
