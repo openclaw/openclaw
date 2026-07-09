@@ -63,6 +63,20 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
   };
   params.chatQueuedTurns.set(runId, entry);
+  // Defensive cleanup: the drain path normally calls completeQueuedChatTurn
+  // via the lifecycle callback, but a direct client-disconnect abort can
+  // fire before the followup ever reaches the drainer.  Retired collect
+  // identities (abortable: false) stay as idempotency guards.
+  params.controller.signal.addEventListener(
+    "abort",
+    () => {
+      const current = params.chatQueuedTurns.get(runId);
+      if (current?.controller === params.controller && current.abortable !== false) {
+        params.chatQueuedTurns.delete(runId);
+      }
+    },
+    { once: true },
+  );
   return true;
 }
 

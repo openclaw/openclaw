@@ -219,4 +219,35 @@ describe("chat-queued-turns", () => {
     expect(b.signal.aborted).toBe(true);
     expect(map.size).toBe(0);
   });
+
+  it("cleans up the map entry when the abort signal fires (client disconnect)", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    registerQueuedChatTurn({
+      chatQueuedTurns: map,
+      runId: "run-dc",
+      controller,
+      sessionId: "sess-dc",
+      sessionKey: "main",
+    });
+    expect(map.has("run-dc")).toBe(true);
+    controller.abort();
+    expect(map.has("run-dc")).toBe(false);
+  });
+
+  it("keeps a retired collect identity after abort (idempotency guard)", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    registerQueuedChatTurn({
+      chatQueuedTurns: map,
+      runId: "run-retired",
+      controller,
+      sessionId: "sess-retired",
+      sessionKey: "main",
+    });
+    retireQueuedChatTurnCancellation(map, "run-retired");
+    expect(getQueuedChatTurn(map, "run-retired")?.abortable).toBe(false);
+    controller.abort();
+    expect(map.has("run-retired")).toBe(true);
+  });
 });
