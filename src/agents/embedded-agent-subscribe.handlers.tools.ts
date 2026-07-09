@@ -982,7 +982,7 @@ export function handleToolExecutionStart(
         const argsType = typeof args;
         const rawArgsPreview = readStringValue(args);
         const argsPreview = sanitizeForConsole(
-          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
+          rawArgsPreview ? truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS) : undefined,
           TOOL_START_WARNING_PREVIEW_MAX_CHARS,
         );
         const safeRunId = sanitizeForConsole(runId) ?? "-";
