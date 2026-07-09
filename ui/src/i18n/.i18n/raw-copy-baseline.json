@@ -2474,62 +2474,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Balanced default for daily use."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Highest context budget for repo work."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Lean follow-ups for shared bots."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Smallest context budget and lowest cost."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Code Agent"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Personal Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Team Bot"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/config/quick.ts",
@@ -2575,13 +2519,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose how much workspace context OpenClaw injects into each run. Profiles only change bootstrap size and follow-up reinjection — never your model, tools, channels, or theme."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Choose image"
     },
     {
@@ -2611,20 +2548,6 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Connect →"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Current"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Custom"
     },
     {
       "count": 1,
@@ -2694,21 +2617,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Saved"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Selected"
+      "text": "Save stores your changes. Apply Now also reloads the current session."
     },
     {
       "count": 1,
@@ -2744,6 +2653,13 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Thinking"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "Unsaved changes"
     },
     {
       "count": 1,

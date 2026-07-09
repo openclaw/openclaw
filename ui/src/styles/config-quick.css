@@ -955,173 +955,39 @@ openclaw-logs-page {
   height: 14px;
 }
 
-/* ── Presets Grid ── */
+/* ── Pending Changes ── */
 
-.qs-profiles {
-  display: grid;
-  gap: 14px;
-  padding: 14px 16px 16px;
-}
-
-.qs-profiles__intro {
-  margin: 0;
-  max-width: 78ch;
-  font-size: 0.8125rem;
-  line-height: 1.55;
-  color: var(--muted);
-  text-wrap: pretty;
-}
-
-.qs-presets-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
-  gap: 10px;
-}
-
-.qs-profiles__footer {
+.qs-pending {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px 16px;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  gap: 12px 16px;
+  padding: 14px 16px;
 }
 
-.qs-profiles__summary {
+.qs-pending__copy {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
 }
 
-.qs-profiles__summary-label {
-  font-size: 0.8125rem;
-  font-weight: 650;
+.qs-pending__label {
+  font-weight: 600;
   color: var(--text-strong);
 }
 
-.qs-profiles__summary-values {
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.qs-profiles__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.qs-profiles__hint {
+.qs-pending__hint {
   font-size: 0.75rem;
   line-height: 1.4;
-  max-width: 46ch;
 }
 
-.qs-preset {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  cursor: pointer;
-  transition:
-    border-color var(--duration-normal) var(--ease-out),
-    background var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-  text-align: left;
-  touch-action: manipulation;
-}
-
-.qs-preset:hover {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border) 60%);
-  background: color-mix(in srgb, var(--accent-subtle) 40%, var(--card) 60%);
-}
-
-.qs-preset:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.qs-preset--active {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border) 50%);
-  background: color-mix(in srgb, var(--accent-subtle) 60%, var(--card) 40%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
-.qs-preset--active:hover {
-  background: color-mix(in srgb, var(--accent-subtle) 80%, var(--card) 20%);
-}
-
-.qs-preset__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.qs-preset__identity {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.qs-preset__identity-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.qs-preset__badges {
+.qs-pending__actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.qs-preset__icon {
-  font-size: 1.45rem;
-  line-height: 1;
-  flex: 0 0 auto;
-}
-
-.qs-preset__label {
-  font-size: 0.875rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-}
-
-.qs-preset__desc {
-  font-size: 0.75rem;
-  line-height: 1.45;
-  color: var(--muted);
-  text-wrap: pretty;
-}
-
-.qs-preset__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 0.6875rem;
-  color: var(--muted);
-}
-
-.qs-preset__meta span {
-  display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (max-width: 1100px) {
@@ -1155,13 +1021,13 @@ openclaw-logs-page {
     grid-template-columns: 1fr;
   }
 
-  .qs-profiles__footer,
-  .qs-profiles__actions {
+  .qs-pending,
+  .qs-pending__actions {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .qs-profiles__actions .btn {
+  .qs-pending__actions .btn {
     width: 100%;
     justify-content: center;
   }

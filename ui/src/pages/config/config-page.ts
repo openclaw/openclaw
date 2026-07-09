@@ -24,7 +24,6 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { renderMcp } from "./mcp.ts";
-import { getPresetById } from "./presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
@@ -799,21 +798,10 @@ export class ConfigPage extends LitElement {
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
-      configObject,
-      savedConfigObject:
-        asConfigRecord(
-          runtimeConfig.state.configFormOriginal ?? runtimeConfig.state.configSnapshot?.config,
-        ) ?? {},
       configDirty: runtimeConfig.state.configFormDirty,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
-      onSelectPreset: (id) => {
-        const preset = getPresetById(id);
-        if (preset) {
-          runtimeConfig.stagePreset(preset.patch);
-        }
-      },
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
