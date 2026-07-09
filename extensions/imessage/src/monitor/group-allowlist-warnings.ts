@@ -7,8 +7,13 @@
 // during iMessage config migration. See
 // https://github.com/openclaw/openclaw/issues/78749.
 
+import { createDedupeCache } from "openclaw/plugin-sdk/core";
+
 const startupWarned = new Set<string>();
-const perChatWarned = new Set<string>();
+// Bounded warn-once cache — perChatWarned grows with every distinct group chat
+// the gateway sees. Cap at 512 to keep long-running iMessage monitor memory
+// stable while still covering active chat sets.
+const perChatWarned = createDedupeCache({ maxSize: 512, ttlMs: 0 });
 
 /**
  * Fires once per `accountId` at monitor startup when `groupPolicy === "allowlist"`
@@ -62,10 +67,9 @@ export function warnGroupAllowlistDropPerChatOnce(params: {
     return false;
   }
   const key = `imessage:${params.accountId}:${chat}`;
-  if (perChatWarned.has(key)) {
+  if (perChatWarned.check(key)) {
     return false;
   }
-  perChatWarned.add(key);
   params.log(
     `imessage: dropping group message from chat_id=${chat} (account "${params.accountId}") — ` +
       `not in channels.imessage.groups allowlist. ` +
