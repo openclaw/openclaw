@@ -8,6 +8,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -2719,7 +2720,7 @@ async function runEmbeddedAgentInternal(
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
-                `error=${errorText.slice(0, 200)}`,
+                `error=${truncateUtf16Safe(errorText, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
