@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The non-isolated UI shard shares custom elements across files. Leave the
-// production tag free so chat-pane tests can install its real class.
+// The dedicated jsdom context keeps this host-only mock from sharing the
+// production tag registry with component tests.
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
