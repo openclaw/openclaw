@@ -286,6 +286,16 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   return params;
 }
 
+function sessionListEventScopeOptions(options: SessionListOptions = {}): SessionListOptions {
+  return {
+    ...options,
+    includeGlobal: options.includeGlobal ?? SESSION_LIST_PARAMS.includeGlobal,
+    includeUnknown: options.includeUnknown ?? SESSION_LIST_PARAMS.includeUnknown,
+    configuredAgentsOnly:
+      options.configuredAgentsOnly ?? SESSION_LIST_PARAMS.configuredAgentsOnly,
+  };
+}
+
 async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
@@ -618,7 +628,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return;
     }
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    lastListOptions = requestOptions;
+    lastListOptions = sessionListEventScopeOptions(requestOptions);
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });
     }

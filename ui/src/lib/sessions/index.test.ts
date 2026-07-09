@@ -251,6 +251,67 @@ describe("createSessionCapability", () => {
     ).toBe(result);
   });
 
+  it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
+    const visibleKey = "agent:main:main";
+    const hiddenKey = "agent:local:hidden";
+    let eventListener: ((event: GatewayEventFrame) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(
+        [
+          {
+            key: visibleKey,
+            kind: "direct",
+            updatedAt: 1,
+            sessionId: "visible-session",
+          },
+        ],
+        1,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: visibleKey,
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: (listener: (event: GatewayEventFrame) => void) => {
+        eventListener = listener;
+        return () => undefined;
+      },
+    });
+
+    await sessions.refresh({ force: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ configuredAgentsOnly: true }),
+    );
+
+    eventListener?.({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        session: {
+          key: hiddenKey,
+          kind: "direct",
+          updatedAt: 2,
+          sessionId: "hidden-session",
+          label: "Hidden",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    sessions.dispose();
+  });
+
   it("refreshes stale active rows after a terminal session message", async () => {
     const key = "agent:main:main";
     const request = vi
