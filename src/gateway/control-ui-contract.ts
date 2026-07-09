@@ -57,4 +57,5 @@ export type ControlUiBootstrapConfig = {
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  title?: string;
 };

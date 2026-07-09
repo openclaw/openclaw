@@ -105,6 +105,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.controlUi.title":
+    "Custom browser tab title for the Control UI. Useful when running multiple OpenClaw instances to distinguish between tabs. Defaults to 'OpenClaw Control' when unset.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":

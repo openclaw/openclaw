@@ -127,6 +127,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.customBindHost": "Gateway Custom Bind Host",
   "gateway.controlUi": "Control UI",
   "gateway.controlUi.enabled": "Control UI Enabled",
+  "gateway.controlUi.title": "Control UI Browser Tab Title",
   "gateway.terminal": "Operator Terminal",
   "gateway.terminal.enabled": "Operator Terminal Enabled",
   "gateway.terminal.shell": "Operator Terminal Shell",

@@ -197,6 +197,9 @@ async function loadApplicationConfig(params: {
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
     setUiTimeFormatPreference(parsed.timeFormat);
     applyControlUiSeamColor(parsed.seamColor);
+    if (typeof document !== "undefined" && parsed.title) {
+      document.title = parsed.title;
+    }
     return normalizeApplicationConfig(parsed);
   } catch {
     return null;

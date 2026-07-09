@@ -1051,6 +1051,7 @@ export async function handleControlUiHttpRequest(
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
       terminalEnabled,
+      title: config?.gateway?.controlUi?.title,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
