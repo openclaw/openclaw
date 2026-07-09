@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "lastUpdated": "2026-07-07T18:03:07Z",
+  "owner": "Program Manager",
+  "lastVerifiedAt": "2026-07-07T18:03:07Z",
+  "source": "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md",
+  "verificationStatus": "partial",
+  "stalenessPolicy": "Re-verify against control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md before any Program Manager completion/status contract claim; operational backlog/status remains UNKNOWN unless a separate approved truth source is provided.",
+  "blockers": [
+    {
+      "id": "PM-B1",
+      "blocker": "Operational backlog/status population requires a separate approved current-state truth source.",
+      "severity": "medium",
+      "evidenceStatus": "Confirmed",
+      "resolution": "Provide a non-secret current project source containing milestones, tasks, owners, dependencies, blockers, and verification evidence."
+    }
+  ]
+}

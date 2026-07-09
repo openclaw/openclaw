@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "lastUpdated": "2026-07-07T18:03:07Z",
+  "owner": "Program Manager",
+  "lastVerifiedAt": "2026-07-07T18:03:07Z",
+  "source": "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md",
+  "verificationStatus": "partial",
+  "stalenessPolicy": "Re-verify against control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md before any Program Manager completion/status contract claim; operational backlog/status remains UNKNOWN unless a separate approved truth source is provided.",
+  "status": "PARTIAL_SOURCE_VERIFIED",
+  "milestones": [
+    {
+      "id": "PM-CONTRACT",
+      "title": "Program Manager output contract source verified",
+      "status": "Confirmed",
+      "owner": "Program Manager",
+      "acceptanceCriteria": [
+        "Approved source defines required schema fields, evidence labels, completion-claim safety rules, approval gates, and non-scope boundaries."
+      ],
+      "verificationPlan": [
+        "Read control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md and confirm the contract language is present.",
+        "Run Program Manager static and contract evals after state updates."
+      ],
+      "completionClaim": "complete",
+      "evidenceStatus": "Confirmed"
+    },
+    {
+      "id": "PM-OPERATIONAL-BACKLOG",
+      "title": "Live Program Manager operational backlog and current project status",
+      "status": "Unknown",
+      "owner": "Program Manager",
+      "acceptanceCriteria": [
+        "A separate approved truth source provides current milestones, tasks, owners, dependencies, blockers, and verification evidence."
+      ],
+      "verificationPlan": [
+        "Request and inspect a separate approved operational truth source before claiming current project status."
+      ],
+      "completionClaim": "Unknown",
+      "evidenceStatus": "Unknown"
+    }
+  ],
+  "tasks": [],
+  "unknowns": [
+    "Current real project tasks are not provided by the approved output contract source.",
+    "Current real owners, dependencies, blockers, and completion evidence are not provided by the approved output contract source."
+  ]
+}
