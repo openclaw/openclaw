@@ -66,13 +66,15 @@ const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
-const RETRY_AFTER_HTTP_DATE_RE =
-  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const HTTP_DATE_MONTH_INDEX = new Map(
   ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
     (month, index) => [month, index],
   ),
 );
+const RFC1123_HTTP_DATE_RE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
+const OBSOLETE_RFC850_HTTP_DATE_RE =
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
 const OBSOLETE_ASCTIME_HTTP_DATE_RE =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
@@ -483,12 +485,7 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const trimmedRetryAfter = trimmedRetryAfterSeconds;
-  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
-    return undefined;
-  }
-
-  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
+  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfterSeconds);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
@@ -497,44 +494,94 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
 }
 
 function parseRetryAfterHttpDateMs(value: string): number {
-  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
-  if (match) {
-    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
-    if (month === undefined) {
-      return Number.NaN;
-    }
-    const year = Number.parseInt(match[6] ?? "", 10);
-    const day = Number.parseInt((match[2] ?? "").trim(), 10);
-    const hours = Number.parseInt(match[3] ?? "", 10);
-    const minutes = Number.parseInt(match[4] ?? "", 10);
-    const seconds = Number.parseInt(match[5] ?? "", 10);
-    if (
-      day < 1 ||
-      day > 31 ||
-      hours > 23 ||
-      minutes > 59 ||
-      seconds > 59 ||
-      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
-    ) {
-      return Number.NaN;
-    }
-    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
-    const parsedDate = new Date(timestamp);
-    return parsedDate.getUTCFullYear() === year &&
-      parsedDate.getUTCMonth() === month &&
-      parsedDate.getUTCDate() === day &&
-      parsedDate.getUTCHours() === hours &&
-      parsedDate.getUTCMinutes() === minutes &&
-      parsedDate.getUTCSeconds() === seconds
-      ? timestamp
-      : Number.NaN;
+  const rfc1123Match = RFC1123_HTTP_DATE_RE.exec(value);
+  if (rfc1123Match) {
+    return parseHttpDateComponentsMs({
+      year: Number.parseInt(rfc1123Match[3] ?? "", 10),
+      month: HTTP_DATE_MONTH_INDEX.get(rfc1123Match[2] ?? ""),
+      day: Number.parseInt(rfc1123Match[1] ?? "", 10),
+      hours: Number.parseInt(rfc1123Match[4] ?? "", 10),
+      minutes: Number.parseInt(rfc1123Match[5] ?? "", 10),
+      seconds: Number.parseInt(rfc1123Match[6] ?? "", 10),
+    });
   }
 
-  const parsed = Date.parse(value);
-  if (!Number.isNaN(parsed)) {
-    return parsed;
+  const rfc850Match = OBSOLETE_RFC850_HTTP_DATE_RE.exec(value);
+  if (rfc850Match) {
+    const components = {
+      month: HTTP_DATE_MONTH_INDEX.get(rfc850Match[2] ?? ""),
+      day: Number.parseInt(rfc850Match[1] ?? "", 10),
+      hours: Number.parseInt(rfc850Match[4] ?? "", 10),
+      minutes: Number.parseInt(rfc850Match[5] ?? "", 10),
+      seconds: Number.parseInt(rfc850Match[6] ?? "", 10),
+    };
+    const shortYear = Number.parseInt(rfc850Match[3] ?? "", 10);
+    const currentYear = new Date(Date.now()).getUTCFullYear();
+    const candidateYear = Math.floor(currentYear / 100) * 100 + shortYear;
+    const candidate = parseHttpDateComponentsMs({ year: candidateYear, ...components });
+    return candidate > httpDateFiftyYearsFromNowMs()
+      ? parseHttpDateComponentsMs({ year: candidateYear - 100, ...components })
+      : candidate;
   }
+
+  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
+  if (match) {
+    return parseHttpDateComponentsMs({
+      year: Number.parseInt(match[6] ?? "", 10),
+      month: HTTP_DATE_MONTH_INDEX.get(match[1] ?? ""),
+      day: Number.parseInt((match[2] ?? "").trim(), 10),
+      hours: Number.parseInt(match[3] ?? "", 10),
+      minutes: Number.parseInt(match[4] ?? "", 10),
+      seconds: Number.parseInt(match[5] ?? "", 10),
+    });
+  }
+
   return Number.NaN;
+}
+
+function parseHttpDateComponentsMs(components: {
+  year: number;
+  month: number | undefined;
+  day: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+}): number {
+  const { year, month, day, hours, minutes, seconds } = components;
+  if (
+    month === undefined ||
+    day < 1 ||
+    day > 31 ||
+    hours > 23 ||
+    minutes > 59 ||
+    seconds > 59 ||
+    [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
+  ) {
+    return Number.NaN;
+  }
+  const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
+  const parsedDate = new Date(timestamp);
+  return parsedDate.getUTCFullYear() === year &&
+    parsedDate.getUTCMonth() === month &&
+    parsedDate.getUTCDate() === day &&
+    parsedDate.getUTCHours() === hours &&
+    parsedDate.getUTCMinutes() === minutes &&
+    parsedDate.getUTCSeconds() === seconds
+    ? timestamp
+    : Number.NaN;
+}
+
+function httpDateFiftyYearsFromNowMs(): number {
+  const now = new Date(Date.now());
+  return Date.UTC(
+    now.getUTCFullYear() + 50,
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    now.getUTCHours(),
+    now.getUTCMinutes(),
+    now.getUTCSeconds(),
+    now.getUTCMilliseconds(),
+  );
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
