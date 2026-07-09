@@ -54,6 +54,7 @@ describe("stepfun provider registration", () => {
     expect(standardModel).toMatchObject({
       reasoning: true,
       input: ["text", "image"],
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
       contextWindow: 262144,
       maxTokens: 262144,
       cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
@@ -66,6 +67,7 @@ describe("stepfun provider registration", () => {
     expect(planModel).toMatchObject({
       reasoning: true,
       input: ["text", "image"],
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
       contextWindow: 262144,
       maxTokens: 262144,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -83,8 +85,10 @@ describe("stepfun provider registration", () => {
       baseUrl: standard.baseUrl,
     } as Model<"openai-completions">;
     const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
+    const offReasoning = standardModel.thinkingLevelMap?.off;
+    expect(offReasoning).toBe("low");
     expect(
-      buildOpenAICompletionsParams(transportModel, context, { reasoning: "off" } as never)
+      buildOpenAICompletionsParams(transportModel, context, { reasoning: offReasoning } as never)
         .reasoning_effort,
     ).toBe("low");
     expect(

@@ -30,6 +30,12 @@
             "name": "Step 3.7 Flash",
             "reasoning": true,
             "input": ["text", "image"],
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "high",
+              "max": "high"
+            },
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
@@ -79,6 +85,12 @@
             "name": "Step 3.7 Flash",
             "reasoning": true,
             "input": ["text", "image"],
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "high",
+              "max": "high"
+            },
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
