@@ -45,12 +45,14 @@ type ScopedToolsCall = {
   onYield?: (message: string) => Promise<void> | void;
   accountId?: string;
   messageProvider?: string;
+  clientCaps?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
   surface?: string;
@@ -807,12 +809,14 @@ describe("mcp loopback server", () => {
         "x-openclaw-session-id": "session-123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-client-caps": "tool-events,inline-widgets",
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
         "x-openclaw-current-message-id": "reply-message-1",
         "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
+        "x-openclaw-task-suggestion-delivery-mode": "gateway",
         "x-openclaw-require-explicit-message-target": "true",
       }),
       body: mcpToolsListBody(),
@@ -824,12 +828,14 @@ describe("mcp loopback server", () => {
     expect(call.sessionId).toBe("session-123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-message-1");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
@@ -840,6 +846,27 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("normalizes whitespace, duplicate, and empty client capability headers", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sendWithCaps = async (clientCaps: string, currentMessageId: string) =>
+      await sendLoopbackToolsList({
+        token: runtime.ownerToken,
+        headers: {
+          "x-session-key": "agent:main:main",
+          "x-openclaw-current-message-id": currentMessageId,
+          "x-openclaw-client-caps": clientCaps,
+        },
+      });
+
+    expect(
+      (await sendWithCaps(" tool-events, inline-widgets,tool-events, , ", "message-capped")).status,
+    ).toBe(200);
+    expect((await sendWithCaps("", "message-capless")).status).toBe(200);
+
+    expect(getScopedToolsCall(0).clientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(getScopedToolsCall(1).clientCaps).toBeUndefined();
   });
 
   it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
@@ -857,6 +884,7 @@ describe("mcp loopback server", () => {
       headers: jsonHeaders({
         "x-session-key": "agent:main:SPOOFED-other-session",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-client-caps": "inline-widgets",
         "x-openclaw-account-id": "victim-account",
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
@@ -872,6 +900,7 @@ describe("mcp loopback server", () => {
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(call.messageProvider).toBeUndefined();
+    expect(call.clientCaps).toBeUndefined();
     expect(call.accountId).toBeUndefined();
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
@@ -945,6 +974,7 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode?: string,
       currentInboundAudio?: boolean,
       requireExplicitMessageTarget?: boolean,
+      taskSuggestionDeliveryMode?: string,
     ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
@@ -959,6 +989,9 @@ describe("mcp loopback server", () => {
           ...(requireExplicitMessageTarget
             ? { "x-openclaw-require-explicit-message-target": "true" }
             : {}),
+          ...(taskSuggestionDeliveryMode
+            ? { "x-openclaw-task-suggestion-delivery-mode": taskSuggestionDeliveryMode }
+            : {}),
         },
       });
 
@@ -967,13 +1000,50 @@ describe("mcp loopback server", () => {
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true, true)).status).toBe(200);
+    expect(
+      (await sendToolsList("room_event", "message_tool_only", true, true, "gateway")).status,
+    ).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(5);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(6);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
     expect(getScopedToolsCall(4).requireExplicitMessageTarget).toBe(true);
+    expect(getScopedToolsCall(5).taskSuggestionDeliveryMode).toBe("gateway");
+  });
+
+  it("keeps capless and capability-scoped tool cache entries separate", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
+      const call = input as ScopedToolsCall;
+      return {
+        agentId: "main",
+        tools: [
+          makeMessageTool(),
+          ...(call.clientCaps?.includes("inline-widgets")
+            ? [makeMockTool({ name: "show_widget" })]
+            : []),
+        ],
+      };
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const listTools = async (clientCaps?: string) =>
+      await readMcpPayload(
+        await sendLoopbackToolsList({
+          token: runtime.ownerToken,
+          headers: {
+            "x-session-key": "agent:main:main",
+            ...(clientCaps ? { "x-openclaw-client-caps": clientCaps } : {}),
+          },
+        }),
+      );
+
+    const capless = await listTools();
+    const capped = await listTools("inline-widgets");
+
+    expect(capless.result?.tools?.map((tool) => tool.name)).not.toContain("show_widget");
+    expect(capped.result?.tools?.map((tool) => tool.name)).toContain("show_widget");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
@@ -2179,6 +2249,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
     );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-client-caps"]).toBe(
+      "${OPENCLAW_MCP_CLIENT_CAPS}",
+    );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
       "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
     );
@@ -2193,6 +2266,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-task-suggestion-delivery-mode"]).toBe(
+      "${OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE}",
     );
     expect(
       config.mcpServers?.openclaw?.headers?.["x-openclaw-require-explicit-message-target"],

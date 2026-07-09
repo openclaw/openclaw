@@ -18,6 +18,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
+- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Per-app language selection for translated resources follows Android system settings and persistence
 
 ## Open in Android Studio
 
@@ -69,16 +71,13 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
-To make screenshot capture own emulator startup, pass a named AVD:
-
-```bash
-ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
-```
-
-The screenshot script uses one connected ADB device when available. If none is
-connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
-headlessly, waits for Android to finish booting, disables animations, captures
-the screenshots, then shuts down the emulator it started.
+The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
+created from Android's no-cutout Pixel 2 profile. It creates the AVD when
+missing, boots it headlessly, waits for Android to finish booting, disables
+animations, captures the screenshots, then shuts down the emulator it started.
+The API 36 Google APIs system image must be installed in the local Android SDK.
+Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
+explicitly use a connected emulator.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 

@@ -1023,14 +1023,16 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.testListen",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.testListen({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            timeoutMs: readPositiveIntegerParam(asParamRecord(params), "timeoutMs"),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            agentId: normalizeOptionalString(trustedParams.agentId),
+            timeoutMs: readPositiveIntegerParam(trustedParams, "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {
@@ -1094,7 +1096,12 @@ export default definePluginEntry({
               }
               case "test_listen": {
                 return json(
-                  await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "test_listen",
+                    raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
+                  }),
                 );
               }
               case "status": {

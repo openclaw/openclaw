@@ -6,6 +6,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
   },
+  enterpriseOrgInstall: {
+    label: "Slack Enterprise Grid Org Install",
+    help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
+  },
   "dm.policy": {
     label: "Slack DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',

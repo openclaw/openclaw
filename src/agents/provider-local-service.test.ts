@@ -191,7 +191,7 @@ describe("provider local service", () => {
 
   it("rejects unknown sentinels before starting a local service", async () => {
     const port = await freePort();
-    const unknown = "oc-sent-v1-fedcba987654321001234567";
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     const model = attachModelProviderLocalService(
       {
         id: "demo",

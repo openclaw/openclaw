@@ -146,6 +146,7 @@ internal fun ChatComposer(
   onRemoveAttachment: (id: String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
+  voiceNoteLevel: Float,
   recordVoiceNoteEnabled: Boolean,
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
@@ -227,6 +228,7 @@ internal fun ChatComposer(
     if (recordingVoiceNote) {
       VoiceNoteRecordingControls(
         elapsedMs = voiceNoteElapsedMs,
+        level = voiceNoteLevel,
         onCancel = onCancelVoiceNote,
         onDone = onFinishVoiceNote,
       )
