@@ -304,7 +304,10 @@ export async function readResponseTextSnippet(
     return undefined;
   }
 
-  const text = new TextDecoder().decode(prefix.buffer);
+  const text = new TextDecoder().decode(
+    prefix.buffer,
+    prefix.truncated ? { stream: true } : undefined,
+  );
   if (!text) {
     return undefined;
   }

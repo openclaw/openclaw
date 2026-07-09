@@ -236,6 +236,12 @@ describe("readResponseTextSnippet", () => {
       expected: "1234567…",
     },
     {
+      name: "drops partial UTF-8 characters when snippets truncate at a byte boundary",
+      response: new Response(makeStream([new TextEncoder().encode("ab😀cd")])),
+      options: { maxBytes: 3, maxChars: 50 },
+      expected: "ab…",
+    },
+    {
       name: "keeps character-limited snippets UTF-16 well-formed",
       response: new Response(makeStream([new TextEncoder().encode("ab🚀tail")])),
       options: { maxBytes: 64, maxChars: 3 },

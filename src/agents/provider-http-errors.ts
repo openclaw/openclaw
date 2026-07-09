@@ -74,7 +74,9 @@ export async function readResponseTextLimited(
         break;
       }
     }
-    text += decoder.decode();
+    if (!reachedLimit) {
+      text += decoder.decode();
+    }
   } finally {
     if (reachedLimit) {
       // Stop the upstream body once the diagnostic budget is full.
