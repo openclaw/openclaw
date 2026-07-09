@@ -1706,6 +1706,9 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       toolName: "exec",
       timedOut: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
   });
 
   it("uses raw exec metadata for failed tool payload warnings", async () => {

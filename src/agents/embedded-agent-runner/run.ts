@@ -496,7 +496,12 @@ function createScopedAuthProfileStore(
 }
 
 function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas?: Array<{
+    toolName: string;
+    meta?: string;
+    isError?: boolean;
+    asyncStarted?: boolean;
+  }>;
   hadFailure: boolean;
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
@@ -512,10 +517,11 @@ function buildTraceToolSummary(params: {
     seen.add(toolName);
     tools.push(toolName);
   }
+  const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
   return {
     calls: params.toolMetas?.length ?? 0,
     tools,
-    failures: params.hadFailure ? 1 : 0,
+    failures: failedToolCalls > 0 || !params.hadFailure ? failedToolCalls : 1,
   };
 }
 
