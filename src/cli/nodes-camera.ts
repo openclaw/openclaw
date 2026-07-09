@@ -16,6 +16,7 @@ import {
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
+const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
@@ -94,7 +95,7 @@ export function cameraTempPath(opts: {
 export async function writeUrlToFile(
   filePath: string,
   url: string,
-  opts: { expectedHost: string },
+  opts: { expectedHost: string; timeoutMs?: number },
 ) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
@@ -124,6 +125,7 @@ export async function writeUrlToFile(
       url,
       auditContext: "writeUrlToFile",
       policy,
+      timeoutMs: opts.timeoutMs ?? CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     const res = guarded.response;

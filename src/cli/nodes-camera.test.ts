@@ -1,5 +1,7 @@
 // Nodes camera tests cover camera node command media handling and file inputs.
 import * as fs from "node:fs/promises";
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,12 +11,31 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; timeoutMs?: number }) => {
+    const controller = new AbortController();
+    const timeoutId =
+      typeof params.timeoutMs === "number"
+        ? setTimeout(
+            () => controller.abort(new Error(`timed out after ${params.timeoutMs}ms`)),
+            Math.max(1, params.timeoutMs),
+          )
+        : undefined;
+    timeoutId?.unref?.();
+    const release = async () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
+    try {
+      return {
+        response: await globalThis.fetch(params.url, { signal: controller.signal }),
+        finalUrl: params.url,
+        release,
+      };
+    } catch (err) {
+      await release();
+      throw err;
+    }
   }),
 }));
 
@@ -47,6 +68,67 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`expected missing path: ${targetPath}`);
+}
+
+async function withHangingHttpServer<T>(run: (url: string) => Promise<T>): Promise<T> {
+  const server = http.createServer((_req, _res) => {
+    // Intentionally leave the response open to model a node host that accepts
+    // the media request and then never sends headers.
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP listener address");
+    }
+    return await run(`http://127.0.0.1:${(address as AddressInfo).port}/hang`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+}
+
+function mockFetchGuardToRealUrl(realUrl: string): { abort: () => void } {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  fetchGuardMocks.fetchWithSsrFGuard.mockImplementationOnce(
+    async (params: { url: string; timeoutMs?: number }) => {
+      if (typeof params.timeoutMs === "number") {
+        timeoutId = setTimeout(
+          () => controller.abort(new Error(`timed out after ${params.timeoutMs}ms`)),
+          Math.max(1, params.timeoutMs),
+        );
+        timeoutId.unref?.();
+      }
+      const release = async () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      };
+      try {
+        return {
+          response: await globalThis.fetch(realUrl, { signal: controller.signal }),
+          finalUrl: params.url,
+          release,
+        };
+      } catch (err) {
+        await release();
+        throw err;
+      }
+    },
+  );
+  return {
+    abort: () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      controller.abort();
+    },
+  };
 }
 
 function cancelTrackedResponse(init?: ResponseInit): {
@@ -257,6 +339,39 @@ describe("nodes camera helpers", () => {
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 120_000 }),
+      );
+    });
+  });
+
+  it("aborts hanging url payload downloads through the guarded fetch timeout", async () => {
+    await withHangingHttpServer(async (hangingUrl) => {
+      const controller = mockFetchGuardToRealUrl(hangingUrl);
+      await withCameraTempDir(async (dir) => {
+        const out = path.join(dir, "hanging.bin");
+        const download = writeUrlToFile(out, "https://198.51.100.42/hanging.bin", {
+          expectedHost: "198.51.100.42",
+          timeoutMs: 50,
+        });
+        try {
+          await expect(
+            Promise.race([
+              download,
+              new Promise((_, reject) => {
+                setTimeout(() => reject(new Error("download did not time out")), 500);
+              }),
+            ]),
+          ).rejects.toThrow(/timed out after 50ms|abort/i);
+          expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+            expect.objectContaining({ timeoutMs: 50 }),
+          );
+          await expectPathMissing(out);
+        } finally {
+          controller.abort();
+          await download.catch(() => undefined);
+        }
+      });
     });
   });
 
