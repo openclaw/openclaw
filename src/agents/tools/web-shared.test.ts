@@ -147,6 +147,60 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mark exact-limit streamed responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark multi-chunk exact-limit streamed responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hel", "lo"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks responses that exceed the limit as truncated after confirming overflow", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", "!"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
     const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
     const text = vi.fn(async () => "hello");
