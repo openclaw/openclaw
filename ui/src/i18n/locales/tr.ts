@@ -208,7 +208,6 @@ export const tr: TranslationMap = {
     globalTooltip: "Genel oturumları dahil et.",
     unknownTooltip: "Bilinmeyen oturumları dahil et.",
     archivedOnlyTooltip: "Yalnızca arşivlenen oturumları göster.",
-    liveCount: "{count} live",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",
@@ -250,6 +249,9 @@ export const tr: TranslationMap = {
     tokenRange: "{before} to {after} token",
     tokensBefore: "önce {count} token",
     tokenDeltaUnavailable: "token değişimi kullanılamıyor",
+    contextUsage: "Bağlamın %{percent} kadarı kullanıldı ({used} / {context} token)",
+    contextUsageApprox:
+      "Bağlamın ~%{percent} kadarı kullanıldı ({used} / {context} token, yaklaşık)",
     checkpoints: "{count} kontrol noktası",
     checkpoint: "{count} kontrol noktası",
     showSessionDetails: "{count} için oturum ayrıntılarını göster",
