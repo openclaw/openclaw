@@ -218,7 +218,18 @@ async function runCli(params: {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     proc.stdout.on("data", (c) => stdoutChunks.push(c));
+    // stdout carries synthesized audio data. A stream error means the audio
+    // pipe broke mid-generation — reject so the caller does not silently
+    // receive truncated audio when the child later exits zero.
+    proc.stdout.on("error", (e) => {
+      clearTimeout(timer);
+      proc.kill();
+      reject(new Error(`CLI TTS stdout stream error: ${e.message}`));
+    });
     proc.stderr.on("data", (c) => stderrChunks.push(c));
+    // stderr carries diagnostic logs only. Stream errors here are benign and
+    // should not crash the provider or affect audio output.
+    proc.stderr.on("error", () => {});
 
     proc.on("error", (e) => {
       clearTimeout(timer);
