@@ -2251,7 +2251,7 @@ async function readPartialAssistantText(
         if (remaining <= 0) {
           return true;
         }
-        const nextText = text.slice(0, remaining);
+        const nextText = truncateUtf16Safe(text, remaining);
         texts.push(nextText);
         collectedChars += separatorChars + nextText.length;
         return collectedChars >= resolvedLimits.maxChars;
@@ -2259,12 +2259,13 @@ async function readPartialAssistantText(
       return false;
     },
   });
-  const joined = texts
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, resolvedLimits.maxChars)
-    .trim();
+  const joined = truncateUtf16Safe(
+    texts
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .join("\n"),
+    resolvedLimits.maxChars,
+  ).trim();
   return joined || null;
 }
 
