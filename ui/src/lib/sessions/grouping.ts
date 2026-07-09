@@ -24,6 +24,12 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
+type SidebarSessionSection<Row> = {
+  id: "pinned" | "ungrouped" | `category:${string}`;
+  category?: string;
+  rows: Row[];
+};
+
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
@@ -98,6 +104,73 @@ export function groupSessionRows(params: {
   }
   const ids = orderedGroupIds(params.mode, byId, params.knownCategories ?? []);
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
+}
+
+/** How the sidebar buckets non-pinned rows: category sections or one flat list. */
+export type SidebarSessionsGrouping = "category" | "none";
+
+export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsGrouping {
+  return raw === "none" ? "none" : "category";
+}
+
+/**
+ * Pinned first, named categories in the persisted `knownGroups` order, then
+ * newly observed categories alphabetically, then uncategorized rows.
+ * `knownGroups` keeps stored-but-empty groups visible as move targets;
+ * `grouping: "none"` collapses categories into the ungrouped list (pinned stays).
+ */
+export function groupSidebarSessionRows<Row extends { pinned?: boolean; category?: string | null }>(
+  rows: readonly Row[],
+  options: { knownGroups?: readonly string[]; grouping?: SidebarSessionsGrouping } = {},
+): SidebarSessionSection<Row>[] {
+  const grouping = options.grouping ?? "category";
+  const pinned: Row[] = [];
+  const ungrouped: Row[] = [];
+  const categories = new Map<string, Row[]>();
+  if (grouping === "category") {
+    for (const name of options.knownGroups ?? []) {
+      const trimmed = name.trim();
+      if (trimmed && !categories.has(trimmed)) {
+        categories.set(trimmed, []);
+      }
+    }
+  }
+  for (const row of rows) {
+    if (row.pinned === true) {
+      pinned.push(row);
+      continue;
+    }
+    const category = grouping === "category" ? row.category?.trim() : undefined;
+    if (!category) {
+      ungrouped.push(row);
+      continue;
+    }
+    const categoryRows = categories.get(category);
+    if (categoryRows) {
+      categoryRows.push(row);
+    } else {
+      categories.set(category, [row]);
+    }
+  }
+
+  const sections: SidebarSessionSection<Row>[] = [];
+  if (pinned.length > 0) {
+    sections.push({ id: "pinned", rows: pinned });
+  }
+  const knownGroups = [
+    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
+  ];
+  const orderedCategories = [
+    ...knownGroups.filter((name) => categories.has(name)),
+    ...[...categories.keys()]
+      .filter((name) => !knownGroups.includes(name))
+      .toSorted((a, b) => a.localeCompare(b)),
+  ];
+  for (const category of orderedCategories) {
+    sections.push({ id: `category:${category}`, category, rows: categories.get(category) ?? [] });
+  }
+  sections.push({ id: "ungrouped", rows: ungrouped });
+  return sections;
 }
 
 function orderedGroupIds(

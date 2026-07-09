@@ -27,6 +27,7 @@ import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
+  isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
@@ -128,7 +129,7 @@ async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => 
 }
 
 function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv();
+  return snapshotLiveEnv(["OPENCLAW_ALLOW_SLOW_REPLY_TESTS"]);
 }
 
 function restoreEnv(snapshot: LiveEnvSnapshot): void {
@@ -257,6 +258,7 @@ async function writeLiveGatewayConfig(params: {
 }
 
 async function requestAgentTextWithEvents(params: {
+  acceptYieldedTimeout?: boolean;
   client: GatewayClient;
   eventPrefix?: string;
   includeAllSessions?: boolean;
@@ -293,7 +295,9 @@ async function requestAgentTextWithEvents(params: {
       },
       { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
     );
-    if (payload?.status !== "ok") {
+    const acceptedYieldedTimeout =
+      params.acceptYieldedTimeout === true && isExpectedYieldedAgentTimeout(payload);
+    if (payload?.status !== "ok" && !acceptedYieldedTimeout) {
       throw new Error(`agent status=${String(payload?.status)} payload=${JSON.stringify(payload)}`);
     }
     return { text: extractPayloadText(payload.result), events };
@@ -980,6 +984,8 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
   const { listTaskRecords } = await import("../tasks/runtime-internal.js");
   const { text, events } = await requestAgentTextWithEvents({
+    // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
+    acceptYieldedTimeout: true,
     client: params.client,
     eventPrefix: "codex_app_server.",
     includeAllSessions: true,
@@ -1058,6 +1064,9 @@ describeLive("gateway live (Codex harness)", () => {
         delete process.env.OPENAI_BASE_URL;
       }
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      // This live lane exercises the full config-loaded runtime inside Vitest's
+      // fast-test envelope, so config-override completeness checks do not apply.
+      setTestEnvValue("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";

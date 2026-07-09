@@ -12,8 +12,22 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/components/app-sidebar.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/components/app-topbar.ts",
-      "text": "⌘K"
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/app-topbar.ts",
+      "text": "OpenClaw"
     },
     {
       "count": 1,
@@ -665,6 +679,13 @@
       "name": "text",
       "path": "ui/src/components/login-gate.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/settings-sidebar.ts",
+      "text": "esc"
     },
     {
       "count": 1,
@@ -1852,13 +1873,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Cancel reply"
@@ -1963,13 +1977,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
@@ -2054,17 +2061,10 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Faster"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Model"
+      "text": "Speed"
     },
     {
       "count": 1,
@@ -2078,35 +2078,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Smarter"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
       "text": "Speed"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Talk options"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Model"
     },
     {
       "count": 1,
@@ -2144,32 +2116,11 @@
       "text": "Coral"
     },
     {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Default"
-    },
-    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Echo"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "High"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Low"
     },
     {
       "count": 1,
@@ -2183,21 +2134,7 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Medium"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Sage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sensitivity"
     },
     {
       "count": 1,
@@ -2215,17 +2152,52 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Voice"
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Close sidebar"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
-      "text": "Close sidebar"
+      "text": "Copy path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Next match"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Previous match"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search in file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Show in Files"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search"
     },
     {
       "count": 1,
@@ -2256,7 +2228,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 4,
+      "count": 5,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
@@ -2502,62 +2474,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Balanced default for daily use."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Highest context budget for repo work."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Lean follow-ups for shared bots."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Smallest context budget and lowest cost."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Code Agent"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Personal Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Team Bot"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/config/quick.ts",
@@ -2603,13 +2519,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose how much workspace context OpenClaw injects into each run. Profiles only change bootstrap size and follow-up reinjection — never your model, tools, channels, or theme."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Choose image"
     },
     {
@@ -2639,20 +2548,6 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Connect →"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Current"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Custom"
     },
     {
       "count": 1,
@@ -2722,28 +2617,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Roundness"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Saved"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Selected"
+      "text": "Save stores your changes. Apply Now also reloads the current session."
     },
     {
       "count": 1,
@@ -2785,6 +2659,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
+      "text": "Unsaved changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/quick.ts",
       "text": "User"
     },
     {
@@ -2795,6 +2676,13 @@
       "text": "Claw"
     },
     {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "CPU"
+    },
+    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
@@ -2802,18 +2690,11 @@
       "text": "Dash"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Full"
+      "text": "Disk"
     },
     {
       "count": 1,
@@ -2837,18 +2718,11 @@
       "text": "M"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "None"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Round"
+      "text": "Memory"
     },
     {
       "count": 1,
@@ -2856,13 +2730,6 @@
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "S"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Slight"
     },
     {
       "count": 1,
@@ -2919,13 +2786,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
       "text": "Search settings..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Adjust corner radius across the UI."
     },
     {
       "count": 1,
@@ -3094,13 +2954,6 @@
       "name": "text",
       "path": "ui/src/pages/config/view.ts",
       "text": "Receive browser push notifications from your gateway."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Roundness"
     },
     {
       "count": 2,
@@ -3982,6 +3835,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Default action"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Defaults"
     },
     {
@@ -4038,6 +3898,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Host-native policy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Load exec approvals to edit allowlists."
     },
     {
@@ -4046,6 +3913,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Mode"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Native"
     },
     {
       "count": 1,
@@ -4074,6 +3948,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Pattern"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Read-only here. Edit from the companion app or CLI."
     },
     {
       "count": 1,

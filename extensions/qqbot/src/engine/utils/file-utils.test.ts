@@ -31,10 +31,19 @@ import {
   checkFileSize,
   downloadFile,
   fileExistsAsync,
+  formatFileSize,
   getImageMimeType,
   getMimeType,
   readFileAsync,
 } from "./file-utils.js";
+
+describe("formatFileSize", () => {
+  it("preserves compact binary-scaled upload labels", () => {
+    expect(formatFileSize(512)).toBe("512B");
+    expect(formatFileSize(1536)).toBe("1.5KB");
+    expect(formatFileSize(2 * 1024 * 1024)).toBe("2.0MB");
+  });
+});
 
 describe("qqbot file-utils MIME helpers", () => {
   it("uses the shared media MIME table for extension inference", () => {

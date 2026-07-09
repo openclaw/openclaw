@@ -45,7 +45,7 @@ type OpenRouterVideoModelsResponse = {
   data?: OpenRouterVideoModel[];
 };
 
-export type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
+type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
   allowedPassthroughParameters?: readonly string[];
   canonicalSlug?: string;
   created?: number;

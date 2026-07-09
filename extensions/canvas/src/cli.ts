@@ -25,7 +25,7 @@ import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
 /** Runtime output surface used by Canvas CLI commands. */
-export type CanvasCliRuntime = {
+type CanvasCliRuntime = {
   log: (message: string) => void;
   error: (message: string) => void;
   exit: (code: number) => void;

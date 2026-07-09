@@ -188,11 +188,46 @@ plugin through stable ownership: an exact app id from plugin detail, a known
 MCP server name, or unique stable metadata. Display-name-only or ambiguous
 ownership is excluded until the next inventory refresh proves ownership.
 
+## Connected account apps
+
+Owner-operated agents can opt into every app already connected to their Codex
+account without requiring a matching plugin package:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`allow_all_plugins: true` takes a complete `app/list` snapshot when a new native
+Codex thread is established and admits only apps marked accessible for that
+account. It does not install, authenticate, or enable apps globally. Existing
+threads keep their persisted app set; use `/new`, `/reset`, or restart the
+gateway to pick up newly connected or revoked apps.
+
+Account apps inherit the global `codexPlugins.allow_destructive_actions` value,
+which accepts `true`, `false`, `"auto"`, or `"ask"`. Explicit per-plugin policy
+overrides the global policy for overlapping app ids. Inventory failures fail
+closed instead of falling back to an unrestricted default.
+
 ## Thread app config
 
 OpenClaw injects a restrictive `config.apps` patch for the Codex thread:
-`_default` is disabled, and only apps owned by enabled migrated plugins are
-enabled.
+`_default` is disabled, and only apps owned by enabled migrated plugins or
+accessible account apps admitted by `allow_all_plugins` are enabled.
 
 `destructive_enabled` on each app comes from the effective global or
 per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`
@@ -203,7 +238,7 @@ get `open_world_enabled: true`. OpenClaw does not expose a separate
 plugin-level open-world policy knob and does not maintain per-plugin
 destructive tool-name deny lists.
 
-Tool approval mode defaults to automatic for plugin apps, so non-destructive
+Tool approval mode defaults to automatic for admitted apps, so non-destructive
 read tools run without a same-thread approval prompt. Destructive tools stay
 controlled by each app's `destructive_enabled` policy.
 

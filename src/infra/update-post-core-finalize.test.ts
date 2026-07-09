@@ -123,6 +123,18 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
   });
 
+  it("carries the external service-repair policy into the finalizer", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult(),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      serviceRepairPolicy: "external",
+    });
+
+    expect(spawnFinalize.mock.calls[0][0].env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
+  });
+
   it("carries effective git/dev channel via env without --channel for a no-config update", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({

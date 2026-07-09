@@ -54,7 +54,6 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
-  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -79,7 +78,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
-  ChatComposerPersistenceController,
+  ChatComposerPersistence,
   persistChatComposerState,
   restoreChatComposerState,
 } from "./composer-persistence.ts";
@@ -91,6 +90,8 @@ import {
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
 import { applyModelCatalogResult, loadModels } from "./models.ts";
+import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
+import { waitForCommit } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
@@ -98,7 +99,13 @@ import {
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
+import {
+  cancelChatScroll,
+  handleChatScroll,
+  resetChatScroll,
+  scheduleChatScroll,
+  scheduleCommittedChatScroll,
+} from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   handleAgentEvent,
@@ -111,7 +118,6 @@ import {
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
-  readonly updateComplete: Promise<unknown>;
 };
 
 export type ChatPageHost = ChatHost &
@@ -170,6 +176,9 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatManualRefreshInFlight: boolean;
+    chatManualRefreshFrame: number | null;
+    chatManualRefreshGeneration: number;
+    chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
     chatMobileControlsOpen: boolean;
     chatMobileControlsTrigger: HTMLElement | null;
@@ -181,20 +190,23 @@ export type ChatPageHost = ChatHost &
     chatInputHistoryItems: string[] | null;
     chatInputHistoryIndex: number;
     chatDraftBeforeHistory: string | null;
+    chatScrollCommitCleanup: (() => void) | null;
     chatScrollFrame: number | null;
+    chatScrollGuardFrame: number | null;
     chatScrollTimeout: number | null;
+    chatScrollGeneration: number;
     chatLastScrollTop: number;
+    chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
     chatUserNearBottom: boolean;
     chatFollowLocked: boolean;
-    chatHeaderControlsHidden: boolean;
     chatIsProgrammaticScroll: boolean;
     chatProgrammaticScrollTarget: number;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
-    updateComplete: Promise<unknown>;
+    renderLifecycle: RenderLifecycle;
     requestUpdate: () => void;
     onModelChanged: () => Promise<void> | void;
     resetToolStream: () => void;
@@ -247,23 +259,60 @@ export function canCreateChatSession(
 }
 
 export async function handleChatManualRefresh(state: ChatPageHost): Promise<void> {
+  if (state.chatManualRefreshFrame !== null) {
+    cancelAnimationFrame(state.chatManualRefreshFrame);
+    state.chatManualRefreshFrame = null;
+  }
+  const lifecycle = state.renderLifecycle;
+  const generation = ++state.chatManualRefreshGeneration;
   state.chatManualRefreshInFlight = true;
   state.chatNewMessagesBelow = false;
-  await state.updateComplete;
+  const committed = await waitForCommit(lifecycle);
+  if (!committed || generation !== state.chatManualRefreshGeneration) {
+    if (generation === state.chatManualRefreshGeneration) {
+      state.chatManualRefreshInFlight = false;
+    }
+    return;
+  }
   state.resetToolStream();
   try {
     await Promise.allSettled([
       refreshPageChat(state, { awaitHistory: true, scheduleScroll: false }),
       refreshChatModelAuthStatus(state, { refresh: true }),
     ]);
-    state.scrollToBottom({ smooth: true });
+    if (generation === state.chatManualRefreshGeneration) {
+      state.scrollToBottom({ smooth: true });
+    }
   } finally {
-    requestAnimationFrame(() => {
-      state.chatManualRefreshInFlight = false;
-      state.chatNewMessagesBelow = false;
-      state.requestUpdate();
-    });
+    if (generation === state.chatManualRefreshGeneration) {
+      let finalized = false;
+      const frame = requestAnimationFrame(() => {
+        finalized = true;
+        state.chatManualRefreshFrame = null;
+        if (
+          generation !== state.chatManualRefreshGeneration ||
+          lifecycle !== state.renderLifecycle
+        ) {
+          return;
+        }
+        state.chatManualRefreshInFlight = false;
+        state.chatNewMessagesBelow = false;
+        lifecycle.invalidate();
+      });
+      if (!finalized) {
+        state.chatManualRefreshFrame = frame;
+      }
+    }
   }
+}
+
+function cancelChatManualRefresh(state: ChatPageHost): void {
+  state.chatManualRefreshGeneration += 1;
+  if (state.chatManualRefreshFrame !== null) {
+    cancelAnimationFrame(state.chatManualRefreshFrame);
+    state.chatManualRefreshFrame = null;
+  }
+  state.chatManualRefreshInFlight = false;
 }
 
 export function resolveAssistantAttachmentAuthToken(state: ChatPageHost) {
@@ -346,9 +395,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
-  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -361,7 +408,9 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearRunStatus: true,
   });
   state.resetChatScroll();
-  saveRouteSessionSettings(state, sessionKey);
+  // Deliberately no saveRouteSessionSettings here: this runs for every split
+  // pane, and only the active pane may write the global sessionKey /
+  // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {
@@ -445,20 +494,6 @@ function scheduleChatMetadataRefresh(callback: () => void) {
   globalThis.setTimeout(callback, 50);
 }
 
-async function refreshChatModels(host: ChatPageHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
-  }
-}
-
 export async function refreshChatCommands(host: ChatPageHost) {
   await refreshSlashCommands({
     client: host.client,
@@ -484,45 +519,118 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
-async function refreshChatMetadata(host: ChatPageHost) {
+function ownsChatMetadataRequest(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+): boolean {
+  return (
+    host.client === client &&
+    host.connected &&
+    host.chatMetadataRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId
+  );
+}
+
+async function refreshCompatibilityModelCatalog(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  const models = await loadModels(client);
+  if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+    host.chatModelCatalog = models;
+  }
+}
+
+async function refreshCompatibilityCommands(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  await refreshSlashCommands({
+    client,
+    agentId,
+    shouldApply: () => ownsChatMetadataRequest(host, client, agentId, requestVersion),
+  });
+}
+
+function canUseCompatibilityModelCatalog(
+  host: ChatPageHost,
+  agentId: string | null | undefined,
+): boolean {
+  return agentId === resolveUiDefaultAgentId(host);
+}
+
+export async function refreshChatMetadata(
+  host: ChatPageHost,
+  opts?: { preserveModelCatalogOnFallback?: boolean },
+) {
+  const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
     return;
   }
   const client = host.client;
-  const sessionKey = host.sessionKey;
   const agentId = resolveChatAgentId(host);
-  if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-    return;
-  }
-
+  const shouldRefreshCompatibilityModels =
+    !opts?.preserveModelCatalogOnFallback && canUseCompatibilityModelCatalog(host, agentId);
+  const shouldClearUnresolvedModels =
+    !opts?.preserveModelCatalogOnFallback && !shouldRefreshCompatibilityModels;
   host.chatModelsLoading = true;
   try {
+    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
+      ]);
+      return;
+    }
+
     const result = await client.request<ChatMetadataResult>(
       "chat.metadata",
       agentId ? { agentId } : {},
     );
-    if (
-      host.client !== client ||
-      !host.connected ||
-      host.sessionKey !== sessionKey ||
-      resolveChatAgentId(host) !== agentId
-    ) {
+    if (!ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       return;
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
+    if (!metadataApplied.models && shouldClearUnresolvedModels) {
+      host.chatModelCatalog = [];
+    }
     if (!metadataApplied.models || !metadataApplied.commands) {
       await Promise.allSettled([
-        ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
+        ...(!metadataApplied.models && shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        ...(metadataApplied.commands
+          ? []
+          : [refreshCompatibilityCommands(host, client, agentId, requestVersion)]),
       ]);
     }
   } catch {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
+      ]);
+    }
   } finally {
-    if (host.client === client) {
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       host.chatModelsLoading = false;
     }
   }
@@ -640,38 +748,57 @@ export async function refreshChat(
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   let resolveStartupMetadata: (result: ChatMetadataApplyResult) => void = () => {};
-  const startupMetadataApplied =
-    opts?.startup && host.client && host.connected
-      ? new Promise<ChatMetadataApplyResult>((resolve) => {
-          resolveStartupMetadata = resolve;
-        })
-      : Promise.resolve({ commands: false, models: false });
+  const ownsStartupMetadata = Boolean(opts?.startup && host.client && host.connected);
+  const startupMetadataRequestVersion = ownsStartupMetadata
+    ? ++host.chatMetadataRequestVersion
+    : null;
+  const startupMetadataApplied = ownsStartupMetadata
+    ? new Promise<ChatMetadataApplyResult>((resolve) => {
+        resolveStartupMetadata = resolve;
+      })
+    : Promise.resolve({ commands: false, models: false });
 
   const refresh = refreshChat(host, {
     ...opts,
     onStartupMetadata: ({ client, agentId, metadata }) => {
-      const applied = metadata
-        ? applyChatMetadataResult(host, client, agentId, metadata)
-        : { commands: false, models: false };
+      const ownsMetadata =
+        startupMetadataRequestVersion !== null &&
+        host.chatMetadataRequestVersion === startupMetadataRequestVersion &&
+        host.client === client &&
+        host.connected &&
+        resolveChatAgentId(host) === agentId;
+      const applied =
+        metadata && ownsMetadata
+          ? applyChatMetadataResult(host, client, agentId, metadata)
+          : { commands: false, models: false };
       resolveStartupMetadata(applied);
     },
   });
 
   const refreshedSessionKey = host.sessionKey;
+  const ownsScheduledMetadataRefresh = () =>
+    host.sessionKey === refreshedSessionKey &&
+    host.connected &&
+    (startupMetadataRequestVersion === null ||
+      host.chatMetadataRequestVersion === startupMetadataRequestVersion);
   scheduleChatMetadataRefresh(() => {
-    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
+    if (!ownsScheduledMetadataRefresh()) {
       return;
     }
     void startupMetadataApplied
       .catch(() => ({ commands: false, models: false }))
-      .then((metadataApplied) => {
-        const metadataRefresh =
-          opts?.startup && (metadataApplied.commands || metadataApplied.models)
-            ? metadataApplied.models
-              ? Promise.allSettled([])
-              : Promise.allSettled([refreshChatModels(host)])
-            : Promise.allSettled([refreshChatMetadata(host)]);
-        return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
+      .then(async (metadataApplied) => {
+        // Startup metadata can settle after a session switch. Recheck ownership
+        // so stale startup work cannot supersede the new pane's catalog refresh.
+        if (!ownsScheduledMetadataRefresh()) {
+          return;
+        }
+        await Promise.allSettled([
+          refreshChatAvatar(host),
+          refreshChatMetadata(host, {
+            preserveModelCatalogOnFallback: opts?.startup === true && metadataApplied.models,
+          }),
+        ]);
       })
       .finally(() => host.requestUpdate?.());
   });
@@ -875,7 +1002,7 @@ async function loadPageAssistantIdentity(
 
 export function createPageState(
   context: ApplicationContext,
-  requestUpdate: () => void,
+  renderLifecycle: RenderLifecycle,
   page: ChatPageElement,
 ): ChatPageHost {
   const settings = loadSettings();
@@ -900,7 +1027,9 @@ export function createPageState(
     chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
+    connectionEpoch: 0,
     hello: null,
+    terminalAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: settings.sessionKey,
     chatLoading: false,
@@ -928,6 +1057,7 @@ export function createPageState(
     chatAvatarReason: null,
     chatModelSwitchPromises: {} as Record<string, Promise<boolean>>,
     chatModelsLoading: false,
+    chatMetadataRequestVersion: 0,
     chatModelCatalog: [] as ModelCatalogEntry[],
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
@@ -954,6 +1084,8 @@ export function createPageState(
     basePath: context.basePath,
     chatNewMessagesBelow: false,
     chatManualRefreshInFlight: false,
+    chatManualRefreshFrame: null,
+    chatManualRefreshGeneration: 0,
     chatMobileControlsOpen: false,
     chatMobileControlsTrigger: null,
     sessionsHideCron: true,
@@ -962,13 +1094,16 @@ export function createPageState(
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
+    chatScrollCommitCleanup: null,
     chatScrollFrame: null,
+    chatScrollGuardFrame: null,
     chatScrollTimeout: null,
+    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
-    chatHeaderControlsHidden: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
     sidebarOpen: false,
@@ -977,17 +1112,13 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    ...createInitialChatRealtimeState(),
-    requestUpdate,
+    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
+    renderLifecycle,
+    requestUpdate: () => renderLifecycle.invalidate(),
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
-  Object.defineProperty(state, "updateComplete", {
-    configurable: true,
-    enumerable: false,
-    get: () => page.updateComplete,
-  });
 
   state.resetToolStream = () => resetToolStream(state as never);
   state.onModelChanged = () => undefined;
@@ -1010,19 +1141,19 @@ export function createPageState(
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.setChatMobileControlsOpen = (open, options) => {
     if (open) {
       state.chatMobileControlsTrigger = options?.trigger ?? state.chatMobileControlsTrigger;
       state.chatMobileControlsOpen = true;
-      requestUpdate();
+      renderLifecycle.invalidate();
       return;
     }
     const focusTarget = options?.restoreFocus ? state.chatMobileControlsTrigger : null;
     state.chatMobileControlsOpen = false;
     state.chatMobileControlsTrigger = null;
-    requestUpdate();
+    renderLifecycle.invalidate();
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
       return;
     }
@@ -1040,28 +1171,28 @@ export function createPageState(
     handleSendChat(state, messageOverride, options as never);
   state.handleAbortChat = async (options) => {
     await handleAbortChat(state, options as never);
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
     removeQueuedMessage(state, id);
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.retryQueuedChatMessage = async (id) => {
     await retryQueuedChatMessage(state, id);
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.steerQueuedChatMessage = async (id) => {
     await steerQueuedChatMessage(state, id);
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
     state.sidebarContent = content;
     state.sidebarOpen = true;
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.handleCloseSidebar = () => {
     state.sidebarOpen = false;
-    requestUpdate();
+    renderLifecycle.invalidate();
   };
   state.handleSplitRatioChange = (ratio) => {
     const next = Math.max(0.4, Math.min(0.7, ratio));
@@ -1115,8 +1246,13 @@ function requestPageUpdate(state: ChatPageHost) {
   state.requestUpdate?.();
 }
 
+type ChatRenderLifecycleScope = {
+  connectionEpoch: number;
+  cancellations: Set<() => void>;
+};
+
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
-  private readonly composerPersistence: ChatComposerPersistenceController;
+  private readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
@@ -1124,35 +1260,67 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
+  private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
+  private chatThreadResizeObserver: ResizeObserver | null = null;
+  private chatThreadResizeTargets:
+    | {
+        thread: Element;
+        content: Element;
+      }
+    | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
+  private renderLifecycleConnected = false;
+  private renderLifecycleConnectionEpoch = 0;
+  private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
   constructor(private readonly host: ReactiveControllerHost) {
+    this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
     host.addController(this);
-    this.composerPersistence = new ChatComposerPersistenceController(host, () => this.stateValue);
   }
 
   get state(): TState | undefined {
     return this.stateValue;
   }
 
+  createRenderLifecycle(): RenderLifecycle {
+    this.cancelRenderLifecycleScope();
+    const scope: ChatRenderLifecycleScope = {
+      connectionEpoch: this.renderLifecycleConnectionEpoch,
+      cancellations: new Set(),
+    };
+    this.renderLifecycleScope = scope;
+    return {
+      invalidate: () => {
+        this.requestUpdateForScope(scope);
+      },
+      afterCommit: (effect, onCancel) => this.afterCommit(scope, effect, onCancel),
+    };
+  }
+
   attach(state: TState) {
+    if (this.stateValue && this.stateValue !== state) {
+      this.composerPersistence.stop();
+      cancelChatManualRefresh(this.stateValue);
+      cancelChatScroll(this.stateValue);
+    }
     this.stateValue = state;
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
-    state.requestUpdate = this.requestUpdate;
+    const renderLifecycle = state.renderLifecycle;
+    state.requestUpdate = () => renderLifecycle.invalidate();
     const sendChat = state.handleSendChat;
     state.handleSendChat = async (messageOverride, options) => {
       const pending = sendChat(messageOverride, options);
-      this.requestUpdate();
+      renderLifecycle.invalidate();
       try {
         await pending;
       } finally {
-        this.requestUpdate();
+        renderLifecycle.invalidate();
       }
     };
     const commitDraftChange = state.handleChatDraftChange;
@@ -1160,17 +1328,118 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       commitDraftChange(next);
       this.composerPersistence.schedule();
     };
+    const navigateInputHistory = state.handleChatInputHistoryKey;
+    state.handleChatInputHistoryKey = (input) => {
+      const result = navigateInputHistory(input);
+      if (result.handled) {
+        this.composerPersistence.schedule();
+      }
+      return result;
+    };
   }
 
   addCleanup(cleanup: () => void) {
     this.cleanups.push(cleanup);
   }
 
-  readonly requestUpdate = () => {
+  private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
+    return (
+      this.renderLifecycleConnected &&
+      this.renderLifecycleScope === scope &&
+      scope.connectionEpoch === this.renderLifecycleConnectionEpoch
+    );
+  }
+
+  private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
+    if (!this.isRenderLifecycleScopeActive(scope)) {
+      return false;
+    }
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.host.requestUpdate();
-  };
+    return true;
+  }
+
+  private cancelRenderLifecycleScope(): void {
+    const scope = this.renderLifecycleScope;
+    if (!scope) {
+      return;
+    }
+    this.renderLifecycleScope = undefined;
+    for (const cancel of scope.cancellations) {
+      cancel();
+    }
+  }
+
+  private afterCommit(
+    scope: ChatRenderLifecycleScope,
+    effect: AfterCommitEffect,
+    onCancel?: () => void,
+  ): () => void {
+    if (!this.isRenderLifecycleScopeActive(scope)) {
+      onCancel?.();
+      return () => undefined;
+    }
+    let active = true;
+    let committed = false;
+    let cleanup: (() => void) | undefined;
+    const complete = () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      cleanup = undefined;
+      scope.cancellations.delete(cancel);
+    };
+    const cancel = () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      scope.cancellations.delete(cancel);
+      try {
+        cleanup?.();
+      } finally {
+        cleanup = undefined;
+        if (!committed) {
+          onCancel?.();
+        }
+      }
+    };
+    scope.cancellations.add(cancel);
+    // Request first so updateComplete represents the render this effect needs.
+    if (!this.requestUpdateForScope(scope)) {
+      cancel();
+      return cancel;
+    }
+    const completion = this.host.updateComplete;
+    void completion.then(() => {
+      if (!active) {
+        return;
+      }
+      if (!this.isRenderLifecycleScopeActive(scope)) {
+        cancel();
+        return;
+      }
+      committed = true;
+      try {
+        const nextCleanup = effect(complete);
+        if (typeof nextCleanup === "function") {
+          if (active && this.isRenderLifecycleScopeActive(scope)) {
+            cleanup = nextCleanup;
+          } else {
+            nextCleanup();
+          }
+        } else {
+          complete();
+        }
+      } catch (error) {
+        complete();
+        throw error;
+      }
+    }, cancel);
+    return cancel;
+  }
 
   private captureRenderLifecycleChanges() {
     const state = this.stateValue;
@@ -1194,21 +1463,70 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     this.scrollAfterUpdate = true;
+    this.scrollContentChangedAfterUpdate ||= messagesChanged || streamChanged;
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
+  private syncChatThreadResizeObserver(state: TState) {
+    if (typeof ResizeObserver !== "function") {
+      return;
+    }
+    const thread = state.querySelector(".chat-thread");
+    const content = state.querySelector(".chat-thread-inner");
+    if (
+      thread &&
+      content &&
+      this.chatThreadResizeTargets?.thread === thread &&
+      this.chatThreadResizeTargets.content === content
+    ) {
+      return;
+    }
+
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
+    if (!thread || !content) {
+      return;
+    }
+
+    // Streamed markdown and mobile composer controls can finish sizing after
+    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    this.chatThreadResizeObserver = new ResizeObserver(() => {
+      const currentState = this.stateValue;
+      if (!currentState || currentState.chatManualRefreshInFlight) {
+        return;
+      }
+      scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
+    });
+    this.chatThreadResizeObserver.observe(thread);
+    this.chatThreadResizeObserver.observe(content);
+    this.chatThreadResizeTargets = { thread, content };
+  }
+
+  hostConnected() {
+    this.renderLifecycleConnectionEpoch += 1;
+    this.renderLifecycleConnected = true;
+    // A lifecycle created while detached must never become active on reconnect.
+    this.cancelRenderLifecycleScope();
+  }
+
   hostUpdated() {
+    const state = this.stateValue;
+    if (state) {
+      this.syncChatThreadResizeObserver(state);
+    }
     if (!this.scrollAfterUpdate) {
       return;
     }
-    const state = this.stateValue;
     const force = this.forceScrollAfterUpdate;
+    const contentChanged = this.scrollContentChangedAfterUpdate;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     if (!state || state.chatManualRefreshInFlight) {
       return;
     }
-    scheduleChatScroll(state, force);
+    scheduleCommittedChatScroll(state, force, false, { contentChanged });
   }
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {
@@ -1245,11 +1563,16 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private stopChatEffects() {
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }
     const state = this.stateValue;
     if (state) {
+      cancelChatManualRefresh(state);
+      cancelChatScroll(state);
       clearSessionWorkspaceTimers(state);
     }
     state?.realtimeTalkSession?.stop();
@@ -1260,9 +1583,15 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostDisconnected() {
+    this.renderLifecycleConnected = false;
+    this.cancelRenderLifecycleScope();
+    // Flush while stateValue still points at the active session. Composer
+    // persistence is owned here so controller registration order cannot lose it.
+    this.composerPersistence.stop();
     this.stopChatEffects();
     this.stateValue = undefined;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     this.pendingCreatedSessionComposer = null;
   }

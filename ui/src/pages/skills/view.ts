@@ -49,7 +49,7 @@ function showDialogWhenClosed(el?: Element) {
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
-export type SkillsProps = {
+type SkillsProps = {
   connected: boolean;
   loading: boolean;
   report: SkillStatusReport | null;

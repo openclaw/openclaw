@@ -59,6 +59,7 @@ import {
 } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -526,6 +527,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
   const { nodeSession } = params;
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,
+    connId: nodeSession.connId,
     displayName: nodeSession.displayName,
     platform: nodeSession.platform,
     deviceFamily: nodeSession.deviceFamily,
@@ -1441,7 +1443,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession, cfg);
         respond(
           false,
           undefined,
@@ -1666,6 +1668,7 @@ function buildNodeCommandRejectionHint(
   reason: string,
   command: string,
   node: { platform?: string } | undefined,
+  cfg: OpenClawConfig,
 ): string {
   const platform = node?.platform ?? "unknown";
   if (reason === "command not declared by node") {
@@ -1674,6 +1677,13 @@ function buildNodeCommandRejectionHint(
   if (reason === "command not allowlisted") {
     if (command.startsWith("talk.")) {
       return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
+    }
+    const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
+    if (denyCommands.some((entry) => entry.trim() === command)) {
+      return `node command not allowed: "${command}" is blocked by gateway.nodes.denyCommands`;
+    }
+    if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {
+      return `node command not allowed: "${command}" requires explicit gateway.nodes.allowCommands opt-in`;
     }
     return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
   }

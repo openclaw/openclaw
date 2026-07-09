@@ -93,6 +93,7 @@
 @media (max-width: 1100px) {
   .shell,
   .shell--nav-collapsed {
+    --shell-topbar-height: 58px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
     grid-template-areas:
@@ -123,6 +124,10 @@
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
   }
 
+  .sidebar-resizer {
+    display: none;
+  }
+
   .shell--nav-drawer-open .shell-nav,
   .shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
     transform: translateX(0);
@@ -147,13 +152,52 @@
     pointer-events: auto;
   }
 
+  /* Inside the drawer there is no Escape key to hint at. */
+  .settings-sidebar__esc {
+    display: none;
+  }
+
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
      the desktop rail toggle makes no sense once the sidebar is a drawer. */
-  .topbar-nav-toggle {
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
-  .topbar-sidebar-toggle {
+  .topbar {
+    display: flex;
+  }
+
+  .topnav-shell {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    gap: 10px;
+  }
+
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
+  }
+
+  .sidebar-brand__actions {
     display: none;
   }
 
@@ -243,29 +287,34 @@
 
   /* Topbar */
   .topbar {
+    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
   .topnav-shell {
-    flex-wrap: wrap;
     gap: 10px;
   }
 
   .topnav-shell__actions {
     min-width: 0;
-    flex: 1 1 auto;
-    justify-content: space-between;
-    gap: 10px;
-    align-items: stretch;
+    justify-content: flex-end;
   }
 
   .topnav-shell__content {
-    display: none;
-    width: 100%;
+    display: flex;
+    justify-content: center;
   }
 
-  .topbar-nav-toggle {
+  .topnav-shell .dashboard-header {
+    display: none;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
@@ -276,8 +325,17 @@
   }
 
   .topbar-search {
-    min-width: 0;
-    flex: 1;
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .topbar-search__kbd {
+    display: none;
   }
 
   .topbar-theme-mode {
@@ -438,30 +496,6 @@
     min-height: 44px;
     padding: 10px 12px;
     font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
-    position: static;
-    width: 100%;
-    max-height: min(52vh, 420px);
-    margin-top: 8px;
-    box-shadow: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-session-picker
-    .chat-session-picker__icon-button.btn--icon {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
@@ -722,12 +756,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
-  .theme-orb__trigger {
-    width: 26px;
-    height: 26px;
-    font-size: 13px;
-  }
 }
 
 /* Small mobile */
@@ -774,50 +802,20 @@
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
   }
-
-  .topbar-status .pill {
-    padding: 3px 6px;
-    font-size: 12px; /* was 10px */
-  }
-
-  .theme-orb__trigger {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
-  }
 }
 
 /* ===========================================
    Sessions table – responsive column hiding
    =========================================== */
 
-/* nth-child is 1-based and includes the checkbox column (col 1). */
+/* nth-child is 1-based and includes the checkbox column (col 1). The optional
+   Group column in category mode shifts later indexes; grouping is a desktop
+   workflow, so the hide rules target the default 7-column roster. */
 
-/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
-@media (max-width: 1400px) {
+/* ≤900px: tighten padding */
+@media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 1120px;
-  }
-
-  .sessions-table th:nth-child(12),
-  .sessions-table td:nth-child(12),
-  .sessions-table th:nth-child(13),
-  .sessions-table td:nth-child(13) {
-    display: none;
-  }
-}
-
-/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
-@media (max-width: 1100px) {
-  .data-table.sessions-table {
-    min-width: 930px;
-  }
-
-  .sessions-table th:nth-child(4),
-  .sessions-table td:nth-child(4),
-  .sessions-table th:nth-child(11),
-  .sessions-table td:nth-child(11) {
-    display: none;
+    min-width: 640px;
   }
 
   .data-table th,
@@ -826,28 +824,14 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
-@media (max-width: 900px) {
-  .data-table.sessions-table {
-    min-width: 720px;
-  }
-
-  .sessions-table th:nth-child(3),
-  .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(10),
-  .sessions-table td:nth-child(10) {
-    display: none;
-  }
-}
-
-/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
+/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 560px;
+    min-width: 500px;
   }
 
-  .sessions-table th:nth-child(8),
-  .sessions-table td:nth-child(8) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -885,15 +869,6 @@
     max-width: 200px;
   }
 
-  .session-compaction-col {
-    width: 96px;
-    min-width: 86px;
-  }
-
-  .session-compaction-trigger {
-    padding: 6px 7px;
-  }
-
   .session-details-panel {
     padding: 12px;
   }
@@ -926,16 +901,16 @@
   }
 }
 
-/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
+/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
-    min-width: 340px;
+    min-width: 320px;
   }
 
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6),
-  .sessions-table th:nth-child(7),
-  .sessions-table td:nth-child(7) {
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
     display: none;
   }
 
@@ -943,6 +918,12 @@
     width: 106px;
     min-width: 106px;
     max-width: 106px;
+  }
+
+  /* The 106px key column has no room for the kind avatar; run state stays
+     visible through the status column, which this breakpoint keeps. */
+  .sessions-table .session-avatar {
+    display: none;
   }
 
   .sessions-table .session-status-col {
@@ -966,11 +947,6 @@
 
   .sessions-table .session-goal-chip__objective {
     display: none;
-  }
-
-  .sessions-table .session-compaction-col {
-    width: 84px;
-    min-width: 84px;
   }
 
   .data-table th,

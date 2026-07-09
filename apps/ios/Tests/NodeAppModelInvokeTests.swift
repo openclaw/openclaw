@@ -1,11 +1,33 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawChatUI
+
+@MainActor
+private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+    private(set) var cancelCallCount = 0
+    private(set) var permissionRequestCount = 0
+
+    func requestPermission() async -> Bool {
+        self.permissionRequestCount += 1
+        return true
+    }
+
+    func start(url _: URL) throws {}
+    func stop() -> TimeInterval {
+        1
+    }
+
+    func cancel() {
+        self.cancelCallCount += 1
+    }
+
+    func setFailureHandler(_: @escaping @MainActor () -> Void) {}
+}
 
 private func makeAgentDeepLinkURL(
     message: String,
@@ -326,6 +348,19 @@ private actor WatchSnapshotSendGate {
     }
 }
 
+private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Void {
+    let defaults = UserDefaults.standard
+    let previous = defaults.object(forKey: NotificationServingPreference.storageKey)
+    defaults.set(enabled, forKey: NotificationServingPreference.storageKey)
+    return {
+        if let previous {
+            defaults.set(previous, forKey: NotificationServingPreference.storageKey)
+        } else {
+            defaults.removeObject(forKey: NotificationServingPreference.storageKey)
+        }
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test @MainActor func `decode params fails without JSON`() {
         #expect(throws: Error.self) {
@@ -344,6 +379,21 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `chat session key defaults to main base`() {
         let appModel = NodeAppModel()
         #expect(appModel.chatSessionKey == "main")
+        #expect(appModel.chatDeliveryAgentId == nil)
+    }
+
+    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+        let appModel = NodeAppModel()
+        #expect(appModel.chatDeliveryAgentId == nil)
+
+        appModel.gatewayDefaultAgentId = " Agent-A "
+        #expect(appModel.chatDeliveryAgentId == "agent-a")
+
+        appModel.setSelectedAgentId(" Agent-B ")
+        #expect(appModel.chatDeliveryAgentId == "agent-b")
+
+        appModel.openChat(sessionKey: "agent:Agent-C:incident")
+        #expect(appModel.chatDeliveryAgentId == "agent-c")
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -709,6 +759,26 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.stop()
     }
 
+    @Test @MainActor func `PTT start preserves an active voice note`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        #expect(await recorder.start())
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+
+        let request = BridgeInvokeRequest(
+            id: "ptt-start-with-voice-note",
+            command: OpenClawTalkCommand.pttStart.rawValue)
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("active voice note") == true)
+        #expect(recorder.isRecording)
+        #expect(capture.cancelCallCount == 0)
+        recorder.cancel()
+    }
+
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.voiceWake.isEnabled = true
@@ -716,6 +786,7 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.statusText = "Listening"
 
         appModel._test_acquirePttVoiceWakeLease()
+        #expect(appModel.isTalkCaptureActive == true)
         appModel._test_acquirePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
 
@@ -724,7 +795,23 @@ private actor WatchSnapshotSendGate {
 
         appModel._test_releasePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+        appModel._test_acquirePttVoiceWakeLease()
+
+        #expect(await recorder.start() == false)
+        #expect(recorder.isRecording == false)
+        #expect(capture.permissionRequestCount == 0)
+
+        appModel._test_releasePttVoiceWakeLease()
     }
 
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {
@@ -2155,6 +2242,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `system notify schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2171,7 +2260,30 @@ private actor WatchSnapshotSendGate {
         #expect(center.addCalls == 1)
     }
 
-    @Test @MainActor func `apns registration requires disclosure and notification authorization`() async {
+    @Test @MainActor func `system notify respects app notification opt out`() async throws {
+        let restorePreference = overrideNotificationServingPreference(false)
+        defer { restorePreference() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-disabled",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.addCalls == 0)
+    }
+
+    @Test @MainActor func `apns registration requires notification authorization and relay disclosure`() async {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2179,7 +2291,7 @@ private actor WatchSnapshotSendGate {
         defer { PushEnrollmentConsent.reset() }
 
         #expect(await appModel._test_canPublishAPNsRegistration() == false)
-        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false) == false)
+        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false))
 
         PushEnrollmentConsent.markDisclosureAccepted()
         center.status = .notDetermined
@@ -2187,6 +2299,9 @@ private actor WatchSnapshotSendGate {
 
         center.status = .authorized
         #expect(await appModel._test_canPublishAPNsRegistration())
+
+        UserDefaults.standard.set(false, forKey: NotificationServingPreference.storageKey)
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
     }
 
     @Test @MainActor func `chat push without speech returns unavailable when notifications off`() async throws {
@@ -2209,6 +2324,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `chat push schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)

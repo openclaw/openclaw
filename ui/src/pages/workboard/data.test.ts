@@ -3440,18 +3440,21 @@ describe("workboard controller", () => {
     );
   });
 
-  it("clamps long session labels before creating captured cards", async () => {
+  it("clamps captured session fields without splitting surrogate pairs", async () => {
     const host = {};
-    const longLabel = "x".repeat(220);
+    const titlePrefix = "x".repeat(176);
+    const textPrefix = "y".repeat(696);
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return { cards: [], statuses: ["todo"] };
       }
       if (method === "chat.history") {
-        return { messages: [] };
+        return {
+          messages: [{ role: "user", content: [{ type: "text", text: `${textPrefix}😀tail` }] }],
+        };
       }
       if (method === "workboard.cards.create") {
-        return { card: { ...sampleCard, title: `${"x".repeat(177)}...` } };
+        return { card: { ...sampleCard, title: `${titlePrefix}...` } };
       }
       return {};
     });
@@ -3459,14 +3462,17 @@ describe("workboard controller", () => {
     await captureSessionToWorkboard({
       host,
       client: client as never,
-      session: { ...sampleSession, label: longLabel },
+      session: { ...sampleSession, label: `${titlePrefix}😀tail` },
     });
 
     expect(client.request).toHaveBeenNthCalledWith(
       3,
       "workboard.cards.create",
       expect.objectContaining({
-        title: `${"x".repeat(177)}...`,
+        title: `${titlePrefix}...`,
+        notes: [`Session: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
+          "\n",
+        ),
       }),
     );
   });
@@ -3526,6 +3532,30 @@ describe("workboard controller", () => {
       }),
     );
     expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
+  });
+
+  it("keeps bounded task session labels on a UTF-16 boundary", async () => {
+    const host = {};
+    const title = `${"a".repeat(499)}🚀tail`;
+    const client = createClient({
+      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.update": { card: { ...sampleCard, title, status: "running" } },
+    });
+
+    await startWorkboardCard({
+      host,
+      client: client as never,
+      card: { ...sampleCard, title },
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({
+        label: `${"a".repeat(499)}... (card-1)`,
+      }),
+    );
   });
 
   it("starts reassigned cards with the current task session key", async () => {

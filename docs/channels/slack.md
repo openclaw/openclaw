@@ -67,6 +67,219 @@ Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router o
 
 The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and router route table as part of the Slack authorization boundary: routed events enter the normal Slack message handler as authorized activations. A router-provided `slack_identity` in the websocket `hello` frame can set the default outbound username and icon; an explicit identity supplied by the caller still wins. The relay connection reconnects with the same bounded backoff timing as Socket Mode and clears the router-provided identity whenever it disconnects.
 
+### Enterprise Grid org-wide installs
+
+One Slack account can receive messages from every workspace covered by an
+Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
+Request URLs; relay mode is not supported for enterprise accounts. Both
+least-privilege manifests below enable only the V1 `message` and `app_mention`
+event path, immediate replies, and listener-owned status reactions.
+
+#### Socket Mode
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    }
+  }
+}
+```
+
+Have an Enterprise Grid Org Admin or Org Owner approve the app, install it at
+the organization level, and choose the workspaces the installation covers.
+Confirm that the app is available in every intended workspace before starting
+OpenClaw. Generate an app-level token with `connections:write` for Socket Mode,
+then copy the bot token from the org installation. Configure the account that
+uses the org-installed bot token:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      enterpriseOrgInstall: true,
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      channels: {
+        C0123456789: { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+#### HTTP Request URLs
+
+Use HTTP mode when the Gateway has a public HTTPS endpoint and does not open a
+Socket Mode connection. Replace the example URL with the Gateway's public
+`webhookPath` URL (default `/slack/events`):
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "event_subscriptions": {
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    }
+  }
+}
+```
+
+Have an Enterprise Grid Org Admin or Org Owner approve the app, install it at
+the organization level, and choose the workspaces the installation covers.
+After Slack verifies the Request URL, copy the org installation's bot token and
+the app's **Basic Information -> App Credentials -> Signing Secret**. Configure
+the enterprise account with the same Request URL path:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "http",
+      enterpriseOrgInstall: true,
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      signingSecret: {
+        source: "env",
+        provider: "default",
+        id: "SLACK_SIGNING_SECRET",
+      },
+      webhookPath: "/slack/events",
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      channels: {
+        C0123456789: { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+At startup, OpenClaw verifies `enterpriseOrgInstall` with Slack `auth.test`.
+An org-installed token without the flag, or a workspace token with the flag,
+fails startup. Slack remains the source of truth for which workspaces have
+granted the installation; OpenClaw then applies the configured channel, user,
+DM, and mention policies to each delivered event. Enterprise V1 rejects all
+bot-authored `message` and `app_mention` events before dispatch, regardless of
+`allowBots`, because org installs do not provide a stable workspace-qualified
+bot identity for loop prevention.
+
+Enterprise support is intentionally limited to direct Socket Mode or HTTP
+`message` and `app_mention` events and their immediate replies. Relay mode,
+slash commands, interactions, App Home, reaction event listeners, pins, Slack
+action tools, Slack-native approvals, bindings, queued or scheduled delivery,
+and proactive sends are unavailable for an enterprise account. Outbound
+acknowledgment, typing, and status reactions are supported through the
+listener-owned Slack client and require `reactions:write`; inbound reaction
+notifications and reaction action tools remain unavailable.
+
+Immediate replies reuse the standard Slack delivery behavior for chunks,
+media, metadata, identity fallback, unfurls, and receipts, but only while the
+validated listener-owned client remains in the active event turn. The
+in-memory send queue and thread-participation records are partitioned by that
+event's workspace; the client itself is never serialized or persisted.
+
+Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
+`channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
+runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
+User policy entries must use stable Slack user IDs; names, slugs, display names,
+and email addresses fail startup. IDs must use Slack's canonical uppercase
+prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
+short lookalikes fail startup. Enterprise accounts cannot enable
+`dangerouslyAllowNameMatching`. Enterprise accounts may set the global
+`mentionPatterns.mode`, but `mentionPatterns.allowIn` and
+`mentionPatterns.denyIn` fail startup because bare Slack channel IDs are not
+workspace-qualified and can be reused across workspaces. Workspace installs
+retain the existing scoped mention-pattern behavior. Each accepted workspace
+gets separate routing, session, transcript, dedupe, history, and cache identity
+even when Slack IDs overlap. Within the `message` stream, ordinary user messages
+and user-authored `file_share` events are supported; other message subtypes are
+rejected before authorization or system-event handling.
+
+Enterprise DMs must either be disabled (`dm.enabled=false` or
+`dmPolicy="disabled"`) or explicitly open with `dmPolicy="open"` and
+an effective account `allowFrom` containing the literal `"*"`. An empty
+allowlist or user-specific IDs without `"*"` fails startup. Pairing and
+per-user DM allowlists are rejected because Slack user IDs are not
+workspace-qualified in those authorization stores. Channel and sender policy
+continues to apply to channel messages.
+
 ## Install
 
 ```bash
@@ -76,6 +289,10 @@ openclaw plugins install @openclaw/slack
 `plugins install` registers and enables the plugin. It does nothing until you configure the Slack app and channel settings below. See [Plugins](/tools/plugin) for general plugin install rules.
 
 ## Quick setup
+
+The manifests in this section create a workspace-scoped installation. For an
+Enterprise Grid organization installation, use the dedicated
+[org-wide manifest and workflow](#enterprise-grid-org-wide-installs) instead.
 
 <Tabs>
   <Tab title="Socket Mode (default)">
@@ -1215,6 +1432,17 @@ Notes:
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
+## Voice input
+
+To speak to OpenClaw in Slack today, send a Slack audio clip to the OpenClaw app. Slackbot's dictation microphone is a separate Slack-owned feature, not an app API.
+
+- **[Slackbot voice dictation](https://slack.com/help/articles/202026038-How-to-use-Slackbot)** lives inside the user's private Slackbot conversation. Slack turns the recording into a Slackbot prompt but does not emit an audio file, dictation event, prompt, or input-source marker to third-party Slack apps through the Events API. The OpenClaw Slack plugin cannot enable or receive it.
+- **[Slack audio clips](https://slack.com/help/articles/4406235165587-Record-audio-and-video-clips-in-Slack)** are stored Slack files that can be posted in an OpenClaw DM, channel, or thread. OpenClaw downloads an accessible clip with the bot token, normalizes Slack's clip MIME metadata, and sends it through the shared [audio transcription pipeline](/nodes/audio). The recommended app manifest includes the required `files:read` scope.
+
+Audio clips and Slackbot dictation have different privacy semantics: clips follow Slack file-retention policy and OpenClaw downloads them for transcription, while Slack says dictation audio is not stored.
+
+In a channel with `requireMention: true`, include a typed mention of the bot with a captionless audio clip, or send the clip in a DM. Slack clip transcription currently happens after the channel mention gate.
+
 ## Media, chunking, and delivery
 
 <AccordionGroup>
@@ -1231,6 +1459,7 @@ Notes:
     - text chunks use `channels.slack.textChunkLimit` (default `8000`, capped at Slack's own message-length limit)
     - `channels.slack.streaming.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
+    - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
   </Accordion>
@@ -1455,7 +1684,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
@@ -1570,19 +1799,20 @@ openclaw pairing list slack
   </Accordion>
 </AccordionGroup>
 
-## Attachment vision reference
+## Attachment media reference
 
-Slack can attach downloaded media to the agent turn when Slack file downloads succeed and size limits permit. Image files can be passed through the media understanding path or directly to a vision-capable reply model; other files are retained as downloadable file context rather than treated as image input.
+Slack can attach downloaded media to the agent turn when Slack file downloads succeed and size limits permit. Audio clips can be transcribed, image files can pass through the media-understanding path or directly to a vision-capable reply model, and other files remain available as downloadable file context.
 
 ### Supported media types
 
 | Media type                     | Source               | Current behavior                                                                  | Notes                                                                     |
 | ------------------------------ | -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Slack audio clips              | Slack file URL       | Downloaded and routed through shared audio transcription                          | Requires `files:read` and a working `tools.media.audio` model or CLI      |
 | JPEG / PNG / GIF / WebP images | Slack file URL       | Downloaded and attached to the turn for vision-capable handling                   | Per-file cap: `channels.slack.mediaMaxMb` (default 20 MB)                 |
 | PDF files                      | Slack file URL       | Downloaded and exposed as file context for tools such as `download-file` or `pdf` | Slack inbound does not convert PDFs into image-vision input automatically |
 | Other files                    | Slack file URL       | Downloaded when possible and exposed as file context                              | Binary files are not treated as image input                               |
 | Thread replies                 | Thread starter files | Root-message files can be hydrated as context when the reply has no direct media  | File-only starters use an attachment placeholder                          |
-| Multi-image messages           | Multiple Slack files | Each file is evaluated independently                                              | Slack processing is capped at eight files per message                     |
+| Multi-file messages            | Multiple Slack files | Each file is evaluated independently                                              | Slack processing is capped at eight files per message                     |
 
 ### Inbound pipeline
 
@@ -1591,8 +1821,8 @@ When a Slack message with file attachments arrives:
 1. OpenClaw downloads the file from Slack's private URL using the bot token.
 2. The file is written to the media store on success.
 3. Downloaded media paths and content types are added to the inbound context.
-4. Image-capable model/tool paths can use image attachments from that context.
-5. Non-image files remain available as file metadata or media references for tools that can handle them.
+4. Audio clips are routed to the shared transcription pipeline; image-capable model/tool paths can use image attachments from the same context.
+5. Other files remain available as file metadata or media references for tools that can handle them.
 
 ### Thread-root attachment inheritance
 
@@ -1615,22 +1845,26 @@ When a single Slack message contains multiple file attachments:
 ### Size, download, and model limits
 
 - **Size cap**: Default 20 MB per file. Configurable via `channels.slack.mediaMaxMb`.
+- **Audio transcription cap**: `tools.media.audio.maxBytes` also applies when the downloaded file is sent to a transcription provider or CLI.
 - **Download failures**: Files that Slack cannot serve, expired URLs, inaccessible files, oversize files, and Slack auth/login HTML responses are skipped instead of being reported as unsupported formats.
 - **Vision model**: Image analysis uses the active reply model when it supports vision, or the image model configured at `agents.defaults.imageModel`.
 
 ### Known limits
 
-| Scenario                               | Current behavior                                                             | Workaround                                                                 |
-| -------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Expired Slack file URL                 | File skipped; no error shown                                                 | Re-upload the file in Slack                                                |
-| Vision model not configured            | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model |
-| Very large images (> 20 MB by default) | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                       |
-| Forwarded/shared attachments           | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                   |
-| PDF attachments                        | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis   |
+| Scenario                                    | Current behavior                                                             | Workaround                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Expired Slack file URL                      | File skipped; no error shown                                                 | Re-upload the file in Slack                                                  |
+| Audio transcription unavailable             | Clip remains attached but no transcript is produced                          | Configure `tools.media.audio` or install a supported local transcription CLI |
+| Captionless clip in a mention-gated channel | Dropped before clip transcription                                            | Add a typed bot mention or send the clip in a DM                             |
+| Vision model not configured                 | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model   |
+| Very large images (> 20 MB by default)      | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                         |
+| Forwarded/shared attachments                | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                     |
+| PDF attachments                             | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis     |
 
 ### Related documentation
 
 - [Media understanding pipeline](/nodes/media-understanding)
+- [Audio and voice notes](/nodes/audio)
 - [PDF tool](/tools/pdf)
 
 ## Related

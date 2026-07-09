@@ -110,8 +110,13 @@ extension SettingsProTab {
 
     var gatewaySection: some View {
         Section("Gateway") {
-            NavigationLink(value: SettingsRoute.gateway) {
-                self.gatewayConnectionRow
+            HStack(spacing: 8) {
+                NavigationLink(value: SettingsRoute.gateway) {
+                    self.gatewayConnectionRow
+                }
+                if self.gatewayRegistry.entries.count > 1 {
+                    self.gatewayQuickSwitchMenu
+                }
             }
             SettingsDetailRow("Address", value: self.gatewayAddress)
             SettingsDetailRow("Server", value: self.gatewayServer)
@@ -168,11 +173,6 @@ extension SettingsProTab {
                 iconColor: .indigo,
                 title: "Privacy",
                 route: .privacy)
-            self.settingsListRow(
-                icon: "bell.fill",
-                iconColor: .red,
-                title: "Notifications",
-                route: .notifications)
             self.settingsListRow(
                 icon: "info.circle.fill",
                 iconColor: .gray,
@@ -297,6 +297,7 @@ extension SettingsProTab {
             }
 
             self.manualGatewayCard
+            self.pairedGatewaysCard
             self.deviceIdentityCard
             self.agentSelectionCard
             self.gatewaySetupCard
@@ -304,6 +305,31 @@ extension SettingsProTab {
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
+    }
+
+    var gatewayQuickSwitchMenu: some View {
+        Menu {
+            ForEach(self.gatewayRegistry.entries) { entry in
+                Button {
+                    Task { await self.switchGateway(to: entry) }
+                } label: {
+                    Label {
+                        Text(entry.name)
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: entry.stableID == self.gatewayRegistry.activeStableID
+                            ? "checkmark.circle.fill"
+                            : "circle")
+                    }
+                }
+                .disabled(entry.stableID == self.gatewayRegistry.activeStableID || self.connectingGatewayID != nil)
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(OpenClawBrand.accent)
+        }
+        .accessibilityLabel("Switch Gateway")
     }
 
     var approvalsDestination: some View {
@@ -469,6 +495,8 @@ extension SettingsProTab {
 
     var privacyDestination: some View {
         Group {
+            self.notificationsSection
+
             self.detailStatusCard(
                 icon: "hand.raised",
                 title: "Privacy",
@@ -491,49 +519,42 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
-        Group {
-            self.detailStatusCard(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusDetail,
-                value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+        self.notificationsSection
+    }
 
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        self.handleNotificationAction()
-                    } label: {
-                        Label(
-                            self.notificationActionText,
-                            systemImage: self.notificationStatus.actionIcon)
-                            .font(OpenClawType.captionSemiBold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-
+    var notificationsSection: some View {
+        Section("Notifications") {
+            HStack(spacing: 12) {
+                SettingsIcon(systemName: "bell.fill", color: self.notificationStatusColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
                     Text(self.notificationStatusDetail)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Divider()
-
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "network")
-                            .font(OpenClawType.captionSemiBold)
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .frame(width: 22, height: 22)
-                        Text(self.notificationRelayDetail)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
+                Spacer(minLength: 8)
+                Toggle("Notifications", isOn: self.notificationToggleBinding)
+                    .labelsHidden()
+                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                    .accessibilityIdentifier("settings-notifications-toggle")
+                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "network")
+                    .font(OpenClawType.captionSemiBold)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .frame(width: 22, height: 22)
+                Text(self.notificationRelayDetail)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityIdentifier("settings-privacy-notifications-section")
     }
 
     var gatewayActions: some View {
@@ -695,10 +716,7 @@ extension SettingsProTab {
 
     func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
         Section {
-            Toggle(isOn: isOn) {
-                Text(title)
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle(title, isOn: isOn)
         }
     }
 
@@ -824,6 +842,82 @@ extension SettingsProTab {
         }
     }
 
+    var pairedGatewaysCard: some View {
+        Section {
+            if self.gatewayRegistry.entries.isEmpty {
+                Text("Pair a gateway to make it available here.")
+                    .font(OpenClawType.subhead)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(self.gatewayRegistry.entries) { entry in
+                    self.pairedGatewayRow(entry)
+                }
+            }
+        } header: {
+            Text("Paired Gateways")
+                .font(OpenClawType.subheadSemiBold)
+        } footer: {
+            Text("Switch gateways without pairing again.")
+                .font(OpenClawType.footnote)
+        }
+    }
+
+    func pairedGatewayRow(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> some View {
+        let isActive = entry.stableID == self.gatewayRegistry.activeStableID
+        return Button {
+            guard !isActive else { return }
+            Task { await self.switchGateway(to: entry) }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name)
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(.primary)
+                    Text(self.gatewayEndpointSummary(entry))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if self.connectingGatewayID == entry.stableID {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .accessibilityLabel("Active Gateway")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(self.connectingGatewayID != nil)
+        .swipeActions {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget")
+                        .font(OpenClawType.captionSemiBold)
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+    }
+
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -853,10 +947,7 @@ extension SettingsProTab {
 
     var manualGatewayCard: some View {
         Section("Manual Gateway") {
-            Toggle(isOn: self.manualGatewayEnabledBinding) {
-                Text("Use Manual Gateway")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Use Manual Gateway", isOn: self.manualGatewayEnabledBinding)
             TextField("Host", text: self.manualHostBinding)
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
@@ -864,9 +955,20 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Toggle(isOn: self.$manualGatewayTLS) {
-                Text("Use TLS")
-                    .font(OpenClawType.body)
+            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+                Text("Unencrypted")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(false)
+                Text("Secure (TLS)")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(self.manualGatewayTransport.requiresTLS)
+            if let helperText = self.manualGatewayTransport.helperText {
+                Text(helperText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
             self.gatewayActionButton(
                 title: "Connect Manual",
@@ -882,14 +984,34 @@ extension SettingsProTab {
         .disabled(self.setupAttemptID != nil)
     }
 
+    private var manualGatewayTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualGatewayHost,
+            requestedTLS: self.manualGatewayTLS)
+    }
+
+    private var manualGatewayTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualGatewayTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayTLS = enabled
+            })
+    }
+
     var gatewayAdvancedCard: some View {
         Section {
-            Toggle(isOn: self.$gatewayAutoConnect) {
-                Text("Auto-connect on launch")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
             self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
             self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                NavigationLink {
+                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                } label: {
+                    Text("Custom Headers")
+                        .font(OpenClawType.body)
+                }
+            }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {
@@ -992,10 +1114,7 @@ extension SettingsProTab {
 
     var shareSettingsCard: some View {
         Section {
-            Toggle(isOn: self.$talkButtonEnabled) {
-                Text("Show Talk Control")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Show Talk Control", isOn: self.$talkButtonEnabled)
             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                 .font(OpenClawType.body)
                 .lineLimit(2...5)
@@ -1045,10 +1164,21 @@ extension SettingsProTab {
         isOn: Binding<Bool>,
         onChange: ((Bool) -> Void)? = nil) -> some View
     {
-        Toggle(isOn: isOn) {
-            Text(title)
-                .font(OpenClawType.body)
+        // Native Toggle rows can ignore visible-row taps on iOS 26; reuse the shared indicator row.
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                    .font(OpenClawType.body)
+                Spacer(minLength: 8)
+                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
         }

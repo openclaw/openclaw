@@ -41,14 +41,19 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
+  const now = Date.now();
   return {
     key: "test",
     sessionId: "session",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     terminalRecovery: false,
+    acceptedSteeredInboundAudio: false,
+    startedAtMs: now,
+    lastActivityAtMs: now,
     phase: "queued",
     result: null,
+    recordActivity: vi.fn(),
     hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
@@ -65,6 +70,7 @@ function createReplyOperation(): TestReplyOperation {
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
+    markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
 

@@ -23,6 +23,39 @@ describe("qqbot outbound sanitizeText", () => {
   });
 });
 
+describe("qqbot outbound session routing", () => {
+  it.each([
+    {
+      target: "qqbot:c2c:user-openid",
+      peerKind: "direct",
+      chatType: "direct",
+    },
+    {
+      target: "qqbot:group:group-openid",
+      peerKind: "group",
+      chatType: "group",
+    },
+    {
+      target: "qqbot:channel:channel-id",
+      peerKind: "group",
+      chatType: "group",
+    },
+  ] as const)("routes $target as $chatType", async ({ target, peerKind, chatType }) => {
+    const route = await qqbotPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target,
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: peerKind },
+      chatType,
+      from: target,
+      to: target,
+    });
+  });
+});
+
 const sendTextMock = vi.hoisted(() => vi.fn());
 const sendMediaMock = vi.hoisted(() => vi.fn());
 

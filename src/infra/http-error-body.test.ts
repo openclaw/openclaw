@@ -96,4 +96,30 @@ describe("readResponseBodySnippet", () => {
     });
     expect(result).toBe("");
   });
+
+  it.each([
+    {
+      name: "body-less response under the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      maxBytes: 1024,
+    },
+    {
+      name: "body-less response truncated by the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      maxBytes: 30,
+    },
+    {
+      name: "streamed response",
+      response: () =>
+        new Response(new Blob([new TextEncoder().encode("a" + "🦞".repeat(10))]).stream()),
+      maxBytes: 1024,
+    },
+  ])("preserves surrogate pairs for $name", async ({ response, maxBytes }) => {
+    const result = await readResponseBodySnippet(response(), {
+      maxBytes,
+      maxChars: 10,
+    });
+
+    expect(result).toBe("a" + "🦞".repeat(4));
+  });
 });

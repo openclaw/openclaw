@@ -26,7 +26,10 @@ import {
   createSqliteSchemaShapeFromSql,
 } from "./sqlite-schema-shape.test-support.js";
 
-type StateDbTestDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events" | "schema_meta">;
+type StateDbTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_lifecycle" | "skill_usage"
+>;
 
 const stateDbTempDirs: string[] = [];
 
@@ -86,6 +89,102 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("creates the bounded skill curator tables", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const kysely = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_usage").values({
+        skill_file: "/skills/daily-brief/SKILL.md",
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_source: "workspace",
+        first_used_at_ms: 1,
+        last_used_at_ms: 2,
+        use_count: 3,
+        last_agent_id: "main",
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_usage").values({
+        skill_file: "/other-workspace/skills/daily-brief/SKILL.md",
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_source: "workspace",
+        first_used_at_ms: 4,
+        last_used_at_ms: 5,
+        use_count: 1,
+        last_agent_id: "other",
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_lifecycle").values({
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_file: "/skills/daily-brief/SKILL.md",
+        state: "active",
+        pinned: 0,
+        state_changed_at_ms: 2,
+        created_at_ms: 1,
+        archived_reason: null,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_lifecycle").values({
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_file: "/other-workspace/skills/daily-brief/SKILL.md",
+        state: "active",
+        pinned: 0,
+        state_changed_at_ms: 2,
+        created_at_ms: 1,
+        archived_reason: null,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_curator_state").values({
+        id: 1,
+        last_attempt_at_ms: 2,
+        last_success_at_ms: 2,
+        last_error: null,
+        last_result_json: "{}",
+      }),
+    );
+
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("skill_usage")
+          .select(["skill_file", "use_count"])
+          .where("skill_key", "=", "daily-brief")
+          .orderBy("skill_file", "asc"),
+      ).rows,
+    ).toEqual([
+      { skill_file: "/other-workspace/skills/daily-brief/SKILL.md", use_count: 1 },
+      { skill_file: "/skills/daily-brief/SKILL.md", use_count: 3 },
+    ]);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("skill_lifecycle")
+          .select("skill_file")
+          .where("skill_key", "=", "daily-brief")
+          .orderBy("skill_file", "asc"),
+      ).rows,
+    ).toEqual([
+      { skill_file: "/other-workspace/skills/daily-brief/SKILL.md" },
+      { skill_file: "/skills/daily-brief/SKILL.md" },
+    ]);
   });
 
   it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {

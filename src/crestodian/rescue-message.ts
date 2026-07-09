@@ -11,6 +11,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { classifyCrestodianApprovalText } from "./approval-intent.js";
 import {
   executeCrestodianOperation,
   formatCrestodianPersistentPlan,
@@ -48,7 +49,6 @@ export type CrestodianRescueMessageInput = {
 };
 
 const CRESTODIAN_COMMAND = "/crestodian";
-const APPROVAL_RE = /^(yes|y|apply|approve|approved|do it)$/i;
 
 function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   const lines: string[] = [];
@@ -146,6 +146,18 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
       "Use local `openclaw` for agent handoff, or ask for status, doctor, config, gateway, agents, or models.",
     ].join(" ");
   }
+  if (operation.kind === "channel-setup") {
+    return [
+      "Crestodian rescue cannot host the interactive channel setup from a message channel.",
+      "Run `openclaw crestodian` locally and say `connect " + operation.channel + "` instead.",
+    ].join(" ");
+  }
+  if (operation.kind === "model-setup") {
+    return [
+      "Crestodian rescue cannot host model-provider credential setup from a message channel.",
+      "Run `openclaw crestodian` locally and say `configure model provider` instead.",
+    ].join(" ");
+  }
   if (operation.kind === "plugin-install") {
     return [
       "Crestodian rescue cannot install plugins from a message channel by default because plugin install downloads executable code.",
@@ -174,7 +186,9 @@ export async function runCrestodianRescueMessage(
   }
 
   const pendingPath = resolvePendingPath(input);
-  if (APPROVAL_RE.test(rescueMessage)) {
+  // Remote rescue never consults a model (a broken/compromised agent path must
+  // not become a config editor); approval stays on the closed deterministic list.
+  if (classifyCrestodianApprovalText(rescueMessage) === "approve") {
     const pending = await readPending(pendingPath);
     if (!pending) {
       return "No pending Crestodian rescue change is waiting for approval.";
@@ -192,6 +206,14 @@ export async function runCrestodianRescueMessage(
     });
     await fs.rm(pendingPath, { force: true });
     return capture.read() || "Crestodian rescue change applied.";
+  }
+
+  if (classifyCrestodianApprovalText(rescueMessage) === "decline") {
+    const pending = await readPending(pendingPath);
+    await fs.rm(pendingPath, { force: true });
+    return pending
+      ? "Dropped the pending Crestodian rescue change."
+      : "No pending Crestodian rescue change is waiting for approval.";
   }
 
   const operation = parseCrestodianOperation(rescueMessage);

@@ -48,7 +48,7 @@ type ServiceOptions = {
   now?: () => number;
 };
 
-export type ManagedWorktreeGcParams = {
+type ManagedWorktreeGcParams = {
   isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
 };
 
@@ -457,6 +457,14 @@ export class ManagedWorktreeService {
     ownerId: string,
   ): ManagedWorktreeRecord | undefined {
     return findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
+  }
+
+  /** Resolves the canonical registry root and the caller's own checkout root. */
+  async resolveRepositoryPaths(
+    repoRoot: string,
+  ): Promise<{ canonicalRoot: string; sourceRoot: string }> {
+    const resolved = await resolveRepository(repoRoot);
+    return { canonicalRoot: resolved.repoRoot, sourceRoot: resolved.sourceRoot };
   }
 
   async acquire(id: string): Promise<ManagedWorktreeRecord> {

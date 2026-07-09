@@ -96,6 +96,9 @@ function coerceCanvasPreview(
     ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
     ...(typeof preview.className === "string" ? { className: preview.className } : {}),
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
+      ? { sandbox: preview.sandbox }
+      : {}),
   };
 }
 
@@ -144,6 +147,7 @@ const MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
   opus: "audio/opus",
   m4a: "audio/mp4",
+  m2a: "audio/mpeg",
   mp4: "video/mp4",
   mov: "video/quicktime",
   pdf: "application/pdf",

@@ -70,6 +70,10 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
@@ -209,6 +213,10 @@ const loadTalkHandlers = lazyHandlerModule(
 const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
+);
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
 );
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
@@ -495,6 +503,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTasksHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
     loadHandlers: loadToolsCatalogHandlers,
   }),
@@ -512,6 +529,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -532,6 +550,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.curator.status",
+      "skills.curator.pin",
+      "skills.curator.unpin",
+      "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.create",
@@ -654,6 +676,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.set",
     ],
     loadHandlers: loadAgentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

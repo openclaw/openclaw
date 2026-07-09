@@ -246,7 +246,8 @@ const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
   "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
+  "sonnet-5": "claude-sonnet-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
 };
@@ -594,6 +595,7 @@ export async function prepareCliRunContext(
             OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
             OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
             OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+            OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE: params.taskSuggestionDeliveryMode ?? "",
             OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget
               ? "true"
               : "",
@@ -717,6 +719,7 @@ export async function prepareCliRunContext(
             accountId: params.agentAccountId,
             inboundEventKind: undefined,
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             senderIsOwner: undefined,
           }).tools

@@ -156,12 +156,11 @@ type ModelRefInputObject = {
   maxTokens?: number;
 };
 
-export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
 
-export type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
+type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 
-export interface CopilotAttemptDeps {
+interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   now?: () => number;
   createToolBridge?: typeof createCopilotToolBridge;
@@ -1612,7 +1611,7 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
   return resolveUserPath(raw);
 }
 
-export function resolveModelRef(params: AttemptParamsLike): ModelRef {
+function resolveModelRef(params: AttemptParamsLike): ModelRef {
   const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
     const model = rawModel as ModelRefInputObject;
@@ -1748,7 +1747,7 @@ export function toError(error: unknown): Error {
  * version bump that changes the wording will safely fall through to
  * the generic prompt-error path.
  */
-export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
+function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {
     return false;
   }

@@ -2,23 +2,17 @@
 
 ## Unreleased
 
-Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
+## 2026.7.1 - 2026-07-08
 
-Android chat messages now expose long-press actions for whole-message copy, selective text copy, sharing, and quoted replies.
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
 
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
 
-Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
+Adds workspace files, Cron details, terminal access, and Listen playback.
 
-Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
 
-Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
-
-Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
-
-Camera clip capture no longer emits release-path diagnostics containing temporary file details.
-
-Push-to-talk now waits for realtime input and output to stop, keeps finishing turns serialized, and safely resumes the matching relay capture.
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

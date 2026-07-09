@@ -152,10 +152,12 @@ function isBrowserProxyTimeoutError(err: unknown): boolean {
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||
-    path === "/snapshot"
+    path === "/snapshot" ||
+    path === "/wait/download"
   );
 }
 
@@ -315,11 +317,13 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     );
   }
   if (response.status >= 400) {
-    const message =
+    // node.invoke preserves only Error.message; keep the status there so gateway
+    // retry classifiers see the same error shape as direct browser requests.
+    const detail =
       response.body && typeof response.body === "object" && "error" in response.body
-        ? String((response.body as { error?: unknown }).error)
-        : `HTTP ${response.status}`;
-    throw new Error(message);
+        ? String((response.body as { error?: unknown }).error).trim()
+        : "";
+    throw new Error(detail ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
   }
 
   const result = response.body;
