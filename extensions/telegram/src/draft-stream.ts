@@ -5,7 +5,6 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
@@ -35,6 +34,7 @@ import {
 
 const TELEGRAM_STREAM_MAX_CHARS = TELEGRAM_TEXT_CHUNK_LIMIT;
 const DEFAULT_THROTTLE_MS = 1000;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // Retryable preview failures keep the latest text pending for the next throttle
 // tick; cap consecutive misses so a persistent outage stops the preview instead
 // of warn-spamming for the rest of the run.
@@ -193,12 +193,20 @@ function findTelegramDraftChunkLength(
   renderText: ((text: string) => TelegramDraftPreview) | undefined,
   richMessages: boolean,
 ): number {
+  const segments = Array.from(graphemeSegmenter.segment(text));
+  // Prefix sums: utf16Len[n] = total UTF-16 code units in the first n grapheme clusters.
+  const utf16Len: number[] = [0];
+  for (let i = 0; i < segments.length; i++) {
+    utf16Len[i + 1] = utf16Len[i] + segments[i].segment.length;
+  }
+
   let best = 0;
   let low = 1;
-  let high = text.length;
+  let high = segments.length;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const preview = renderTelegramDraftPreview(text.slice(0, mid), renderText);
+    const sliceLen = utf16Len[mid];
+    const preview = renderTelegramDraftPreview(text.slice(0, sliceLen), renderText);
     const renderedText = resolveTelegramDraftRenderedText(preview, richMessages).trimEnd();
     const payloadLength = richMessages
       ? telegramDraftRichPayloadLength(preview)
@@ -210,7 +218,7 @@ function findTelegramDraftChunkLength(
       high = mid - 1;
     }
   }
-  return sliceUtf16Safe(text, 0, best).length;
+  return utf16Len[best];
 }
 
 export function createTelegramDraftStream(params: {

@@ -1,20 +1,21 @@
 // Telegram tests cover progress text clipping behavior.
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-
 export const TELEGRAM_PROGRESS_MAX_CHARS = 300;
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /**
- * Clips Telegram progress text to at most {@link TELEGRAM_PROGRESS_MAX_CHARS} UTF-16 code units,
- * slicing on a code-point boundary so a surrogate pair straddling the limit is
- * dropped whole rather than leaving a lone high surrogate in the payload.
+ * Clips Telegram progress text to at most {@link TELEGRAM_PROGRESS_MAX_CHARS}
+ * grapheme clusters, slicing at a grapheme cluster boundary so that ZWJ emoji
+ * sequences (like 👨‍👩‍👧‍👦) and other multi-codepoint clusters are never broken.
  */
 export function clipTelegramProgressText(text: string): string {
-  if (text.length <= TELEGRAM_PROGRESS_MAX_CHARS) {
+  const segments = Array.from(graphemeSegmenter.segment(text));
+  if (segments.length <= TELEGRAM_PROGRESS_MAX_CHARS) {
     return text;
   }
-  // Slice on a code-point boundary so an emoji (or any astral character) that
-  // straddles the limit is dropped whole instead of leaving a lone \uD83D-style
-  // high surrogate before the ellipsis, which serializes to an invalid character
-  // in the Telegram Bot API payload.
-  return `${sliceUtf16Safe(text, 0, TELEGRAM_PROGRESS_MAX_CHARS - 1).trimEnd()}…`;
+  const truncated = segments
+    .slice(0, TELEGRAM_PROGRESS_MAX_CHARS - 1)
+    .map((s) => s.segment)
+    .join("");
+  return `${truncated.trimEnd()}…`;
 }
