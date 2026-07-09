@@ -3,12 +3,12 @@
  * These references are surfaced in agent context so follow-up turns can
  * reconnect to prior long-running work.
  */
+import { truncateUtf16Safe } from "../utils.js";
 import { listRunningSessions } from "./bash-process-registry.js";
 import {
   deriveRedactedProcessSessionName,
   redactProcessSessionText,
 } from "./bash-tools.process-redaction.js";
-import { truncateMiddle } from "./bash-tools.shared.js";
 
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
@@ -26,6 +26,16 @@ export type ActiveProcessSessionReference = {
   tail?: string;
   truncated: boolean;
 };
+
+function truncate(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 1) {
+    return truncateUtf16Safe(value, maxChars);
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, maxChars - 3))}...`;
+}
 
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
@@ -55,7 +65,7 @@ export function listActiveProcessSessionReferences(params: {
       runtimeMs: Math.max(0, now - session.startedAt),
       cwd: session.cwd,
       command: redactProcessSessionText(session.command),
-      name: truncateMiddle(
+      name: truncate(
         deriveRedactedProcessSessionName(session.command) ??
           redactProcessSessionText(session.command),
         MAX_COMMAND_LABEL_CHARS,
