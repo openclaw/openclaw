@@ -453,6 +453,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tencent/**"
+"extensions: tenki":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tenki/**"
 "extensions: stepfun":
   - changed-files:
       - any-glob-to-any-file:
