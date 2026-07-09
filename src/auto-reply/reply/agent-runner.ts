@@ -1276,6 +1276,7 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      activeReplyOperation?.recordActivity();
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }

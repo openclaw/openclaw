@@ -468,6 +468,11 @@ export const zh_TW: TranslationMap = {
   nav: {
     chat: "聊天",
     settings: "設置",
+    settingsGeneral: "一般",
+    settingsGroupConnections: "連線",
+    settingsGroupAgents: "代理程式與工具",
+    settingsGroupSystem: "系統",
+    exitSettings: "返回應用程式",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
     resize: "調整側邊欄大小",
