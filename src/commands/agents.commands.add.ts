@@ -426,6 +426,7 @@ export async function agentsAddCommand(
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {
         selection = value;

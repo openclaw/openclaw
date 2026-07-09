@@ -642,6 +642,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });
 }

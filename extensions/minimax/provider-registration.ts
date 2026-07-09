@@ -288,7 +288,7 @@ function createMinimaxOAuthMethod(region: MiniMaxRegion) {
   };
 }
 
-export function buildMinimaxApiProviderPlugin(): ProviderPlugin {
+function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   return {
     id: API_PROVIDER_ID,
     label: PROVIDER_LABEL,
@@ -325,7 +325,7 @@ export function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   };
 }
 
-export function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
+function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
   return {
     id: PORTAL_PROVIDER_ID,
     label: PROVIDER_LABEL,

@@ -7,9 +7,10 @@ import {
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
-  evaluateChromeMcpScript: vi.fn(async () => "https://example.com"),
+  evaluateChromeMcpScript: vi.fn(async (_params: unknown) => "https://example.com"),
   fillChromeMcpElement: vi.fn(async () => {}),
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
@@ -25,6 +26,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
+  clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: chromeMcpMocks.dragChromeMcpElement,
@@ -52,6 +54,7 @@ function getActPostHandler(
   registerBrowserAgentActRoutes(app, {
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         evaluateEnabled: true,
         ssrfPolicy: ssrfPolicy ?? undefined,
       },
@@ -145,6 +148,54 @@ describe("existing-session interaction navigation guard", () => {
       expect.objectContaining({ key: "Enter" }),
     );
     expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
+  });
+
+  it("threads one request budget through coordinate actions and navigation probes", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+    const pending = handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "clickCoords", x: 20, y: 30 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+
+    await vi.runAllTimersAsync();
+    await pending;
+
+    const expectedOptions = { signal: ctrl.signal, timeoutMs: 60_000 };
+    expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith(
+      expect.objectContaining(expectedOptions),
+    );
+    for (const [params] of chromeMcpMocks.evaluateChromeMcpScript.mock.calls) {
+      expect(params).toEqual(expect.objectContaining(expectedOptions));
+    }
+    expect(routeState.profileCtx.listTabs).toHaveBeenCalledWith(expectedOptions);
+  });
+
+  it("cancels a pending existing-session wait when its request aborts", async () => {
+    const handler = getActPostHandler(null);
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+    const pending = handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "wait", timeMs: 30_000 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+    void pending?.catch(() => {});
+
+    ctrl.abort(new Error("request cancelled after browser crash"));
+
+    await expect(pending).rejects.toThrow(/aborted|cancelled/i);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("rechecks the page url after delayed navigation-triggering interactions", async () => {

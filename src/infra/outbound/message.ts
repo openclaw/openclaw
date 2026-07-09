@@ -47,7 +47,7 @@ const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
+type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;

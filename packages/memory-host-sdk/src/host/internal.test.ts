@@ -226,7 +226,19 @@ describe("memory host SDK package internals", () => {
       overlap: 0,
     });
     for (const chunk of surrogateChunks) {
-      expect(chunk.text).not.toContain("\uFFFD");
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
+  });
+
+  it("preserves a surrogate pair at the coarse split boundary", () => {
+    const text = `${"a".repeat(39)}🌸${"b".repeat(39)}`;
+
+    const chunks = chunkMarkdown(text, { tokens: 10, overlap: 0 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
   });
 

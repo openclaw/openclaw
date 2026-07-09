@@ -42,6 +42,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
@@ -856,6 +857,7 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
     // the WebSocket URL.
@@ -867,7 +869,7 @@ export async function getChromeWebSocketUrl(
   const discoveryUrl = isWebSocketUrl(cdpUrl)
     ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
     : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     // /json/version unavailable or returned no WebSocket URL. For bare
@@ -881,7 +883,10 @@ export async function getChromeWebSocketUrl(
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy, { source: "discovered" });
+  await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+    source: "discovered",
+    configuredUrl: cdpUrl,
+  });
   return normalizedWsUrl;
 }
 

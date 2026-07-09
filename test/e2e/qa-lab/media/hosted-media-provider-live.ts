@@ -795,7 +795,7 @@ export function buildHostedMediaEvidence(params: {
   return createHostedMediaEvidenceWriter(params.options).build(params.result);
 }
 
-export async function runHostedMediaProviderLiveProducer(
+async function runHostedMediaProviderLiveProducer(
   options: HostedMediaOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const writer = createHostedMediaEvidenceWriter(options);

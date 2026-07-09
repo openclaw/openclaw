@@ -995,6 +995,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   stagger_ms INTEGER,
   session_target TEXT NOT NULL,
   wake_mode TEXT NOT NULL,
+  trigger_script TEXT,
+  trigger_once INTEGER,
   payload_kind TEXT NOT NULL,
   payload_message TEXT,
   payload_model TEXT,

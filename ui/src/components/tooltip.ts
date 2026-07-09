@@ -16,7 +16,7 @@ function createTooltipId() {
   return `openclaw-tooltip-${nextTooltipId}`;
 }
 
-export class TooltipProvider extends LitElement {
+class TooltipProvider extends LitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
   @property({ type: Number }) touchDelay = TOUCH_DELAY;
@@ -99,7 +99,7 @@ export class TooltipProvider extends LitElement {
   }
 }
 
-export class Tooltip extends LitElement {
+class Tooltip extends LitElement {
   @property() content = "";
 
   private trigger: HTMLElement | null = null;
