@@ -597,13 +597,6 @@
       "text": "Web"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/dashboard-header.ts",
-      "text": "OpenClaw"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
