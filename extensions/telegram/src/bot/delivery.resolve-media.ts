@@ -184,6 +184,8 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+/** Overall request timeout for Telegram media downloads before headers/body finish. */
+const TELEGRAM_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
   return (
@@ -356,6 +358,7 @@ async function downloadAndSaveTelegramFile(params: {
     },
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
+    timeoutMs: TELEGRAM_DOWNLOAD_TIMEOUT_MS,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
     fallbackContentType: params.mimeType,

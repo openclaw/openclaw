@@ -594,6 +594,7 @@ describe("resolveMedia getFile retry", () => {
       fetchImpl: callerFetch,
       dispatcherAttempts,
       trustExplicitProxyDns: true,
+      timeoutMs: 120_000,
       readIdleTimeoutMs: 30_000,
     });
     expect(typeof params.shouldRetryFetchError).toBe("function");
