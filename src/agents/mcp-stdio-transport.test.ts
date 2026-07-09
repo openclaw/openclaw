@@ -246,4 +246,24 @@ describe("OpenClawStdioClientTransport", () => {
     child.stderr.write("server diagnostic");
     expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
   });
+
+  it("suppresses PassThrough stderr stream errors without crashing", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx", stderr: "pipe" });
+    const onerror = vi.fn();
+    Object.assign(transport, { onerror });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const stderrStream = transport.stderr;
+    expect(stderrStream).toBeInstanceOf(PassThrough);
+
+    // Emitting an error on the PassThrough stderrStream should not throw
+    // or trigger the transport's onerror (that's for subprocess stream errors).
+    expect(() => stderrStream?.emit("error", new Error("pass-through error"))).not.toThrow();
+    expect(onerror).not.toHaveBeenCalled();
+  });
 });

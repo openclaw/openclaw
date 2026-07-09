@@ -50,6 +50,10 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
     }
   };
   stderr.on("data", onData);
+  stderr.on("error", () => {
+    // Stderr stream errors are benign — the subprocess stderr errors
+    // are already reported through the transport's onerror callback.
+  });
   return () => {
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);

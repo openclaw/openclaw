@@ -41,6 +41,9 @@ export class OpenClawStdioClientTransport implements Transport {
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
       this.stderrStream = new PassThrough();
+      // Suppress PassThrough errors; subprocess stderr errors are reported
+      // through the transport's onerror callback.
+      this.stderrStream.on("error", () => {});
     }
   }
 
