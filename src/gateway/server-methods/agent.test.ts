@@ -138,52 +138,58 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: mocks.listAgentIds,
-  resolveDefaultAgentId: (cfg?: {
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) =>
-    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
-  resolveSessionAgentId: ({
-    sessionKey,
-  }: {
-    sessionKey?: string | null;
-    config?: Record<string, unknown>;
-  }) => {
-    const m = /^agent:([^:]+):/.exec((sessionKey ?? "").trim());
-    return m?.[1] ?? "main";
-  },
-  resolveSessionAgentIds: ({
-    sessionKey,
-    agentId,
-    fallbackAgentId,
-  }: {
-    sessionKey?: string | null;
-    agentId?: string;
-    fallbackAgentId?: string;
-  }) => {
-    const parsedAgentId = /^agent:([^:]+):/.exec((sessionKey ?? "").trim())?.[1];
-    return {
-      defaultAgentId: "main",
-      sessionAgentId: agentId ?? parsedAgentId ?? fallbackAgentId ?? "main",
-    };
-  },
-  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-    cfg.agents?.list?.find((agent) => agent.id === agentId),
-  resolveAgentWorkspaceDir: (
-    cfg: {
-      agents?: {
-        defaults?: { workspace?: string };
-        list?: Array<{ id?: string; workspace?: string }>;
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    listAgentIds: mocks.listAgentIds,
+    resolveDefaultAgentId: (cfg?: {
+      agents?: { list?: Array<{ id?: string; default?: boolean }> };
+    }) =>
+      cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
+    resolveSessionAgentId: ({
+      sessionKey,
+    }: {
+      sessionKey?: string | null;
+      config?: Record<string, unknown>;
+    }) => {
+      const m = /^agent:([^:]+):/.exec((sessionKey ?? "").trim());
+      return m?.[1] ?? "main";
+    },
+    resolveSessionAgentIds: ({
+      sessionKey,
+      agentId,
+      fallbackAgentId,
+    }: {
+      sessionKey?: string | null;
+      agentId?: string;
+      fallbackAgentId?: string;
+    }) => {
+      const parsedAgentId = /^agent:([^:]+):/.exec((sessionKey ?? "").trim())?.[1];
+      return {
+        defaultAgentId: "main",
+        sessionAgentId: agentId ?? parsedAgentId ?? fallbackAgentId ?? "main",
       };
     },
-    agentId?: string,
-  ) =>
-    cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
-    cfg?.agents?.defaults?.workspace ??
-    "/tmp/workspace",
-  resolveAgentEffectiveModelPrimary: () => undefined,
-}));
+    resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+      cfg.agents?.list?.find((agent) => agent.id === agentId),
+    resolveAgentWorkspaceDir: (
+      cfg: {
+        agents?: {
+          defaults?: { workspace?: string };
+          list?: Array<{ id?: string; workspace?: string }>;
+        };
+      },
+      agentId?: string,
+    ) =>
+      cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
+      cfg?.agents?.defaults?.workspace ??
+      "/tmp/workspace",
+    resolveAgentEffectiveModelPrimary: () => undefined,
+  };
+});
 
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: (lifecycleGeneration: string) => {
