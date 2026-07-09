@@ -1,6 +1,5 @@
 // Gateway hot-reload handlers.
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -35,8 +34,8 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import {
+  formatActiveTaskRestartBlocker,
   getInspectableActiveTaskRestartBlockers,
-  type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -261,23 +260,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     return details;
   };
-  const formatTaskBlocker = (task: ActiveTaskRestartBlocker) => {
-    const details = [
-      `taskId=${task.taskId}`,
-      task.runId ? `runId=${task.runId}` : null,
-      `status=${task.status}`,
-      `runtime=${task.runtime}`,
-      task.label ? `label=${task.label}` : null,
-      task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
-    ].filter((value): value is string => Boolean(value));
-    return details.join(" ");
-  };
   const formatTaskBlockers = () => {
     const blockers = getInspectableActiveTaskRestartBlockers();
     if (blockers.length === 0) {
       return null;
     }
-    const shown = blockers.slice(0, 8).map(formatTaskBlocker);
+    const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };

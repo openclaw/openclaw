@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -510,6 +509,7 @@ export async function runGatewayLoop(params: {
             async () => {
               const {
                 abortEmbeddedAgentRun,
+                formatActiveTaskRestartBlocker,
                 getRuntimeConfig,
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
@@ -558,20 +558,7 @@ export async function runGatewayLoop(params: {
                 if (blockers.length === 0) {
                   return null;
                 }
-                const shown = blockers
-                  .slice(0, 8)
-                  .map((task) =>
-                    [
-                      `taskId=${task.taskId}`,
-                      task.runId ? `runId=${task.runId}` : null,
-                      `status=${task.status}`,
-                      `runtime=${task.runtime}`,
-                      task.label ? `label=${task.label}` : null,
-                      task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
-                    ]
-                      .filter((value): value is string => Boolean(value))
-                      .join(" "),
-                  );
+                const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
                 const omitted = blockers.length - shown.length;
                 return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
               };

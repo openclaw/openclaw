@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
@@ -919,6 +920,19 @@ export type ActiveTaskRestartBlocker = {
   label?: string;
   title?: string;
 };
+
+export function formatActiveTaskRestartBlocker(task: ActiveTaskRestartBlocker): string {
+  return [
+    `taskId=${task.taskId}`,
+    task.runId ? `runId=${task.runId}` : null,
+    `status=${task.status}`,
+    `runtime=${task.runtime}`,
+    task.label ? `label=${task.label}` : null,
+    task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+}
 
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,

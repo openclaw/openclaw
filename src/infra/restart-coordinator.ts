@@ -1,10 +1,10 @@
 // Coordinates restart requests around active embedded agent runs.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
+  formatActiveTaskRestartBlocker,
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
@@ -62,19 +62,6 @@ const defaultInspectors: SafeRestartInspectors = {
 
 function normalizeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function formatTaskBlocker(task: ActiveTaskRestartBlocker): string {
-  return [
-    `taskId=${task.taskId}`,
-    task.runId ? `runId=${task.runId}` : null,
-    `status=${task.status}`,
-    `runtime=${task.runtime}`,
-    task.label ? `label=${task.label}` : null,
-    task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
 }
 
 function createFallbackTaskBlocker(count: number): SafeGatewayRestartBlocker {
@@ -144,7 +131,7 @@ export function createSafeGatewayRestartPreflight(
         blockers.push({
           kind: "task",
           count: 1,
-          message: formatTaskBlocker(task),
+          message: formatActiveTaskRestartBlocker(task),
           task,
         });
       }
