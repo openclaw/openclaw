@@ -131,7 +131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 199,
+      "line": 247,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
       "source": "OPENCLAW",
       "surface": "android",
