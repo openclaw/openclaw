@@ -74,6 +74,7 @@ import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
+  toggleSessionWorkspace,
 } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
@@ -581,6 +582,24 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (
+      this.active &&
+      !event.defaultPrevented &&
+      !event.altKey &&
+      event.shiftKey &&
+      event.metaKey &&
+      !event.ctrlKey &&
+      event.key.toLowerCase() === "b"
+    ) {
+      const state = this.state;
+      if (!state) {
+        return;
+      }
+      event.preventDefault();
+      toggleSessionWorkspace(state);
+      return;
+    }
+
     if (
       this.active &&
       !event.defaultPrevented &&

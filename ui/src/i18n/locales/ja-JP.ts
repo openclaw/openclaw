@@ -608,7 +608,9 @@ export const ja_JP: TranslationMap = {
   },
   tasksPage: {
     active: "アクティブ",
+    activeSub: "キューに入っているバックグラウンド作業と実行中のバックグラウンド作業。",
     recent: "最近",
+    recentSub: "完了、失敗、キャンセルされた最新のタスク。",
     loading: "タスクを読み込み中…",
     empty: "バックグラウンドタスクはまだありません。",
     emptyActive: "キュー内または実行中のタスクはありません。",
@@ -1707,7 +1709,6 @@ export const ja_JP: TranslationMap = {
       splitRight: "右に分割",
       splitDown: "下に分割",
       closePane: "ペインを閉じる",
-      sessionSelect: "ペインのセッション",
       dropSplit: "分割",
       dropOpenHere: "ここで開く",
     },
@@ -1948,8 +1949,7 @@ export const ja_JP: TranslationMap = {
     },
     summary: {
       enabled: "有効",
-      yes: "はい",
-      no: "いいえ",
+      scheduler: "スケジューラー",
       jobs: "ジョブ",
       nextWake: "次回のウェイク",
       refreshing: "更新中...",

@@ -608,7 +608,9 @@ export const ru: TranslationMap = {
   },
   tasksPage: {
     active: "Активно",
+    activeSub: "Фоновые задания в очереди и выполняющиеся сейчас.",
     recent: "Недавние",
+    recentSub: "Последние завершенные, неудачные и отмененные задачи.",
     loading: "Загрузка задач…",
     empty: "Фоновых задач пока нет.",
     emptyActive: "Нет задач в очереди или в работе.",
@@ -1715,7 +1717,6 @@ export const ru: TranslationMap = {
       splitRight: "Разделить вправо",
       splitDown: "Разделить вниз",
       closePane: "Закрыть панель",
-      sessionSelect: "Сессия панели",
       dropSplit: "Разделить",
       dropOpenHere: "Открыть здесь",
     },
@@ -1955,8 +1956,7 @@ export const ru: TranslationMap = {
     },
     summary: {
       enabled: "Включено",
-      yes: "Да",
-      no: "Нет",
+      scheduler: "Планировщик",
       jobs: "Задачи",
       nextWake: "Следующее пробуждение",
       refreshing: "Обновление...",
