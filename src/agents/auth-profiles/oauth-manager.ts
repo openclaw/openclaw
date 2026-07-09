@@ -472,16 +472,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     profileId: string;
     refreshed: OAuthCredential;
   }): Promise<OAuthCredential | null> {
-    const currentStore = loadStoredOAuthRefreshStore(params.agentDir);
-    const current = currentStore.profiles[params.profileId];
-    if (current?.type !== "oauth" || current.provider !== params.refreshed.provider) {
-      return null;
-    }
-    if (!hasMatchingOAuthIdentity(current, params.refreshed)) {
-      return hasUsableOAuthCredential(current) ? current : null;
-    }
-
-    let saved = false;
+    // Single locked pass decides both outcomes so no relog can slip between a
+    // pre-read and the update: same identity persists the rotation, different
+    // identity adopts the stored (re-logged) credential for this call.
+    let adopted: OAuthCredential | null = null;
     const result = await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       updater: (store) => {
@@ -493,13 +487,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         // losers must win the store or the token family is bricked.
         if (hasMatchingOAuthIdentity(existing, params.refreshed)) {
           store.profiles[params.profileId] = { ...params.refreshed };
-          saved = true;
+          adopted = params.refreshed;
           return true;
         }
+        adopted = hasUsableOAuthCredential(existing) ? existing : null;
         return false;
       },
     });
-    return result !== null && saved ? params.refreshed : null;
+    return result === null ? null : adopted;
   }
 
   async function doRefreshOAuthTokenWithLock(params: {
