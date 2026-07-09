@@ -39,6 +39,16 @@ const GPT_5_PRO_REASONING_EFFORTS = ["high"] as const;
 const GPT_51_CODEX_MAX_REASONING_EFFORTS = ["none", "medium", "high", "xhigh"] as const;
 const GPT_51_CODEX_MINI_REASONING_EFFORTS = ["medium"] as const;
 const GENERIC_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+const CANONICAL_REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "off",
+]);
 
 function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
@@ -59,7 +69,10 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
 
 /** Normalize user-facing reasoning effort names to API effort names. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
-  return effort === "minimal" ? "minimal" : effort;
+  const trimmed = effort.trim();
+  const folded = trimmed.toLowerCase();
+  // Only fold OpenAI-owned names; provider-native compat values can be case-sensitive.
+  return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
 }
 
 function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
