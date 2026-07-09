@@ -38,7 +38,6 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
-    mainKey: "main",
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -49,6 +48,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
+    sessionMenu: null,
     expandedSessionKey: null,
     checkpointItemsByKey: {},
     checkpointLoadingKey: null,
@@ -70,7 +70,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
-    onFork: () => undefined,
+    onOpenSessionMenu: () => undefined,
     onToggleDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
@@ -90,16 +90,7 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
   return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
 }
 
-const SESSION_TABLE_HEADERS = [
-  "",
-  "Key",
-  "Kind",
-  "Status",
-  "Runtime",
-  "Updated",
-  "Tokens",
-  "Actions",
-];
+const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
@@ -235,9 +226,9 @@ describe("sessions view", () => {
     expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 
-  it("offers workboard capture for dashboard sessions", async () => {
+  it("opens the session menu from the kebab and row context menu", async () => {
     const container = document.createElement("div");
-    const onAddToWorkboard = vi.fn();
+    const onOpenSessionMenu = vi.fn();
     const session = {
       key: "agent:main:dashboard:1",
       kind: "direct",
@@ -246,65 +237,45 @@ describe("sessions view", () => {
     render(
       renderSessions({
         ...buildProps(buildResult(session)),
-        onAddToWorkboard,
+        onOpenSessionMenu,
       }),
       container,
     );
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Add to Workboard"]',
+      'button[aria-label="Open session menu"]',
     );
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected Add to Workboard button");
+    if (!button) {
+      throw new Error("Expected session menu button");
     }
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
     button.click();
-
-    expect(onAddToWorkboard).toHaveBeenCalledWith(session);
-  });
-
-  it("pins, archives, and restores sessions from row actions", async () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            pinned: false,
-            archived: false,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
     );
-    await Promise.resolve();
 
-    container.querySelector<HTMLButtonElement>('button[title="Pin session"]')!.click();
-    container.querySelector<HTMLButtonElement>('button[title="Archive session"]')!.click();
-    expect(onPatch).toHaveBeenNthCalledWith(1, "agent:main:dashboard:1", { pinned: true });
-    expect(onPatch).toHaveBeenNthCalledWith(2, "agent:main:dashboard:1", { archived: true });
-
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            archived: true,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    const row = container.querySelector(".session-data-row");
+    if (!row) {
+      throw new Error("Expected session row");
+    }
+    const contextMenu = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 123,
+      clientY: 45,
+    });
+    row.dispatchEvent(contextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ key: session.key }),
+      { x: 123, y: 45 },
+      null,
     );
-    await Promise.resolve();
-    container.querySelector<HTMLButtonElement>('button[title="Restore session"]')!.click();
-    expect(onPatch).toHaveBeenLastCalledWith("agent:main:dashboard:1", { archived: false });
+    expect(contextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -326,27 +297,6 @@ describe("sessions view", () => {
       row.querySelector(".session-key-cell")?.textContent?.trim(),
     );
     expect(keys).toEqual(["pinned", "newer"]);
-  });
-
-  it("marks sessions that already have workboard cards", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-        workboardSessionKeys: new Set(["agent:main:dashboard:1"]),
-        onAddToWorkboard: () => undefined,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector('button[aria-label="Open Workboard card"]')).not.toBeNull();
   });
 
   it("uses the shared tooltip component for session filters", async () => {
@@ -742,7 +692,7 @@ describe("sessions view", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
-  it("renders and filters the session runtime", async () => {
+  it("filters by agent runtime and surfaces it in the details drawer", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -763,20 +713,22 @@ describe("sessions view", () => {
           ]),
         ),
         searchQuery: "fallback none",
+        expandedSessionKey: "agent:main:claude",
       }),
       container,
     );
     await Promise.resolve();
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
-      "claude-cli (fallback none)",
-    );
+    // The roster no longer has a Runtime column; the drawer carries it.
+    expect(container.querySelector(".session-runtime-cell")).toBeNull();
     const rows = container.querySelectorAll("tbody tr.session-data-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "agent:main:claude",
     );
+    const stats = readSessionDetailStats(container);
+    expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
   });
 
   it("does not filter terminal sessions as live when active-run flags are stale", async () => {
@@ -998,7 +950,8 @@ describe("sessions view", () => {
     expect(stats.get("Status")).toBe("running");
     expect(stats.get("Model")).toBe("gpt-5.5");
     expect(stats.get("Provider")).toBe("openai");
-    expect(stats.get("Runtime")).toBe("2m 5s");
+    expect(stats.get("Runtime")).toBe("pi");
+    expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
     expect(stats.get("Goal")).toBe(

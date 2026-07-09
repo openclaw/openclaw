@@ -1644,9 +1644,11 @@ openclaw-chat-page {
   background: transparent;
 }
 
+/* Flex row, not grid: WebKit (Mac/iOS WKWebView) never re-runs shrink-to-fit
+   intrinsic sizing for a grid flex-item while streamed transcript text grows,
+   freezing the turn at first-delta width and wrapping one character per line. */
 .agent-chat__voice-turn {
-  display: grid;
-  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) 12px;
+  display: flex;
   gap: 8px;
   align-items: baseline;
   max-width: min(100%, 780px);
@@ -1666,7 +1668,9 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-speaker {
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 56px;
+  max-width: 200px;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
@@ -1676,6 +1680,7 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-text {
+  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
@@ -1685,6 +1690,7 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-stream {
+  flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 999px;

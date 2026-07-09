@@ -33,7 +33,6 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -48,7 +47,6 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   showArchived: boolean;
-  mainKey: string;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -59,6 +57,7 @@ export type SessionsProps = {
   page: number;
   pageSize: number;
   selectedKeys: Set<string>;
+  sessionMenu: { key: string } | null;
   expandedSessionKey: string | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   checkpointLoadingKey: string | null;
@@ -100,10 +99,11 @@ export type SessionsProps = {
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
-  onFork: (sessionKey: string) => void | Promise<void>;
-  workboardSessionKeys?: Set<string>;
-  workboardBusySessionKey?: string | null;
-  onAddToWorkboard?: (session: GatewaySessionRow) => void | Promise<void>;
+  onOpenSessionMenu: (
+    row: GatewaySessionRow,
+    position: { x: number; y: number },
+    trigger: HTMLElement | null,
+  ) => void;
   onToggleDetails: (sessionKey: string) => void;
   onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
@@ -619,7 +619,10 @@ function sessionDetailItems(params: {
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
-  add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
+  // The roster dropped its Runtime column; the drawer is where agent runtime
+  // and run duration live now.
+  add(t("sessionsView.runtime"), resolveAgentRuntimeLabel(row.agentRuntime));
+  add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
   add(t("sessionsView.subject"), row.subject);
   add(t("sessionsView.room"), row.room);
@@ -649,7 +652,7 @@ function sessionDetailItems(params: {
 const NEW_GROUP_OPTION = "__new-group__";
 
 function sessionsTableColumnCount(props: SessionsProps): number {
-  return props.groupBy === "category" ? 9 : 8;
+  return props.groupBy === "category" ? 8 : 7;
 }
 
 function groupModeLabel(mode: SessionsGroupBy): string {
@@ -1110,10 +1113,11 @@ export function renderSessions(props: SessionsProps) {
                   : nothing}
                 ${sortHeader("kind", t("sessionsView.kind"))}
                 <th class="session-status-col">${t("sessionsView.status")}</th>
-                <th class="session-runtime-col">${t("agents.context.runtime")}</th>
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
-                <th class="session-actions-col">${t("sessionsView.actions")}</th>
+                <th class="session-actions-col">
+                  <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1226,12 +1230,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
-  const isMainSession =
-    row.key === "main" ||
-    parseAgentSessionKey(row.key)?.rest === normalizeLowercaseStringOrEmpty(props.mainKey);
   const canLink = row.kind !== "global";
-  const captured = props.workboardSessionKeys?.has(row.key) === true;
-  const captureBusy = props.workboardBusySessionKey === row.key;
   const chatUrl = canLink
     ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
     : null;
@@ -1249,6 +1248,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     "session-data-row",
     "session-data-row--expandable",
     isExpanded ? "session-data-row--expanded" : "",
+    props.sessionMenu?.key === row.key ? "session-data-row--menu-open" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -1279,6 +1279,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       @dragover=${rowDrop.dragover}
       @dragleave=${rowDrop.dragleave}
       @drop=${rowDrop.drop}
+      @contextmenu=${(event: MouseEvent) => {
+        event.preventDefault();
+        props.onOpenSessionMenu(row, { x: event.clientX, y: event.clientY }, null);
+      }}
       @click=${(e: MouseEvent) => {
         if (isRowControlTarget(e.target)) {
           return;
@@ -1361,9 +1365,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
         </div>
       </td>
-      <td class="session-runtime-cell">
-        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
-      </td>
       <td>${updated}</td>
       <td class="session-token-cell">${renderTokensCell(row)}</td>
       <td class="session-actions-cell">
@@ -1386,84 +1387,20 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           </button>
           <button
             class="icon-btn"
-            title=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
-            aria-label=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
-            ?disabled=${props.loading}
+            type="button"
+            title=${t("chat.sidebar.openSessionMenu")}
+            aria-label=${t("chat.sidebar.openSessionMenu")}
+            aria-haspopup="menu"
+            aria-expanded=${String(props.sessionMenu?.key === row.key)}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
-              props.onPatch(row.key, { unread: row.unread !== true });
+              const trigger = event.currentTarget as HTMLElement;
+              const rect = trigger.getBoundingClientRect();
+              props.onOpenSessionMenu(row, { x: rect.right, y: rect.bottom + 4 }, trigger);
             }}
           >
-            ${row.unread ? icons.eye : icons.circle}
+            ${icons.moreHorizontal}
           </button>
-          <button
-            class="icon-btn"
-            title=${t("sessionsView.forkSession")}
-            aria-label=${t("sessionsView.forkSession")}
-            ?disabled=${props.loading}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              void props.onFork(row.key);
-            }}
-          >
-            ${icons.copy}
-          </button>
-          <button
-            class="icon-btn"
-            title=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
-            aria-label=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
-            ?disabled=${props.loading || row.archived === true}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              props.onPatch(row.key, { pinned: row.pinned !== true });
-            }}
-          >
-            ${row.pinned ? icons.pinOff : icons.pin}
-          </button>
-          <button
-            class="icon-btn"
-            title=${row.archived
-              ? t("sessionsView.restoreSession")
-              : t("sessionsView.archiveSession")}
-            aria-label=${row.archived
-              ? t("sessionsView.restoreSession")
-              : t("sessionsView.archiveSession")}
-            ?disabled=${props.loading ||
-            (!row.archived &&
-              (isMainSession ||
-                row.hasActiveRun === true ||
-                row.kind === "global" ||
-                row.kind === "unknown"))}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              props.onPatch(row.key, { archived: row.archived !== true });
-            }}
-          >
-            ${row.archived ? icons.archiveRestore : icons.archive}
-          </button>
-          ${props.onAddToWorkboard && canLink
-            ? html`
-                <openclaw-tooltip
-                  .content=${captured
-                    ? t("sessionsView.openWorkboardCard")
-                    : t("sessionsView.addToWorkboard")}
-                >
-                  <button
-                    class="icon-btn"
-                    aria-label=${captured
-                      ? t("sessionsView.openWorkboardCard")
-                      : t("sessionsView.addToWorkboard")}
-                    ?disabled=${props.loading || captureBusy}
-                    @click=${(event: MouseEvent) => {
-                      event.stopPropagation();
-                      void props.onAddToWorkboard?.(row);
-                    }}
-                  >
-                    ${captured ? icons.check : icons.plus}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
         </div>
       </td>
     </tr>`,

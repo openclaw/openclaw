@@ -370,7 +370,7 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg)
         }
 
-        if self.viewModel.hasBlockingRunActivity {
+        if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
@@ -389,9 +389,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
+        if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
             ChatStreamingAssistantBubble(
                 text: text,
                 markdownVariant: self.markdownVariant,
@@ -656,12 +654,15 @@ public struct OpenClawChatView: View {
         return self.hasVisibleTransientContent
     }
 
+    private var hasVisibleStreamingAssistantText: Bool {
+        guard let text = self.viewModel.streamingAssistantText else { return false }
+        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+    }
+
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
             !self.viewModel.pendingToolCalls.isEmpty ||
-            (self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false)
+            self.hasVisibleStreamingAssistantText
     }
 
     @ViewBuilder
@@ -713,9 +714,7 @@ public struct OpenClawChatView: View {
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
-            !(self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false) &&
+            !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
             self.viewModel.pendingToolCalls.isEmpty
     }

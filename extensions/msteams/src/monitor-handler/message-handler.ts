@@ -33,6 +33,7 @@ import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
@@ -589,6 +590,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
+    // The inbound Teams blockquote only carries a truncated `preview` snippet for
+    // quote replies. When we have the quoted message id, fetch the complete text
+    // via the app-only `GET /chats/{chatId}/messages/{id}` endpoint (allowed with
+    // Chat.Read.All). Restricted to 1:1 DMs on purpose: in a group chat an
+    // allowlisted sender could quote a non-allowlisted member, and the fetched
+    // full body would bypass the supplemental-quote visibility allowlist applied
+    // below. DMs have only two participants, so there is no third-party exposure.
+    // Group/channel quotes keep the (now-surfaced) truncated preview from fix 1.
+    // Any failure degrades to that preview, so message handling never breaks.
+    let quoteBodyFull: string | undefined;
+    if (quoteInfo?.id && isDirectMessage && graphConversationId.startsWith("19:")) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        quoteBodyFull = await fetchChatMessageText(graphToken, graphConversationId, quoteInfo.id);
+      } catch (err) {
+        log.debug?.("failed to fetch full quoted message text", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -776,8 +798,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       supplemental: {
         quote: quoteInfo
           ? {
-              id: activity.replyToId ?? undefined,
-              body: quoteInfo.body,
+              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
               isQuote: true,
