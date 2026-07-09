@@ -3,6 +3,7 @@
  */
 import { existsSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
@@ -139,11 +140,12 @@ function appendBoundedTruncationSuffix(params: {
       return finalText;
     }
     if (keptText.length === 0) {
-      return finalText.slice(0, params.maxChars);
+      return truncateUtf16Safe(finalText, params.maxChars);
     }
     const overflow = finalText.length - params.maxChars;
-    const nextKeptText = keptText.slice(0, Math.max(0, keptText.length - overflow));
-    keptText = nextKeptText.length < keptText.length ? nextKeptText : keptText.slice(0, -1);
+    const nextKeptText = sliceUtf16Safe(keptText, 0, Math.max(0, keptText.length - overflow));
+    keptText =
+      nextKeptText.length < keptText.length ? nextKeptText : sliceUtf16Safe(keptText, 0, -1);
   }
 }
 
@@ -158,8 +160,8 @@ const MIDDLE_OMISSION_MARKER =
  * which should be preserved during truncation.
  */
 function hasImportantTail(text: string): boolean {
-  // Check last ~2000 chars for error-like patterns
-  const tail = normalizeLowercaseStringOrEmpty(text.slice(-2000));
+  // Check last ~2000 chars for error-like patterns without splitting a surrogate pair.
+  const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
     // JSON closing — if the output is JSON, the tail has closing structure
@@ -213,7 +215,8 @@ export function truncateToolResultText(
         tailStart = tailNewline + 1;
       }
 
-      const keptText = text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart);
+      const keptText =
+        sliceUtf16Safe(text, 0, headCut) + MIDDLE_OMISSION_MARKER + sliceUtf16Safe(text, tailStart);
       return appendBoundedTruncationSuffix({
         keptText,
         originalTextLength: text.length,
@@ -229,7 +232,7 @@ export function truncateToolResultText(
   if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  const keptText = text.slice(0, cutPoint);
+  const keptText = sliceUtf16Safe(text, 0, cutPoint);
   return appendBoundedTruncationSuffix({
     keptText,
     originalTextLength: text.length,
