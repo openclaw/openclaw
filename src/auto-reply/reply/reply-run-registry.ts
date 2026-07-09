@@ -60,7 +60,7 @@ export type ReplyBackendQueueMessageMismatch =
 
 /** Prevents steering a turn into a run whose model-facing tool surface differs. */
 export function resolveReplyBackendQueueMessageMismatch(
-  backend: ReplyBackendHandle,
+  backend: Pick<ReplyBackendHandle, "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode">,
   options?: ReplyBackendQueueMessageOptions,
 ): ReplyBackendQueueMessageMismatch | undefined {
   if (
