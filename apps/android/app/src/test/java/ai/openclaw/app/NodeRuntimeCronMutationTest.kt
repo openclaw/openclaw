@@ -144,7 +144,8 @@ class NodeRuntimeCronMutationTest {
 
         runtime.runCronJob("job-1")
 
-        assertTrue(runtime.cronErrorText.value.orEmpty().contains("admin operator access"))
+        val errorText = runtime.cronErrorText.value.orEmpty()
+        assertTrue(errorText.contains("admin operator access"))
         assertFalse(gateway.requests.any { it.method == "cron.run" })
       } finally {
         runtime.disconnect()
