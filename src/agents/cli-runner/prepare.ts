@@ -730,24 +730,28 @@ export async function prepareCliRunContext(
       bundleMcpEnabled && mcpLoopbackRuntime
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
         : undefined;
-    const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
-      ? { mode: "none" }
-      : params.cliSessionBinding
-        ? resolveCliSessionReuse({
-            binding: params.cliSessionBinding,
-            authProfileId: effectiveAuthProfileId,
-            authEpoch,
-            authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-            extraSystemPromptHash,
-            messageToolPolicyHash,
-            promptToolNamesHash,
-            cwdHash,
-            mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-            mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-          })
-        : params.cliSessionId
-          ? { mode: "reuse", sessionId: params.cliSessionId }
-          : { mode: "none" };
+    // `sessionMode: none` may still use a live transport in-process, but neither a
+    // returned nor previously stored id is authority for cross-process continuity.
+    const backendAllowsSessionReuse = preparedBackendFinal.backend.sessionMode !== "none";
+    const reusableCliSessionCandidate: CliReusableSession =
+      isSideQuestion || !backendAllowsSessionReuse
+        ? { mode: "none" }
+        : params.cliSessionBinding
+          ? resolveCliSessionReuse({
+              binding: params.cliSessionBinding,
+              authProfileId: effectiveAuthProfileId,
+              authEpoch,
+              authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+              extraSystemPromptHash,
+              messageToolPolicyHash,
+              promptToolNamesHash,
+              cwdHash,
+              mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+              mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+            })
+          : params.cliSessionId
+            ? { mode: "reuse", sessionId: params.cliSessionId }
+            : { mode: "none" };
     const backendReusableCliSession: CliReusableSession =
       reusableCliSessionCandidate.mode === "reuse-with-drift" &&
       !canTransportSystemPrompt(preparedBackendFinal.backend)

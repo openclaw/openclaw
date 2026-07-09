@@ -179,7 +179,12 @@ function createCliBackendConfig(
   } satisfies OpenClawConfig;
 }
 
-function setClaudeCliBackendForPrepareTest() {
+function setClaudeCliBackendForPrepareTest(
+  params: {
+    sessionMode?: "always" | "existing" | "none";
+    reseedFromRawTranscriptWhenUncompacted?: boolean;
+  } = {},
+) {
   // Keep Claude-specific preparation behind the same runtime resolver seam that
   // production uses; direct backend constants would bypass provider ownership.
   cliBackendsTesting.setDepsForTest({
@@ -195,7 +200,10 @@ function setClaudeCliBackendForPrepareTest() {
           resumeArgs: ["--resume", "{sessionId}"],
           output: "jsonl",
           input: "stdin",
-          sessionMode: "existing",
+          sessionMode: params.sessionMode ?? "existing",
+          ...(params.reseedFromRawTranscriptWhenUncompacted
+            ? { reseedFromRawTranscriptWhenUncompacted: true }
+            : {}),
         },
       },
     ],
@@ -3265,27 +3273,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       },
     });
     try {
-      // Same claude-cli runtime resolver seam as setClaudeCliBackendForPrepareTest,
-      // but opted into raw-transcript reseed so the missing-transcript path can
-      // redeliver prior OpenClaw history instead of silently losing continuity.
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              resumeArgs: ["--resume", "{sessionId}"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-              reseedFromRawTranscriptWhenUncompacted: true,
-            },
-          },
-        ],
+      setClaudeCliBackendForPrepareTest({
+        reseedFromRawTranscriptWhenUncompacted: true,
       });
       const transcriptCheck = vi.fn(async () => false);
       const orphanCheck = vi.fn(async () => false);
@@ -3317,6 +3306,43 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stored CLI session candidates when the backend disables sessions", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setClaudeCliBackendForPrepareTest({
+        sessionMode: "none",
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "stateless ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-stateless-cli",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.reusableCliSession).toEqual({ mode: "none" });
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
