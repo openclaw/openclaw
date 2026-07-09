@@ -131,6 +131,18 @@ describe("tool-policy", () => {
     // A child cannot inherit an MCP tool the parent's deny layer removes.
     expect(filtered).toEqual(["lsp_hover_typescript"]);
   });
+
+  it("excludes the default plugin discovery marker from runtime selectors", () => {
+    // DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY contains __ but is an internal
+    // discovery marker, not an MCP selector. It must never be preserved as an
+    // inherited runtime token. (#85030)
+    const filtered = filterRuntimeMaterializationAllowlistEntries({
+      entries: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "bundle-mcp", "probe__search"],
+      policies: [{ allow: ["bundle-mcp", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "probe__search"] }],
+    });
+
+    expect(filtered).toEqual(["bundle-mcp", "probe__search"]);
+  });
 });
 
 describe("sandbox tool policy", () => {

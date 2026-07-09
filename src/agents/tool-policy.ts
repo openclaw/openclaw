@@ -75,10 +75,11 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
 // authorization to rebuild those runtimes in the child. (#85030)
 function isRuntimeMaterializationAllowlistEntry(normalized: string): boolean {
   return (
-    normalized === "bundle-mcp" ||
-    normalized === "group:plugins" ||
-    normalized.includes(TOOL_NAME_SEPARATOR) ||
-    normalized.startsWith("lsp_")
+    (normalized === "bundle-mcp" ||
+      normalized === "group:plugins" ||
+      normalized.includes(TOOL_NAME_SEPARATOR) ||
+      normalized.startsWith("lsp_")) &&
+    normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
   );
 }
 
