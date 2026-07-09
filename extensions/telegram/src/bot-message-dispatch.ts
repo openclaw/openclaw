@@ -164,6 +164,11 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+// Partial streaming stays prose-first. A tool-only turn gets one activity draft
+// after two quiet minutes, then refreshes no faster than every 30s.
+// Visible output or preview.toolProgress:false turns this fallback off.
+const QUIET_TOOL_PROGRESS_AFTER_MS = 120_000;
+const QUIET_TOOL_PROGRESS_REFRESH_MIN_MS = 30_000;
 
 type DraftPartialTextUpdate = {
   text: string;
@@ -1046,6 +1051,9 @@ export const dispatchTelegramMessage = async ({
   const durableReasoningPayloadsEnabled =
     resolvedReasoningLevel === "on" || Boolean(reasoningLane.stream);
   const streamToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const quietToolProgressEnabled =
+    streamMode === "partial" && canStreamAnswerDraft && streamToolProgressEnabled;
+  const deliveryState = createLaneDeliveryStateTracker();
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
   let activeAnswerBlockAssistantMessageIndex: number | undefined;
@@ -1093,6 +1101,10 @@ export const dispatchTelegramMessage = async ({
   const progressSummaryStartedAt = Date.now();
   const progressSummary = createTelegramProgressSummaryTracker();
   let progressSummaryDelivered = false;
+  let quietToolProgressTimer: ReturnType<typeof setTimeout> | undefined;
+  let quietToolProgressPendingLine: ChannelProgressDraftCompositorLine | undefined;
+  let quietToolProgressLastRenderTime = 0;
+  let quietToolProgressRendered = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
     mode: streamMode,
@@ -1139,14 +1151,83 @@ export const dispatchTelegramMessage = async ({
       !finalAnswerDeliveryStarted &&
       !finalAnswerDelivered,
     );
+  const hasVisibleChannelOutput = () =>
+    (answerLane.hasStreamedMessage && !quietToolProgressRendered) ||
+    reasoningLane.hasStreamedMessage ||
+    deliveryState.snapshot().delivered;
+  const clearQuietToolProgressTimer = () => {
+    if (!quietToolProgressTimer) {
+      return;
+    }
+    clearTimeout(quietToolProgressTimer);
+    quietToolProgressTimer = undefined;
+  };
+  const suppressQuietToolProgress = () => {
+    clearQuietToolProgressTimer();
+    quietToolProgressPendingLine = undefined;
+    quietToolProgressRendered = false;
+  };
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
-    options?: { toolName?: string; startImmediately?: boolean },
+    options?: { toolName?: string; startImmediately?: boolean; quietPartialRender?: boolean },
   ) => {
+    if (streamMode === "partial" && options?.quietPartialRender !== true) {
+      return false;
+    }
     if (!canPushStreamToolProgress()) {
       return false;
     }
     return await progressDraft.pushToolProgress(line, options);
+  };
+  const renderQuietToolProgress = async () => {
+    clearQuietToolProgressTimer();
+    const line = quietToolProgressPendingLine;
+    if (!quietToolProgressEnabled || !line || hasVisibleChannelOutput()) {
+      return false;
+    }
+    const rendered = await pushStreamToolProgress(line, { quietPartialRender: true });
+    if (rendered) {
+      quietToolProgressRendered = true;
+      quietToolProgressLastRenderTime = Date.now();
+    }
+    return rendered;
+  };
+  const scheduleQuietToolProgressRender = (delayMs: number) => {
+    if (quietToolProgressTimer) {
+      return;
+    }
+    quietToolProgressTimer = setTimeout(() => {
+      void enqueueDraftLaneEvent(async () => {
+        await renderQuietToolProgress();
+      });
+    }, delayMs);
+  };
+  const noteQuietToolProgress = async (
+    line: ChannelProgressDraftCompositorLine | undefined,
+    toolName: string | undefined,
+  ) => {
+    if (
+      !quietToolProgressEnabled ||
+      !line ||
+      !streamToolProgressEnabled ||
+      !isChannelProgressDraftWorkToolName(toolName)
+    ) {
+      return false;
+    }
+    quietToolProgressPendingLine = line;
+    if (hasVisibleChannelOutput()) {
+      return false;
+    }
+    if (!quietToolProgressRendered) {
+      scheduleQuietToolProgressRender(QUIET_TOOL_PROGRESS_AFTER_MS);
+      return false;
+    }
+    const elapsedMs = Date.now() - quietToolProgressLastRenderTime;
+    if (elapsedMs >= QUIET_TOOL_PROGRESS_REFRESH_MIN_MS) {
+      return await renderQuietToolProgress();
+    }
+    scheduleQuietToolProgressRender(QUIET_TOOL_PROGRESS_REFRESH_MIN_MS - elapsedMs);
+    return false;
   };
   const pushStreamReasoningProgress = async (payload: {
     text?: string;
@@ -1452,6 +1533,7 @@ export const dispatchTelegramMessage = async ({
       if (streamMode === "progress") {
         return;
       }
+      suppressQuietToolProgress();
       resetAnswerToolProgressDraft();
       suppressProgressDraftState();
     }
@@ -1529,7 +1611,6 @@ export const dispatchTelegramMessage = async ({
   const replyQuoteEntities = Array.isArray(ctxPayload.ReplyToQuoteEntities)
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
-  const deliveryState = createLaneDeliveryStateTracker();
   const beginDeliveryCorrelation = () =>
     beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
@@ -2744,21 +2825,25 @@ export const dispatchTelegramMessage = async ({
                         progressSummary.closeCommentaryBurst();
                       }
                     }
-                    const progressPromise = pushStreamToolProgress(
-                      buildChannelProgressDraftLineForEntry(
-                        telegramCfg,
-                        {
-                          event: "tool",
-                          itemId: payload.itemId,
-                          toolCallId: payload.toolCallId,
-                          name: toolName,
-                          phase: payload.phase,
-                          args: payload.args,
-                        },
-                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                      ),
-                      { toolName, startImmediately: true },
+                    const progressLine = buildChannelProgressDraftLineForEntry(
+                      telegramCfg,
+                      {
+                        event: "tool",
+                        itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
+                        name: toolName,
+                        phase: payload.phase,
+                        args: payload.args,
+                      },
+                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
                     );
+                    const progressPromise =
+                      streamMode === "partial"
+                        ? noteQuietToolProgress(progressLine, toolName)
+                        : pushStreamToolProgress(progressLine, {
+                            toolName,
+                            startImmediately: true,
+                          });
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
@@ -2835,7 +2920,7 @@ export const dispatchTelegramMessage = async ({
                     if (
                       !updatedDraft &&
                       isFastModeAutoProgressPayload(payload) &&
-                      !canPushStreamToolProgress()
+                      (streamMode === "partial" || !canPushStreamToolProgress())
                     ) {
                       await sendPayload(payload);
                     }
@@ -2910,6 +2995,7 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
+      suppressQuietToolProgress();
       progressDraft.cancel();
       await draftLaneEventQueue;
       await finalizeSkippedDuplicateAnswerBlockDraft();

@@ -2407,11 +2407,51 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("does not coalesce answer partial fragments with tool progress drafts", async () => {
+  it("shows quiet tool progress in partial mode after the quiet threshold", async () => {
+    vi.useFakeTimers();
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseRun: (() => void) | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await new Promise<void>((resolve) => {
+        releaseRun = resolve;
+      });
+      return { queuedFinal: false };
+    });
+
+    try {
+      const run = dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+        telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+      );
+
+      releaseRun?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replaces a quiet tool progress draft with partial answer prose", async () => {
+    vi.useFakeTimers();
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseAnswer: (() => void) | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await new Promise<void>((resolve) => {
+          releaseAnswer = resolve;
+        });
         await replyOptions?.onPartialReply?.({ text: "Done ", delta: "Done " });
         await replyOptions?.onPartialReply?.({ text: "Done answer", delta: "answer" });
         await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
@@ -2419,17 +2459,125 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
 
+    try {
+      const run = dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(mockCallArg(answerDraftStream.updatePreview).text).toContain("Exec");
+      releaseAnswer?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done answer");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not show quiet tool progress when partial prose appears before threshold", async () => {
+    vi.useFakeTimers();
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseRun: (() => void) | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onPartialReply?.({ text: "Working answer" });
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        });
+        await dispatcherOptions.deliver({ text: "Working answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    try {
+      const run = dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+      releaseRun?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Working answer");
+  });
+
+  it("throttles quiet tool progress refreshes after the fallback renders", async () => {
+    vi.useFakeTimers();
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let startSecondTool: (() => void) | undefined;
+    let releaseRun: (() => void) | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await new Promise<void>((resolve) => {
+        startSecondTool = resolve;
+      });
+      await replyOptions?.onToolStart?.({ name: "write", phase: "start" });
+      await new Promise<void>((resolve) => {
+        releaseRun = resolve;
+      });
+      return { queuedFinal: false };
+    });
+
+    try {
+      const run = dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
+      startSecondTool?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(2);
+      expect(answerDraftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).toContain("Write");
+
+      releaseRun?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends fast-mode auto progress when partial quiet gating suppresses the draft", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolResult?.({
+        text: "Still checking the workspace",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { queuedFinal: false };
+    });
+
     await dispatchWithContext({
       context: createContext(),
       streamMode: "partial",
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expect(mockCallArg(answerDraftStream.updatePreview).text).toContain("Exec");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done answer");
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+    expectDeliveredReply(0, { text: "Still checking the workspace" });
   });
 
   it("does not hide text-only tool output after answer streaming starts", async () => {
@@ -2888,7 +3036,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("keeps tool progress visible after a partial-streamed intermediate block", async () => {
+  it("keeps quiet tool progress hidden after a partial-streamed intermediate block", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -2903,28 +3051,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
-    );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
-    // The tool-progress window repositions before the final (deferred delete),
-    // never an immediate clear/delete.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
-    }
-    const progressResetOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const progressUpdateOrder = answerDraftStream.updatePreview.mock.invocationCallOrder[0];
-    expect(progressResetOrder).toBeLessThan(progressUpdateOrder);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Final answer");
+    expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("preserves streamed text blocks that follow tool progress before the final answer", async () => {
+  it("preserves streamed text blocks when quiet tool progress never renders", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -2939,21 +3072,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
-    );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
-    // The tool-progress window repositions (deferred delete) rather than an
-    // immediate clear when the following text block takes over the lane.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
-    }
+    expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -2978,16 +3100,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("rotates a tool-progress-only answer draft before streaming the final answer", async () => {
+    vi.useFakeTimers();
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseFinal: (() => void) | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await new Promise<void>((resolve) => {
+          releaseFinal = resolve;
+        });
         await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    try {
+      const run = dispatchWithContext({ context: createContext() });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      releaseFinal?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
@@ -3011,17 +3146,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("clears a tool-progress-only draft across assistant boundaries before final text", async () => {
+    vi.useFakeTimers();
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseFinal: (() => void) | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await new Promise<void>((resolve) => {
+          releaseFinal = resolve;
+        });
         await replyOptions?.onAssistantMessageStart?.();
         await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    try {
+      const run = dispatchWithContext({ context: createContext() });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      releaseFinal?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
@@ -5850,20 +5998,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not suppress text-only blocks after a tool-progress draft", async () => {
+    vi.useFakeTimers();
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let releaseBlock: (() => void) | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await new Promise<void>((resolve) => {
+          releaseBlock = resolve;
+        });
         await dispatcherOptions.deliver({ text: "block after progress" }, { kind: "block" });
         return { queuedFinal: true };
       },
     );
 
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: { streaming: { mode: "partial" } },
-    });
+    try {
+      const run = dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      releaseBlock?.();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(mockCallArg(answerDraftStream.updatePreview).text).toContain("Exec");
     expect(answerDraftStream.update).toHaveBeenLastCalledWith("block after progress");
