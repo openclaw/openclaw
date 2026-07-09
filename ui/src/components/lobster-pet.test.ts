@@ -24,6 +24,7 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "abyss",
   "ghost",
   "split",
+  "retro",
 ];
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
@@ -98,8 +99,8 @@ describe("lobster pet look", () => {
     for (const id of LOBSTER_PET_PALETTE_IDS) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
-    // Grails stay grails: ghost and split each roll ~1%, commons dominate.
-    for (const grail of ["ghost", "split"]) {
+    // Grails stay grails: ghost/split roll ~1%, retro ~0.5%; commons dominate.
+    for (const grail of ["ghost", "split", "retro"]) {
       expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.03);
     }
     expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.4);

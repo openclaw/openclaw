@@ -63,6 +63,13 @@ openclaw-lobster-pet {
   filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
 }
 
+/* Retro: homage to the classic OpenClaw logo — white sticker outline around
+   the whole sprite (the halo is two stacked 1px drop-shadows). */
+.lobster-pet--palette-retro .lobster-pet__svg {
+  filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+    drop-shadow(0 0 1.2px #f5f7fa);
+}
+
 /* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
    right claw and antenna wear the second shell color. */
 .lobster-pet--palette-split {

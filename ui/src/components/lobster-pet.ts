@@ -33,7 +33,8 @@ export type LobsterPetPaletteId =
   | "calico"
   | "abyss"
   | "ghost"
-  | "split";
+  | "split"
+  | "retro";
 
 export type LobsterPetPalette = {
   id: LobsterPetPaletteId;
@@ -161,6 +162,9 @@ const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "abyss", shell: "#2c3b68", claw: "#465b96" }, 2],
   [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
   [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
+  // The grail: homage to the classic OpenClaw logo (big raised claw, smirk,
+  // angry brows, white sticker outline). ~0.5% of sessions.
+  [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
 ];
 
 const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
@@ -308,6 +312,38 @@ const SPLIT_HALF = svg`
   />
 `;
 
+// Retro homage parts (classic OpenClaw logo): one oversized raised claw with
+// a pincer notch, tall V antennae, angry brows, and a smirk. The mega claw
+// lives inside the .lob-claw--r group so wave/snip acts swing it.
+const RETRO_MEGA_CLAW = svg`
+  <path
+    d="M95 55 C112 53 119 39 116 25 C113 11 99 5 91 12 C88 15 87 19 88 23 C83 27 83 36 88 43 C91 49 93 52 95 55 Z"
+    fill="var(--lob-claw)"
+  />
+  <path
+    d="M92 14 C97 22 99 31 95 41"
+    stroke="#b8151b"
+    stroke-width="3"
+    stroke-linecap="round"
+    fill="none"
+  />
+`;
+
+const RETRO_ANTENNAE = svg`
+  <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
+    <path d="M50 16 Q45 4 37 1" />
+    <path d="M70 16 Q75 4 83 1" />
+  </g>
+`;
+
+const RETRO_FACE = svg`
+  <g stroke="#0a1014" stroke-linecap="round" fill="none">
+    <path d="M37 24 L51 28" stroke-width="3.5" />
+    <path d="M69 28 L83 24" stroke-width="3.5" />
+    <path d="M49 45 Q59 51 69 45 L72 42" stroke-width="3" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -333,19 +369,25 @@ function renderLobsterSvg(look: LobsterPetLook) {
       preserveAspectRatio="xMidYMax meet"
       aria-hidden="true"
     >
-      ${ANTENNAE_SPRITES[look.antennae]}
+      ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
       <g class="lob-claw lob-claw--l">
         <path
           d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
           fill="var(--lob-claw)"
         />
       </g>
-      <g class="lob-claw lob-claw--r">
-        <path
-          d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
-          fill="var(--lob-claw)"
-        />
-      </g>
+      ${
+        look.palette.id === "retro"
+          ? nothing
+          : svg`
+            <g class="lob-claw lob-claw--r">
+              <path
+                d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
+                fill="var(--lob-claw)"
+              />
+            </g>
+          `
+      }
       <path
         d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z"
         fill="var(--lob-shell)"
@@ -369,6 +411,14 @@ function renderLobsterSvg(look: LobsterPetLook) {
         <path d="M39 33 Q45 28 51 33" />
         <path d="M69 33 Q75 28 81 33" />
       </g>
+      ${
+        look.palette.id === "retro"
+          ? svg`
+            ${RETRO_FACE}
+            <g class="lob-claw lob-claw--r">${RETRO_MEGA_CLAW}</g>
+          `
+          : nothing
+      }
       ${look.accessory === "none" ? nothing : ACCESSORY_SPRITES[look.accessory]}
     </svg>
   `;
