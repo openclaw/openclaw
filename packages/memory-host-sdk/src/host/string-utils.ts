@@ -19,6 +19,25 @@ export function normalizeOptionalLowercaseString(value: unknown): string | undef
   return normalizeOptionalString(value)?.toLowerCase();
 }
 
+/** Truncate without cutting a UTF-16 surrogate pair in half. */
+export function truncateUtf16Safe(value: string, maxChars: number): string {
+  const limit = Math.max(0, Math.floor(maxChars));
+  if (value.length <= limit) {
+    return value;
+  }
+  if (
+    limit > 0 &&
+    limit < value.length &&
+    value.charCodeAt(limit - 1) >= 0xd800 &&
+    value.charCodeAt(limit - 1) <= 0xdbff &&
+    value.charCodeAt(limit) >= 0xdc00 &&
+    value.charCodeAt(limit) <= 0xdfff
+  ) {
+    return value.slice(0, limit - 1);
+  }
+  return value.slice(0, limit);
+}
+
 /** Normalize a value to lowercase text, defaulting to an empty string. */
 export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return normalizeOptionalLowercaseString(value) ?? "";
