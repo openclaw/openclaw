@@ -4796,6 +4796,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/tmp/offloaded-big.png", contentType: "image/png" },
       { path: "/tmp/chat-send-inline.png", contentType: "image/png" },
     ];
+    mockState.config = {
+      agents: {
+        defaults: {
+          model: { primary: "test-provider/vision-model" },
+        },
+      },
+    };
     const respond = vi.fn();
     const context = createChatContext();
     const bigPng = Buffer.alloc(2_100_000);
@@ -5172,6 +5179,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         input: ["text", "image"],
       },
     ];
+    mockState.config = {
+      agents: {
+        defaults: {
+          model: { primary: "modelscope/Qwen/Qwen3.5-35B-A3B" },
+        },
+      },
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -6098,6 +6112,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [{ path: "/tmp/offloaded-big.png", contentType: "image/png" }];
+    mockState.config = {
+      agents: {
+        defaults: {
+          model: { primary: "test-provider/vision-model" },
+        },
+      },
+    };
     const respond = vi.fn();
     const context = createChatContext();
     const bigPng = Buffer.alloc(2_100_000);

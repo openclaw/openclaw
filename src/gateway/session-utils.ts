@@ -1645,20 +1645,9 @@ export function resolveSessionModelRef(
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
   const runtimeModel = normalizeOptionalString(entry?.model);
-  if (runtimeProvider && runtimeModel) {
-    if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    // No overrides. If this session has an agentId, the runtime metadata is
-    // default-derived and may be stale after a config hot-reload; fall through
-    // to re-resolve from current config. Without an agentId, preserve runtime
-    // values as-is (backward compat).
-    if (!agentId) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    // agentId available, no overrides — runtime metadata is stale.
-  }
 
+  // Resolve from agent config or built-in defaults so we can detect stale
+  // runtime metadata after a config hot-reload.
   const resolved = agentId
     ? resolveDefaultModelForAgent({
         cfg,
@@ -1672,12 +1661,29 @@ export function resolveSessionModelRef(
         allowPluginNormalization: options?.allowPluginNormalization,
       });
 
-  // Runtime metadata that was present but stale (agentId + no overrides)
-  // must not reach resolvePersistedModelRef — it returns runtime before defaults.
+  if (runtimeProvider && runtimeModel) {
+    if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    if (!agentId) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // agentId available, no overrides — runtime metadata is default-derived
+    // and may be stale after a config hot-reload. Return the cached values
+    // only when they still match the current agent default (not stale).
+    if (runtimeProvider === resolved.provider && runtimeModel === resolved.model) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // Runtime metadata differs from current default — stale after a config
+    // hot-reload. Fall through to use the freshly resolved default.
+  }
+
+  // runtimeProvider/runtimeModel that is present but stale must not reach
+  // resolvePersistedModelRef — it returns runtime before defaults.
   const skipStaleRuntime =
-    agentId &&
-    runtimeProvider &&
-    runtimeModel &&
+    agentId != null &&
+    runtimeProvider != null &&
+    runtimeModel != null &&
     !normalizedOverride.providerOverride &&
     !normalizedOverride.modelOverride;
 

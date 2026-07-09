@@ -7593,11 +7593,20 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 
   it("does not dispatch when chat.abort lands during slow attachment setup", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-    });
+    mockMainSessionEntry(
+      {
+        sessionId: "existing-session-id",
+        model: "vision-model",
+        modelProvider: "test",
+      },
+      {
+        agents: {
+          defaults: {
+            model: { primary: "test/vision-model" },
+          },
+        },
+      },
+    );
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
@@ -7696,7 +7705,13 @@ describe("gateway agent handler chat.abort integration", () => {
     };
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "test/vision-model" },
+          },
+        },
+      },
       storePath: "/tmp/sessions.json",
       entry: deleted ? undefined : persistedEntry,
       canonicalKey: sessionKey,
@@ -7764,7 +7779,13 @@ describe("gateway agent handler chat.abort integration", () => {
     };
     let currentEntry = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "test/vision-model" },
+          },
+        },
+      },
       storePath: "/tmp/sessions.json",
       entry: currentEntry,
       canonicalKey: sessionKey,
@@ -7825,7 +7846,13 @@ describe("gateway agent handler chat.abort integration", () => {
   it("keeps selected-global agent scope while aborting during attachment setup", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "test/vision-model" },
+          },
+        },
+      },
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "work-global-session-id",
