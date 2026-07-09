@@ -125,6 +125,7 @@ struct ExecHostRequest: Codable {
     var agentId: String?
     var sessionKey: String?
     var approvalDecision: ExecApprovalDecision?
+    var approvalSource: String? = nil
 }
 
 private struct ExecHostRunResult: Codable {
@@ -737,13 +738,19 @@ private enum ExecHostExecutor {
             command: validatedRequest.command,
             rawCommand: validatedRequest.evaluationRawCommand,
             displayCommand: validatedRequest.displayCommand)
-        var explicitlyApproved = request.approvalDecision == .allowOnce ||
+        let approvalSource = validatedRequest.approvalSource
+        let security = ExecHostRequestEvaluator.effectiveSecurity(
+            context: context,
+            approvalSource: approvalSource)
+        var explicitlyApproved = approvalSource == .autoReview ||
+            request.approvalDecision == .allowOnce ||
             request.approvalDecision == .allowAlways
-        var effectiveApprovalDecision = request.approvalDecision
+        var persistAllowlist = request.approvalDecision == .allowAlways
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
-            approvalDecision: request.approvalDecision)
+            approvalDecision: request.approvalDecision,
+            approvalSource: approvalSource)
         {
         case let .deny(error):
             return self.errorResponse(error)
@@ -781,11 +788,12 @@ private enum ExecHostExecutor {
                 explicitlyApproved = true
                 followupDecision = .allowOnce
             }
-            effectiveApprovalDecision = followupDecision
+            persistAllowlist = followupDecision == .allowAlways
 
             switch ExecHostRequestEvaluator.evaluate(
                 context: context,
-                approvalDecision: followupDecision)
+                approvalDecision: followupDecision,
+                approvalSource: approvalSource)
             {
             case let .deny(error):
                 return self.errorResponse(error)
@@ -799,17 +807,11 @@ private enum ExecHostExecutor {
             }
         }
 
-        if case .failure = self.persistAllowlistEntry(decision: effectiveApprovalDecision, context: context) {
-            return self.approvalStoreErrorResponse()
-        }
-
-        if case .failure = self.recordAllowlistMatches(context: context) {
-            return self.approvalStoreErrorResponse()
-        }
-
-        let reusableAuthorization = context.security == .allowlist &&
+        let authorizationBasis = context.authorizationBasis
+        let reusableAuthorization = security == .allowlist &&
             !explicitlyApproved &&
-            (context.allowlistSatisfied || context.skillAllow)
+            authorizationBasis != nil
+
         let executionCommand: [String]
         if reusableAuthorization {
             guard let boundCommand = context.boundCommand else {
@@ -827,11 +829,29 @@ private enum ExecHostExecutor {
             return errorResponse
         }
 
-        return await self.runCommand(
-            command: executionCommand,
-            cwd: request.cwd,
-            env: context.env,
-            timeoutMs: request.timeoutMs)
+        let executionCommit = ExecApprovalExecutionCommit.build(
+            context: context,
+            effectiveSecurity: security,
+            approvalSource: approvalSource,
+            explicitlyApproved: explicitlyApproved,
+            persistAllowlist: persistAllowlist)
+        let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
+        let cwd = request.cwd
+        let env = context.env
+        if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
+            return self.approvalStoreErrorResponse()
+        }
+
+        // The store commit linearizes authorization. Enqueue before the next
+        // suspension so no unrelated MainActor work sits between those steps.
+        let execution = Task.detached { () -> ShellExecutor.ShellResult in
+            await ShellExecutor.runDetailed(
+                command: executionCommand,
+                cwd: cwd,
+                env: env,
+                timeout: timeoutSec)
+        }
+        return await self.commandResponse(execution: execution)
     }
 
     private static func buildContext(
@@ -847,46 +867,6 @@ private enum ExecHostExecutor {
             cwd: request.cwd,
             envOverrides: request.env,
             agentId: request.agentId)
-    }
-
-    private static func persistAllowlistEntry(
-        decision: ExecApprovalDecision?,
-        context: ExecApprovalEvaluation) -> Result<Void, ExecApprovalsMutationError>
-    {
-        guard decision == .allowAlways,
-              context.security == .allowlist,
-              context.boundCommand != nil
-        else { return .success(()) }
-        var seenPatterns = Set<String>()
-        let entries = context.allowAlwaysPatterns.compactMap { pattern -> ExecAllowlistEntry? in
-            guard seenPatterns.insert(pattern).inserted else { return nil }
-            return ExecAllowlistEntry(
-                pattern: pattern,
-                source: "allow-always")
-        }
-        return ExecApprovalsStore.addAllowlistEntries(agentId: context.agentId, entries: entries)
-    }
-
-    private static func recordAllowlistMatches(
-        context: ExecApprovalEvaluation) -> Result<Void, ExecApprovalsMutationError>
-    {
-        guard context.allowlistSatisfied else { return .success(()) }
-        var seenEntries = Set<String>()
-        var uses: [ExecAllowlistUse] = []
-        for (idx, match) in context.allowlistMatches.enumerated() {
-            if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {
-                continue
-            }
-            let resolvedPath = idx < context.allowlistResolutions.count
-                ? context.allowlistResolutions[idx].resolvedRealPath ??
-                context.allowlistResolutions[idx].resolvedPath
-                : nil
-            uses.append(ExecAllowlistUse(match: match, resolvedPath: resolvedPath))
-        }
-        return ExecApprovalsStore.recordAllowlistUses(
-            agentId: context.agentId,
-            uses: uses,
-            command: context.displayCommand)
     }
 
     private static func approvalStoreErrorResponse() -> ExecHostResponse {
@@ -909,20 +889,10 @@ private enum ExecHostExecutor {
             reason: "permission:screenRecording")
     }
 
-    private static func runCommand(
-        command: [String],
-        cwd: String?,
-        env: [String: String]?,
-        timeoutMs: Int?) async -> ExecHostResponse
+    private static func commandResponse(
+        execution: Task<ShellExecutor.ShellResult, Never>) async -> ExecHostResponse
     {
-        let timeoutSec = timeoutMs.flatMap { Double($0) / 1000.0 }
-        let result = await Task.detached { () -> ShellExecutor.ShellResult in
-            await ShellExecutor.runDetailed(
-                command: command,
-                cwd: cwd,
-                env: env,
-                timeout: timeoutSec)
-        }.value
+        let result = await execution.value
         let payload = ExecHostRunResult(
             exitCode: result.exitCode,
             timedOut: result.timedOut,

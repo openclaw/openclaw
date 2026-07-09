@@ -84,6 +84,18 @@ struct ExecAllowlistTests {
         #expect(match?.pattern == entry.pattern)
     }
 
+    @Test func `match never treats durable command markers as executable patterns`() {
+        for marker in ["=command:0123456789abcdef", "=node-command:0123456789abcdef"] {
+            let entry = ExecAllowlistEntry(pattern: marker, source: "allow-always")
+            let resolution = ExecCommandResolution(
+                rawExecutable: marker,
+                resolvedPath: "/Users/test/.local/bin/\(marker)",
+                executableName: marker,
+                cwd: nil)
+            #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) == nil)
+        }
+    }
+
     @Test func `match ignores basename for path selected executable`() {
         let entry = ExecAllowlistEntry(pattern: "echo")
         let relativeResolution = ExecCommandResolution(
@@ -308,20 +320,32 @@ struct ExecAllowlistTests {
         #expect(bound == [first.path, "value"])
     }
 
-    @Test func `standard sh transport binds one static command directly`() {
-        for flag in ["-c", "-lc"] {
-            let payload = "/usr/bin/printf 'literal value'"
-            let command = ["/bin/sh", flag, payload]
-            let resolutions = ExecCommandResolution.resolveForAllowlist(
-                command: command,
-                rawCommand: payload,
-                cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"])
-            #expect(ExecCommandResolution.bindForAllowlistExecution(
-                command: command,
-                rawCommand: payload,
-                resolutions: resolutions) == ["/usr/bin/printf", "literal value"])
-        }
+    @Test func `standard non-login sh transport binds one static command directly`() {
+        let payload = "/usr/bin/printf 'literal value'"
+        let command = ["/bin/sh", "-c", payload]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: payload,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: payload,
+            resolutions: resolutions) == ["/usr/bin/printf", "literal value"])
+    }
+
+    @Test func `login sh transport remains one-shot because startup files are outside the binding`() {
+        let payload = "/usr/bin/printf 'literal value'"
+        let command = ["/bin/sh", "-lc", payload]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: payload,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: payload,
+            resolutions: resolutions) == nil)
     }
 
     @Test func `nonstandard shell wrappers never receive reusable execution binding`() {

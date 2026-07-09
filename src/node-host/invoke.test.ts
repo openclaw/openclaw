@@ -4,17 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
 const execApprovalsStoreMock = vi.hoisted(() => ({
-  ensureError: undefined as unknown,
+  ensureError: undefined as Error | undefined,
   ensureResult: undefined as unknown,
   hasEnsureResult: false,
-  updateError: undefined as unknown,
+  updateError: undefined as Error | undefined,
   updateResult: undefined as unknown,
   hasUpdateResult: false,
   updateCalls: 0,
@@ -454,6 +454,43 @@ describe("node host invoke", () => {
         },
       }),
     );
+  });
+
+  it("forwards suppressNotifyOnExit on completed system.run events", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+    try {
+      await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        saveExecApprovals({
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "deny" },
+        });
+        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "invoke-suppress-notify",
+            nodeId: "node-1",
+            command: "system.run",
+            paramsJSON: JSON.stringify({
+              command: [process.execPath, "-e", ""],
+              suppressNotifyOnExit: true,
+            }),
+          },
+          { request } as unknown as GatewayClient,
+          { current: async () => [] },
+        );
+
+        const event = request.mock.calls.find(
+          ([method, params]) =>
+            method === "node.event" &&
+            (params as { event?: string } | undefined)?.event === "exec.finished",
+        )?.[1] as { payloadJSON?: string | null } | undefined;
+        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
+          suppressNotifyOnExit: true,
+        });
+      });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("consumes a failed terminal response after approval resolution rejects", async () => {

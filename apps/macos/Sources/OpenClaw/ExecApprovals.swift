@@ -20,6 +20,16 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
         case .full: "Always Allow"
         }
     }
+
+    static func narrower(_ lhs: ExecSecurity, _ rhs: ExecSecurity) -> ExecSecurity {
+        if lhs == .deny || rhs == .deny {
+            return .deny
+        }
+        if lhs == .allowlist || rhs == .allowlist {
+            return .allowlist
+        }
+        return .full
+    }
 }
 
 enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
@@ -81,6 +91,18 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable, Sendable {
         case .off: "Never Ask"
         case .onMiss: "Ask on Allowlist Miss"
         case .always: "Always Ask"
+        }
+    }
+
+    static func stricter(_ lhs: ExecAsk, _ rhs: ExecAsk) -> ExecAsk {
+        lhs.strictnessRank >= rhs.strictnessRank ? lhs : rhs
+    }
+
+    private var strictnessRank: Int {
+        switch self {
+        case .off: 0
+        case .onMiss: 1
+        case .always: 2
         }
     }
 }
@@ -1094,34 +1116,271 @@ extension ExecApprovalsStore {
     }
 
     @discardableResult
+    static func commitExecution(
+        _ commit: ExecApprovalExecutionCommit) -> Result<Void, ExecApprovalsMutationError>
+    {
+        let grants: [ExecAllowlistUse] = switch commit.authorization {
+        case let .explicitAlways(_, _, grants):
+            grants
+        case .currentPolicy, .askFallback, .autoReview, .explicitOnce:
+            []
+        }
+        let normalizedGrants: [ExecAllowlistUse]
+        switch self.normalizeExecutionGrants(grants) {
+        case let .success(normalized):
+            normalizedGrants = normalized
+        case let .failure(error):
+            return .failure(error)
+        }
+        let authorizationUsesByKey = Dictionary(
+            commit.uses.map { (self.allowlistEntryMatchKey($0.match), $0) },
+            uniquingKeysWith: { first, _ in first })
+        let allUsesByKey = Dictionary(
+            (commit.uses + normalizedGrants).map { (self.allowlistEntryMatchKey($0.match), $0) },
+            uniquingKeysWith: { first, _ in first })
+
+        do {
+            try self.withWriteLock {
+                var file = try self.ensureFileUnlocked()
+                try self.assertCurrentExecutionAuthorization(
+                    file: file,
+                    agentId: commit.agentId,
+                    usesByKey: authorizationUsesByKey,
+                    authorization: commit.authorization)
+                let grantsChanged = self.applyAllowlistGrantsUnlocked(
+                    file: &file,
+                    agentId: commit.agentId,
+                    grants: normalizedGrants)
+                let usesChanged = self.applyAllowlistUsesUnlocked(
+                    file: &file,
+                    agentId: commit.agentId,
+                    usesByKey: allUsesByKey,
+                    command: commit.command)
+                if grantsChanged || usesChanged {
+                    try self.saveFileUnlocked(file)
+                }
+            }
+            return .success(())
+        } catch {
+            self.logger.error("exec approval execution commit failed: \(error.localizedDescription, privacy: .public)")
+            return .failure(.unavailable)
+        }
+    }
+
+    @discardableResult
     static func recordAllowlistUses(
         agentId: String?,
         uses: [ExecAllowlistUse],
-        command: String) -> Result<Void, ExecApprovalsMutationError>
+        command: String,
+        authorization: ExecApprovalAuthorization? = nil) -> Result<Void, ExecApprovalsMutationError>
     {
+        if let authorization {
+            return self.commitExecution(ExecApprovalExecutionCommit(
+                agentId: agentId,
+                command: command,
+                authorization: authorization,
+                uses: uses))
+        }
         guard !uses.isEmpty else { return .success(()) }
         let usesByKey = Dictionary(
             uses.map { (self.allowlistEntryMatchKey($0.match), $0) },
             uniquingKeysWith: { first, _ in first })
-        return self.updateFile { file in
-            let key = self.agentKey(agentId)
-            var agents = file.agents ?? [:]
-            var entry = agents[key] ?? ExecApprovalsAgent()
-            let allowlist = (entry.allowlist ?? []).map { item -> ExecAllowlistEntry in
+        do {
+            try self.withWriteLock {
+                var file = try self.ensureFileUnlocked()
+                if self.applyAllowlistUsesUnlocked(
+                    file: &file,
+                    agentId: agentId,
+                    usesByKey: usesByKey,
+                    command: command)
+                {
+                    try self.saveFileUnlocked(file)
+                }
+            }
+            return .success(())
+        } catch {
+            self.logger.error("exec approvals usage update failed: \(error.localizedDescription, privacy: .public)")
+            return .failure(.unavailable)
+        }
+    }
+
+    private static func normalizeExecutionGrants(
+        _ grants: [ExecAllowlistUse]) -> Result<[ExecAllowlistUse], ExecApprovalsMutationError>
+    {
+        var normalized: [ExecAllowlistUse] = []
+        normalized.reserveCapacity(grants.count)
+        for grant in grants {
+            switch ExecApprovalHelpers.validateAllowlistPattern(grant.match.pattern) {
+            case let .valid(pattern):
+                normalized.append(ExecAllowlistUse(
+                    match: ExecAllowlistEntry(
+                        id: grant.match.id,
+                        pattern: pattern,
+                        source: "allow-always",
+                        argPattern: self.normalizeOptionalString(grant.match.argPattern)),
+                    resolvedPath: grant.resolvedPath))
+            case let .invalid(reason):
+                return .failure(.invalidPattern(reason))
+            }
+        }
+        return .success(normalized)
+    }
+
+    private static func assertCurrentExecutionAuthorization(
+        file: ExecApprovalsFile,
+        agentId: String?,
+        usesByKey: [String: ExecAllowlistUse],
+        authorization: ExecApprovalAuthorization) throws
+    {
+        let current = self.resolveFromFile(file, agentId: agentId)
+        let currentKeys = Set(current.allowlist.map(self.allowlistEntryMatchKey))
+        let evaluatedSecurity: ExecSecurity
+        let evaluatedAsk: ExecAsk?
+        let basis: ExecApprovalAuthorization.Basis?
+        let appliesFallback: Bool
+        switch authorization {
+        case let .autoReview(security):
+            guard ExecSecurity.narrower(security, current.agent.security) != .deny,
+                  current.agent.ask != .always
+            else {
+                throw self.executionAuthorizationChangedError()
+            }
+            return
+        case let .explicitOnce(security):
+            guard ExecSecurity.narrower(security, current.agent.security) != .deny else {
+                throw self.executionAuthorizationChangedError()
+            }
+            return
+        case let .explicitAlways(security, policySnapshot, _):
+            let currentSnapshot = ExecApprovalPolicySnapshot(
+                security: current.agent.security,
+                ask: current.agent.ask,
+                askFallback: current.agent.askFallback,
+                autoAllowSkills: current.agent.autoAllowSkills,
+                allowlist: current.allowlist)
+            guard ExecSecurity.narrower(security, current.agent.security) != .deny,
+                  currentSnapshot == policySnapshot
+            else {
+                throw self.executionAuthorizationChangedError()
+            }
+            return
+        case let .currentPolicy(security, ask, authorizationBasis):
+            evaluatedSecurity = security
+            evaluatedAsk = ask
+            basis = authorizationBasis
+            appliesFallback = false
+        case let .askFallback(security, authorizationBasis):
+            evaluatedSecurity = security
+            evaluatedAsk = nil
+            basis = authorizationBasis
+            appliesFallback = true
+        }
+
+        let currentSecurity = ExecSecurity.narrower(evaluatedSecurity, current.agent.security)
+        let authorizationSecurity = appliesFallback
+            ? ExecSecurity.narrower(currentSecurity, current.agent.askFallback)
+            : currentSecurity
+        let currentAskAllowsExecution = evaluatedAsk.map {
+            ExecAsk.stricter($0, current.agent.ask) == $0
+        } ?? true
+        let basisIsCurrent: Bool = switch basis {
+        case .allowlistEntries:
+            !usesByKey.isEmpty && usesByKey.keys.allSatisfy { currentKeys.contains($0) }
+        case .autoAllowedSkill:
+            current.agent.autoAllowSkills
+        case nil:
+            false
+        }
+        let authorizationIsCurrent: Bool = switch authorizationSecurity {
+        case .deny:
+            false
+        case .full:
+            currentAskAllowsExecution && authorizationSecurity == evaluatedSecurity
+        case .allowlist:
+            currentAskAllowsExecution &&
+                authorizationSecurity == evaluatedSecurity &&
+                basisIsCurrent
+        }
+        guard authorizationIsCurrent else {
+            throw self.executionAuthorizationChangedError()
+        }
+    }
+
+    private static func executionAuthorizationChangedError() -> NSError {
+        NSError(domain: "ExecApprovals", code: 21, userInfo: [
+            NSLocalizedDescriptionKey: "exec approval changed before execution",
+        ])
+    }
+
+    private static func applyAllowlistGrantsUnlocked(
+        file: inout ExecApprovalsFile,
+        agentId: String?,
+        grants: [ExecAllowlistUse]) -> Bool
+    {
+        guard !grants.isEmpty else { return false }
+        let key = self.agentKey(agentId)
+        var agents = file.agents ?? [:]
+        var entry = agents[key] ?? ExecApprovalsAgent()
+        var allowlist = entry.allowlist ?? []
+        let now = Date().timeIntervalSince1970 * 1000
+        for grant in grants {
+            let incoming = grant.match
+            if let index = allowlist.firstIndex(where: {
+                self.allowlistEntryMatchKey($0) == self.allowlistEntryMatchKey(incoming)
+            }) {
+                allowlist[index].source = "allow-always"
+                allowlist[index].lastUsedAt = now
+                continue
+            }
+            allowlist.append(ExecAllowlistEntry(
+                pattern: incoming.pattern,
+                source: "allow-always",
+                argPattern: incoming.argPattern,
+                lastUsedAt: now))
+        }
+        entry.allowlist = allowlist
+        agents[key] = entry
+        file.agents = agents
+        return true
+    }
+
+    private static func applyAllowlistUsesUnlocked(
+        file: inout ExecApprovalsFile,
+        agentId: String?,
+        usesByKey: [String: ExecAllowlistUse],
+        command: String) -> Bool
+    {
+        guard !usesByKey.isEmpty else { return false }
+        let key = self.agentKey(agentId)
+        let targetKeys = key == "*" ? [key] : ["*", key]
+        let now = Date().timeIntervalSince1970 * 1000
+        var changed = false
+        var agents = file.agents ?? [:]
+        for targetKey in targetKeys {
+            guard var entry = agents[targetKey], let currentAllowlist = entry.allowlist else { continue }
+            var entryChanged = false
+            let allowlist = currentAllowlist.map { item -> ExecAllowlistEntry in
                 guard let use = usesByKey[self.allowlistEntryMatchKey(item)] else { return item }
+                entryChanged = true
                 return ExecAllowlistEntry(
                     id: item.id,
                     pattern: item.pattern,
                     source: item.source,
                     argPattern: item.argPattern,
-                    lastUsedAt: Date().timeIntervalSince1970 * 1000,
+                    lastUsedAt: now,
                     lastUsedCommand: command,
                     lastResolvedPath: use.resolvedPath)
             }
-            entry.allowlist = allowlist
-            agents[key] = entry
+            if entryChanged {
+                changed = true
+                entry.allowlist = allowlist
+                agents[targetKey] = entry
+            }
+        }
+        if changed {
             file.agents = agents
         }
+        return changed
     }
 
     @discardableResult

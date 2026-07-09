@@ -114,6 +114,48 @@ struct ExecApprovalsSocketAuthTests {
         #expect(result.exitCode == 0)
     }
 
+    @Test
+    func `socket serialization preserves timeout fallback provenance`() throws {
+        let request = ExecHostRequest(
+            command: ["/usr/bin/printf", "ok"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            approvalDecision: nil,
+            approvalSource: "ask-fallback")
+
+        let decoded = try JSONDecoder().decode(
+            ExecHostRequest.self,
+            from: JSONEncoder().encode(request))
+        #expect(decoded.approvalSource == "ask-fallback")
+        #expect(decoded.approvalDecision == nil)
+    }
+
+    @Test
+    func `socket serialization preserves marker only auto review provenance`() throws {
+        let request = ExecHostRequest(
+            command: ["/usr/bin/printf", "ok"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            approvalDecision: nil,
+            approvalSource: "auto-review")
+
+        let decoded = try JSONDecoder().decode(
+            ExecHostRequest.self,
+            from: JSONEncoder().encode(request))
+        #expect(decoded.approvalSource == "auto-review")
+        #expect(decoded.approvalDecision == nil)
+    }
+
     private struct EncodedExecHostResponse: Codable {
         var type: String
         var id: String

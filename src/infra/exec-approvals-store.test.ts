@@ -19,6 +19,7 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let ensureExecApprovalsSnapshot: ExecApprovalsModule["ensureExecApprovalsSnapshot"];
+let commitExecAuthorization: ExecApprovalsModule["commitExecAuthorizationLocked"];
 let loadExecApprovals: ExecApprovalsModule["loadExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
@@ -46,6 +47,7 @@ beforeAll(async () => {
   const module = await import("./exec-approvals.js");
   ensureExecApprovals = module.ensureExecApprovals;
   ensureExecApprovalsSnapshot = module.ensureExecApprovalsSnapshot;
+  commitExecAuthorization = module.commitExecAuthorizationLocked;
   loadExecApprovals = module.loadExecApprovals;
   mergeExecApprovalsSocketDefaults = module.mergeExecApprovalsSocketDefaults;
   normalizeExecApprovals = module.normalizeExecApprovals;
@@ -648,6 +650,58 @@ describe("exec approvals store helpers", () => {
     expect(resolved.token).toBe("");
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
     expect(fs.existsSync(stateDir)).toBe(false);
+  });
+
+  it.each([
+    {
+      mode: "sync",
+      resolve: async () =>
+        resolveExecApprovalsSync("main", {
+          security: "full",
+          ask: "off",
+        }),
+    },
+    {
+      mode: "async",
+      resolve: async () =>
+        await resolveExecApprovals("main", {
+          security: "full",
+          ask: "off",
+        }),
+    },
+  ])("re-reads policy created after the final lock probe ($mode)", async ({ resolve }) => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const stateDir = path.dirname(approvalsPath);
+    fs.mkdirSync(stateDir, { recursive: true });
+    const restrictivePolicy = `${JSON.stringify(
+      {
+        version: 1,
+        defaults: { security: "deny", ask: "off" },
+        agents: {},
+      },
+      null,
+      2,
+    )}\n`;
+    const realpathSync = fs.realpathSync.bind(fs);
+    let stateDirProbeCount = 0;
+    vi.spyOn(fs, "realpathSync").mockImplementation((target) => {
+      const resolved = realpathSync(target);
+      if (path.normalize(String(target)) === path.normalize(stateDir)) {
+        stateDirProbeCount += 1;
+        if (stateDirProbeCount === 2) {
+          // Simulate a writer that observed the old lock as absent, then fully
+          // committed a restrictive file before the reader's target probe.
+          fs.writeFileSync(approvalsPath, restrictivePolicy, "utf8");
+        }
+      }
+      return resolved;
+    });
+
+    const resolved = await resolve();
+
+    expect(stateDirProbeCount).toBeGreaterThanOrEqual(2);
+    expect(resolved.agent).toMatchObject({ security: "deny", ask: "off" });
   });
 
   it("fails closed when a writer locks the store before creating the policy file", () => {
@@ -1383,6 +1437,435 @@ describe("exec approvals store helpers", () => {
     const persisted = readApprovalsFile(dir);
     expect(persisted.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(persisted.agents?.main?.allowlist).toEqual([{ pattern: "/usr/bin/jq", id: "jq-id" }]);
+  });
+
+  it("rejects reusable execution after its current approval is revoked", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off" },
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", id: "rg-id" }] } },
+      }),
+    );
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        agents: { ...current.agents, main: { allowlist: [] } },
+      }),
+    });
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg", id: "rg-id" }],
+        command: "rg needle",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([]);
+  });
+
+  it("rejects reusable execution when current policy changes to deny", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny", ask: "off" },
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", id: "rg-id" }] } },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg", id: "rg-id" }],
+        command: "rg needle",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(readApprovalsFile(dir).agents?.main?.allowlist?.[0]?.lastUsedAt).toBeUndefined();
+  });
+
+  it("rejects reusable execution after its exact-command approval is revoked", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off" },
+        agents: { main: { allowlist: [] } },
+      }),
+    );
+    const command = "printf exact-command";
+    await persistAllowAlwaysDecision({
+      agentId: "main",
+      decision: { kind: "exact-command", commandText: command },
+    });
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        agents: { ...current.agents, main: { allowlist: [] } },
+      }),
+    });
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [],
+        command,
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: false,
+          requireExactCommandApproval: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects reusable skill execution after autoAllowSkills is removed", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off" },
+        agents: { main: {} },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [],
+        command: "skill-tool",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+          requireAutoAllowSkills: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects timed-out execution after askFallback is revoked", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full", ask: "on-miss", askFallback: "deny" },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [],
+        command: "printf fallback",
+        authorization: {
+          source: "ask-fallback",
+          security: "full",
+          ask: "on-miss",
+          allowlistSatisfied: false,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects a full fallback when current policy tightens to allowlist", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "allowlist" },
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg" }],
+        command: "rg needle",
+        authorization: {
+          source: "ask-fallback",
+          security: "full",
+          ask: "always",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("accepts a current full askFallback after an always-ask timeout", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "full" },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [],
+        command: "printf fallback",
+        authorization: {
+          source: "ask-fallback",
+          security: "full",
+          ask: "always",
+          allowlistSatisfied: false,
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects an allowlist askFallback after its matched entry is revoked", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "allowlist" },
+        agents: { main: { allowlist: [] } },
+      }),
+    );
+
+    await expect(
+      recordAllowlistMatchesUse({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg" }],
+        command: "rg needle",
+        authorization: {
+          source: "ask-fallback",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects an explicit approval after policy changes to deny without persisting its grant", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "deny", ask: "off" },
+      agents: { main: { allowlist: [] } },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: false,
+        },
+        allowAlwaysDecision: {
+          kind: "exact-command",
+          commandText: "printf approved",
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
+  it("commits an explicit allow-always grant after current-policy authorization", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "always" },
+      agents: { main: { allowlist: [] } },
+    });
+
+    await commitExecAuthorization({
+      agentId: "main",
+      matches: [],
+      command: "printf approved",
+      authorization: {
+        source: "explicit-approval",
+        security: "allowlist",
+        ask: "always",
+        allowlistSatisfied: false,
+      },
+      allowAlwaysDecision: {
+        kind: "exact-command",
+        commandText: "printf approved",
+      },
+    });
+
+    expect(allowlistEntries(dir, "main")).toEqual([
+      expect.objectContaining({
+        pattern: expect.stringMatching(/^=command:/),
+        source: "allow-always",
+      }),
+    ]);
+  });
+
+  it("does not let current policy create an allow-always grant", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: { allowlist: [] } },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf full",
+        authorization: {
+          source: "current-policy",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+        },
+        allowAlwaysDecision: {
+          kind: "exact-command",
+          commandText: "printf full",
+        },
+      }),
+    ).rejects.toThrow("Allow-always persistence requires explicit approval");
+    expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
+  it("rejects unprompted full execution after policy changes to deny", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "deny", ask: "off" },
+      agents: { main: {} },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf full",
+        authorization: {
+          source: "current-policy",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(readApprovalsFile(dir).defaults?.security).toBe("deny");
+  });
+
+  it("rejects unprompted full execution after ask tightens to on-miss", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "on-miss" },
+      agents: { main: {} },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf full",
+        authorization: {
+          source: "current-policy",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects auto-review when current policy changes to always ask", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "always" },
+      agents: { main: {} },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf reviewed",
+        authorization: {
+          source: "auto-review",
+          security: "full",
+          ask: "on-miss",
+          allowlistSatisfied: false,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects a durable grant after its source is downgraded", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: {
+        main: { allowlist: [{ pattern: "/usr/bin/rg", source: "manual" }] },
+      },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg", source: "allow-always" }],
+        command: "rg needle",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+          requireDurableAllowlistApproval: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(allowlistEntries(dir, "main")).toEqual([{ pattern: "/usr/bin/rg", source: "manual" }]);
   });
 
   it("persists allow-always patterns with shared helper", () => {

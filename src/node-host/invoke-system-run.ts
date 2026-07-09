@@ -9,17 +9,18 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
+  hasExactCommandDurableExecApproval,
   maxAsk,
   minSecurity,
-  persistAllowAlwaysDecisionLocked,
-  recordAllowlistMatchesUseLocked,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
+  type ExecApprovalUsageAuthorization,
   type ExecApprovalsResolved,
   type ExecAsk,
   type ExecCommandSegment,
@@ -102,6 +103,7 @@ type SystemRunParsePhase = {
   runId: string;
   execution: SystemRunExecutionContext;
   approvalDecision: ReturnType<typeof resolveExecApprovalDecision>;
+  approvalSource: "ask-fallback" | "auto-review" | undefined;
   envOverrides: Record<string, string> | undefined;
   env: Record<string, string> | undefined;
   cwd: string | undefined;
@@ -116,12 +118,14 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   security: ExecSecurity;
   ask: ExecAsk;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
+  approvalGrantSource: "explicit-approval" | "auto-review" | null;
   durableApprovalSatisfied: boolean;
   strictInlineEval: boolean;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  allowlistAuthorizationSatisfied: boolean;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
   trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
@@ -279,8 +283,7 @@ export type HandleSystemRunInvokeOptions = {
   preferMacAppExecHost: boolean;
   getRuntimeConfig?: () => OpenClawConfig;
   autoReviewer?: ExecAutoReviewer;
-  persistAllowAlwaysDecision?: typeof persistAllowAlwaysDecisionLocked;
-  recordAllowlistMatchesUse?: typeof recordAllowlistMatchesUseLocked;
+  commitExecAuthorization?: typeof commitExecAuthorizationLocked;
 };
 
 async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
@@ -386,9 +389,57 @@ async function parseSystemRunPhase(
     return null;
   }
   const agentId = normalizeOptionalString(opts.params.agentId);
-  const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
+  const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
+  const sessionKey = requestedSessionKey ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
+  const cwd = normalizeOptionalString(opts.params.cwd);
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const approvalSource = opts.params.approvalSource;
+  if (
+    approvalSource != null &&
+    approvalSource !== "ask-fallback" &&
+    approvalSource !== "auto-review"
+  ) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "approvalSource invalid" },
+    });
+    return null;
+  }
+  const approvalDecision = resolveExecApprovalDecision(opts.params.approvalDecision);
+  const approved = opts.params.approved === true;
+  if (
+    approvalSource != null &&
+    (opts.params.approved !== undefined || opts.params.approvalDecision !== undefined)
+  ) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "approvalSource cannot be combined with explicit approval",
+      },
+    });
+    return null;
+  }
+  if (approvalSource != null) {
+    const planMatchesRequest =
+      approvalPlan !== null &&
+      argvArraysMatch(approvalPlan.argv, command.argv) &&
+      approvalPlan.commandText === commandText &&
+      normalizeOptionalString(approvalPlan.cwd) === cwd &&
+      normalizeOptionalString(approvalPlan.agentId) === agentId &&
+      normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
+    if (!planMatchesRequest) {
+      await opts.sendInvokeResult({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "approvalSource requires matching systemRunPlan",
+        },
+      });
+      return null;
+    }
+  }
   const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
   const envAssignmentOverrides =
     envAssignmentKeys.length > 0
@@ -453,13 +504,14 @@ async function parseSystemRunPhase(
     sessionKey,
     runId,
     execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
-    approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
+    approvalDecision,
+    approvalSource: approvalSource ?? undefined,
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
-    cwd: normalizeOptionalString(opts.params.cwd),
+    cwd,
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
-    approved: opts.params.approved === true,
+    approved,
     suppressNotifyOnExit,
   };
 }
@@ -476,7 +528,14 @@ async function evaluateSystemRunPolicyPhase(
     defaultAsk: opts.resolveExecAsk(undefined),
     requireSocket: opts.preferMacAppExecHost,
   });
-  const { agentExec, globalExec, approvals, security, ask } = effectivePolicy;
+  const { agentExec, globalExec, approvals } = effectivePolicy;
+  const baseSecurity = effectivePolicy.security;
+  const baseAsk = effectivePolicy.ask;
+  const fallbackRequest = parsed.approvalSource === "ask-fallback";
+  const security = fallbackRequest
+    ? minSecurity(baseSecurity, approvals.agent.askFallback)
+    : baseSecurity;
+  const ask = fallbackRequest ? "off" : baseAsk;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
@@ -497,8 +556,13 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
-  const { allowlistMatches, segments, segmentAllowlistEntries, segmentSatisfiedBy } =
-    allowlistEvaluation;
+  const {
+    allowlistMatches,
+    allowlistAuthorizationSatisfied,
+    segments,
+    segmentAllowlistEntries,
+    segmentSatisfiedBy,
+  } = allowlistEvaluation;
   let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
@@ -518,7 +582,13 @@ async function evaluateSystemRunPolicyPhase(
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
-  let approvalDecision = parsed.approvalDecision;
+  const forwardedAutoReview = parsed.approvalSource === "auto-review";
+  let approvalDecision = forwardedAutoReview ? "allow-once" : parsed.approvalDecision;
+  let approvalGrantSource: SystemRunPolicyPhase["approvalGrantSource"] = forwardedAutoReview
+    ? "auto-review"
+    : parsed.approved || approvalDecision !== null
+      ? "explicit-approval"
+      : null;
   let policy = evaluateSystemRunPolicy({
     security,
     ask,
@@ -539,7 +609,14 @@ async function evaluateSystemRunPolicyPhase(
       cwd: parsed.cwd,
       env: parsed.env,
       segments,
-    }) && !(security === "full" && ask === "off");
+    }) && !(baseSecurity === "full" && baseAsk === "off" && !fallbackRequest);
+  if (forwardedAutoReview && requiresSecurityAuditSuppressionApproval) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message: "SYSTEM_RUN_DENIED: explicit approval required",
+    });
+    return null;
+  }
   if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
     policy = {
       allowed: false,
@@ -584,6 +661,7 @@ async function evaluateSystemRunPolicyPhase(
         ? autoReviewSegment?.argv
         : undefined;
     const canAutoReviewApprovalMiss =
+      !fallbackRequest &&
       effectivePolicy.autoReview &&
       ask !== "always" &&
       analysisOk &&
@@ -621,6 +699,7 @@ async function evaluateSystemRunPolicyPhase(
       });
       if (decision.decision === "allow-once") {
         approvalDecision = "allow-once";
+        approvalGrantSource = "auto-review";
         policy = evaluateSystemRunPolicy({
           security,
           ask,
@@ -656,8 +735,9 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
+  const approvalContextBound = policy.approvedByAsk || fallbackRequest;
   const hardenedPaths = hardenApprovedExecutionPaths({
-    approvedByAsk: policy.approvedByAsk,
+    approvedByAsk: approvalContextBound,
     argv: parsed.argv,
     shellCommand: parsed.shellPayload,
     cwd: parsed.cwd,
@@ -669,8 +749,8 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
-  const approvedCwdSnapshot = policy.approvedByAsk ? hardenedPaths.approvedCwdSnapshot : undefined;
-  if (policy.approvedByAsk && hardenedPaths.cwd && !approvedCwdSnapshot) {
+  const approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
+  if (approvalContextBound && hardenedPaths.cwd && !approvedCwdSnapshot) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
@@ -700,12 +780,14 @@ async function evaluateSystemRunPolicyPhase(
     security,
     ask,
     policy,
+    approvalGrantSource,
     durableApprovalSatisfied,
     strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
+    allowlistAuthorizationSatisfied,
     safeBins,
     safeBinProfiles,
     trustedSafeBinDirs,
@@ -720,10 +802,10 @@ async function evaluateSystemRunPolicyPhase(
   };
 }
 
-async function executeSystemRunPhase(
+async function revalidateSystemRunApprovedPathBindings(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
-): Promise<void> {
+): Promise<boolean> {
   if (
     phase.approvedCwdSnapshot &&
     !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
@@ -733,6 +815,31 @@ async function executeSystemRunPhase(
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
     });
+    return false;
+  }
+  if (
+    phase.approvalPlan?.mutableFileOperand &&
+    !revalidateApprovedMutableFileOperand({
+      snapshot: phase.approvalPlan.mutableFileOperand,
+      argv: phase.argv,
+      cwd: phase.cwd,
+    })
+  ) {
+    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+    });
+    return false;
+  }
+  return true;
+}
+
+async function executeSystemRunPhase(
+  opts: HandleSystemRunInvokeOptions,
+  phase: SystemRunPolicyPhase,
+): Promise<void> {
+  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }
   const expectedMutableFileOperand = phase.approvalPlan
@@ -758,22 +865,6 @@ async function executeSystemRunPhase(
     });
     return;
   }
-  if (
-    phase.approvalPlan?.mutableFileOperand &&
-    !revalidateApprovedMutableFileOperand({
-      snapshot: phase.approvalPlan.mutableFileOperand,
-      argv: phase.argv,
-      cwd: phase.cwd,
-    })
-  ) {
-    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-    });
-    return;
-  }
-
   const execArgv = await resolveSystemRunExecArgv({
     plannedAllowlistArgv: phase.plannedAllowlistArgv,
     argv: phase.argv,
@@ -803,6 +894,9 @@ async function executeSystemRunPhase(
 
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
+    const macApprovalSource =
+      phase.approvalSource ??
+      (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
     const execRequest: ExecHostRequest = {
       command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
@@ -814,7 +908,8 @@ async function executeSystemRunPhase(
       needsScreenRecording: phase.needsScreenRecording,
       agentId: phase.agentId ?? null,
       sessionKey: phase.sessionKey ?? null,
-      approvalDecision: phase.approvalDecision,
+      approvalDecision: macApprovalSource ? null : phase.approvalDecision,
+      approvalSource: macApprovalSource,
     };
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
@@ -841,11 +936,39 @@ async function executeSystemRunPhase(
     }
   }
 
-  try {
-    if (phase.policy.approvalDecision === "allow-always") {
-      await (opts.persistAllowAlwaysDecision ?? persistAllowAlwaysDecisionLocked)({
-        agentId: phase.agentId,
-        decision: resolveAllowAlwaysPersistenceDecision({
+  if (phase.needsScreenRecording) {
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "permission:screenRecording",
+      message: "PERMISSION_MISSING: screenRecording",
+    });
+    return;
+  }
+
+  const exactCommandDurableApproval =
+    phase.durableApprovalSatisfied &&
+    !phase.allowlistAuthorizationSatisfied &&
+    hasExactCommandDurableExecApproval({
+      allowlist: phase.approvals.allowlist,
+      commandText: phase.commandText,
+    });
+  const authorizationSource: ExecApprovalUsageAuthorization["source"] =
+    phase.approvalSource === "ask-fallback"
+      ? "ask-fallback"
+      : phase.approvalSource === "auto-review"
+        ? "auto-review"
+        : (phase.approvalGrantSource ?? "current-policy");
+  const authorization: ExecApprovalUsageAuthorization = {
+    source: authorizationSource,
+    security: phase.security,
+    ask: phase.ask,
+    allowlistSatisfied: phase.allowlistAuthorizationSatisfied || phase.durableApprovalSatisfied,
+    requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
+    requireExactCommandApproval: exactCommandDurableApproval,
+    requireDurableAllowlistApproval: phase.durableApprovalSatisfied && !exactCommandDurableApproval,
+  };
+  const allowAlwaysDecision =
+    phase.policy.approvalDecision === "allow-always"
+      ? resolveAllowAlwaysPersistenceDecision({
           segments: phase.segments,
           cwd: phase.cwd,
           env: phase.env,
@@ -854,15 +977,17 @@ async function executeSystemRunPhase(
           strictInlineEval: phase.strictInlineEval,
           authorizationPlan: phase.authorizationPlan,
           runtimePayload: phase.inlineEvalHit !== null,
-        }),
-      });
-    }
+        })
+      : undefined;
 
-    await (opts.recordAllowlistMatchesUse ?? recordAllowlistMatchesUseLocked)({
+  try {
+    await (opts.commitExecAuthorization ?? commitExecAuthorizationLocked)({
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,
       resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
+      authorization,
+      ...(allowAlwaysDecision ? { allowAlwaysDecision } : {}),
     });
   } catch {
     // Approval state is part of the authorization boundary. Never execute after
@@ -876,11 +1001,9 @@ async function executeSystemRunPhase(
     return;
   }
 
-  if (phase.needsScreenRecording) {
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "permission:screenRecording",
-      message: "PERMISSION_MISSING: screenRecording",
-    });
+  // Policy commit can yield to another invocation or process. Recheck the
+  // approval-bound cwd and mutable operand immediately before local spawn.
+  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }
 
