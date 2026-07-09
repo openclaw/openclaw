@@ -518,6 +518,9 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
+  // Once an output delta crosses the transcript cap, later deltas must not fill
+  // UTF-16 capacity recovered by backing up over a split surrogate pair.
+  private readonly toolResultOutputTruncatedItemIds = new Set<string>();
   private readonly toolMetas = new Map<
     string,
     { toolName: string; meta?: string; asyncStarted?: boolean }
@@ -1363,7 +1366,12 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta) {
       return;
     }
-    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    appendToolOutputDeltaText(
+      this.toolResultOutputTextByItem,
+      this.toolResultOutputTruncatedItemIds,
+      itemId,
+      delta,
+    );
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -2539,7 +2547,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
   return isJsonObject(error) ? readString(error, "message") : undefined;
@@ -3029,16 +3036,25 @@ function itemTranscriptResultText(
 
 function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
+  truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
 ): void {
+  if (truncatedItemIds.has(itemId)) {
+    return;
+  }
   const current = outputTextByItem.get(itemId) ?? "";
   if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    truncatedItemIds.add(itemId);
     return;
   }
   const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
-  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
+  const didTruncate = delta.length > remaining;
+  const next = current + (didTruncate ? truncateUtf16Safe(delta, remaining) : delta);
   outputTextByItem.set(itemId, next);
+  if (didTruncate) {
+    truncatedItemIds.add(itemId);
+  }
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
