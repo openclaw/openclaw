@@ -422,11 +422,12 @@ const hooksModelCheck: HealthCheck = {
   },
 };
 
-const legacyStateCheck: HealthCheck = {
+const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-state",
   kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
   source: "doctor",
+  defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
@@ -874,12 +875,15 @@ const browserCheck: HealthCheck = {
   },
 };
 
-function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createSkillsReadinessCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
     source: "doctor",
+    defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
         await deps.detectUnavailableSkills(ctx.cfg),

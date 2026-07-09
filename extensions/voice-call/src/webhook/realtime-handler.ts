@@ -45,7 +45,7 @@ import {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
 };
-export type ToolHandlerFn = (
+type ToolHandlerFn = (
   args: unknown,
   callId: string,
   context: ToolHandlerContext,
@@ -243,7 +243,7 @@ type PendingStreamToken = {
   callId?: string;
 };
 
-export type StreamSessionRequest = {
+type StreamSessionRequest = {
   providerName?: "twilio" | "telnyx";
   callId?: string;
   from?: string;

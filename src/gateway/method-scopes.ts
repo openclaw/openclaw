@@ -98,6 +98,13 @@ function resolveSessionsPatchRequiredScopes(params: unknown): OperatorScope[] {
   return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
 }
 
+function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [WRITE_SCOPE];
+  }
+  return Object.hasOwn(params, "cwd") ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+}
+
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return undefined;
@@ -149,6 +156,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
+  }
+  if (method === "sessions.create") {
+    return resolveSessionsCreateRequiredScopes(params);
   }
   if (method === "sessions.delete") {
     return resolveSessionsDeleteRequiredScopes(params);
@@ -220,6 +230,13 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
+    if (method === "sessions.create") {
+      const missingScope = findMissingOperatorScope(
+        resolveSessionsCreateRequiredScopes(params),
+        scopes,
+      );
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    }
     if (method === "sessions.patch") {
       const missingScope = findMissingOperatorScope(
         resolveSessionsPatchRequiredScopes(params),

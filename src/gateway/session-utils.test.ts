@@ -2560,6 +2560,11 @@ describe("deriveSessionTitle", () => {
     expect(result.endsWith("…")).toBe(true);
   });
 
+  test("keeps a derived title valid when the limit bisects an emoji", () => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now() } as SessionEntry;
+    expect(deriveSessionTitle(entry, `${"t".repeat(58)}🚀 extra`)).toBe(`${"t".repeat(58)}…`);
+  });
+
   test("truncates at word boundary when possible", () => {
     const entry = {
       sessionId: "abc123",
