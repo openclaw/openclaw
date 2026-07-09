@@ -119,6 +119,12 @@ async function runProcess(
     appendProcessChunk(managed, managed.tty ? "pty" : "stdout", chunk),
   );
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
+  const onStreamError = (error: Error) => {
+    managed.failure = error.message;
+    emitProcessClosed(managed, null);
+  };
+  child.stdout.on("error", onStreamError);
+  child.stderr.on("error", onStreamError);
   child.once("error", (error) => {
     managed.failure = error.message;
     emitProcessClosed(managed, null);
