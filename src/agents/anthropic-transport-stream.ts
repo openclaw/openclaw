@@ -339,6 +339,18 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
+function sanitizeAnthropicImageMediaType(mimeType: string): string {
+  if (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  ) {
+    return mimeType;
+  }
+  return "image/png";
+}
+
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
@@ -376,7 +388,9 @@ function convertContentBlocks(content: readonly unknown[]) {
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        media_type: sanitizeAnthropicImageMediaType(
+          typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        ),
         data: typeof record.data === "string" ? record.data : "",
       },
     });
@@ -441,7 +455,7 @@ function convertAnthropicMessages(
               type: "image",
               source: {
                 type: "base64",
-                media_type: item.mimeType,
+                media_type: sanitizeAnthropicImageMediaType(item.mimeType),
                 data: item.data,
               },
             },

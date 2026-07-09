@@ -147,6 +147,18 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
+function sanitizeAnthropicImageMediaType(mimeType: string): string {
+  if (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  ) {
+    return mimeType;
+  }
+  return "image/png";
+}
+
 function convertContentBlocks(
   content: readonly unknown[],
   isError: boolean,
@@ -209,11 +221,9 @@ function convertContentBlocks(
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp",
+        media_type: sanitizeAnthropicImageMediaType(
+          typeof record.mimeType === "string" ? record.mimeType : "image/jpeg",
+        ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
         data: typeof record.data === "string" ? record.data : "",
       },
     });
@@ -1475,7 +1485,11 @@ function convertMessages(
             type: "image",
             source: {
               type: "base64",
-              media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+              media_type: sanitizeAnthropicImageMediaType(item.mimeType) as
+                | "image/jpeg"
+                | "image/png"
+                | "image/gif"
+                | "image/webp",
               data: item.data,
             },
           };
