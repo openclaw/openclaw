@@ -275,7 +275,7 @@ function requireExecApprovalsBaseHash(
 // When the spawn cwd is set but is not a usable directory, name the real cause.
 // Diagnostic only: the run still fails closed — the cwd is never dropped to fall
 // back to the node's default directory.
-export function clarifyNodeExecCwdSpawnError(
+function clarifyNodeExecCwdSpawnError(
   error: NodeJS.ErrnoException,
   cwd: string | undefined,
 ): string {
@@ -283,22 +283,27 @@ export function clarifyNodeExecCwdSpawnError(
   if (!cwd || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
     return message;
   }
-  let stats: fs.Stats | undefined;
+  let reason: "does not exist" | "is not a directory";
   try {
-    stats = fs.statSync(cwd);
-  } catch {
-    stats = undefined;
+    const stats = fs.statSync(cwd);
+    // An existing directory means the cwd is fine and the ENOENT is about the
+    // executable itself; leave the original message untouched.
+    if (stats.isDirectory()) {
+      return message;
+    }
+    reason = "is not a directory";
+  } catch (statError) {
+    const statCode = (statError as NodeJS.ErrnoException).code;
+    if (statCode !== "ENOENT" && statCode !== "ENOTDIR") {
+      return message;
+    }
+    reason =
+      statCode === "ENOTDIR" || error.code === "ENOTDIR" ? "is not a directory" : "does not exist";
   }
-  // An existing directory means the cwd is fine and the ENOENT is about the
-  // executable itself; leave the original message untouched.
-  if (stats?.isDirectory()) {
-    return message;
-  }
-  const reason = stats ? "is not a directory" : "does not exist";
   return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
 }
 
-export async function runCommand(
+async function runCommand(
   argv: string[],
   cwd: string | undefined,
   env: Record<string, string> | undefined,
@@ -856,5 +861,6 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
 
 export const testing = {
   STREAM_ERROR_KILL_GRACE_MS,
+  clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
