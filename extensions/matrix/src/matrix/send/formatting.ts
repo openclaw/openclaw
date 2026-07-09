@@ -1,4 +1,5 @@
 // Matrix helper module supports formatting behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixHtml,
@@ -157,7 +158,10 @@ export function buildThreadRelation(threadId: string, replyToId?: string): Matri
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
-  const kind = getCore().media.mediaKindFromMime(contentType ?? "");
+  // MIME types are case-insensitive (RFC 2045 §5.1); the outbound contentType can be a raw
+  // HTTP Content-Type header, so lowercase before the case-sensitive mediaKindFromMime prefix
+  // checks or mixed-case image/audio/video would misclassify and degrade to MsgType.File.
+  const kind = getCore().media.mediaKindFromMime(normalizeLowercaseStringOrEmpty(contentType));
   switch (kind) {
     case "image":
       return MsgType.Image;
