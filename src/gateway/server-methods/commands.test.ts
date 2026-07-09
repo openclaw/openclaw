@@ -564,6 +564,33 @@ describe("commands.list handler", () => {
     }
   });
 
+  it("clamps a description without splitting a trailing surrogate pair", () => {
+    const originalCommands = [...mockChatCommands];
+    // U+1F600 is a surrogate pair; place it so it straddles the clamp limit.
+    const description = `${"d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1)}😀`;
+    try {
+      mockChatCommands.length = 0;
+      mockChatCommands.push({
+        key: "surrogate_boundary",
+        nativeName: "surrogate_boundary",
+        description,
+        textAliases: ["/surrogate_boundary"],
+        scope: "both",
+        category: "tools",
+      });
+
+      const clamped = requireCommand(listCommands(), "surrogate_boundary").description as string;
+
+      expect(clamped.length).toBeLessThanOrEqual(COMMAND_DESCRIPTION_MAX_LENGTH);
+      const lastUnit = clamped.charCodeAt(clamped.length - 1);
+      // A raw slice would leave a dangling high surrogate at the boundary.
+      expect(lastUnit >= 0xd800 && lastUnit <= 0xdbff).toBe(false);
+    } finally {
+      mockChatCommands.length = 0;
+      mockChatCommands.push(...originalCommands);
+    }
+  });
+
   it("rejects unknown agentId", () => {
     const { ok, error } = callHandler({ agentId: "nonexistent" });
     expect(ok).toBe(false);
