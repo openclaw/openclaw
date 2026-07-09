@@ -24,6 +24,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
+  "meta-model-api": ["MODEL_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
   "qwen-dashscope": ["DASHSCOPE_API_KEY"],
 } as const;
