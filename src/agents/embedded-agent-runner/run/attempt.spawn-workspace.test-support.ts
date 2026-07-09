@@ -339,6 +339,7 @@ vi.mock("../../sessions/index.js", () => {
     ModelRegistry,
     SessionManager: {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+      openCompactedTail: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
 });

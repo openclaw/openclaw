@@ -528,7 +528,8 @@ function isCurrentSessionHeader(header: SessionHeader | undefined): header is Se
 function tailEntriesRequireEarlierCursor(entries: readonly FileEntry[]): boolean {
   return entries.some(
     (entry) =>
-      isIndexedSessionEntry(entry) && !Object.hasOwn(entry as Record<string, unknown>, "parentId"),
+      isIndexedSessionEntry(entry) &&
+      !Object.hasOwn(entry as unknown as Record<string, unknown>, "parentId"),
   );
 }
 
