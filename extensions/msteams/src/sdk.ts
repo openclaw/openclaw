@@ -178,7 +178,7 @@ export type MSTeamsApp = {
  * Token provider compatible with the existing codebase, wrapping the Teams
  * SDK App's public tokenManager.
  */
-export type MSTeamsTokenProvider = {
+type MSTeamsTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -235,7 +235,7 @@ export async function createMSTeamsExpressAdapter(
 /**
  * Options for creating a Teams SDK App instance.
  */
-export type CreateMSTeamsAppOptions = {
+type CreateMSTeamsAppOptions = {
   /**
    * HTTP server adapter to use. When an Express app is available (monitor
    * mode), pass an ExpressAdapter so the SDK registers routes and handles

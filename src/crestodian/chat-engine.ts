@@ -23,6 +23,7 @@ import {
   parseCrestodianOperation,
   type CrestodianCommandDeps,
   type CrestodianOperation,
+  type CrestodianOperationResult,
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 
@@ -53,6 +54,11 @@ export type CrestodianChatEngineOptions = {
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: (channel: string, prompter: WizardPrompterLike) => Promise<void>;
+  /** Test seam for model-provider setup hosted by gateway chat. */
+  runModelSetupWizard?: (
+    workspace: string | undefined,
+    prompter: WizardPrompterLike,
+  ) => Promise<void>;
 };
 
 export type CrestodianChatReplyAction = "none" | "exit" | "open-tui";
@@ -62,7 +68,7 @@ export type CrestodianChatReply = {
   action: CrestodianChatReplyAction;
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
-  /** Present when action is "open-tui"; the TUI host executes it. */
+  /** Present when the host must leave chat for an interactive handoff. */
   handoff?: CrestodianOperation;
 };
 
@@ -71,6 +77,7 @@ type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
+  kind: "channel" | "model";
   label: string;
   /** Channel to auto-answer in the first selection step ("connect telegram"). */
   autoSelectChannel?: string;
@@ -79,6 +86,15 @@ type ActiveWizardBridge = {
 type CaptureRuntime = RuntimeEnv & {
   read: () => string;
 };
+
+function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  return {
+    ...runtime,
+    exit: (code): never => {
+      throw new Error(`hosted wizard exited with code ${String(code)}`);
+    },
+  };
+}
 
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
@@ -110,10 +126,12 @@ function defaultChannelSetupWizardRunner(
     const snapshot = await readSetupConfigFileSnapshot();
     const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const { defaultRuntime } = await import("../runtime.js");
+    const runtime = createHostedWizardRuntime(defaultRuntime);
     const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
-    const nextConfig = await setupChannels(baseConfig, defaultRuntime, prompter, {
+    const nextConfig = await setupChannels(baseConfig, runtime, prompter, {
       initialSelection: [channel],
       forceAllowFromChannels: [channel],
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       deferStatusUntilSelection: true,
       quickstartDefaults: true,
@@ -127,7 +145,23 @@ function defaultChannelSetupWizardRunner(
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
       cfg: committedConfig,
-      runtime: defaultRuntime,
+      runtime,
+    });
+  };
+}
+
+function defaultModelSetupWizardRunner(
+  workspace: string | undefined,
+): (prompter: WizardPrompterLike) => Promise<void> {
+  return async (prompter) => {
+    const [{ runCrestodianModelSetup }, { defaultRuntime }] = await Promise.all([
+      import("./model-setup.js"),
+      import("../runtime.js"),
+    ]);
+    await runCrestodianModelSetup({
+      workspace,
+      prompter,
+      runtime: createHostedWizardRuntime(defaultRuntime),
     });
   };
 }
@@ -362,8 +396,14 @@ export class CrestodianChatEngine {
         return await this.applyPendingProposal();
       }
       if (intent === "decline") {
+        const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
-        return { text: "Skipped. No barnacles on config today.", action: "none" };
+        return {
+          text: skippedModelSetup
+            ? "Skipped. Crestodian remains available in deterministic mode; say `configure model provider` when you are ready."
+            : "Skipped. No barnacles on config today.",
+          action: "none",
+        };
       }
     }
     if (intent === "decline") {
@@ -399,20 +439,23 @@ export class CrestodianChatEngine {
     if (pending.kind === "channel-setup") {
       return { text: await this.startChannelSetupWizard(pending.channel), action: "none" };
     }
+    if (pending.kind === "model-setup") {
+      return await this.startModelSetup(pending.workspace);
+    }
     const capture = createCaptureRuntime();
-    let applied = false;
+    let result: CrestodianOperationResult | undefined;
     try {
-      const result = await executeCrestodianOperation(pending, capture, {
+      result = await executeCrestodianOperation(pending, capture, {
         approved: true,
         deps: this.commandDeps(),
       });
-      applied = result.applied;
     } catch (error) {
       capture.error(formatOperationError(error));
     }
-    const verify = applied ? await this.verifyConfigAfterWrite() : null;
+    const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
+    const followUp = this.armFollowUp(result?.followUp);
     return {
-      text: [capture.read() || "Applied. Audit entry written.", verify]
+      text: [capture.read() || "Applied. Audit entry written.", verify, followUp]
         .filter(Boolean)
         .join("\n\n"),
       action: "none",
@@ -511,6 +554,13 @@ export class CrestodianChatEngine {
         action: "none",
       };
     }
+    if (loopReply.directive?.kind === "model-setup") {
+      const setup = await this.startModelSetup(loopReply.directive.workspace);
+      return {
+        ...setup,
+        text: [loopReply.text, setup.text].filter(Boolean).join("\n\n"),
+      };
+    }
     if (loopReply.directive?.kind === "open-tui") {
       return {
         text: loopReply.text,
@@ -534,7 +584,7 @@ export class CrestodianChatEngine {
     return {
       text: [
         "I could not reach a model for that (deterministic mode).",
-        "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
+        "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
       ].join("\n"),
       action: "none",
     };
@@ -557,6 +607,9 @@ export class CrestodianChatEngine {
       // answers and commits only at the end.
       return { text: await this.startChannelSetupWizard(operation.channel), action: "none" };
     }
+    if (operation.kind === "model-setup") {
+      return await this.startModelSetup(operation.workspace);
+    }
 
     const capture = createCaptureRuntime();
     if (isPersistentCrestodianOperation(operation) && !this.opts.yes) {
@@ -574,18 +627,18 @@ export class CrestodianChatEngine {
       };
     }
 
-    let applied = false;
+    let result: CrestodianOperationResult | undefined;
     try {
-      const result = await executeCrestodianOperation(operation, capture, {
+      result = await executeCrestodianOperation(operation, capture, {
         approved: this.opts.yes === true || !isPersistentCrestodianOperation(operation),
         deps: this.commandDeps(),
       });
-      applied = result.applied;
     } catch (error) {
       capture.error(formatOperationError(error));
     }
-    const verify = applied ? await this.verifyConfigAfterWrite() : null;
-    const reply = [provenance, capture.read(), verify].filter(Boolean).join("\n\n");
+    const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
+    const followUp = this.armFollowUp(result?.followUp);
+    const reply = [provenance, capture.read(), verify, followUp].filter(Boolean).join("\n\n");
     if (operation.kind === "none" && reply.includes("Bye.")) {
       return { text: reply, action: "exit" };
     }
@@ -647,13 +700,50 @@ export class CrestodianChatEngine {
     this.agentSession.proposalRef.current = undefined;
   }
 
+  private armFollowUp(operation: CrestodianOperation | undefined): string | null {
+    if (operation?.kind !== "model-setup") {
+      return null;
+    }
+    this.pending = operation;
+    return [
+      "No usable model provider is configured, so the agent cannot answer yet.",
+      "Configure a model provider now? Say yes or no.",
+    ].join("\n");
+  }
+
   private async startChannelSetupWizard(channel: string): Promise<string> {
     const runWizard =
       this.opts.runChannelSetupWizard ??
       ((ch: string, prompter: WizardPrompterLike) => defaultChannelSetupWizardRunner(ch)(prompter));
     const session = new WizardSession((prompter) => runWizard(channel, prompter));
-    this.wizardBridge = { session, step: null, label: channel, autoSelectChannel: channel };
+    this.wizardBridge = {
+      session,
+      step: null,
+      kind: "channel",
+      label: channel,
+      autoSelectChannel: channel,
+    };
     return await this.pumpWizardBridge();
+  }
+
+  private async startModelSetup(workspace: string | undefined): Promise<CrestodianChatReply> {
+    if ((this.opts.surface ?? "cli") === "cli") {
+      return {
+        text: "Opening masked model-provider setup in the terminal.",
+        action: "open-tui",
+        handoff: {
+          kind: "model-setup",
+          ...(workspace ? { workspace } : {}),
+        },
+      };
+    }
+    const runWizard =
+      this.opts.runModelSetupWizard ??
+      ((dir: string | undefined, prompter: WizardPrompterLike) =>
+        defaultModelSetupWizardRunner(dir)(prompter));
+    const session = new WizardSession((prompter) => runWizard(workspace, prompter));
+    this.wizardBridge = { session, step: null, kind: "model", label: "model provider" };
+    return { text: await this.pumpWizardBridge(), action: "none" };
   }
 
   /**
@@ -690,6 +780,18 @@ export class CrestodianChatEngine {
       this.wizardBridge = null;
       const label = bridge.label;
       if (result.status === "done") {
+        if (bridge.kind === "model") {
+          const overview = await this.loadOverview();
+          const verify = await this.verifyConfigAfterWrite();
+          return [
+            overview.defaultModel
+              ? `Done — default model is ${overview.defaultModel}.`
+              : "Model provider setup finished without a default model. Crestodian remains in deterministic mode.",
+            verify ?? "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+        }
         const { appendCrestodianAuditEntry } = await import("./audit.js");
         await appendCrestodianAuditEntry({
           operation: "channels.setup",
@@ -706,9 +808,11 @@ export class CrestodianChatEngine {
           .join("\n");
       }
       if (result.status === "cancelled") {
-        return "Channel setup cancelled. Nothing was changed beyond completed steps.";
+        return bridge.kind === "model"
+          ? "Model provider setup cancelled. Crestodian remains in deterministic mode."
+          : "Channel setup cancelled. Nothing was changed beyond completed steps.";
       }
-      return `Channel setup stopped: ${result.error ?? "unknown error"}`;
+      return `${bridge.kind === "model" ? "Model provider" : "Channel"} setup stopped: ${result.error ?? "unknown error"}`;
     }
     bridge.step = result.step ?? null;
     if (bridge.step) {
@@ -722,10 +826,15 @@ export class CrestodianChatEngine {
       if (this.opts.surface === "cli" && bridge.step.sensitive === true) {
         bridge.session.cancel();
         this.wizardBridge = null;
-        return [
-          "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
-          `Run \`openclaw channels add --channel ${bridge.label}\` to finish setup with masked prompts.`,
-        ].join("\n");
+        return bridge.kind === "model"
+          ? [
+              "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
+              "Run `openclaw configure --section model` to finish setup with masked prompts.",
+            ].join("\n")
+          : [
+              "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
+              `Run \`openclaw channels add --channel ${bridge.label}\` to finish setup with masked prompts.`,
+            ].join("\n");
       }
       if (bridge.step.type === "note" || bridge.step.type === "progress") {
         const step = bridge.step;

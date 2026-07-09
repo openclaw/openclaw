@@ -64,7 +64,7 @@ export function createPierreDiffsSideEffectImportPlugin() {
 /**
  * Builds one configured diffs viewer runtime target.
  */
-export async function buildDiffsViewerRuntime(targetName) {
+async function buildDiffsViewerRuntime(targetName) {
   const target = targets[targetName];
   if (!target) {
     throw new Error(

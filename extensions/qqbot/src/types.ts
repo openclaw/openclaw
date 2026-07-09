@@ -37,7 +37,7 @@ export interface QQBotExecApprovalConfig {
   target?: "dm" | "channel" | "both";
 }
 
-export interface QQBotGroupConfig {
+interface QQBotGroupConfig {
   requireMention?: boolean;
   commandLevel?: QQBotGroupCommandLevel;
   ignoreOtherMentions?: boolean;

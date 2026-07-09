@@ -445,9 +445,16 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
 
       // Group by "None" flattens the category sections into the plain list.
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
+      await sortSessionsButton.click();
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
+      await sortSessionsButton.click();
+      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
+      await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
+
+      await sortSessionsButton.click();
       await page.getByRole("menuitemradio", { name: "None" }).click();
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);

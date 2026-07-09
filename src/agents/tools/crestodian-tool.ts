@@ -41,6 +41,7 @@ export type CrestodianToolOptions = {
 /** Interactive handoffs the hosting chat engine executes after the turn. */
 export type CrestodianToolDirective =
   | { kind: "channel-setup"; channel: string }
+  | { kind: "model-setup"; workspace?: string }
   | { kind: "open-tui"; agentId?: string; workspace?: string };
 
 /** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
@@ -49,9 +50,9 @@ export function hashCrestodianOperation(operation: CrestodianOperation): string 
 }
 
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
-export const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
-export const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
-export const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
+const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
+const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
+const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
 
 /**
  * Reconstruct a host directive from an out-of-process tool result. Directive
@@ -75,6 +76,12 @@ export function resolveCrestodianDirectiveTransition(params: {
 function directiveForOperation(operation: CrestodianOperation): CrestodianToolDirective | null {
   if (operation.kind === "channel-setup") {
     return { kind: "channel-setup", channel: operation.channel };
+  }
+  if (operation.kind === "model-setup") {
+    return {
+      kind: "model-setup",
+      ...(operation.workspace ? { workspace: operation.workspace } : {}),
+    };
   }
   if (operation.kind === "open-tui") {
     return {
@@ -129,6 +136,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "plugin_search",
   // Interactive handoffs executed by the hosting chat after this turn.
   "connect_channel",
+  "configure_model_provider",
   "open_agent",
   // Mutating actions below require approved=true.
   "setup",
@@ -215,6 +223,10 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "gateway-status" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
+    case "configure_model_provider": {
+      const workspace = readStringParam(params, "workspace")?.trim();
+      return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
+    }
     case "open_agent": {
       const agentId = readStringParam(params, "agentId")?.trim();
       const workspace = readStringParam(params, "workspace")?.trim();
@@ -302,7 +314,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
     label: "Crestodian",
     description: [
       "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) starts the guided channel setup in this chat; open_agent hands the user to their normal agent. Both run immediately.",
+      "connect_channel(channel) starts guided channel setup; configure_model_provider starts masked provider/default-model setup; open_agent hands the user to their normal agent. These interactive handoffs run immediately.",
       "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install/plugin_uninstall/doctor_fix) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
       "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes.",
       "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
@@ -321,7 +333,9 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
         return textResult(
           directive.kind === "channel-setup"
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
-            : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`,
+            : directive.kind === "model-setup"
+              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now starts masked model-provider setup. Tell the user the provider questions come next; do not ask for credentials yourself.`
+              : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`,
           {},
         );
       }

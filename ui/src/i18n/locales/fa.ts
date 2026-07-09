@@ -1557,6 +1557,15 @@ export const fa: TranslationMap = {
   chat: {
     disconnected: "اتصال از Gateway قطع شد.",
     archivedSessionDisabled: "برای ارسال پیام، این نشست را بازیابی کنید.",
+    taskSuggestions: {
+      eyebrow: "کار پیگیری پیشنهادی",
+      start: "شروع در درخت کاری",
+      starting: "در حال شروع…",
+      dismiss: "رد کردن {title}",
+      project: "پروژه",
+      instructions: "دستورالعمل‌ها",
+      adminRequired: "برای ایجاد درخت کاری از این پروژه، دسترسی مدیر لازم است.",
+    },
     refreshTitle: "تازه‌سازی داده‌های چت",
     settings: "تنظیمات چت",
     usageRemaining: "استفاده باقی‌مانده",

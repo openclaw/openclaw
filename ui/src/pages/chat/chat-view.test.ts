@@ -232,31 +232,7 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
 }));
 
 vi.mock("../../lib/agents/display.ts", () => ({
-  isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
-  resolveChatAvatarRenderUrl: (
-    candidate: string | null | undefined,
-    agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  ) => {
-    const isRenderableControlUiAvatarUrl = (value: string) =>
-      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-      return candidate;
-    }
-    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-        return value;
-      }
-    }
-    return null;
-  },
-  resolveAssistantTextAvatar: (value: string | null | undefined) => {
-    if (!value) {
-      return null;
-    }
-    return value.length <= 3 ? value : null;
-  },
 }));
 
 function renderQueue(params: {
@@ -4073,6 +4049,24 @@ describe("right-click Reply", () => {
     expect(target.senderLabel).toBe("User");
   });
 
+  it("backs off before an emoji that crosses the reply target limit", () => {
+    const onSetReply = vi.fn();
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "x".repeat(499) + "🧠tail";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>(".chat-reply-context-menu button")!.click();
+
+    expect(onSetReply.mock.calls[0][0].text).toBe("x".repeat(499));
+  });
+
   it("keeps the native context menu when Reply is unavailable", () => {
     const container = renderChatView();
     const section = container.querySelector<HTMLElement>(".card.chat");
@@ -4151,6 +4145,20 @@ describe("right-click Reply", () => {
 
     const dismiss = preview!.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss");
     expect(dismiss).not.toBeNull();
+  });
+
+  it("backs off before an emoji that crosses the reply preview limit", () => {
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-emoji",
+        text: "x".repeat(119) + "🧠tail",
+        senderLabel: "User",
+      },
+    });
+
+    expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+      `${"x".repeat(119)}...`,
+    );
   });
 
   it("calls onClearReply when dismiss button is clicked", () => {

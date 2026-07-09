@@ -1558,6 +1558,15 @@ export const id: TranslationMap = {
   chat: {
     disconnected: "Terputus dari gateway.",
     archivedSessionDisabled: "Pulihkan sesi ini untuk mengirim pesan.",
+    taskSuggestions: {
+      eyebrow: "Tindak lanjut yang disarankan",
+      start: "Mulai di worktree",
+      starting: "Memulai…",
+      dismiss: "Tutup {title}",
+      project: "Proyek",
+      instructions: "Petunjuk",
+      adminRequired: "Akses administrator diperlukan untuk membuat worktree dari proyek ini.",
+    },
     refreshTitle: "Refresh data chat",
     settings: "Pengaturan chat",
     usageRemaining: "Sisa penggunaan",

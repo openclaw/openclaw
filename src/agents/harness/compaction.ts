@@ -1,3 +1,4 @@
+import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Routes compaction through selected native agent harnesses when supported.
  */
@@ -5,14 +6,17 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { applySecretRefHeaderSentinels, getApiKeyForModel } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import { selectAgentHarness } from "./selection.js";
 import type {
@@ -84,26 +88,28 @@ async function resolveHarnessCompactApiKey(params: {
   if (!model) {
     return existing ? { apiKey: existing } : {};
   }
+  const runtimeModel = applySecretRefHeaderSentinels(model, compactParams.config);
   if (existing) {
-    return { apiKey: existing, runtimeModel: model };
+    return { apiKey: existing, runtimeModel };
   }
   try {
     const apiKeyInfo = await getApiKeyForModel({
-      model,
+      model: runtimeModel,
       cfg: compactParams.config,
       profileId: authProfileId,
       agentDir,
       workspaceDir,
+      secretSentinels: true,
     });
     return {
       apiKey: apiKeyInfo.apiKey?.trim() || undefined,
-      runtimeModel: model,
+      runtimeModel,
     };
   } catch (err) {
     log.debug("agent harness compaction credential lookup failed", {
       error: formatErrorMessage(err),
     });
-    return { runtimeModel: model };
+    return { runtimeModel };
   }
 }
 
@@ -195,8 +201,22 @@ export async function maybeCompactAgentHarnessSession(
     resolvedApiKey || runtimeModel
       ? {
           ...compactParams,
-          ...(resolvedApiKey ? { resolvedApiKey } : {}),
-          ...(runtimeModel ? { runtimeModel } : {}),
+          ...(resolvedApiKey
+            ? {
+                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                  resolvedApiKey,
+                  "plugin harness compaction handoff",
+                ),
+              }
+            : {}),
+          ...(runtimeModel
+            ? {
+                runtimeModel: unwrapModelHeaderSentinelsForProviderEgress(
+                  runtimeModel,
+                  "plugin harness compaction handoff",
+                ),
+              }
+            : {}),
         }
       : compactParams;
   if (shouldCompactAfterContextEngine) {

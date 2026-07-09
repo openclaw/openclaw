@@ -31,6 +31,7 @@ export type SessionWorkspaceProps = {
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
+  onToggleTerminal?: () => void;
 };
 
 type SessionWorkspaceState = {
@@ -63,6 +64,7 @@ export type SessionWorkspaceHost = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
+  terminalAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   sessionWorkspaceState?: SessionWorkspaceState;
@@ -493,6 +495,15 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
+    onToggleTerminal: state.terminalAvailable
+      ? () => {
+          window.dispatchEvent(
+            new CustomEvent("openclaw:terminal-toggle", {
+              detail: { dock: "right", open: true },
+            }),
+          );
+        }
+      : undefined,
   };
 }
 
@@ -535,6 +546,20 @@ export function renderSessionWorkspaceRail(
   if (!sessionWorkspace) {
     return nothing;
   }
+  const terminalButton = sessionWorkspace.onToggleTerminal
+    ? html`
+        <openclaw-tooltip .content=${t("terminal.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("terminal.toggle")}
+            @click=${sessionWorkspace.onToggleTerminal}
+          >
+            ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   if (sessionWorkspace.collapsed) {
     return html`
       <aside
@@ -557,6 +582,7 @@ export function renderSessionWorkspaceRail(
         <span class="chat-workspace-rail__collapsed-icon" aria-hidden="true"
           >${icons.fileText}</span
         >
+        ${terminalButton}
       </aside>
     `;
   }
@@ -676,38 +702,6 @@ export function renderSessionWorkspaceRail(
           : t("chat.workspaceFiles.session");
     return html`<span class="chat-workspace-rail__file-badge">${label}</span>`;
   };
-  const renderBrowserBreadcrumbs = (): TemplateResult | typeof nothing => {
-    if (!browser || browser.search) {
-      return nothing;
-    }
-    const parts = browser.path ? browser.path.split("/").filter(Boolean) : [];
-    let currentPath = "";
-    return html`
-      <div class="chat-workspace-rail__breadcrumbs" aria-label=${t("chat.workspaceFiles.path")}>
-        <button
-          class="chat-workspace-rail__crumb"
-          type="button"
-          @click=${() => sessionWorkspace.onBrowsePath("")}
-        >
-          ${t("chat.workspaceFiles.root")}
-        </button>
-        ${parts.map((part) => {
-          currentPath = currentPath ? `${currentPath}/${part}` : part;
-          const pathForPart = currentPath;
-          return html`
-            <span class="chat-workspace-rail__crumb-separator">/</span>
-            <button
-              class="chat-workspace-rail__crumb"
-              type="button"
-              @click=${() => sessionWorkspace.onBrowsePath(pathForPart)}
-            >
-              ${part}
-            </button>
-          `;
-        })}
-      </div>
-    `;
-  };
   const renderBrowserRows = (): TemplateResult => {
     const entries = browser?.entries ?? [];
     const parentPath = browser?.parentPath;
@@ -728,7 +722,6 @@ export function renderSessionWorkspaceRail(
             />
           </label>
         </div>
-        ${renderBrowserBreadcrumbs()}
         ${browser?.search
           ? html`<div class="chat-workspace-rail__browser-caption">
               ${t("chat.workspaceFiles.searchResults")}
@@ -874,6 +867,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
+          ${terminalButton}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
               class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
