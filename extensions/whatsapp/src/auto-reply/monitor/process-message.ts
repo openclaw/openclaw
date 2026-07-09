@@ -310,6 +310,7 @@ export async function processMessage(params: {
     previousTimestamp,
     envelope: envelopeOptions,
     visibleReplyTo,
+    accountId: params.route.accountId,
   });
   let shouldClearGroupHistory = false;
   const visibleGroupHistory =

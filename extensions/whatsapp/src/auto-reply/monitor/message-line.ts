@@ -34,11 +34,13 @@ export function buildInboundLine(params: {
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
   visibleReplyTo?: WhatsAppReplyContext | null;
+  accountId?: string;
 }) {
-  const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
+  const { cfg, msg, agentId, previousTimestamp, envelope, accountId } = params;
+  // WhatsApp inbound prefix: L1 account → L2 channel → L3 global → L4 identity/fallback
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
     channel: "whatsapp",
+    accountId,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const admission = requireWhatsAppInboundAdmission(msg);
