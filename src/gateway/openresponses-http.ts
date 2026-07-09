@@ -1044,7 +1044,14 @@ export async function handleOpenResponsesHttpRequest(
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
       const hadAssistantDelta = sawAssistantDelta;
-      if (replace && typeof text === "string") {
+      // Scope accumulated-text preservation to media-bearing replacement events
+      // (matching the server-chat.ts coalesce guard). A replace:true, text:""
+      // event that carries mediaUrls/mediaUrl is a media-only update and must
+      // not erase previously streamed assistant text. Without the media signal,
+      // an empty text replacement clears the buffer per existing behavior.
+      const hasMediaContent =
+        Array.isArray(evt.data?.mediaUrls) || typeof evt.data?.mediaUrl === "string";
+      if (replace && typeof text === "string" && (text || !hasMediaContent)) {
         accumulatedText = text;
       }
 
