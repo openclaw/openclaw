@@ -26,6 +26,7 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  continuationIntent?: TelegramContinuationIntent;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
   spooledReplay?: boolean;
@@ -34,6 +35,20 @@ export type TelegramMessageContextOptions = {
 export type TelegramPromptContextEntry = NonNullable<
   MsgContext["UntrustedStructuredContext"]
 >[number];
+
+export type TelegramContinuationIntentKind =
+  | "self_reply"
+  | "media_followup"
+  | "self_reply_media_followup";
+
+export type TelegramContinuationIntent = {
+  kind: TelegramContinuationIntentKind;
+  reason: string;
+  currentMessageId?: string;
+  anchorMessageId?: string;
+  anchorSenderId?: string;
+  anchorBody?: string;
+};
 
 export type TelegramAmbientTranscriptWatermark = {
   messageId: string;

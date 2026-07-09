@@ -182,7 +182,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     }
     if (
       context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
+      context.initialTypingCueSent !== true &&
+      context.suppressInitialTypingCue !== true
     ) {
       void context.sendTyping().catch((err: unknown) => {
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);

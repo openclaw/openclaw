@@ -25,7 +25,9 @@ type TelegramReplyFenceKey = {
   roomEventKey: string;
 };
 
-// Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
+// Authorized control turns can arrive ahead of older same-session reply work.
+// Ordinary group/topic messages must not: Moeed treats each reacted-to message as
+// owed a direct answer unless the message is explicitly a side lane or abort.
 const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
 const telegramReplyFenceKeysByLane = new Map<string, Set<string>>();
 
@@ -165,6 +167,17 @@ export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
   return superseded;
 }
 
+export function hasActiveTelegramReplyFenceLane(laneKey: string): boolean {
+  const keys = [...(telegramReplyFenceKeysByLane.get(laneKey) ?? [])];
+  for (const key of keys) {
+    const state = telegramReplyFenceByKey.get(key);
+    if (state && (state.activeDispatches > 0 || (state.abortControllers?.size ?? 0) > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isTelegramReplyFenceSuperseded(params: {
   key: string;
   generation: number;
@@ -221,17 +234,14 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   ) {
     return false;
   }
+  const isAuthorizedExplicitCommand =
+    ctxPayload.CommandAuthorized &&
+    (isExplicitCommandTurn(ctxPayload.CommandTurn) ||
+      isRecognizedTelegramTextCommand(dispatchText));
   if (ctxPayload.ChatType === "direct") {
-    if (
-      ctxPayload.CommandAuthorized &&
-      (isExplicitCommandTurn(ctxPayload.CommandTurn) ||
-        isRecognizedTelegramTextCommand(dispatchText))
-    ) {
-      return true;
-    }
-    return false;
+    return isAuthorizedExplicitCommand;
   }
-  return true;
+  return isAuthorizedExplicitCommand;
 }
 
 export function resetTelegramReplyFenceForTests(): void {

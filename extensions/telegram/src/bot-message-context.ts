@@ -46,6 +46,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -54,6 +55,11 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import {
+  buildTelegramReplyFenceLaneKey,
+  hasActiveTelegramReplyFenceLane,
+  shouldSupersedeTelegramReplyFence,
+} from "./telegram-reply-fence.js";
 import { getTopicName, resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 export type {
@@ -108,6 +114,7 @@ export type TelegramMessageContext = {
   sendRecordVoice: () => Promise<void>;
   sendChatActionHandler: BuildTelegramMessageContextParams["sendChatActionHandler"];
   initialTypingCueSent?: boolean;
+  suppressInitialTypingCue?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
@@ -481,9 +488,29 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  const replyFenceLaneKey = getTelegramSequentialKey({
+    message: msg,
+    ...(primaryCtx.me ? { me: primaryCtx.me } : {}),
+  });
+  const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+    accountId: route.accountId,
+    sequentialKey: replyFenceLaneKey,
+  });
+  const canShowPreContextStatusCue = bodyResult.inboundEventKind !== "room_event";
+  const suppressVisibleAckWhileReplyActive =
+    canShowPreContextStatusCue &&
+    !shouldSupersedeTelegramReplyFence({
+      Body: bodyResult.bodyText,
+      RawBody: bodyResult.rawBody,
+      CommandBody: bodyResult.rawBody,
+      CommandAuthorized: bodyResult.commandAuthorized,
+      ChatType: isGroup ? "group" : "direct",
+    }) &&
+    hasActiveTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+
   // Send the first typing cue before expensive context/session construction,
   // but only after intake has accepted the message as a non-room-event turn.
-  if (bodyResult.inboundEventKind !== "room_event") {
+  if (canShowPreContextStatusCue && !suppressVisibleAckWhileReplyActive) {
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
@@ -541,6 +568,8 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
+    canShowStatusReaction &&
+    !suppressVisibleAckWhileReplyActive &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
@@ -661,6 +690,7 @@ export const buildTelegramMessageContext = async ({
     sendRecordVoice,
     sendChatActionHandler,
     initialTypingCueSent,
+    suppressInitialTypingCue: suppressVisibleAckWhileReplyActive,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,

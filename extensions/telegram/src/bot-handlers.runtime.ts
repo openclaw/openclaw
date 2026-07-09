@@ -79,6 +79,7 @@ import {
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
+  TelegramContinuationIntent,
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
@@ -302,7 +303,9 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
-  type TelegramDebounceLane = "default" | "forward";
+  const TELEGRAM_CONTINUATION_DEBOUNCE_MS = 3000;
+  const TELEGRAM_MEDIA_FOLLOWUP_WINDOW_MS = 15 * 60 * 1000;
+  type TelegramDebounceLane = "default" | "forward" | "continuation";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
     msg: Message;
@@ -319,7 +322,11 @@ export const registerTelegramHandlers = ({
     spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   };
   const resolveTelegramDebounceEntryMs = (entry: TelegramDebounceEntry): number =>
-    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs;
+    entry.debounceLane === "forward"
+      ? FORWARD_BURST_DEBOUNCE_MS
+      : entry.debounceLane === "continuation"
+        ? TELEGRAM_CONTINUATION_DEBOUNCE_MS
+        : debounceMs;
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
     const text = getTelegramTextParts(entry.msg).text;
     const hasDebounceableText = shouldDebounceTextInbound({
@@ -330,6 +337,11 @@ export const registerTelegramHandlers = ({
     if (entry.debounceLane === "forward") {
       // Forwarded bursts often split text + media into adjacent updates.
       // Debounce media-only forward entries too so they can coalesce.
+      return hasDebounceableText || entry.allMedia.length > 0;
+    }
+    if (entry.debounceLane === "continuation") {
+      // Telegram forces long text + media into separate updates. Hold explicit
+      // follow-up text and media-only updates briefly so they can coalesce.
       return hasDebounceableText || entry.allMedia.length > 0;
     }
     if (!hasDebounceableText) {
@@ -442,8 +454,145 @@ export const registerTelegramHandlers = ({
       forwardMeta.forward_sender_name ??
       forwardMeta.forward_date)
       ? "forward"
-      : "default";
+      : isTelegramContinuationCueText(getTelegramTextParts(msg).text) ||
+          (hasInboundMedia(msg) && !getTelegramTextParts(msg).text.trim())
+        ? "continuation"
+        : "default";
   };
+
+  const isMediaPlaceholderText = (text: string | undefined) =>
+    Boolean(text?.trim().match(/^<media:[^>]+>(?:\s+\(.+\))?$/u));
+
+  const hasRealUserText = (node: TelegramCachedMessageNode | null | undefined) =>
+    Boolean(node?.body?.trim()) && !isMediaPlaceholderText(node?.body);
+
+  function isTelegramContinuationCueText(text: string | null | undefined): boolean {
+    const normalized = (text ?? "").toLowerCase();
+    if (!normalized.trim()) {
+      return false;
+    }
+    const mediaWord =
+      /\b(?:image|images|photo|photos|picture|pictures|screenshot|screenshots|screen\s*shot|attachment|attachments|media)\b/u;
+    const followWord =
+      /\b(?:after|afterwards|following|next|separately|below|later|share|send|sending|upload|attach|attaching|coming|follow)\b/u;
+    return mediaWord.test(normalized) && followWord.test(normalized);
+  }
+
+  function isTelegramSelfReplyContinuationCueText(text: string | null | undefined): boolean {
+    const normalized = (text ?? "").toLowerCase();
+    if (!normalized.trim()) {
+      return false;
+    }
+    return (
+      isTelegramContinuationCueText(normalized) ||
+      /\b(?:part\s*[2-9]|continued|continuing|continuation|rest\s+of|read\s+(?:this\s+)?(?:with|together)|same\s+(?:message|ask|issue|thread)|more\s+(?:context|evidence|proof)|extra\s+(?:context|evidence|proof)|adding\s+(?:context|evidence|proof))\b/u.test(
+        normalized,
+      )
+    );
+  }
+
+  const isSameSenderSelfReply = (
+    current: TelegramCachedMessageNode | null | undefined,
+    replyTarget: TelegramCachedMessageNode | undefined,
+  ) =>
+    Boolean(
+      current?.senderId &&
+      replyTarget?.senderId &&
+      current.senderId === replyTarget.senderId &&
+      current.replyToId &&
+      replyTarget.messageId &&
+      current.replyToId === replyTarget.messageId,
+    );
+
+  const findMediaFollowupAnchor = (
+    current: TelegramCachedMessageNode | null | undefined,
+    conversationContext: Awaited<ReturnType<typeof buildTelegramConversationContext>>,
+  ): TelegramCachedMessageNode | undefined => {
+    if (!current?.senderId || !current.mediaType || hasRealUserText(current)) {
+      return undefined;
+    }
+    const currentTs = typeof current.timestamp === "number" ? current.timestamp : undefined;
+    return conversationContext
+      .map((entry) => entry.node)
+      .filter((node) => {
+        if (!node.body || node.senderId !== current.senderId) {
+          return false;
+        }
+        if (!isTelegramContinuationCueText(node.body)) {
+          return false;
+        }
+        if (currentTs !== undefined && typeof node.timestamp === "number") {
+          const ageMs = currentTs - node.timestamp;
+          return ageMs >= 0 && ageMs <= TELEGRAM_MEDIA_FOLLOWUP_WINDOW_MS;
+        }
+        return true;
+      })
+      .toSorted((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))[0];
+  };
+
+  const clipContinuationAnchorBody = (body: string | undefined) =>
+    body && body.length > 240 ? `${body.slice(0, 239).trimEnd()}…` : body;
+
+  const resolveTelegramContinuationIntent = (params: {
+    currentNode: TelegramCachedMessageNode | null;
+    replyChainNodes: TelegramCachedMessageNode[];
+    conversationContext: Awaited<ReturnType<typeof buildTelegramConversationContext>>;
+  }): TelegramContinuationIntent | undefined => {
+    const selfReplyTarget = params.replyChainNodes[0];
+    const isSelfReply = isSameSenderSelfReply(params.currentNode, selfReplyTarget);
+    const mediaAnchor = findMediaFollowupAnchor(params.currentNode, params.conversationContext);
+    const explicitSelfReplyContinuation =
+      isSelfReply &&
+      (isTelegramSelfReplyContinuationCueText(params.currentNode?.body) ||
+        isTelegramSelfReplyContinuationCueText(selfReplyTarget?.body));
+    if (!explicitSelfReplyContinuation && !mediaAnchor) {
+      return undefined;
+    }
+    const anchor = explicitSelfReplyContinuation ? selfReplyTarget : mediaAnchor;
+    return {
+      kind:
+        explicitSelfReplyContinuation && mediaAnchor
+          ? "self_reply_media_followup"
+          : explicitSelfReplyContinuation
+            ? "self_reply"
+            : "media_followup",
+      reason: explicitSelfReplyContinuation
+        ? "sender replied to their own earlier Telegram message with an explicit continuation cue"
+        : "current media-only Telegram message follows recent same-sender text that said media would follow",
+      currentMessageId: params.currentNode?.messageId,
+      anchorMessageId: anchor?.messageId,
+      anchorSenderId: anchor?.senderId,
+      anchorBody: clipContinuationAnchorBody(anchor?.body),
+    };
+  };
+
+  const buildTelegramContinuationPromptContext = (
+    intent: TelegramContinuationIntent | undefined,
+  ): TelegramPromptContextEntry[] =>
+    intent
+      ? [
+          {
+            label: "Telegram continuation intent",
+            source: "telegram",
+            type: "telegram_continuation_intent",
+            payload: {
+              kind: intent.kind,
+              reason: intent.reason,
+              current_message_id: intent.currentMessageId,
+              anchor_message_id: intent.anchorMessageId,
+              anchor_sender_id: intent.anchorSenderId,
+              anchor_body: intent.anchorBody,
+              handling: [
+                "treat as added context for the anchored request when possible",
+                "if work is already active, treat as a steer/update",
+                ...(intent.kind.includes("media_followup")
+                  ? ["do not close as NO_REPLY solely because this message is media-only"]
+                  : []),
+              ],
+            },
+          },
+        ]
+      : [];
   const buildSyntheticTextMessage = (params: {
     base: Message;
     text: string;
@@ -1278,7 +1427,10 @@ export const registerTelegramHandlers = ({
     options?: TelegramMessageContextOptions,
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     selectedMessageIds?: PromptContextMessageSelection,
-  ): Promise<TelegramPromptContextEntry[]> => {
+  ): Promise<{
+    promptContext: TelegramPromptContextEntry[];
+    continuationIntent?: TelegramContinuationIntent;
+  }> => {
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryLimit = Math.max(
       0,
@@ -1354,6 +1506,11 @@ export const registerTelegramHandlers = ({
         entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
       ),
     );
+    const continuationIntent = resolveTelegramContinuationIntent({
+      currentNode,
+      replyChainNodes,
+      conversationContext,
+    });
     for (const [selectedMessageId, selection] of selectedMessageIds ?? []) {
       if (selection === "exclude") {
         conversationContextById.delete(selectedMessageId);
@@ -1390,20 +1547,27 @@ export const registerTelegramHandlers = ({
     const promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted(
       (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
     );
-    return promptMessages.length > 0
-      ? [
-          {
-            label: "Conversation context",
-            source: sessionOnlyPromptMessages.length > 0 ? "session" : "telegram",
-            type: "chat_window",
-            payload: {
-              order: "chronological",
-              relation: "selected_for_current_message",
-              messages: promptMessages,
+    const promptContext: TelegramPromptContextEntry[] = [
+      ...(promptMessages.length > 0
+        ? [
+            {
+              label: "Conversation context",
+              source: sessionOnlyPromptMessages.length > 0 ? "session" : "telegram",
+              type: "chat_window",
+              payload: {
+                order: "chronological",
+                relation: "selected_for_current_message",
+                messages: promptMessages,
+              },
             },
-          },
-        ]
-      : [];
+          ]
+        : []),
+      ...buildTelegramContinuationPromptContext(continuationIntent),
+    ];
+    return {
+      promptContext,
+      ...(continuationIntent ? { continuationIntent } : {}),
+    };
   };
 
   const resolveReplyMediaForChain = async (
@@ -1556,7 +1720,7 @@ export const registerTelegramHandlers = ({
           });
         }
       }
-      const promptContext = await buildPromptContextForMessage(
+      const { promptContext, continuationIntent } = await buildPromptContextForMessage(
         params.ctx,
         params.msg,
         replyChainNodes,
@@ -1564,11 +1728,17 @@ export const registerTelegramHandlers = ({
         promptContextMediaByMessageId,
         params.promptContextMessageSelection,
       );
+      const options = continuationIntent
+        ? {
+            ...params.options,
+            continuationIntent,
+          }
+        : params.options;
       const result = await processMessage(
         params.ctx,
         params.allMedia,
         params.storeAllowFrom,
-        params.options,
+        options,
         replyMedia,
         replyChain,
         promptContext,

@@ -2109,6 +2109,237 @@ describe("createTelegramBot", () => {
     ]);
   });
 
+  it("marks same-sender self replies as Telegram continuation context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "group", title: "Ops" };
+    const original = {
+      chat,
+      text: "Please investigate this. I will send the screenshot afterwards.",
+      date: 1736380800,
+      message_id: 300,
+      from: { id: 201, is_bot: false, first_name: "Moeed" },
+    };
+
+    await handler({
+      ...baseCtx,
+      message: original,
+    });
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "Adding the extra context here.",
+        date: 1736380803,
+        message_id: 301,
+        from: { id: 201, is_bot: false, first_name: "Moeed" },
+        reply_to_message: original,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.TelegramContinuationIntent).toBe("self_reply");
+    expect(payload.TelegramContinuationAnchorId).toBe("300");
+    expect(payload.TelegramContinuationCurrentMessageId).toBe("301");
+    const continuationContext = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    ).find(
+      (entry) =>
+        requireRecord(entry, "structured context entry").type === "telegram_continuation_intent",
+    );
+    expect(requireRecord(continuationContext, "continuation context").payload).toMatchObject({
+      kind: "self_reply",
+      anchor_message_id: "300",
+      current_message_id: "301",
+    });
+  });
+
+  it("does not treat plain same-sender self replies as continuation bundles", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "group", title: "Ops" };
+    const original = {
+      chat,
+      text: "Can you investigate the content pipeline?",
+      date: 1736380800,
+      message_id: 310,
+      from: { id: 201, is_bot: false, first_name: "Moeed" },
+    };
+
+    await handler({
+      ...baseCtx,
+      message: original,
+    });
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "What's the plan for that?",
+        date: 1736380920,
+        message_id: 311,
+        from: { id: 201, is_bot: false, first_name: "Moeed" },
+        reply_to_message: original,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.TelegramContinuationIntent).toBeUndefined();
+    const structuredContext = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    expect(
+      structuredContext.some(
+        (entry) =>
+          requireRecord(entry, "structured context entry").type === "telegram_continuation_intent",
+      ),
+    ).toBe(false);
+  });
+
+  it("coalesces explicit text-plus-media Telegram followups into one inbound packet", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    const replyDone = waitForReplyCalls(1);
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearContinuationTimer = () => {
+      const timerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 3000);
+      expect(timerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(setTimeoutSpy.mock.results[timerIndex]?.value as ReturnType<typeof setTimeout>);
+      return setTimeoutSpy.mock.calls[timerIndex]?.[0] as (() => Promise<void>) | undefined;
+    };
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const chat = { id: 42, type: "group", title: "Ops" };
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/followup.png" }),
+      };
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          text: "Please review this. I will send the screenshot afterwards.",
+          date: 1736380800,
+          message_id: 400,
+          from: { id: 201, is_bot: false, first_name: "Moeed" },
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          photo: [{ file_id: "followup-photo-1" }],
+          date: 1736380801,
+          message_id: 401,
+          from: { id: 201, is_bot: false, first_name: "Moeed" },
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+
+      await clearContinuationTimer()?.();
+      await replyDone;
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      expect(payload.RawBody).toBe("Please review this. I will send the screenshot afterwards.");
+      expect(payload.MediaPaths).toHaveLength(1);
+      expect(payload.MessageSid).toBe("401");
+    } finally {
+      ssrfMock.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("excludes ambient transcript rows from live group conversation context", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

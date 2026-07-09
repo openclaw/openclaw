@@ -1506,7 +1506,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  const clearRoomEventFence =
+    !isRoomEvent && (supersedeReplyFence || ctxPayload.InboundEventKind === "user_request");
+  if (clearRoomEventFence) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({

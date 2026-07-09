@@ -463,6 +463,21 @@ function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<str
   });
 }
 
+function buildTelegramContinuationHandlingHints(ctx: TemplateContext): string[] | undefined {
+  const intent = normalizePromptMetadataString(ctx.TelegramContinuationIntent);
+  if (!intent) {
+    return undefined;
+  }
+  const hints = [
+    "Treat this message as added context for the anchored request when possible.",
+    "If work on the anchored request is already active, treat this as a steer/update.",
+  ];
+  if (intent.includes("media_followup")) {
+    hints.push("Do not close as NO_REPLY solely because the current message is media-only.");
+  }
+  return hints;
+}
+
 function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unknown>> {
   if (!Array.isArray(ctx.ReplyChain)) {
     return [];
@@ -725,6 +740,18 @@ export function buildInboundUserContextPrefix(
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
     history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
+    telegram_continuation_intent: normalizePromptMetadataString(ctx.TelegramContinuationIntent),
+    telegram_continuation_reason: normalizePromptMetadataString(ctx.TelegramContinuationReason),
+    telegram_continuation_anchor_id: normalizePromptMetadataString(
+      ctx.TelegramContinuationAnchorId,
+    ),
+    telegram_continuation_anchor_sender_id: normalizePromptMetadataString(
+      ctx.TelegramContinuationAnchorSenderId,
+    ),
+    telegram_continuation_current_message_id: normalizePromptMetadataString(
+      ctx.TelegramContinuationCurrentMessageId,
+    ),
+    telegram_continuation_handling: buildTelegramContinuationHandlingHints(ctx),
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(

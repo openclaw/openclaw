@@ -3,6 +3,14 @@ import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inb
 import { describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
+import {
+  beginTelegramReplyFence,
+  buildTelegramNonInterruptingReplyFenceKey,
+  buildTelegramReplyFenceLaneKey,
+  resetTelegramReplyFenceForTests,
+  resolveTelegramReplyFenceKey,
+} from "./telegram-reply-fence.js";
 
 function createSendChatActionHandler(
   sendChatAction = vi.fn(async () => undefined),
@@ -164,5 +172,63 @@ describe("buildTelegramMessageContext typing", () => {
     ).resolves.toBeNull();
 
     expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+  });
+
+  it("suppresses visible group ack cues while the same topic already has an owed reply", async () => {
+    resetTelegramReplyFenceForTests();
+    const setMessageReaction = vi.fn(async () => undefined);
+    const sendChatActionHandler = createSendChatActionHandler();
+    const message = {
+      chat: { id: -100123, type: "supergroup", is_forum: true },
+      from: { id: 42, first_name: "Pat" },
+      message_id: 20,
+      message_thread_id: 99,
+      is_topic_message: true,
+      text: "second separate message",
+    };
+    const replyFenceKey = resolveTelegramReplyFenceKey({
+      ctxPayload: {
+        SessionKey: "agent:openclaw:telegram:group:-100123:topic:99",
+      },
+      chatId: -100123,
+      threadSpec: { scope: "forum", id: 99 },
+    });
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: getTelegramSequentialKey({
+        message: message as never,
+        me: { username: "bot" } as never,
+      }),
+    });
+    beginTelegramReplyFence({
+      key: buildTelegramNonInterruptingReplyFenceKey({
+        activeKey: replyFenceKey.activeKey,
+        laneKey,
+      }),
+      supersede: false,
+      laneKey,
+    });
+
+    const context = await buildTelegramMessageContextForTest({
+      message,
+      botApi: { setMessageReaction },
+      sendChatActionHandler,
+      ackReactionScope: "group-all",
+      cfg: {
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        messages: {
+          groupChat: { mentionPatterns: [] },
+          ackReaction: "👀",
+          ackReactionScope: "group-all",
+        },
+      },
+    });
+
+    expect(context?.suppressInitialTypingCue).toBe(true);
+    expect(context?.ackReactionPromise).toBeNull();
+    expect(setMessageReaction).not.toHaveBeenCalled();
+    expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+    resetTelegramReplyFenceForTests();
   });
 });
