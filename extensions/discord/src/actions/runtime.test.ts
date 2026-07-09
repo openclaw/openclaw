@@ -28,6 +28,14 @@ type DiscordChannelInfoTest = {
   parent_id?: string;
 };
 
+const defaultFetchChannelInfoDiscord = async (
+  channelId: string,
+): Promise<DiscordChannelInfoTest> => ({
+  id: channelId,
+  type: ChannelType.GuildText,
+  guild_id: "G1",
+});
+
 const discordSendMocks = {
   addRoleDiscord: vi.fn(async () => ({ ok: true })),
   banMemberDiscord: vi.fn(async () => ({})),
@@ -47,13 +55,7 @@ const discordSendMocks = {
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
-  fetchChannelInfoDiscord: vi.fn(
-    async (channelId: string): Promise<DiscordChannelInfoTest> => ({
-      id: channelId,
-      type: ChannelType.GuildText,
-      guild_id: "G1",
-    }),
-  ),
+  fetchChannelInfoDiscord: vi.fn(defaultFetchChannelInfoDiscord),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchGuildInfoDiscord: vi.fn(async (guildId: string) => ({
     id: guildId,
@@ -229,6 +231,7 @@ const rolesEnabled = (key: keyof DiscordActionConfig) => key === "roles";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fetchChannelInfoDiscord.mockImplementation(defaultFetchChannelInfoDiscord);
   clearPresences();
   Object.assign(
     discordMessagingActionRuntime,
@@ -1243,6 +1246,183 @@ describe("handleDiscordMessagingAction", () => {
       { cfg },
     );
   });
+
+  it.each([
+    {
+      name: "delegated",
+      options: undefined,
+    },
+    {
+      name: "direct operator",
+      options: { conversationReadOrigin: "direct-operator" as const },
+    },
+    {
+      name: "current conversation",
+      options: {
+        readContext: {
+          requesterAccountId: "default",
+          currentChannelProvider: "discord",
+          currentChannelId: "333",
+        },
+      },
+    },
+  ])("rejects $name reads beneath an explicitly disabled category", async ({ options }) => {
+    fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
+      if (channelId === "333") {
+        return {
+          id: channelId,
+          guild_id: "111",
+          name: "enabled-child",
+          parent_id: "222",
+          type: ChannelType.GuildText,
+        };
+      }
+      return {
+        id: "222",
+        guild_id: "111",
+        name: "private",
+        type: ChannelType.GuildCategory,
+      };
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          private: { enabled: false },
+          "333": { enabled: true },
+        },
+      },
+    });
+    const cases = [
+      {
+        action: "permissions",
+        params: { channelId: "333" },
+        runtime: fetchChannelPermissionsDiscord,
+      },
+      { action: "readMessages", params: { channelId: "333" }, runtime: readMessagesDiscord },
+      { action: "listPins", params: { channelId: "333" }, runtime: listPinsDiscord },
+      {
+        action: "reactions",
+        params: { channelId: "333", messageId: "message-1" },
+        runtime: fetchReactionsDiscord,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await expect(
+        handleMessagingAction(testCase.action, testCase.params, enableAllActions, cfg, options),
+      ).rejects.toThrow("Discord read target channel is not allowed.");
+      expect(testCase.runtime).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects thread reads when the thread's category ancestor is disabled", async () => {
+    fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
+      if (channelId === "444") {
+        return {
+          id: channelId,
+          guild_id: "111",
+          name: "project-thread",
+          parent_id: "333",
+          type: ChannelType.GuildPublicThread,
+        };
+      }
+      if (channelId === "333") {
+        return {
+          id: channelId,
+          guild_id: "111",
+          name: "enabled-child",
+          parent_id: "222",
+          type: ChannelType.GuildText,
+        };
+      }
+      return {
+        id: "222",
+        guild_id: "111",
+        name: "private",
+        type: ChannelType.GuildCategory,
+      };
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          private: { enabled: false },
+          "333": { enabled: true },
+          "444": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "444" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchChannelInfoDiscord.mock.calls.map((call) => call[0])).toEqual([
+      "444",
+      "333",
+      "222",
+    ]);
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when disabled-channel policy exists and ancestry metadata is incomplete", async () => {
+    fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
+      if (channelId === "333") {
+        return {
+          id: channelId,
+          guild_id: "111",
+          name: "enabled-child",
+          parent_id: "222",
+          type: ChannelType.GuildText,
+        };
+      }
+      throw new Error("metadata unavailable");
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          private: { enabled: false },
+          "333": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "implicit guild lookup",
+      action: "readMessages",
+      params: { channelId: "333" },
+      runtime: readMessagesDiscord,
+    },
+    {
+      name: "explicit guild input",
+      action: "fetchMessage",
+      params: { guildId: "111", channelId: "333", messageId: "message-1" },
+      runtime: fetchMessageDiscord,
+    },
+  ])(
+    "fails closed for $name when disabled ancestry cannot be verified",
+    async ({ action, params, runtime }) => {
+      fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
+      const cfg = discordAllowlistCfg({
+        "111": {
+          channels: {
+            "222": { enabled: false },
+            "333": { enabled: true },
+          },
+        },
+      });
+
+      await expect(handleMessagingAction(action, params, enableAllActions, cfg)).rejects.toThrow(
+        "Discord read target channel is not allowed.",
+      );
+      expect(runtime).not.toHaveBeenCalled();
+    },
+  );
 
   it("reads from Discord target channels allowlisted under a guild slug", async () => {
     fetchChannelInfoDiscord.mockResolvedValueOnce({
@@ -2334,6 +2514,12 @@ describe("handleDiscordGuildAction", () => {
         parent_id: "222",
         type: ChannelType.GuildText,
       },
+      {
+        id: "555",
+        name: "private-thread",
+        parent_id: "333",
+        type: ChannelType.GuildPublicThread,
+      },
       { id: "444", name: "public", type: ChannelType.GuildText },
     ];
     listGuildChannelsDiscord.mockResolvedValueOnce(channels);
@@ -2355,7 +2541,7 @@ describe("handleDiscordGuildAction", () => {
 
     expect(result.details).toEqual({
       ok: true,
-      channels: [channels[2]],
+      channels: [channels[3]],
     });
   });
 

@@ -1,16 +1,16 @@
 // Msteams plugin module implements resolve allowlist behavior.
 import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allow-from";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
-import { searchGraphUsers } from "./graph-users.js";
+import { findGraphUsersByExactIdentity } from "./graph-users.js";
 import {
-  listChannelsForTeam,
-  listTeamsByName,
+  listChannelsForTeamWithPageInfo,
+  listTeamsByNameWithPageInfo,
   normalizeQuery,
   resolveGraphToken,
+  type GraphChannel,
+  type GraphGroup,
+  type GraphUser,
 } from "./graph.js";
 
 type MSTeamsChannelResolution = {
@@ -31,6 +31,74 @@ type MSTeamsUserResolution = {
   name?: string;
   note?: string;
 };
+
+type StableMSTeamsTeamIdMode = "bot-framework" | "graph";
+
+function normalizeExactMatch(value?: string | null): string {
+  return normalizeLowercaseStringOrEmpty(value ?? "");
+}
+
+function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const item of items) {
+    const id = item.id?.trim();
+    if (id && !byId.has(id)) {
+      byId.set(id, item);
+    }
+  }
+  return [...byId.values()];
+}
+
+function findExactTeams(items: GraphGroup[], query: string): GraphGroup[] {
+  const normalized = normalizeExactMatch(query);
+  return uniqueItemsById(
+    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
+  );
+}
+
+function findExactChannels(items: GraphChannel[], query: string): GraphChannel[] {
+  const normalized = normalizeExactMatch(query);
+  return uniqueItemsById(
+    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
+  );
+}
+
+function findExactUsers(items: GraphUser[], query: string): GraphUser[] {
+  const normalized = normalizeExactMatch(query);
+  return uniqueItemsById(
+    items.filter((item) =>
+      [item.displayName, item.mail, item.userPrincipalName].some(
+        (value) => normalizeExactMatch(value) === normalized,
+      ),
+    ),
+  );
+}
+
+function isStableMSTeamsUserId(raw: string): boolean {
+  return /^[0-9a-fA-F-]{16,}$/.test(normalizeMSTeamsUserInput(raw));
+}
+
+function normalizeStaticMSTeamsAllowEntry(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "*" || /^accessGroup:/i.test(trimmed)) {
+    return trimmed;
+  }
+  const id = normalizeMSTeamsUserInput(trimmed);
+  return isStableMSTeamsUserId(id) ? id : undefined;
+}
+
+export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const projected = entries
+    .map((entry) => normalizeStaticMSTeamsAllowEntry(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return [...new Map(projected.map((entry) => [normalizeExactMatch(entry), entry])).values()];
+}
 
 function stripProviderPrefix(raw: string): string {
   return raw.replace(/^(msteams|teams):/i, "");
@@ -150,6 +218,46 @@ function looksLikeMSTeamsThreadConversationId(raw: string): boolean {
   return /^19:.+@thread\./i.test(normalized);
 }
 
+function isStableMSTeamsTeamKey(raw: string): boolean {
+  return /^[0-9a-fA-F-]{16,}$/.test(raw.trim()) || looksLikeMSTeamsThreadConversationId(raw);
+}
+
+function projectStableMSTeamsChannels(
+  channels: NonNullable<MSTeamsConfig["teams"]>[string]["channels"],
+) {
+  const projected: NonNullable<typeof channels> = {};
+  for (const [channelKey, channelConfig] of Object.entries(channels ?? {})) {
+    if (channelKey === "*") {
+      projected[channelKey] = channelConfig;
+      continue;
+    }
+    if (looksLikeMSTeamsThreadConversationId(channelKey)) {
+      projected[normalizeMSTeamsConversationTargetId(channelKey)] = channelConfig;
+    }
+  }
+  return projected;
+}
+
+export function projectStableMSTeamsTeamsConfig(
+  teams: MSTeamsConfig["teams"],
+): NonNullable<MSTeamsConfig["teams"]> | undefined {
+  if (!teams) {
+    return undefined;
+  }
+  const projected: NonNullable<MSTeamsConfig["teams"]> = {};
+  for (const [teamKey, teamConfig] of Object.entries(teams)) {
+    if (teamKey !== "*" && !isStableMSTeamsTeamKey(teamKey)) {
+      continue;
+    }
+    const stableKey = teamKey === "*" ? teamKey : normalizeMSTeamsConversationTargetId(teamKey);
+    projected[stableKey] = {
+      ...teamConfig,
+      channels: projectStableMSTeamsChannels(teamConfig.channels),
+    };
+  }
+  return projected;
+}
+
 export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; channel?: string } {
   const trimmed = stripProviderPrefix(raw).trim();
   if (!trimmed) {
@@ -181,6 +289,7 @@ export function parseMSTeamsTeamEntry(
 export async function resolveMSTeamsChannelAllowlist(params: {
   cfg: unknown;
   entries: string[];
+  teamIdMode?: StableMSTeamsTeamIdMode;
 }): Promise<MSTeamsChannelResolution[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
@@ -219,35 +328,62 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         };
       }
       const token = await getToken();
-      const teams = /^[0-9a-fA-F-]{16,}$/.test(team)
-        ? [{ id: team, displayName: team }]
-        : await listTeamsByName(token, team);
-      if (teams.length === 0) {
-        return { input, resolved: false, note: "team not found" };
+      let teamMatch: GraphGroup;
+      if (/^[0-9a-fA-F-]{16,}$/.test(team)) {
+        teamMatch = { id: team, displayName: team };
+      } else {
+        const result = await listTeamsByNameWithPageInfo(token, team);
+        if (result.truncated) {
+          return { input, resolved: false, note: "team lookup incomplete" };
+        }
+        const exactTeams = findExactTeams(result.items, team);
+        if (exactTeams.length === 0) {
+          return { input, resolved: false, note: "team not found" };
+        }
+        if (exactTeams.length > 1) {
+          return { input, resolved: false, note: "team name is ambiguous" };
+        }
+        teamMatch = exactTeams[0];
       }
-      const teamMatch = teams[0];
       const graphTeamId = teamMatch.id?.trim();
       const teamName = teamMatch.displayName?.trim() || team;
       if (!graphTeamId) {
         return { input, resolved: false, note: "team id missing" };
       }
-      // Bot Framework sends the General channel's conversation ID as
-      // channelData.team.id at runtime, NOT the Graph API group GUID.
-      // Fetch channels upfront so we can resolve the correct key format for
-      // runtime matching and reuse the list for channel lookups.
-      let teamChannels: Awaited<ReturnType<typeof listChannelsForTeam>> = [];
-      try {
-        teamChannels = await listChannelsForTeam(token, graphTeamId);
-      } catch {
-        // API failure (rate limit, network error) — fall back to Graph GUID as team key
+      const needsChannels = params.teamIdMode !== "graph" || Boolean(channel);
+      if (!needsChannels) {
+        return {
+          input,
+          resolved: true,
+          teamId: graphTeamId,
+          graphTeamId,
+          teamName,
+        };
       }
-      const generalChannel = teamChannels.find(
-        (ch) => normalizeOptionalLowercaseString(ch.displayName) === "general",
-      );
-      // Use the General channel's conversation ID as the team key — this
-      // matches what Bot Framework sends at runtime. Fall back to the Graph
-      // GUID if the General channel isn't found (renamed or deleted).
-      const teamId = generalChannel?.id?.trim() || graphTeamId;
+      let teamChannels: GraphChannel[];
+      try {
+        const result = await listChannelsForTeamWithPageInfo(token, graphTeamId);
+        if (result.truncated) {
+          return { input, resolved: false, note: "channel lookup incomplete" };
+        }
+        teamChannels = result.items;
+      } catch {
+        return { input, resolved: false, note: "channel lookup failed" };
+      }
+      const generalChannels = findExactChannels(teamChannels, "general");
+      if (params.teamIdMode !== "graph" && generalChannels.length !== 1) {
+        return {
+          input,
+          resolved: false,
+          graphTeamId,
+          teamName,
+          note:
+            generalChannels.length > 1
+              ? "General channel is ambiguous"
+              : "General channel not found",
+        };
+      }
+      const teamId = generalChannels[0]?.id?.trim() || graphTeamId;
       if (!channel) {
         return {
           input,
@@ -255,21 +391,19 @@ export async function resolveMSTeamsChannelAllowlist(params: {
           teamId,
           graphTeamId,
           teamName,
-          note: teams.length > 1 ? "multiple teams; chose first" : undefined,
         };
       }
-      // Reuse teamChannels — already fetched above
-      const normalizedChannel = normalizeOptionalLowercaseString(channel);
-      const channelMatch =
-        teamChannels.find((item) => item.id === channel) ??
-        teamChannels.find(
-          (item) => normalizeOptionalLowercaseString(item.displayName) === normalizedChannel,
-        ) ??
-        teamChannels.find((item) =>
-          normalizeLowercaseStringOrEmpty(item.displayName ?? "").includes(normalizedChannel ?? ""),
-        );
-      if (!channelMatch?.id) {
+      const channelById = teamChannels.find((item) => item.id === channel);
+      const exactChannels = channelById ? [channelById] : findExactChannels(teamChannels, channel);
+      if (exactChannels.length === 0) {
         return { input, resolved: false, note: "channel not found" };
+      }
+      if (exactChannels.length > 1) {
+        return { input, resolved: false, note: "channel name is ambiguous" };
+      }
+      const channelMatch = exactChannels[0];
+      if (!channelMatch?.id) {
+        return { input, resolved: false, note: "channel id missing" };
       }
       return {
         input,
@@ -279,7 +413,6 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         teamName,
         channelId: channelMatch.id,
         channelName: channelMatch.displayName ?? channel,
-        note: teamChannels.length > 1 ? "multiple channels; chose first" : undefined,
       };
     },
   });
@@ -287,7 +420,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
 
 export async function resolveMSTeamsTeamsConfig(params: {
   cfg: unknown;
-  teamIdMode: "bot-framework" | "graph";
+  teamIdMode: StableMSTeamsTeamIdMode;
   teams: NonNullable<MSTeamsConfig["teams"]>;
 }): Promise<{
   teams: NonNullable<MSTeamsConfig["teams"]>;
@@ -295,8 +428,14 @@ export async function resolveMSTeamsTeamsConfig(params: {
   unresolved: string[];
 }> {
   const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
+  const unresolved: string[] = [];
   for (const [teamKey, teamCfg] of Object.entries(params.teams)) {
     if (teamKey === "*") {
+      for (const channelKey of Object.keys(teamCfg?.channels ?? {})) {
+        if (channelKey !== "*" && !looksLikeMSTeamsThreadConversationId(channelKey)) {
+          unresolved.push(`${teamKey}/${channelKey}`);
+        }
+      }
       continue;
     }
     const channelKeys = Object.keys(teamCfg?.channels ?? {}).filter((key) => key !== "*");
@@ -313,16 +452,20 @@ export async function resolveMSTeamsTeamsConfig(params: {
     }
   }
   if (entries.length === 0) {
-    return { teams: params.teams, mapping: [], unresolved: [] };
+    return {
+      teams: projectStableMSTeamsTeamsConfig(params.teams) ?? {},
+      mapping: [],
+      unresolved,
+    };
   }
 
   const resolved = await resolveMSTeamsChannelAllowlist({
     cfg: params.cfg,
     entries: entries.map((entry) => entry.input),
+    teamIdMode: params.teamIdMode,
   });
   const mapping: string[] = [];
-  const unresolved: string[] = [];
-  const teams = { ...params.teams };
+  const teams = projectStableMSTeamsTeamsConfig(params.teams) ?? {};
 
   resolved.forEach((entry, index) => {
     const source = entries[index];
@@ -341,11 +484,12 @@ export async function resolveMSTeamsTeamsConfig(params: {
         : `${entry.input}→${resolvedTeamId}`,
     );
     const existing = teams[resolvedTeamId] ?? {};
+    const { channels: _sourceChannels, ...sourceTeamPolicy } = sourceTeam;
     const mergedChannels = {
-      ...sourceTeam.channels,
+      ...projectStableMSTeamsChannels(sourceTeam.channels),
       ...existing.channels,
     };
-    const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
+    const mergedTeam = { ...sourceTeamPolicy, ...existing, channels: mergedChannels };
     teams[resolvedTeamId] = mergedTeam;
     if (source.channelKey && entry.channelId) {
       const sourceChannel = sourceTeam.channels?.[source.channelKey];
@@ -371,7 +515,11 @@ export async function resolveMSTeamsUserAllowlist(params: {
   cfg: unknown;
   entries: string[];
 }): Promise<MSTeamsUserResolution[]> {
-  const token = await resolveGraphToken(params.cfg);
+  let tokenPromise: Promise<string> | undefined;
+  const getToken = () => {
+    tokenPromise ??= resolveGraphToken(params.cfg);
+    return tokenPromise;
+  };
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
     mapInput: async (input): Promise<MSTeamsUserResolution> => {
@@ -382,17 +530,26 @@ export async function resolveMSTeamsUserAllowlist(params: {
       if (/^[0-9a-fA-F-]{16,}$/.test(query)) {
         return { input, resolved: true, id: query };
       }
-      const users = await searchGraphUsers({ token, query, top: 10 });
-      const match = users[0];
-      if (!match?.id) {
-        return { input, resolved: false };
+      const result = await findGraphUsersByExactIdentity({
+        token: await getToken(),
+        query,
+      });
+      if (result.truncated) {
+        return { input, resolved: false, note: "user lookup incomplete" };
       }
+      const users = findExactUsers(result.items, query);
+      if (users.length === 0) {
+        return { input, resolved: false, note: "user not found" };
+      }
+      if (users.length > 1) {
+        return { input, resolved: false, note: "user identity is ambiguous" };
+      }
+      const match = users[0];
       return {
         input,
         resolved: true,
         id: match.id,
         name: match.displayName ?? undefined,
-        note: users.length > 1 ? "multiple matches; chose first" : undefined,
       };
     },
   });

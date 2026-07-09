@@ -38,6 +38,19 @@ function normalizeConversationMemberRole(role: string | undefined): Conversation
   throw new Error('MS Teams participant role must be "member" or "owner".');
 }
 
+function resolveConversationMemberRoles(
+  role: string | undefined,
+  kind: "chat" | "channel",
+): ConversationMemberRole[] {
+  const normalized = normalizeConversationMemberRole(role);
+  if (kind === "chat") {
+    // Graph accepts chat additions only as owners; "member" is the public
+    // convenience role and maps to the provider's required representation.
+    return ["owner"];
+  }
+  return normalized === "owner" ? ["owner"] : [];
+}
+
 /**
  * Add a user to a chat or channel via Graph API.
  */
@@ -50,7 +63,7 @@ export async function addParticipantMSTeams(
 
   const body = {
     "@odata.type": "#microsoft.graph.aadUserConversationMember",
-    roles: [normalizeConversationMemberRole(params.role)],
+    roles: resolveConversationMemberRoles(params.role, conv.kind),
     "user@odata.bind": `https://graph.microsoft.com/v1.0/users('${escapeOData(params.userId)}')`,
   };
 

@@ -24,12 +24,12 @@ export type GraphUser = {
   mail?: string;
 };
 
-type GraphGroup = {
+export type GraphGroup = {
   id?: string;
   displayName?: string;
 };
 
-type GraphChannel = {
+export type GraphChannel = {
   id?: string;
   displayName?: string;
 };
@@ -157,7 +157,7 @@ type GraphPagedResponse<T> = {
 };
 
 /** Result of a paginated Graph API fetch. */
-type PaginatedResult<T> = {
+export type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;
@@ -252,11 +252,17 @@ export async function resolveGraphToken(
 }
 
 export async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
+  return (await listTeamsByNameWithPageInfo(token, query)).items;
+}
+
+export async function listTeamsByNameWithPageInfo(
+  token: string,
+  query: string,
+): Promise<PaginatedResult<GraphGroup>> {
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphGroup>({ token, path, maxPages: 5 });
-  return items;
+  return await fetchAllGraphPages<GraphGroup>({ token, path });
 }
 
 export async function postGraphJson<T>(params: {
@@ -315,7 +321,13 @@ export async function patchGraphJson<T>(params: {
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
+  return (await listChannelsForTeamWithPageInfo(token, teamId)).items;
+}
+
+export async function listChannelsForTeamWithPageInfo(
+  token: string,
+  teamId: string,
+): Promise<PaginatedResult<GraphChannel>> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
-  return items;
+  return await fetchAllGraphPages<GraphChannel>({ token, path });
 }

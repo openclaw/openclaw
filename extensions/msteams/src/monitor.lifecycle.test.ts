@@ -177,7 +177,8 @@ const resolveAllowlistMocks = vi.hoisted(() => ({
   resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
-vi.mock("./resolve-allowlist.js", () => ({
+vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./resolve-allowlist.js")>()),
   resolveMSTeamsTeamsConfig: resolveAllowlistMocks.resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist: resolveAllowlistMocks.resolveMSTeamsUserAllowlist,
 }));
@@ -936,14 +937,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
       teams: {
-        Product: {
-          channels: {
-            Roadmap: {},
-          },
-        },
         "team-id": {
           channels: {
-            Roadmap: {},
             "channel-id": {},
           },
         },
@@ -979,15 +974,18 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const registeredCfg = requireRegisteredMSTeamsConfig();
     expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
-      "Alice",
-      "user:40a1a0ed-4ff2-4164-a219-55518990c197",
       "40a1a0ed-4ff2-4164-a219-55518990c197",
     ]);
     expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
-      "Bob",
-      "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
       "50a1a0ed-4ff2-4164-a219-55518990c198",
     ]);
+    expect(registeredCfg.channels?.msteams?.teams).toEqual({
+      "team-id": {
+        channels: {
+          "channel-id": {},
+        },
+      },
+    });
 
     abort.abort();
     await task;
@@ -1029,8 +1027,64 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     const registeredCfg = requireRegisteredMSTeamsConfig();
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["alice-aad"]);
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["bob-aad"]);
+
+    abort.abort();
+    await task;
+  });
+
+  it("keeps only stable allowlist entries when Graph resolution fails", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(true);
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockRejectedValueOnce(
+      new Error("Graph unavailable"),
+    );
+    const runtime = createRuntime();
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, {
+      dangerouslyAllowNameMatching: true,
+      allowFrom: ["Alice", "accessGroup:operators", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      teams: {
+        Mutable: {
+          channels: {
+            Roadmap: {},
+          },
+        },
+        "19:stable-team@thread.tacv2": {
+          channels: {
+            "19:stable-channel@thread.tacv2": {},
+          },
+        },
+      },
+    });
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime,
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(requireRegisteredMSTeamsConfig().channels?.msteams?.allowFrom).toEqual([
+      "accessGroup:operators",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+    ]);
+    expect(requireRegisteredMSTeamsConfig().channels?.msteams?.teams).toEqual({
+      "19:stable-team@thread.tacv2": {
+        channels: {
+          "19:stable-channel@thread.tacv2": {},
+        },
+      },
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("mutable allowlist entries are disabled"),
+    );
 
     abort.abort();
     await task;

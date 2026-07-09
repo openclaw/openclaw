@@ -3,7 +3,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveDefaultGroupPolicy } from "../runtime-api.js";
-import { listChannelsForTeam, resolveGraphToken } from "./graph.js";
+import { listChannelsForTeamWithPageInfo, resolveGraphToken } from "./graph.js";
 import { resolveMSTeamsRouteConfig } from "./policy.js";
 import {
   normalizeMSTeamsMessagingTarget,
@@ -178,8 +178,12 @@ async function resolveConfiguredBotFrameworkTeamKey(
   // Graph reads use the Entra group id. Roster membership proves the mapping
   // without relying on the localized General channel display name.
   const token = await resolveGraphToken(cfg);
+  const channelResult = await listChannelsForTeamWithPageInfo(token, graphTeamId);
+  if (channelResult.truncated) {
+    return undefined;
+  }
   const channelIds = new Set(
-    (await listChannelsForTeam(token, graphTeamId))
+    channelResult.items
       .map((channel) => channel.id?.trim())
       .filter((channelId): channelId is string => Boolean(channelId)),
   );

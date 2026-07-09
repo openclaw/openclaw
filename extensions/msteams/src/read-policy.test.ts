@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
-  listChannelsForTeam: vi.fn(),
+  listChannelsForTeamWithPageInfo: vi.fn(),
   resolveGraphToken: vi.fn(),
   resolveMSTeamsChannelAllowlist: vi.fn(),
   resolveMSTeamsTeamsConfig: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./graph.js", () => ({
-  listChannelsForTeam: mocks.listChannelsForTeam,
+  listChannelsForTeamWithPageInfo: mocks.listChannelsForTeamWithPageInfo,
   resolveGraphToken: mocks.resolveGraphToken,
 }));
 
@@ -36,7 +36,7 @@ const ctx = {
 };
 
 beforeEach(() => {
-  mocks.listChannelsForTeam.mockReset();
+  mocks.listChannelsForTeamWithPageInfo.mockReset();
   mocks.resolveGraphToken.mockReset();
   mocks.resolveMSTeamsChannelAllowlist.mockReset();
   mocks.resolveMSTeamsTeamsConfig.mockReset();
@@ -106,10 +106,13 @@ describe("Microsoft Teams read policy", () => {
         },
       },
     } as OpenClawConfig;
-    mocks.listChannelsForTeam.mockResolvedValue([
-      { id: "19:general@thread.tacv2", displayName: "Allgemein" },
-      { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-    ]);
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [
+        { id: "19:general@thread.tacv2", displayName: "Allgemein" },
+        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
+      ],
+      truncated: false,
+    });
 
     await expect(
       assertMSTeamsReadTargetAllowed({
@@ -118,7 +121,7 @@ describe("Microsoft Teams read policy", () => {
         target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
       }),
     ).resolves.toBe("11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2");
-    expect(mocks.listChannelsForTeam).toHaveBeenCalledWith(
+    expect(mocks.listChannelsForTeamWithPageInfo).toHaveBeenCalledWith(
       "token",
       "11111111-1111-1111-1111-111111111111",
     );
@@ -144,11 +147,43 @@ describe("Microsoft Teams read policy", () => {
         },
       },
     } as OpenClawConfig;
-    mocks.listChannelsForTeam.mockResolvedValue([
-      { id: "19:general@thread.tacv2", displayName: "General" },
-      { id: "19:other@thread.tacv2", displayName: "Other" },
-      { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-    ]);
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [
+        { id: "19:general@thread.tacv2", displayName: "General" },
+        { id: "19:other@thread.tacv2", displayName: "Other" },
+        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
+      ],
+      truncated: false,
+    });
+
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg,
+        ctx,
+        target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+  });
+
+  it("rejects an incomplete Bot Framework team mapping", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "19:general@thread.tacv2": {
+              channels: {
+                "19:roadmap@thread.tacv2": {},
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [{ id: "19:general@thread.tacv2", displayName: "General" }],
+      truncated: true,
+    });
 
     await expect(
       assertMSTeamsReadTargetAllowed({
@@ -333,10 +368,13 @@ describe("Microsoft Teams read policy", () => {
         },
       },
     } as OpenClawConfig;
-    mocks.listChannelsForTeam.mockResolvedValue([
-      { id: "19:general@thread.tacv2", displayName: "General" },
-      { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-    ]);
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [
+        { id: "19:general@thread.tacv2", displayName: "General" },
+        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
+      ],
+      truncated: false,
+    });
 
     await expect(
       assertMSTeamsTeamEnumerationAllowed({
