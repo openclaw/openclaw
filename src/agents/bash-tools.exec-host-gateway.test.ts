@@ -1480,22 +1480,57 @@ EOF`,
     });
     recordAllowlistMatchesUseMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    const captured = captureSecurityEvents();
 
-    const result = await runGatewayAllowlist({ command: "echo approved" });
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({ command: "echo approved" });
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      captured.stop();
+    }
 
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
-    });
+    expect(result!.pendingResult?.details.status).toBe("approval-pending");
     expect(requireSentFollowupText(0)).toContain("approval-state-write-failed");
     expect(runExecProcessMock).not.toHaveBeenCalled();
-    expect(emitTrustedSecurityEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "exec.approval.denied",
-        outcome: "error",
-        policy: expect.objectContaining({ reason: "approval-state-write-failed" }),
-      }),
-    );
+    expect(captured.events.at(-1)).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "error",
+      policy: { reason: "approval-state-write-failed" },
+    });
+  });
+
+  it("fails closed when a detached allow-always grant cannot be persisted", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    persistAllowAlwaysDecisionMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({ command: "echo approved" });
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.pendingResult?.details.status).toBe("approval-pending");
+    expect(requireSentFollowupText(0)).toContain("approval-state-write-failed");
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(captured.events.at(-1)).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "error",
+      policy: { reason: "approval-state-write-failed" },
+    });
   });
 
   it("waits inline for webchat approval so the exec tool can return real output to the model", async () => {
