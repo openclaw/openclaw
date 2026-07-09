@@ -46,9 +46,11 @@ extension RootTabs {
         case skillWorkshop
         case instances
         case sessions
+        case files
         case dreaming
         case usage
         case cron
+        case terminal
         case docs
         case settings
         case gateway
@@ -68,9 +70,11 @@ extension RootTabs {
             case .skillWorkshop: "Skill Workshop"
             case .instances: "Instances"
             case .sessions: "Sessions"
+            case .files: "Files"
             case .dreaming: "Dreaming"
             case .usage: "Usage"
             case .cron: "Cron Jobs"
+            case .terminal: "Terminal"
             case .docs: "Docs"
             case .settings: "Settings"
             case .gateway: "Settings / Gateway"
@@ -95,9 +99,11 @@ extension RootTabs {
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
             case .sessions: "doc.text"
+            case .files: "folder.fill"
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
@@ -114,9 +120,10 @@ extension RootTabs {
                 .agent
             case .settings, .gateway:
                 .settings
-            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+                 .dreaming,
                  .usage,
-                 .cron, .docs:
+                 .cron, .terminal, .docs:
                 .control
             }
         }
@@ -126,8 +133,9 @@ extension RootTabs {
             case .gateway:
                 .gateway
             case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+                 .files,
                  .dreaming,
-                 .usage, .cron, .settings, .docs:
+                 .usage, .cron, .terminal, .settings, .docs:
                 nil
             }
         }
@@ -196,9 +204,10 @@ extension RootTabs {
         switch destination {
         case .chat, .talk, .agents, .gateway, .settings:
             true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+             .dreaming,
              .usage,
-             .cron, .docs:
+             .cron, .terminal, .docs:
             false
         }
     }
@@ -234,13 +243,15 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
+        // Saved gateway state survives independently of the onboarding markers.
+        // Explicit resets bypass this route through evaluateOnboardingPresentation(force:).
+        if hasExistingGatewayConfig {
+            return .none
+        }
         if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
-            return .settings
-        }
-        return .none
+        return .settings
     }
 
     static func shouldPresentQuickSetup(
@@ -280,9 +291,11 @@ extension RootTabs {
                 .skillWorkshop,
                 .instances,
                 .sessions,
+                .files,
                 .dreaming,
                 .usage,
                 .cron,
+                .terminal,
             ]),
         SidebarGroup(
             title: "SETTINGS",
@@ -291,11 +304,14 @@ extension RootTabs {
     ]
 
     static var phoneControlGroups: [SidebarGroup] {
-        self.sidebarGroups
+        // Agents owns a bottom tab and its hub entry duplicated the same destination;
+        // Chat and Talk stay per the tested Control-hub IA contract.
+        let tabOwned: Set<SidebarDestination> = [.agents]
+        return self.sidebarGroups
             .map { group in
                 SidebarGroup(
                     title: group.title,
-                    destinations: group.destinations.filter { $0 != .agents })
+                    destinations: group.destinations.filter { !tabOwned.contains($0) })
             }
             .filter { !$0.destinations.isEmpty }
     }

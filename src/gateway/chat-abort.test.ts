@@ -23,6 +23,7 @@ type ChatAbortPayload = {
   seq: number;
   state: "aborted";
   stopReason?: string;
+  errorMessage?: string;
   message?: {
     role: "assistant";
     content: Array<{ type: "text"; text: string }>;
@@ -357,6 +358,24 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("includes the active run's safe validation diagnostic", () => {
+    const runId = "run-validation-abort";
+    const sessionKey = "main";
+    const entry = {
+      ...createActiveEntry(sessionKey),
+      toolErrorSummary: "edit tool validation failed: edits: must be an array",
+    };
+    const ops = createOps({ runId, entry });
+
+    abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+
+    expect(firstBroadcastPayload(ops)).toMatchObject({
+      runId,
+      state: "aborted",
+      errorMessage: "edit tool validation failed: edits: must be an array",
+    });
   });
 
   it("preserves finalizing runs when the owning reply operation rejects aborts", () => {

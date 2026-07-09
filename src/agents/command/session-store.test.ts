@@ -170,6 +170,69 @@ async function withTempSessionStore<T>(
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("preserves a concurrent rename and unpin during final accounting", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-management-race";
+      const sessionId = "test-management-race-session";
+      const staleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        label: "Old label",
+        pinnedAt: 100,
+        chatType: "direct",
+        elevatedLevel: "full",
+        inheritedToolAllow: ["exec"],
+        sendPolicy: "allow",
+      };
+      const sessionStore = { [sessionKey]: staleEntry };
+      const concurrentEntry: SessionEntry = {
+        ...staleEntry,
+        chatType: "group",
+        label: "Renamed while running",
+        sendPolicy: "deny",
+        updatedAt: 2,
+      };
+      delete concurrentEntry.elevatedLevel;
+      delete concurrentEntry.inheritedToolAllow;
+      delete concurrentEntry.pinnedAt;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: concurrentEntry,
+        }),
+      );
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toMatchObject({
+        chatType: "group",
+        label: "Renamed while running",
+        model: "gpt-5.5",
+        sendPolicy: "deny",
+      });
+      expect(sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
+      expect(sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
+      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
+        sessionStore[sessionKey],
+      );
+    });
+  });
+
   it("passes resolved maintenance config to the gateway turn store write", async () => {
     sessionStoreMocks.updateSessionStore.mockClear();
     await withTempSessionStore(async ({ storePath }) => {
@@ -1115,6 +1178,62 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("uses the compaction snapshot when non-CLI last-call context is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-unavailable-context";
+      const sessionId = "test-unavailable-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 95_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-fable-5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "anthropic",
+              model: "claude-fable-5",
+              usage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                total: 927_907,
+              },
+              lastCallUsage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                contextUsage: { state: "unavailable" },
+                total: 927_907,
+              },
+              compactionTokensAfter: 80_000,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(80_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+    });
+  });
+
   it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -1578,8 +1697,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBe(lastInteractionAt);
+      expect(sessionStore[sessionKey]?.lastActivityAt).toEqual(expect.any(Number));
+      expect(sessionStore[sessionKey]?.lastActivityAt).toBeGreaterThan(lastInteractionAt);
       expect(sessionStore[sessionKey]?.sessionStartedAt).toBe(sessionStartedAt);
       expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("preserves lastActivityAt for heartbeat-style runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-run";
+      const sessionId = "test-heartbeat-run-session";
+      const lastActivityAt = Date.now() - 60 * 60_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now() - 10_000,
+          lastActivityAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+        touchInteraction: false,
+        touchActivity: false,
+      });
+
+      expect(sessionStore[sessionKey]?.lastActivityAt).toBe(lastActivityAt);
+      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThan(lastActivityAt);
     });
   });
 
@@ -1776,6 +1939,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         updatedAt: 2,
         sessionStartedAt: 777,
         lastInteractionAt: 20,
+        lastActivityAt: 21,
         modelProvider: "openai",
         model: "gpt-5.5",
         contextTokens: 400_000,
@@ -1846,6 +2010,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("new-visible-cli-session");
       expect(next?.compactionCount).toBe(9);
       expect(next?.lastInteractionAt).toBeGreaterThan(20);
+      // Preserved-state runs must not re-flag the session unread.
+      expect(next?.lastActivityAt).toBe(21);
     });
   });
 

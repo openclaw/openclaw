@@ -178,6 +178,28 @@ function captureWrappedOllamaPayload(
 }
 
 describe("ollama plugin", () => {
+  it.each(["ollama", "ollama-cloud"])(
+    "classifies incomplete %s streams as provider failures",
+    (providerId) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (candidate) => candidate.id === providerId,
+      );
+
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama API stream ended without a final response",
+        }),
+      ).toBe("server_error");
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama returned malformed tool arguments",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("registers node-local inference commands, policy, and agent tool", () => {
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();

@@ -7,7 +7,12 @@ import {
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type ContextUsage,
+} from "../agents/usage.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -15,6 +20,7 @@ import {
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -1342,13 +1348,15 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
 
-type SessionTranscriptUsageSnapshot = {
+export type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
+  trailingBytes?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
   costUsd?: number;
@@ -1523,6 +1531,9 @@ function extractUsageSnapshotFromTranscriptLine(
     if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
       snapshot.cacheWrite = usage.cacheWrite;
     }
+    if (usage?.contextUsage) {
+      snapshot.contextUsage = usage.contextUsage;
+    }
     if (typeof totalTokens === "number") {
       snapshot.totalTokens = totalTokens;
       snapshot.totalTokensFresh = true;
@@ -1589,7 +1600,15 @@ function extractAggregateUsageFromTranscriptLines(
       cacheWrite += current.cacheWrite;
       sawCacheWrite = true;
     }
-    if (typeof current.totalTokens === "number") {
+    if (current.contextUsage) {
+      snapshot.contextUsage = current.contextUsage;
+    } else {
+      delete snapshot.contextUsage;
+    }
+    if (current.contextUsage?.state === "unavailable") {
+      delete snapshot.totalTokens;
+      delete snapshot.totalTokensFresh;
+    } else if (typeof current.totalTokens === "number") {
       snapshot.totalTokens = current.totalTokens;
       snapshot.totalTokensFresh = true;
     }
@@ -1631,14 +1650,89 @@ function extractAggregateUsageFromTranscriptLines(
   return snapshot;
 }
 
+function hasTranscriptUsage(
+  snapshot: SessionTranscriptUsageSnapshot | null,
+): snapshot is SessionTranscriptUsageSnapshot {
+  return Boolean(
+    snapshot &&
+    (snapshot.contextUsage !== undefined ||
+      snapshot.inputTokens !== undefined ||
+      snapshot.outputTokens !== undefined ||
+      snapshot.cacheRead !== undefined ||
+      snapshot.cacheWrite !== undefined ||
+      snapshot.totalTokens !== undefined ||
+      snapshot.costUsd !== undefined),
+  );
+}
+
 function extractLatestUsageFromTranscriptLines(
   lines: Iterable<string>,
 ): SessionTranscriptUsageSnapshot | null {
+  const parsed = Array.from(lines).flatMap((line) => {
+    const entry = parseTailTranscriptRecord(line);
+    return entry ? [{ entry, line }] : [];
+  });
+  const selected = selectBoundedActiveTailRecords(
+    parsed.map(({ entry }) => entry),
+    { failClosedOnInvalidLeafControl: true },
+  );
+  const lineByRecord = new Map(parsed.map(({ entry, line }) => [entry.record, line]));
   let latest: SessionTranscriptUsageSnapshot | null = null;
-  for (const line of lines) {
-    latest = extractUsageSnapshotFromTranscriptLine(line) ?? latest;
+  let trailingBytes = 0;
+  for (const entry of selected) {
+    const line = lineByRecord.get(entry.record);
+    if (!line) {
+      continue;
+    }
+    const current = extractUsageSnapshotFromTranscriptLine(line);
+    if (hasTranscriptUsage(current)) {
+      latest = current;
+      trailingBytes = 0;
+    } else if (latest) {
+      trailingBytes += Buffer.byteLength(line, "utf8") + 1;
+    }
+  }
+  if (latest) {
+    latest.trailingBytes = trailingBytes;
   }
   return latest;
+}
+
+function hasInvalidLeafControl(lines: Iterable<string>): boolean {
+  const entries = Array.from(lines).flatMap((line) => {
+    const entry = parseTailTranscriptRecord(line);
+    return entry ? [entry.record] : [];
+  });
+  const tree = scanSessionTranscriptTree(entries);
+  return tree.hasInvalidLeafControl;
+}
+
+// File-tier only (#88838): this module is the file backend behind the
+// session-transcript-readers seam, and the index read operates on an already
+// resolved transcript artifact path, never on live session identity.
+async function extractLatestUsageFromTranscriptIndex(
+  filePath: string,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return null;
+  }
+  let trailingBytes = 0;
+  for (let position = index.entries.length - 1; position >= 0; position -= 1) {
+    const entry = index.entries[position];
+    if (!entry) {
+      continue;
+    }
+    if (entry.byteLength <= MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
+      const current = extractUsageSnapshotFromTranscriptLine(JSON.stringify(entry.record));
+      if (hasTranscriptUsage(current)) {
+        current.trailingBytes = trailingBytes;
+        return current;
+      }
+    }
+    trailingBytes += entry.byteLength + 1;
+  }
+  return null;
 }
 
 function extractAggregateUsageFromTranscriptChunk(
@@ -1748,6 +1842,9 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
       maxLines: 1000,
       maxBytes,
     });
+    if (hasInvalidLeafControl(lines)) {
+      return await extractLatestUsageFromTranscriptIndex(filePath);
+    }
     return extractLatestUsageFromTranscriptLines(lines);
   } catch {
     return null;
@@ -1823,13 +1920,11 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
 }
 
 function truncatePreviewText(text: string, maxChars: number): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
+  if (text.length <= maxChars) {
     return text;
   }
-  if (maxChars <= 3) {
-    return text.slice(0, maxChars);
-  }
-  return `${text.slice(0, maxChars - 3)}...`;
+  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
+  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {

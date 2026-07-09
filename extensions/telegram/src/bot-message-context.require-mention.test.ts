@@ -92,6 +92,27 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
   });
 
+  it("keeps explicit bot mentions as user requests in always-on room-event groups", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      message: {
+        ...buildForumMessage(),
+        text: "@bot status",
+        entities: [{ type: "mention", offset: 0, length: "@bot".length }],
+      },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.WasMentioned).toBe(true);
+    expect(ctx?.ctxPayload.ExplicitlyMentionedBot).toBe(true);
+  });
+
   it("keeps ambient abort phrases as user requests", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },

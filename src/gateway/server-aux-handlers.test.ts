@@ -138,6 +138,7 @@ type SecretsReloadHarnessParams = {
   clients?: GatewayAuxHandlerParams["clients"];
   startChannel?: GatewayAuxHandlerParams["startChannel"];
   stopChannel?: GatewayAuxHandlerParams["stopChannel"];
+  getChannelAutostartSuppression?: GatewayAuxHandlerParams["getChannelAutostartSuppression"];
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
 };
@@ -157,6 +158,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     clients: params.clients ?? [],
     startChannel: params.startChannel ?? (async () => {}),
     stopChannel: params.stopChannel ?? (async () => {}),
+    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
   });
 
@@ -201,6 +203,30 @@ afterEach(() => {
 });
 
 describe("gateway aux handlers", () => {
+  it("refuses secrets.reload channel restarts while crash-loop safe mode suppresses autostart", async () => {
+    const buildReloadPlan = buildRestartChannelsPlan("slack");
+    activateSnapshot(slackConfig("old-slack-secret"));
+    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        activateRuntimeSecrets,
+        buildReloadPlan,
+        getChannelAutostartSuppression: () => ({
+          reason: "crash-loop-breaker",
+          message: "safe mode",
+        }),
+      });
+
+    await reload();
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    const [okFlag, successPayload, errorPayload] = firstRespondCall(respond);
+    expect(okFlag).toBe(false);
+    expect(successPayload).toBeUndefined();
+    expect(errorPayload?.message ?? "").toBe("secrets.reload failed");
+  });
+
   it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
     const buildReloadPlanCalls: string[][] = [];
     const buildReloadPlan = (changedPaths: string[]) => {

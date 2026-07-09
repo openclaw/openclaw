@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
+  resolveCodexAppServerDetachedMode,
   resolveCodexAppServerSpawnEnv,
   resolveCodexAppServerSpawnInvocation,
 } from "./transport-stdio.js";
@@ -183,5 +184,21 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     expect(Object.hasOwn(env, "__proto__")).toBe(false);
     expect(Object.hasOwn(env, "constructor")).toBe(false);
     expect(Object.hasOwn(env, "prototype")).toBe(false);
+  });
+});
+
+describe("resolveCodexAppServerDetachedMode", () => {
+  it("detaches normal POSIX app-server processes", () => {
+    expect(resolveCodexAppServerDetachedMode({}, "darwin")).toBe(true);
+  });
+
+  it("keeps QA app-server processes in the gateway process group", () => {
+    expect(resolveCodexAppServerDetachedMode({ OPENCLAW_QA_PARENT_PID: "12345" }, "linux")).toBe(
+      false,
+    );
+  });
+
+  it("does not detach Windows app-server processes", () => {
+    expect(resolveCodexAppServerDetachedMode({}, "win32")).toBe(false);
   });
 });

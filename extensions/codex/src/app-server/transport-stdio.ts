@@ -11,6 +11,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 type CodexAppServerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -73,6 +74,14 @@ export function resolveCodexAppServerSpawnEnv(
   return env;
 }
 
+/** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
+export function resolveCodexAppServerDetachedMode(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim();
+}
+
 function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
   const keys: string[] = [];
   for (const rawKey of rawKeys) {
@@ -106,7 +115,7 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
   });
   return spawn(invocation.command, invocation.args, {
     env,
-    detached: process.platform !== "win32",
+    detached: resolveCodexAppServerDetachedMode(env),
     shell: invocation.shell,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: invocation.windowsHide,

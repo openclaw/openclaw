@@ -11,6 +11,7 @@ import {
   writeSessionStoreForTestAsync,
 } from "../../config/sessions/test-helpers.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { handleGoalCommand } from "./commands-goal.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -35,7 +36,9 @@ function emptyAliasIndex(): ModelAliasIndex {
 }
 
 const mocks = vi.hoisted(() => ({
+  buildStatusReply: vi.fn(),
   ensureAgentWorkspace: vi.fn(),
+  handleCommands: vi.fn(),
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
@@ -47,6 +50,14 @@ const mocks = vi.hoisted(() => ({
     },
   ]),
   resolveReplyDirectives: vi.fn(),
+}));
+
+vi.mock("./commands.runtime.js", () => ({
+  handleCommands: (...args: unknown[]) => mocks.handleCommands(...args),
+}));
+
+vi.mock("./commands-status.js", () => ({
+  buildStatusReply: (...args: unknown[]) => mocks.buildStatusReply(...args),
 }));
 
 vi.mock("../../agents/model-catalog.js", async () => {
@@ -132,7 +143,34 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       }),
       resolveRuntimeCliBackends: () => [],
     });
+    mocks.buildStatusReply.mockReset();
+    mocks.buildStatusReply.mockImplementation(async (params: unknown) => {
+      const status = params as {
+        cfg: OpenClawConfig;
+        resolvedThinkLevel?: string;
+        resolveDefaultThinkingLevel: () => Promise<string | undefined>;
+        sessionKey?: string;
+      };
+      const agentId = status.sessionKey?.split(":")[1];
+      const agentThinkingDefault = status.cfg.agents?.list?.find(
+        (agent) => agent.id === agentId,
+      )?.thinkingDefault;
+      const thinkLevel =
+        status.resolvedThinkLevel ??
+        agentThinkingDefault ??
+        status.cfg.agents?.defaults?.thinkingDefault ??
+        (await status.resolveDefaultThinkingLevel());
+      return { text: `OpenClaw\nThink: ${thinkLevel ?? "off"}` };
+    });
     mocks.ensureAgentWorkspace.mockReset();
+    mocks.handleCommands.mockReset();
+    mocks.handleCommands.mockImplementation(async (params: unknown) => {
+      const result = await handleGoalCommand(
+        params as Parameters<typeof handleGoalCommand>[0],
+        true,
+      );
+      return result ?? { shouldContinue: true, reply: undefined };
+    });
     mocks.handleInlineActions.mockReset();
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.initSessionState.mockReset();
@@ -558,6 +596,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    expect(mocks.handleCommands).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     const directiveParams = requireDirectiveParams();
     expect(directiveParams.sessionKey).toBe(targetSessionKey);

@@ -43,33 +43,39 @@ struct TalkRuntimeIssueDetailsSheet: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(self.issue.fallbackBannerTitle)
-                            .font(.title3.weight(.semibold))
+                            .font(OpenClawType.title3SemiBold)
                         Text(self.issue.fallbackBannerMessage)
-                            .font(.body)
+                            .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
                         Text(self.issue.displayMessage)
-                            .font(.footnote.weight(.semibold))
+                            .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                 }
 
-                Section("Technical details") {
+                Section {
                     Text(verbatim: self.issue.technicalDetails)
-                        .font(.system(.footnote, design: .monospaced))
+                        .font(OpenClawType.monoFootnote)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                    Button("Copy diagnostics") {
+                    Button {
                         UIPasteboard.general.string = self.issue.technicalDetails
                         self.copyFeedback = "Copied diagnostics"
+                    } label: {
+                        Text("Copy diagnostics")
+                            .font(OpenClawType.subheadSemiBold)
                     }
+                } header: {
+                    Text("Technical details")
+                        .font(OpenClawType.captionSemiBold)
                 }
 
                 if let copyFeedback {
                     Section {
                         Text(copyFeedback)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -79,15 +85,21 @@ struct TalkRuntimeIssueDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if let onOpenSettings {
-                        Button("Open Settings") {
+                        Button {
                             self.dismiss()
                             onOpenSettings()
+                        } label: {
+                            Text("Open Settings")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button {
                         self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }

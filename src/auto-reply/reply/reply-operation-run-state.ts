@@ -1,6 +1,6 @@
 export type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
-  | { status: "skipped"; reason: "active-run" | "aborted" };
+  | { status: "skipped"; reason: "active-run" | "aborted" | "lifecycle-invalidated" };
 
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;

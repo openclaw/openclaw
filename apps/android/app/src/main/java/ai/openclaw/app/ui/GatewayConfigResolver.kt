@@ -18,6 +18,13 @@ internal data class GatewayEndpointConfig(
   val displayUrl: String,
 )
 
+/** Effective transport shown by manual gateway forms before they connect. */
+internal data class GatewayManualTransportPresentation(
+  val requiresTls: Boolean,
+  val effectiveTls: Boolean,
+  val helperText: String?,
+)
+
 /** Decoded setup-code payload; only one credential family is expected to be populated. */
 internal data class GatewaySetupCode(
   val url: String,
@@ -39,6 +46,7 @@ internal data class GatewayConnectConfig(
 /** How a connection attempt may update credentials already owned by the runtime. */
 internal enum class GatewaySavedAuthAction {
   PRESERVE,
+  REPLACE_CREDENTIALS,
   REPLACE_ENDPOINT,
   REPLACE_SETUP,
 }
@@ -53,6 +61,7 @@ internal data class GatewayConnectPlan(
 internal enum class GatewayEndpointValidationError {
   INVALID_URL,
   INSECURE_REMOTE_URL,
+  IPV6_ZONE_ID_UNSUPPORTED,
 }
 
 /** User input source used to choose endpoint-validation wording. */
@@ -179,10 +188,10 @@ internal fun resolveGatewayConnectPlan(
     composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
       ?.let { parseGatewayEndpointResult(it).config }
   val action =
-    if (savedManualEndpoint?.sameEndpoint(config) == true) {
-      GatewaySavedAuthAction.PRESERVE
-    } else {
-      GatewaySavedAuthAction.REPLACE_ENDPOINT
+    when {
+      savedManualEndpoint?.sameEndpoint(config) != true -> GatewaySavedAuthAction.REPLACE_ENDPOINT
+      config.token.isNotEmpty() || config.password.isNotEmpty() -> GatewaySavedAuthAction.REPLACE_CREDENTIALS
+      else -> GatewaySavedAuthAction.PRESERVE
     }
   return GatewayConnectPlan(config, action)
 }
@@ -199,7 +208,8 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri =
-    runCatching { URI(normalized) }.getOrNull()
+    runCatching { URI(normalized) }
+      .getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   val host =
     uri.host
@@ -207,6 +217,10 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
       ?.trim('[', ']')
       .orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  // OkHttp rejects scoped IPv6 hosts after URI decoding, so fail before saving an endpoint that can never dial.
+  if (host.contains(':') && host.contains('%')) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED)
+  }
 
   val scheme =
     uri.scheme
@@ -296,6 +310,15 @@ internal fun gatewayEndpointValidationMessage(
         GatewayEndpointInputSource.MANUAL ->
           "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
       }
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+      when (source) {
+        GatewayEndpointInputSource.SETUP_CODE ->
+          "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+        GatewayEndpointInputSource.QR_SCAN ->
+          "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+        GatewayEndpointInputSource.MANUAL ->
+          "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname."
+      }
     GatewayEndpointValidationError.INVALID_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
@@ -303,6 +326,9 @@ internal fun gatewayEndpointValidationMessage(
         GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
       }
   }
+
+private const val defaultManualGatewayPort = 18789
+private const val tailnetTlsGatewayPort = 443
 
 private fun gatewayPort(
   port: Int,
@@ -313,6 +339,20 @@ private fun gatewayPort(
     port in 1..65535 -> port
     else -> null
   }
+
+/** Resolves the manual port default shared by onboarding, settings, and the Connect tab. */
+internal fun resolveDefaultManualGatewayPort(
+  hostInput: String,
+  tls: Boolean,
+): Int {
+  val host =
+    hostInput
+      .trim()
+      .trimEnd('/')
+      .removeSuffix(".")
+      .lowercase(Locale.US)
+  return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
+}
 
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
@@ -333,7 +373,7 @@ internal fun composeGatewayManualUrl(
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
-      if (tls) 443 else return null
+      resolveDefaultManualGatewayPort(bareHost, tls)
     } else {
       portTrimmed.toIntOrNull() ?: return null
     }
@@ -341,6 +381,53 @@ internal fun composeGatewayManualUrl(
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
 }
+
+/** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */
+internal fun gatewayManualTransportPresentation(
+  hostInput: String,
+  requestedTls: Boolean,
+): GatewayManualTransportPresentation {
+  val host = hostInput.trim()
+  if (host.isEmpty()) {
+    return gatewayManualTransportPresentation(
+      requiresTls = false,
+      effectiveTls = requestedTls,
+    )
+  }
+
+  if (host.contains("://")) {
+    val config = parseGatewayEndpointResult(host).config
+    if (config != null) {
+      return gatewayManualTransportPresentation(
+        requiresTls = !isLocalCleartextGatewayHost(config.host),
+        effectiveTls = config.tls,
+      )
+    }
+  }
+
+  val normalizedHost = host.trimEnd('/')
+  val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
+  val effectiveTls = requestedTls || requiresTls
+  return gatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+  )
+}
+
+private fun gatewayManualTransportPresentation(
+  requiresTls: Boolean,
+  effectiveTls: Boolean,
+): GatewayManualTransportPresentation =
+  GatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+    helperText =
+      when {
+        requiresTls -> "Secure connection is required for this host."
+        effectiveTls -> null
+        else -> "Use only on a trusted private network."
+      },
+  )
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 

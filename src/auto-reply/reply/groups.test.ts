@@ -31,10 +31,10 @@ describe("group runtime loading", () => {
     });
     expect(groupChatContext).toContain("You are in a WhatsApp group chat.");
     expect(groupChatContext).toContain(
-      "Your text replies are automatically sent to this group chat.",
+      "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
     );
     expect(groupChatContext).toContain(
-      "For ordinary text, do not use the message tool to send to this same destination; just reply normally.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
     );
     expect(groupChatContext).toContain(
       "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
@@ -102,7 +102,7 @@ describe("group runtime loading", () => {
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).toBe(
-      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation.",
+      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
     );
     expect(
       groups.buildDirectChatContext({
@@ -144,8 +144,8 @@ describe("group runtime loading", () => {
     expect(disallowed).not.toContain("Never say that you are staying quiet");
   });
 
-  it("binds an explicitly mentioned channel handle to the current assistant identity", () => {
-    const context = groups.buildGroupChatContext({
+  it("keeps per-message mention state out of stable group context", () => {
+    const mentioned = groups.buildGroupChatContext({
       sessionCtx: {
         ChatType: "group",
         Provider: "telegram",
@@ -156,19 +156,19 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
     });
 
-    expect(context).toContain("explicitly mentions your channel identity @SirPinchALotBot");
-    expect(context).toContain("Treat that mention as addressed to you");
-
     const notExplicit = groups.buildGroupChatContext({
       sessionCtx: {
         ChatType: "group",
         Provider: "telegram",
-        BotUsername: "kesslerAIBot",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: false,
       },
       silentToken: "NO_REPLY",
       silentReplyPolicy: "allow",
     });
-    expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
+
+    expect(mentioned).toBe(notExplicit);
+    expect(mentioned).not.toContain("channel identity @SirPinchALotBot");
   });
 
   it("uses channel wording when the authoritative chat type is channel", () => {
@@ -179,7 +179,9 @@ describe("group runtime loading", () => {
     });
 
     expect(context).toContain("You are in a Mattermost channel.");
-    expect(context).toContain("Your text replies are automatically sent to this channel.");
+    expect(context).toContain(
+      "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
+    );
     expect(context).toContain("do not use the message tool to send to this same destination");
     expect(context).toContain("attachments to this same channel/thread");
     expect(context).not.toContain("group chat");

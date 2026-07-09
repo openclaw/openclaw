@@ -26,14 +26,15 @@ import type {
   ContextEngineFactoryContext,
   ContextEngineRegistrationResult,
 } from "./registry.js";
-import type {
-  ContextEngine,
-  ContextEngineInfo,
-  AssembleResult,
-  CompactResult,
-  ContextEngineMaintenanceResult,
-  BootstrapResult,
-  IngestResult,
+import {
+  resolveCompactionSuccessorTranscript,
+  type ContextEngine,
+  type ContextEngineInfo,
+  type AssembleResult,
+  type CompactResult,
+  type ContextEngineMaintenanceResult,
+  type BootstrapResult,
+  type IngestResult,
 } from "./types.js";
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
@@ -599,8 +600,77 @@ describe("Engine contract tests", () => {
         tokensBefore: 0,
         tokensAfter: 0,
         details: undefined,
+        sessionTarget: {
+          kind: "file",
+          sessionId: "s2",
+          sessionFile: "/tmp/session.json",
+        },
       },
     });
+  });
+
+  it("delegateCompactionToRuntime reports the rotated successor as a typed session target", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "e1",
+        tokensBefore: 100,
+        tokensAfter: 10,
+        sessionId: "rotated-id",
+        sessionFile: "/tmp/rotated.jsonl",
+      },
+    });
+
+    const result = await delegateCompactionToRuntime({
+      sessionId: "s-rotate",
+      sessionKey: "agent:main:test",
+      sessionFile: "/tmp/session.json",
+      runtimeContext: {
+        workspaceDir: "/tmp/workspace",
+        agentId: "main",
+      },
+    });
+
+    expect(result.result?.sessionTarget).toEqual({
+      kind: "file",
+      agentId: "main",
+      sessionId: "rotated-id",
+      sessionKey: "agent:main:test",
+      sessionFile: "/tmp/rotated.jsonl",
+    });
+    // Deprecated raw fields stay populated for shipped plugin-sdk readers.
+    expect(result.result?.sessionId).toBe("rotated-id");
+    expect(result.result?.sessionFile).toBe("/tmp/rotated.jsonl");
+  });
+
+  it("resolveCompactionSuccessorTranscript prefers the typed target over deprecated raw fields", () => {
+    expect(
+      resolveCompactionSuccessorTranscript({
+        ok: true,
+        compacted: true,
+        result: {
+          tokensBefore: 1,
+          sessionId: "raw-id",
+          sessionFile: "/tmp/raw.jsonl",
+          sessionTarget: {
+            kind: "file",
+            sessionId: "target-id",
+            sessionFile: "/tmp/target.jsonl",
+          },
+        },
+      }),
+    ).toEqual({ sessionId: "target-id", sessionFile: "/tmp/target.jsonl" });
+
+    // Raw-field fallback covers shipped engines that predate sessionTarget.
+    expect(
+      resolveCompactionSuccessorTranscript({
+        ok: true,
+        compacted: true,
+        result: { tokensBefore: 1, sessionId: "raw-id", sessionFile: "/tmp/raw.jsonl" },
+      }),
+    ).toEqual({ sessionId: "raw-id", sessionFile: "/tmp/raw.jsonl" });
   });
 
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {

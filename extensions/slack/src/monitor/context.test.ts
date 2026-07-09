@@ -7,6 +7,8 @@ import { createSlackMonitorContext } from "./context.js";
 
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  groupDmEnabled?: boolean;
+  groupDmChannels?: string[];
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -28,8 +30,8 @@ function createTestContext(params?: {
     dmPolicy: "open",
     allowFrom: [],
     allowNameMatching: false,
-    groupDmEnabled: false,
-    groupDmChannels: [],
+    groupDmEnabled: params?.groupDmEnabled ?? false,
+    groupDmChannels: params?.groupDmChannels ?? [],
     defaultRequireMention: true,
     groupPolicy: "allowlist",
     useAccessGroups: true,
@@ -84,6 +86,18 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
         team: { id: "T_EXPECTED" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("createSlackMonitorContext isChannelAllowed", () => {
+  it("normalizes channel-prefixed group DM allowlist entries", () => {
+    const ctx = createTestContext({
+      groupDmEnabled: true,
+      groupDmChannels: ["channel:G456"],
+    });
+
+    expect(ctx.isChannelAllowed({ channelId: "G456", channelType: "mpim" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "G999", channelType: "mpim" })).toBe(false);
   });
 });
 
