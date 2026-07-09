@@ -223,6 +223,61 @@ describe("deliverMatrixReplies", () => {
     expect(sentTexts.join("\n")).not.toContain("Drafting");
   });
 
+  it("strips MiniMax mm: namespaced reasoning blocks from mixed Matrix replies", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "<mm:thinking>Draft hidden plan</mm:thinking>Visible answer<mm:thought>private note</mm:thought>",
+        },
+        {
+          text: "Caption before <antml:think>secret caption</antml:think>caption after",
+          mediaUrl: "https://example.com/proof.png",
+        },
+      ],
+      roomId: "room:8",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    expect(chunkMatrixTextMock).toHaveBeenCalledWith("Visible answer", {
+      cfg,
+      accountId: undefined,
+      tableMode: "code",
+    });
+    expect(sendCall(0)[1]).toBe("Visible answer");
+    expect(sendCall(1)[1]).toBe("Caption before caption after");
+    expect(sendOptions(1).mediaUrl).toBe("https://example.com/proof.png");
+    const sentTexts = sendMessageMatrixMock.mock.calls.map((call) => String(call[1])).join("\n");
+    expect(sentTexts).not.toContain("Draft hidden plan");
+    expect(sentTexts).not.toContain("private note");
+    expect(sentTexts).not.toContain("secret caption");
+  });
+
+  it("preserves literal reasoning tag examples in Matrix replies", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "Use this literal: `<mm:think>draft</mm:think>`\n\n```xml\n<antml:think>example</antml:think>\n```",
+        },
+      ],
+      roomId: "room:9",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe(
+      "Use this literal: `<mm:think>draft</mm:think>`\n\n```xml\n<antml:think>example</antml:think>\n```",
+    );
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {

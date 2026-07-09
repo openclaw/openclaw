@@ -1,5 +1,6 @@
 // Matrix plugin module implements replies behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
@@ -7,8 +8,10 @@ import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from
 
 const THINKING_TAG_RE =
   /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
-const THINKING_BLOCK_RE =
-  /<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>/gi;
+
+function stripReasoningReplyText(text: string): string {
+  return stripReasoningTagsFromText(text, { mode: "strict", trim: "none" });
+}
 
 function shouldSuppressReasoningReplyText(text?: string): boolean {
   if (typeof text !== "string") {
@@ -25,10 +28,7 @@ function shouldSuppressReasoningReplyText(text?: string): boolean {
   if (!THINKING_TAG_RE.test(text)) {
     return false;
   }
-  THINKING_BLOCK_RE.lastIndex = 0;
-  const withoutThinkingBlocks = text.replace(THINKING_BLOCK_RE, "");
-  THINKING_TAG_RE.lastIndex = 0;
-  return !withoutThinkingBlocks.replace(THINKING_TAG_RE, "").trim();
+  return !stripReasoningReplyText(text).trim();
 }
 
 export async function deliverMatrixReplies(params: {
@@ -81,6 +81,7 @@ export async function deliverMatrixReplies(params: {
         ? undefined
         : replyToIdRaw;
     const rawText = reply.text ?? "";
+    const visibleText = stripReasoningReplyText(rawText);
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -93,7 +94,7 @@ export async function deliverMatrixReplies(params: {
 
     if (mediaList.length === 0) {
       let sentTextChunk = false;
-      const { chunks } = chunkMatrixText(rawText, {
+      const { chunks } = chunkMatrixText(visibleText, {
         cfg: params.cfg,
         accountId: params.accountId,
         tableMode,
@@ -121,7 +122,7 @@ export async function deliverMatrixReplies(params: {
 
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? rawText : "";
+      const caption = first ? visibleText : "";
       await sendMessageMatrix(params.roomId, caption, {
         client: params.client,
         cfg: params.cfg,
