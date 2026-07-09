@@ -21219,7 +21219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 457,
+      "line": 455,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initial)]",
       "surface": "apple",
@@ -21227,7 +21227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 504,
+      "line": 502,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " — \\(option.hint!)",
       "surface": "apple",
