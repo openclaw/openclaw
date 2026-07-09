@@ -106,6 +106,27 @@ export function resolveCodexAppServerAuthProfileId(params: {
   })[0]?.trim();
 }
 
+/** Resolves the eligible Codex app-server auth profiles in failover order. */
+export function resolveCodexAppServerAuthProfileOrder(params: {
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+}): string[] {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+  const store = resolveCodexAppServerAuthProfileStore({
+    agentDir,
+    authProfileStore: params.authProfileStore,
+    config: params.config,
+  });
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: CODEX_APP_SERVER_AUTH_PROVIDER,
+  })
+    .map((profileId) => profileId.trim())
+    .filter(Boolean);
+}
+
 export function resolveCodexAppServerAuthProfileIdForAgent(params: {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;

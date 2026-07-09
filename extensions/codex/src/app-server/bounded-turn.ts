@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
+import { resolveCodexAppServerAuthProfileOrder } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { readModelListResult } from "./models.js";
@@ -26,8 +28,13 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
+import {
+  CodexBoundedTurnUsageLimitError,
+  resolveCodexBoundedTurnUsageLimitError,
+} from "./usage-limit-error.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
@@ -43,6 +50,9 @@ const CODEX_PRIVATE_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.hooks": false,
   notify: [],
 };
+// Caps how many auth profiles a bounded turn walks after usage-limit failures;
+// each attempt spawns its own app-server client.
+const CODEX_BOUNDED_TURN_MAX_AUTH_PROFILE_ATTEMPTS = 3;
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: unknown;
@@ -80,6 +90,74 @@ export async function runBoundedCodexAppServerTurn(
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
   });
+  const profileAttempts = resolveBoundedTurnAuthProfileAttempts(params, appServer);
+  // Rotation attempts share one deadline so usage-limit retries never extend
+  // the caller's timeout budget.
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < profileAttempts.length; attempt += 1) {
+    const profile = profileAttempts[attempt];
+    const remainingMs = attempt === 0 ? timeoutMs : deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await runBoundedCodexAppServerTurnWithProfile(
+        {
+          ...params,
+          ...(profile === undefined ? {} : { profile }),
+          timeoutMs: remainingMs,
+        },
+        appServer,
+      );
+    } catch (error) {
+      lastError = error;
+      if (
+        !(error instanceof CodexBoundedTurnUsageLimitError) ||
+        attempt === profileAttempts.length - 1
+      ) {
+        throw error;
+      }
+      embeddedAgentLog.info("codex bounded turn hit a usage limit; rotating auth profile", {
+        taskLabel: params.taskLabel,
+        authProfileId: profile,
+        nextAuthProfileId: profileAttempts[attempt + 1],
+      });
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Resolves which auth profiles a bounded turn may try. A pinned profile stays
+ * pinned; native Codex auth (user home scope) applies no profiles; otherwise
+ * the turn walks the configured failover order so a usage-limited profile does
+ * not permanently break bounded turns while other profiles still have quota.
+ */
+function resolveBoundedTurnAuthProfileAttempts(
+  params: CodexBoundedTurnParams,
+  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+): Array<string | undefined> {
+  if (appServer.start.homeScope === "user") {
+    return [undefined];
+  }
+  const pinned = params.profile?.trim();
+  if (pinned) {
+    return [pinned];
+  }
+  const order = resolveCodexAppServerAuthProfileOrder({
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir?.trim() || undefined,
+    config: params.config,
+  }).slice(0, CODEX_BOUNDED_TURN_MAX_AUTH_PROFILE_ATTEMPTS);
+  return order.length > 0 ? order : [undefined];
+}
+
+async function runBoundedCodexAppServerTurnWithProfile(
+  params: CodexBoundedTurnParams,
+  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+): Promise<CodexBoundedTurnResult> {
   if (params.isolation === "configured-transport") {
     return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
       cwd: params.agentDir?.trim() || process.cwd(),
@@ -147,6 +225,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const timeout = setTimeout(() => abortController.abort("timeout"), timeoutMs);
   timeout.unref?.();
 
+  let resolvedModel: string | undefined;
+  let rateLimitsRevisionBeforeTurnStart: number | undefined;
   try {
     const model = await resolveCodexBoundedTurnModel({
       client,
@@ -155,6 +235,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       timeoutMs,
       signal: abortController.signal,
     });
+    resolvedModel = model;
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
@@ -183,6 +264,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       createCodexBoundedApprovalHandler(params.taskLabel),
     );
     try {
+      rateLimitsRevisionBeforeTurnStart = readCodexRateLimitsRevision(client);
       const turn = assertCodexTurnStartResponse(
         await client.request<unknown>(
           "turn/start",
@@ -208,6 +290,23 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       requestCleanup();
       cleanup();
     }
+  } catch (error) {
+    // Usage-limit failures are resolved while the client is still open so the
+    // failing profile's rate limits can be read and the profile marked blocked.
+    throw (
+      (await resolveCodexBoundedTurnUsageLimitError({
+        client,
+        error,
+        authProfileId: params.profile,
+        authProfileStore: params.authProfileStore,
+        agentDir,
+        config: params.config,
+        modelId: resolvedModel,
+        rateLimitsRevisionBeforeTurnStart,
+        timeoutMs,
+        signal: abortController.signal,
+      })) ?? error
+    );
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
