@@ -48,7 +48,7 @@ export type ChatItem =
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string };
 
-export const CHAT_HISTORY_RENDER_LIMIT = 100;
+export const CHAT_HISTORY_RENDER_LIMIT = 500;
 export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
 
 export type ChatStreamSegment = {
