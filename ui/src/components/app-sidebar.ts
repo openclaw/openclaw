@@ -1807,6 +1807,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
     const settingsActive =
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
+    const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell">
@@ -1841,7 +1842,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>
               </openclaw-tooltip>
               <span class="sidebar-footer-bar__spacer"></span>
-              <openclaw-tooltip .content=${titleForRoute("config")}>
+              <openclaw-tooltip .content=${settingsTooltip}>
                 <a
                   href=${pathForRoute("config", this.basePath)}
                   class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
