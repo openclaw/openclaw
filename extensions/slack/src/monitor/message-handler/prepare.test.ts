@@ -1866,6 +1866,123 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("keeps C-prefixed mpDM human and bot-authored ingress on one group session when channel info fails (#102676)", async () => {
+    // Modern Slack MPIMs use C-prefixed IDs. Humans carry channel_type: "mpim";
+    // bot-authored events often omit it. When conversations.info is unavailable,
+    // missing-type bot events previously C-prefix-inferred "channel" and split
+    // a second slack:channel:<id> session beside slack:group:<id>.
+    const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true, replyToMode: "all", allowBots: true },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { info: conversationsInfo } } as unknown as App["client"],
+      replyToMode: "all",
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const account = createSlackAccount({ replyToMode: "all", allowBots: true });
+    const channelId = "C0MPIMSPLIT1";
+
+    const human = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: "mpim",
+        user: "U1",
+        text: "human in mpdm",
+        ts: "10.000",
+      }),
+    );
+    assertPrepared(human);
+    expect(human.ctxPayload.ChatType).toBe("group");
+    expect(human.ctxPayload.From).toBe(`slack:group:${channelId}`);
+
+    const bot = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "BOTHER1",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "bot reply in mpdm",
+        ts: "11.000",
+      }),
+    );
+    assertPrepared(bot);
+    expect(bot.ctxPayload.ChatType).toBe("group");
+    expect(bot.ctxPayload.From).toBe(`slack:group:${channelId}`);
+    expect(bot.ctxPayload.From).toBe(human.ctxPayload.From);
+    expect(conversationsInfo).toHaveBeenCalled();
+  });
+
+  it("does not reclassify unresolved G-prefix private channels as mpDM group sessions (#102676)", async () => {
+    // Negative control: G-prefix private channels use channel_type "group" and
+    // must keep slack:channel:<id> session keys — not slack:group:<id>.
+    // Room bot admission also needs an allowFrom owner present in members.
+    const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const members = vi.fn().mockResolvedValue({
+      members: ["UOWNER"],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true, replyToMode: "all", allowBots: true },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        conversations: { info: conversationsInfo, members },
+      } as unknown as App["client"],
+      replyToMode: "all",
+      defaultRequireMention: false,
+    });
+    slackCtx.allowFrom = ["UOWNER"];
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const account = createSlackAccount({ replyToMode: "all", allowBots: true });
+    const channelId = "G0PRIVATE1";
+
+    const human = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: "group",
+        user: "U1",
+        text: "human in private channel",
+        ts: "20.000",
+      }),
+    );
+    assertPrepared(human);
+    expect(human.ctxPayload.ChatType).toBe("channel");
+    expect(human.ctxPayload.From).toBe(`slack:channel:${channelId}`);
+
+    const bot = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "BOTHER2",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "bot reply in private channel",
+        ts: "21.000",
+      }),
+    );
+    assertPrepared(bot);
+    expect(bot.ctxPayload.ChatType).toBe("channel");
+    expect(bot.ctxPayload.From).toBe(`slack:channel:${channelId}`);
+    expect(bot.ctxPayload.From).not.toBe(`slack:group:${channelId}`);
+  });
+
   it.each([
     {
       peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
@@ -3927,6 +4044,7 @@ describe("prepareSlackMessage sender prefix", () => {
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
+      rememberAuthoritativeChannelType: () => {},
       resolveUserName: async () => ({ name: "Alice" }),
       setSlackThreadStatus: async () => undefined,
     } as unknown as SlackMonitorContext;

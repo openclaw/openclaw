@@ -170,6 +170,17 @@ export type SlackMonitorContext = {
     topic?: string;
     purpose?: string;
   }>;
+  /**
+   * Cache an authoritative Slack conversation type (event `channel_type` or
+   * conversations.info `is_mpim` / `is_im` / …). Bot-authored events often omit
+   * `channel_type`; without this cache they fall back to C-prefix → `channel`
+   * and split mpDM sessions from the human `mpim` path.
+   */
+  rememberAuthoritativeChannelType: (
+    channelId: string,
+    channelType?: string | null,
+    eventScope?: SlackEventScope,
+  ) => void;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
   setSlackThreadStatus: (params: {
     channelId: string;
@@ -252,6 +263,9 @@ export function createSlackMonitorContext(params: {
       purpose?: string;
     }
   >();
+  // Separate from channelCache so remembering event channel_type does not
+  // short-circuit conversations.info name/topic fetches on later messages.
+  const authoritativeChannelTypeCache = new Map<string, SlackMessageEvent["channel_type"]>();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
@@ -429,6 +443,33 @@ export function createSlackMonitorContext(params: {
     }).sessionKey;
   };
 
+  const rememberAuthoritativeChannelType = (
+    channelId: string,
+    channelType?: string | null,
+    eventScope?: SlackEventScope,
+  ) => {
+    const id = channelId.trim();
+    if (!id) {
+      return;
+    }
+    const normalized = normalizeOptionalString(channelType)?.toLowerCase();
+    if (
+      normalized !== "im" &&
+      normalized !== "mpim" &&
+      normalized !== "channel" &&
+      normalized !== "group"
+    ) {
+      return;
+    }
+    // Keep D-prefix DM override and other normalize rules consistent with ingress.
+    const type = normalizeSlackChannelType(normalized, id);
+    const cacheKey = scopedKey(id, eventScope);
+    if (authoritativeChannelTypeCache.get(cacheKey) === type) {
+      return;
+    }
+    authoritativeChannelTypeCache.set(cacheKey, type);
+  };
+
   const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
     const cacheKey = scopedKey(channelId, eventScope);
     const cached = channelCache.get(cacheKey);
@@ -456,9 +497,16 @@ export function createSlackMonitorContext(params: {
         channel && "purpose" in channel ? (channel.purpose?.value ?? undefined) : undefined;
       const entry = { name, type, topic, purpose };
       channelCache.set(cacheKey, entry);
+      if (type) {
+        rememberAuthoritativeChannelType(channelId, type, eventScope);
+      }
       return entry;
     } catch {
-      return {};
+      // When conversations.info fails, still surface a previously remembered
+      // authoritative type so bot-authored mpDM events do not fall back to
+      // C-prefix "channel" session keys.
+      const rememberedType = authoritativeChannelTypeCache.get(cacheKey);
+      return rememberedType ? { type: rememberedType } : {};
     }
   };
 
@@ -691,6 +739,7 @@ export function createSlackMonitorContext(params: {
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,
     resolveChannelName,
+    rememberAuthoritativeChannelType,
     resolveUserName,
     setSlackThreadStatus,
     getSlackAssistantThreadContext,

@@ -495,10 +495,20 @@ async function resolveSlackConversationContext(params: {
   // that common path to avoid an unnecessary API round-trip.
   if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
+    // Prefer event channel_type, then conversations.info / remembered type.
+    // resolveChannelName surfaces remembered types when the API fails so bot
+    // events missing channel_type stay on the same mpDM session as humans.
     resolvedChannelType = normalizeSlackChannelType(
       message.channel_type ?? channelInfo.type,
       message.channel,
     );
+  }
+  // Carry authoritative types across events. Human messages usually include
+  // channel_type: "mpim"; bot-authored events often omit it and would otherwise
+  // C-prefix-infer "channel" when conversations.info is unavailable.
+  ctx.rememberAuthoritativeChannelType(message.channel, message.channel_type, params.eventScope);
+  if (channelInfo.type) {
+    ctx.rememberAuthoritativeChannelType(message.channel, channelInfo.type, params.eventScope);
   }
   const channelName = channelInfo?.name;
   const isDirectMessage = resolvedChannelType === "im";
