@@ -263,6 +263,9 @@ export async function monitorWebChannel(
       });
       const shouldDebounce = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);
+        if (normalized.payload.media?.type?.startsWith("audio/") === true) {
+          return false;
+        }
         return !isControlCommandMessage(
           normalized.payload.commandBody ?? normalized.payload.body,
           cfg,

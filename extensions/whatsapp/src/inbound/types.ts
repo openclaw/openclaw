@@ -85,15 +85,18 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
+export type WhatsAppInboundMediaPayload = {
+  path?: string;
+  type?: string;
+  fileName?: string;
+  url?: string;
+};
+
 export type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
-  media?: {
-    path?: string;
-    type?: string;
-    fileName?: string;
-    url?: string;
-  };
+  media?: WhatsAppInboundMediaPayload;
+  mediaItems?: WhatsAppInboundMediaPayload[];
   location?: NormalizedLocation;
   untrustedStructuredContext?: Array<{
     label: string;

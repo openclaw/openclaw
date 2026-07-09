@@ -39,6 +39,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  holds: Set<Promise<void>>;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -150,13 +151,31 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer.releaseReady();
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
-    if (buffers.get(key) === buffer) {
-      buffers.delete(key);
+  const waitForHolds = async (buffer: DebounceBuffer<T>) => {
+    while (buffer.holds.size > 0) {
+      await Promise.allSettled(Array.from(buffer.holds));
     }
+  };
+
+  const flushBuffer = async (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    options: { force?: boolean } = {},
+  ) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
+    }
+    await waitForHolds(buffer);
+    if (buffer.timeout) {
+      if (!options.force) {
+        return;
+      }
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
     }
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
@@ -169,7 +188,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (!buffer) {
       return;
     }
-    await flushBuffer(key, buffer);
+    await flushBuffer(key, buffer, { force: true });
   };
 
   const cancelKey = (key: string): boolean => {
@@ -211,6 +230,32 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return true;
     }
     return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
+  };
+
+  const holdKey = (key: string): (() => void) | null => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return null;
+    }
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    buffer.holds.add(hold);
+    let released = false;
+    const releaseOnce = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      buffer.holds.delete(hold);
+      release();
+    };
+    hold.then(
+      () => buffer.holds.delete(hold),
+      () => buffer.holds.delete(hold),
+    );
+    return releaseOnce;
   };
 
   const enqueue = async (item: T) => {
@@ -278,6 +323,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      holds: new Set(),
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
@@ -286,5 +332,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey, cancelKey };
+  return { enqueue, flushKey, cancelKey, holdKey };
 }

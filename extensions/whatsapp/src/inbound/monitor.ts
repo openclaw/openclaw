@@ -15,6 +15,7 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -459,6 +460,7 @@ export async function attachWebInboxToSocket(
     admission: AdmittedWebInboundCallbackMessage["admission"];
     dedupeKey?: string;
     debounceKey?: string;
+    canonicalDebounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
@@ -468,7 +470,30 @@ export async function attachWebInboxToSocket(
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
+  type ActiveInboundPreparationWindow = {
+    debounceKey: string;
+    expired: Promise<void>;
+    id: number;
+    lastReceivedAt: number;
+    releaseExpired: () => void;
+    task: Promise<void>;
+    cleanupTimeout: ReturnType<typeof setTimeout> | null;
+  };
+  type InboundPreparationReservation = {
+    key: string;
+    receivedAt: number;
+    debounceKey: string;
+    releaseDebounceHold?: () => void;
+    releaseTask: () => void;
+    previousTask?: Promise<void>;
+    window: ActiveInboundPreparationWindow;
+  };
+  const activeInboundPreparationWindows = new Map<string, ActiveInboundPreparationWindow>();
   const pendingMessageHandlers = new Set<Promise<void>>();
+  const pendingDebounceKeysByCanonical = new Map<string, Set<string>>();
+  let flushInboundDebounceKey: ((key: string) => Promise<void>) | undefined;
+  let holdInboundDebounceKey: ((key: string) => (() => void) | null) | undefined;
+  let nextInboundPreparationWindowId = 0;
   let nextReceiveOrder = 0;
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
@@ -492,6 +517,150 @@ export async function attachWebInboxToSocket(
     }
     return `${admission.accountId}:${admission.conversation.id}:${senderKey}`;
   };
+  const buildNormalizedInboundDebounceKey = (inbound: NormalizedInboundMessage): string | null => {
+    const admission = inbound.access.admission;
+    const senderKey =
+      admission.conversation.kind === "group"
+        ? (inbound.senderE164 ?? inbound.participantJid ?? admission.sender.id)
+        : admission.conversation.id;
+    if (!senderKey) {
+      return null;
+    }
+    return `${admission.accountId}:${admission.conversation.id}:${senderKey}`;
+  };
+  const shouldSerializeInboundPreparation = (msg: WAMessage): boolean => {
+    if (inboundDebounceMs <= 0) {
+      return false;
+    }
+    const mediaPlaceholder = extractMediaPlaceholder(msg.message ?? undefined);
+    if (mediaPlaceholder === "<media:audio>") {
+      return false;
+    }
+    const body = extractText(msg.message ?? undefined) ?? mediaPlaceholder ?? "";
+    return !isControlCommandMessage(body, options.loadConfig?.() ?? options.cfg);
+  };
+  const scheduleInboundPreparationWindowCleanup = (
+    key: string,
+    state: ActiveInboundPreparationWindow,
+  ) => {
+    if (activeInboundPreparationWindows.get(key) !== state) {
+      return;
+    }
+    if (state.cleanupTimeout) {
+      clearTimeout(state.cleanupTimeout);
+    }
+    const cleanupDelayMs = Math.max(0, state.lastReceivedAt + inboundDebounceMs - Date.now());
+    state.cleanupTimeout = setTimeout(() => {
+      if (activeInboundPreparationWindows.get(key) !== state) {
+        return;
+      }
+      if (Date.now() - state.lastReceivedAt >= inboundDebounceMs) {
+        activeInboundPreparationWindows.delete(key);
+        state.releaseExpired();
+        return;
+      }
+      scheduleInboundPreparationWindowCleanup(key, state);
+    }, cleanupDelayMs);
+    state.cleanupTimeout.unref?.();
+  };
+  const reserveInboundPreparationWindow = (
+    key: string | null,
+    receivedAt: number,
+  ): InboundPreparationReservation | null => {
+    if (!key) {
+      return null;
+    }
+    const active = activeInboundPreparationWindows.get(key);
+    const withinActiveWindow =
+      active !== undefined && receivedAt - active.lastReceivedAt <= inboundDebounceMs;
+    if (active && !withinActiveWindow && active.cleanupTimeout) {
+      clearTimeout(active.cleanupTimeout);
+      active.cleanupTimeout = null;
+    }
+    if (active && !withinActiveWindow) {
+      active.releaseExpired();
+    }
+    let releaseTask!: () => void;
+    const task = new Promise<void>((resolve) => {
+      releaseTask = resolve;
+    });
+    const window =
+      withinActiveWindow && active
+        ? active
+        : (() => {
+            let releaseExpired!: () => void;
+            const expired = new Promise<void>((resolve) => {
+              releaseExpired = resolve;
+            });
+            const id = nextInboundPreparationWindowId++;
+            return {
+              debounceKey: `${key}:prepared:${id}`,
+              expired,
+              id,
+              lastReceivedAt: receivedAt,
+              releaseExpired,
+              task,
+              cleanupTimeout: null,
+            };
+          })();
+    const previousTask = withinActiveWindow ? window.task : undefined;
+    window.lastReceivedAt = receivedAt;
+    window.task = task;
+    activeInboundPreparationWindows.set(key, window);
+    return {
+      key,
+      receivedAt,
+      debounceKey: window.debounceKey,
+      releaseDebounceHold: withinActiveWindow
+        ? (holdInboundDebounceKey?.(window.debounceKey) ?? undefined)
+        : undefined,
+      releaseTask,
+      previousTask,
+      window,
+    };
+  };
+  const waitForLaterInboundPreparationWindows = async (
+    reservation: InboundPreparationReservation | null,
+  ) => {
+    if (!reservation) {
+      return;
+    }
+    while (true) {
+      const active = activeInboundPreparationWindows.get(reservation.key);
+      if (!active || active.lastReceivedAt <= reservation.receivedAt) {
+        return;
+      }
+      if (active === reservation.window) {
+        const latestTask = active.task;
+        await latestTask;
+        if (
+          activeInboundPreparationWindows.get(reservation.key) === active &&
+          active.task === latestTask
+        ) {
+          return;
+        }
+        continue;
+      }
+      return;
+    }
+  };
+  const runSerializedInboundPreparation = async <T>(
+    reservation: InboundPreparationReservation | null,
+    task: () => Promise<T>,
+  ): Promise<T> => {
+    if (!reservation) {
+      return await task();
+    }
+    try {
+      await reservation.previousTask?.catch(() => undefined);
+      return await task();
+    } finally {
+      reservation.releaseTask();
+      if (activeInboundPreparationWindows.get(reservation.key) === reservation.window) {
+        scheduleInboundPreparationWindowCleanup(reservation.key, reservation.window);
+      }
+    }
+  };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
@@ -504,6 +673,38 @@ export async function attachWebInboxToSocket(
     });
   const firstDefined = <T>(values: Array<T | undefined>): T | undefined =>
     values.find((value): value is T => value !== undefined);
+  const collectMediaItems = (entries: QueuedInboundMessage[]) =>
+    entries.flatMap(
+      (entry) => entry.payload.mediaItems ?? (entry.payload.media ? [entry.payload.media] : []),
+    );
+  const rememberPendingDebounceKey = (canonicalKey: string, actualKey: string) => {
+    let keys = pendingDebounceKeysByCanonical.get(canonicalKey);
+    if (!keys) {
+      keys = new Set();
+      pendingDebounceKeysByCanonical.set(canonicalKey, keys);
+    }
+    keys.add(actualKey);
+  };
+  const forgetPendingDebounceKey = (canonicalKey: string | undefined, actualKey: string) => {
+    if (!canonicalKey) {
+      return;
+    }
+    const keys = pendingDebounceKeysByCanonical.get(canonicalKey);
+    if (!keys) {
+      return;
+    }
+    keys.delete(actualKey);
+    if (keys.size === 0) {
+      pendingDebounceKeysByCanonical.delete(canonicalKey);
+    }
+  };
+  const flushPendingDebounceKeysForCanonical = async (canonicalKey: string) => {
+    const keys = Array.from(pendingDebounceKeysByCanonical.get(canonicalKey) ?? []);
+    if (keys.length === 0) {
+      return;
+    }
+    await Promise.all(keys.map((key) => flushInboundDebounceKey?.(key) ?? Promise.resolve()));
+  };
 
   const finalizeInboundDelivery = async (
     entries: QueuedInboundMessage[],
@@ -584,6 +785,7 @@ export async function attachWebInboxToSocket(
           const combinedStructuredContext = orderedEntries.flatMap(
             (entry) => entry.payload.untrustedStructuredContext ?? [],
           );
+          const combinedMediaItems = collectMediaItems(orderedEntries);
           const combinedMentions =
             mentioned.size > 0
               ? {
@@ -604,7 +806,8 @@ export async function attachWebInboxToSocket(
               ...last.payload,
               body: combinedBody,
               commandBody: combinedCommandBody,
-              media: firstDefined(orderedEntries.map((entry) => entry.payload.media)),
+              media: combinedMediaItems[0],
+              mediaItems: combinedMediaItems.length > 0 ? combinedMediaItems : undefined,
               location: firstDefined(orderedEntries.map((entry) => entry.payload.location)),
               untrustedStructuredContext:
                 combinedStructuredContext.length > 0 ? combinedStructuredContext : undefined,
@@ -626,6 +829,7 @@ export async function attachWebInboxToSocket(
         for (const entry of entries) {
           if (entry.debounceKey) {
             pendingDebounceKeys.delete(entry.debounceKey);
+            forgetPendingDebounceKey(entry.canonicalDebounceKey, entry.debounceKey);
           }
         }
         activeInboundFlushes.delete(flushTask);
@@ -638,6 +842,8 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     },
   });
+  flushInboundDebounceKey = debouncer.flushKey;
+  holdInboundDebounceKey = debouncer.holdKey;
   const groupMetadataCache = options.groupMetadataCache ?? new Map();
   const groupMetaCache = new Map<string, LocalGroupMetadataCacheEntry>();
   const lidLookup = sock.signalRepository?.lidMapping;
@@ -1147,10 +1353,11 @@ export async function attachWebInboxToSocket(
   const buildDurableInboundPayload = (
     msg: WAMessage,
     upsertType: string | undefined,
+    receivedAt: number,
   ): WhatsAppDurableInboundPayload => ({
     message: serializeWhatsAppDurableInboundMessage(msg),
     ...(upsertType ? { upsertType } : {}),
-    receivedAt: Date.now(),
+    receivedAt,
   });
 
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
@@ -1174,6 +1381,7 @@ export async function attachWebInboxToSocket(
     msg: WAMessage,
     upsertType: string | undefined,
     receiveOrder: number | undefined,
+    receivedAt: number,
     stored?: {
       id: string;
       payload: WhatsAppDurableInboundPayload;
@@ -1212,10 +1420,10 @@ export async function attachWebInboxToSocket(
       try {
         const accepted = await durableInboundJournal.accept(
           durableId,
-          buildDurableInboundPayload(msg, upsertType),
+          buildDurableInboundPayload(msg, upsertType, receivedAt),
           {
             metadata: durableMetadata,
-            receivedAt: inbound.messageTimestampMs,
+            receivedAt,
           },
         );
         if (accepted.kind === "completed") {
@@ -1241,29 +1449,45 @@ export async function attachWebInboxToSocket(
       }
     }
 
-    const enriched = await enrichInboundMessage(msg);
-    if (!enriched) {
-      await completeUndeliverableDurableInbound(durableId, durableMetadata);
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return;
-    }
-
-    const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-    const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
-    if (dedupeClaim !== "claimed") {
-      if (dedupeClaim === "duplicate") {
+    const preparationKey = shouldSerializeInboundPreparation(msg)
+      ? buildNormalizedInboundDebounceKey(inbound)
+      : null;
+    const preparationReservation = reserveInboundPreparationWindow(preparationKey, receivedAt);
+    const enriched = await runSerializedInboundPreparation(preparationReservation, async () => {
+      return await enrichInboundMessage(msg);
+    });
+    try {
+      if (!enriched) {
         await completeUndeliverableDurableInbound(durableId, durableMetadata);
         await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+        return;
       }
-      return;
-    }
 
-    recordAcceptedInboundActivity(options.accountId);
-    await enqueueInboundMessage(msg, inbound, enriched, {
-      durableId,
-      readReceipt: deliveryReadReceipt,
-      receiveOrder,
-    });
+      const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
+      const dedupeClaim = dedupeKey
+        ? await claimRecentInboundMessageDelivery(dedupeKey)
+        : "claimed";
+      if (dedupeClaim !== "claimed") {
+        if (dedupeClaim === "duplicate") {
+          await completeUndeliverableDurableInbound(durableId, durableMetadata);
+          await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+        }
+        return;
+      }
+
+      await waitForLaterInboundPreparationWindows(preparationReservation);
+      recordAcceptedInboundActivity(options.accountId);
+      await enqueueInboundMessage(msg, inbound, enriched, {
+        durableId,
+        debounceKey: preparationReservation?.debounceKey,
+        canonicalDebounceKey: preparationReservation?.key,
+        releaseDebounceHold: preparationReservation?.releaseDebounceHold,
+        readReceipt: deliveryReadReceipt,
+        receiveOrder,
+      });
+    } finally {
+      preparationReservation?.releaseDebounceHold?.();
+    }
   };
 
   const replayPendingDurableInboundMessages = async () => {
@@ -1272,6 +1496,7 @@ export async function attachWebInboxToSocket(
       await processDurableInboundMessage(
         deserializeWhatsAppDurableInboundMessage(record.payload.message),
         record.payload.upsertType,
+        nextReceiveOrder++,
         record.payload.receivedAt,
         {
           id: record.id,
@@ -1373,6 +1598,9 @@ export async function attachWebInboxToSocket(
     enriched: EnrichedInboundMessage,
     durable: {
       durableId?: string;
+      debounceKey?: string;
+      canonicalDebounceKey?: string;
+      releaseDebounceHold?: () => void;
       readReceipt?: WhatsAppReadReceiptTarget;
       receiveOrder?: number;
     },
@@ -1519,12 +1747,23 @@ export async function attachWebInboxToSocket(
       readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,
     });
-    const debounceKey = buildInboundDebounceKey(inboundMessage);
+    const canonicalDebounceKey =
+      durable.canonicalDebounceKey ?? buildInboundDebounceKey(inboundMessage);
+    const debounceKey = durable.debounceKey ?? canonicalDebounceKey;
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
+      inboundMessage.canonicalDebounceKey = canonicalDebounceKey ?? undefined;
+      const shouldDebounceMessage =
+        inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage);
+      if (shouldDebounceMessage) {
         pendingDebounceKeys.add(debounceKey);
+        if (canonicalDebounceKey) {
+          rememberPendingDebounceKey(canonicalDebounceKey, debounceKey);
+        }
         publishPendingWorkState();
+      } else if (canonicalDebounceKey) {
+        durable.releaseDebounceHold?.();
+        await flushPendingDebounceKeysForCanonical(canonicalDebounceKey);
       }
     }
     if (inboundMessage.event.id) {
@@ -1556,7 +1795,10 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
+  const handleMessagesUpsert = async (
+    upsert: { type?: string; messages?: Array<WAMessage> },
+    receivedAt: number,
+  ) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
@@ -1579,11 +1821,12 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
-      await processDurableInboundMessage(msg, upsert.type, receiveOrder);
+      await processDurableInboundMessage(msg, upsert.type, receiveOrder, receivedAt);
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    const task = handleMessagesUpsert(upsert).catch((err: unknown) => {
+    const receivedAt = Date.now();
+    const task = handleMessagesUpsert(upsert, receivedAt).catch((err: unknown) => {
       inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });

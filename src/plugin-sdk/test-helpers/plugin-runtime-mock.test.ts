@@ -14,7 +14,9 @@ describe("createPluginRuntimeMock", () => {
     });
 
     expect(debouncer.cancelKey("key")).toBe(false);
+    expect(debouncer.holdKey("key")).toBeNull();
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
+    expect(vi.isMockFunction(debouncer.holdKey)).toBe(true);
   });
 
   it("exposes channel inbound helpers without the removed turn aliases", async () => {

@@ -329,16 +329,16 @@ export async function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
+  const mediaInputs =
+    params.msg.payload.mediaItems ?? (params.msg.payload.media ? [params.msg.payload.media] : []);
   const media = toInboundMediaFacts(
-    params.msg.payload.media?.path || params.msg.payload.media?.url
-      ? [
-          {
-            path: params.msg.payload.media?.path,
-            url: params.msg.payload.media?.url ?? params.msg.payload.media?.path,
-            contentType: params.msg.payload.media?.type,
-          },
-        ]
-      : undefined,
+    mediaInputs
+      .filter((entry) => entry.path || entry.url)
+      .map((entry) => ({
+        path: entry.path,
+        url: entry.url ?? entry.path,
+        contentType: entry.type,
+      })),
     { transcribed: (_entry, index) => params.mediaTranscribedIndexes?.includes(index) === true },
   );
   return buildChannelInboundEventContext({

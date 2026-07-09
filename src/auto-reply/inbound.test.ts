@@ -507,6 +507,62 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("holds buffered flushes until later same-key work joins", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const release = debouncer.holdKey("a");
+    expect(release).toBeTypeOf("function");
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([]);
+
+    await debouncer.enqueue({ key: "a", id: "2" });
+    release?.();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("forces held buffered flushes after later same-key work joins", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const release = debouncer.holdKey("a");
+    expect(release).toBeTypeOf("function");
+
+    const flush = debouncer.flushKey("a");
+    await debouncer.enqueue({ key: "a", id: "2" });
+    release?.();
+    await flush;
+
+    expect(calls).toEqual([["1", "2"]]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

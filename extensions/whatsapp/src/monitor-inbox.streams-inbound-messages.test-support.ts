@@ -958,6 +958,86 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("flushes pending debounced inbound before immediate control messages", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+        shouldDebounce: (msg) => msg.payload.commandBody !== "/stop",
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-before-command-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-before-command-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "/stop",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage).payload.body).toBe("first");
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("/stop");
+      await listener.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes pending debounced inbound before custom immediate messages", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+        shouldDebounce: (msg) => msg.payload.body !== "immediate",
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-before-custom-immediate-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-before-custom-immediate-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "immediate",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage).payload.body).toBe("first");
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("immediate");
+      await listener.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves media metadata when debounced with a follow-up text message", async () => {
     vi.useFakeTimers();
     try {
@@ -1000,6 +1080,236 @@ describe("web monitor inbox", () => {
         path: expect.any(String),
         type: "image/jpeg",
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for slow media enrichment before debouncing follow-up text", async () => {
+    vi.useFakeTimers();
+    try {
+      const { downloadMediaMessage } = await import("./inbound/runtime-api.js");
+      let releaseMedia!: () => void;
+      const mediaReady = new Promise<void>((resolve) => {
+        releaseMedia = resolve;
+      });
+      async function* delayedMediaStream() {
+        await mediaReady;
+        yield Buffer.from("delayed-media-data");
+      }
+      vi.mocked(downloadMediaMessage).mockImplementationOnce(() => delayedMediaStream() as never);
+
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      const firstReceivedAt = Date.now();
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId("debounce-slow-image-1"),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: { imageMessage: { mimetype: "image/jpeg" } },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+
+      await vi.waitFor(() => {
+        expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      });
+      vi.setSystemTime(firstReceivedAt);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-slow-image-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "caption after slow image",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onMessage).not.toHaveBeenCalled();
+
+      releaseMedia();
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 1);
+      const inbound = inboundMessage(onMessage);
+      expect(inbound.payload.body).toBe("<media:image>\ncaption after slow image");
+      expect(inbound.payload.media).toMatchObject({
+        path: expect.any(String),
+        type: "image/jpeg",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not debounce slow media with follow-up text outside the window", async () => {
+    vi.useFakeTimers();
+    try {
+      const { downloadMediaMessage } = await import("./inbound/runtime-api.js");
+      let releaseMedia!: () => void;
+      const mediaReady = new Promise<void>((resolve) => {
+        releaseMedia = resolve;
+      });
+      async function* delayedMediaStream() {
+        await mediaReady;
+        yield Buffer.from("delayed-media-data");
+      }
+      vi.mocked(downloadMediaMessage).mockImplementationOnce(() => delayedMediaStream() as never);
+
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      const firstReceivedAt = Date.now();
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId("debounce-slow-window-image-1"),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: { imageMessage: { mimetype: "image/jpeg" } },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+
+      await vi.waitFor(() => {
+        expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      });
+      vi.setSystemTime(firstReceivedAt + 51);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-slow-window-image-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "caption outside slow image window",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("caption outside slow image window");
+
+      releaseMedia();
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 2);
+      const delayedMedia = inboundMessage(onMessage, 1);
+      expect(delayedMedia.payload.body).toBe("<media:image>");
+      expect(delayedMedia.payload.media).toMatchObject({
+        path: expect.any(String),
+        type: "image/jpeg",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves all media metadata when debounced messages contain multiple attachments", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      for (const id of ["debounce-image-a", "debounce-image-b"]) {
+        sock.ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: nextMessageId(id),
+                fromMe: false,
+                remoteJid: "999@s.whatsapp.net",
+              },
+              message: { imageMessage: { mimetype: "image/jpeg" } },
+              messageTimestamp: 1_700_000_000,
+              pushName: "Tester",
+            },
+          ],
+        });
+      }
+
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 1);
+      const inbound = inboundMessage(onMessage);
+      expect(inbound.payload.body).toBe("<media:image>\n<media:image>");
+      expect(inbound.payload.media).toMatchObject({
+        path: expect.any(String),
+        type: "image/jpeg",
+      });
+      expect(inbound.payload.mediaItems).toEqual([
+        expect.objectContaining({ path: expect.any(String), type: "image/jpeg" }),
+        expect.objectContaining({ path: expect.any(String), type: "image/jpeg" }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps audio messages immediate when debounce predicate skips them", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+        shouldDebounce: (msg) => msg.payload.media?.type?.startsWith("audio/") !== true,
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId("debounce-audio-1"),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: { audioMessage: { mimetype: "audio/ogg; codecs=opus" } },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("<media:audio>");
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-audio-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "caption after audio",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await listener.close();
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("caption after audio");
     } finally {
       vi.useRealTimers();
     }
