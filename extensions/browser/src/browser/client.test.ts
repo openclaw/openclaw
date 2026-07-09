@@ -11,6 +11,7 @@ import {
   browserScreenshotAction,
 } from "./client-actions.js";
 import {
+  browserCloseTabByTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
@@ -388,6 +389,22 @@ describe("browser client", () => {
     ) as { targetId?: unknown; timeoutMs?: unknown };
     expect(defaultScreenshotBody.targetId).toBe("t-default");
     expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
+  });
+
+  it("marks internally selected close targets as exact", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await browserCloseTabByTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
+      profile: "openclaw",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("http://127.0.0.1:18791/tabs/RAW_TARGET?profile=openclaw");
+    expect(init).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({ exactTargetId: true }),
+    });
   });
 
   it("gives browser act requests enough client timeout for long waits", async () => {

@@ -215,6 +215,28 @@ async function callTabsFocus(params: {
   return await callTabsRoute({ ...params, method: "post", path: "/tabs/focus" });
 }
 
+async function callTabsDelete(params: {
+  profileCtx: ProfileContext;
+  targetId: string;
+  body?: Record<string, unknown>;
+}) {
+  const { app, deleteHandlers } = createBrowserRouteApp();
+  registerBrowserTabRoutes(app, createRouteContext(params.profileCtx) as never);
+  const handler = deleteHandlers.get("/tabs/:targetId");
+  expect(handler).toBeTypeOf("function");
+
+  const response = createBrowserRouteResponse();
+  await handler?.(
+    {
+      params: { targetId: params.targetId },
+      query: {},
+      body: params.body ?? {},
+    },
+    response.res,
+  );
+  return response;
+}
+
 describe("browser tab routes", () => {
   beforeEach(() => {
     navigationGuardMocks.assertBrowserNavigationAllowed.mockReset();
@@ -231,6 +253,20 @@ describe("browser tab routes", () => {
 
   it("returns browser-not-running for select when the browser is not reachable", async () => {
     await expectBrowserNotRunningAction("select");
+  });
+
+  it("closes an internally selected raw target through the exact namespace", async () => {
+    const profileCtx = createProfileContext();
+
+    const response = await callTabsDelete({
+      profileCtx,
+      targetId: "T1",
+      body: { exactTargetId: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
   });
 
   it("retries a transient reachability miss before mutating a tab", async () => {

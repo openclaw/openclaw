@@ -311,7 +311,9 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         ctx,
         targetId,
         mutate: async (profileCtx, id) => {
-          await profileCtx.closeTab(id);
+          const exactTargetId =
+            (req.body as { exactTargetId?: unknown } | undefined)?.exactTargetId === true;
+          await profileCtx.closeTab(id, exactTargetId ? { exactTargetId: true } : undefined);
         },
       });
     }),

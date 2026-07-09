@@ -320,6 +320,22 @@ export async function browserCloseTab(
   await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 
+/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
+export async function browserCloseTabByTargetId(
+  baseUrl: string | undefined,
+  targetId: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
+  const path = `/tabs/${encodeURIComponent(targetId)}`;
+  await sendTabTargetRequest({
+    baseUrl,
+    path,
+    method: "DELETE",
+    opts,
+    body: { exactTargetId: true },
+  });
+}
+
 /** Execute legacy index-based tab actions. */
 export async function browserTabAction(
   baseUrl: string | undefined,
