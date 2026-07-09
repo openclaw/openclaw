@@ -101,6 +101,26 @@ describe("hasProgressDraftStarted latch + collapse guard", () => {
     expect(ctrl.hasProgressDraftStarted).toBe(true);
   });
 
+  // commit 86ea382 race-condition fix: if an abort cancels the compositor gate
+  // between markFinalReplyStarted() and shouldCollapseProgressDraft, the latch
+  // (progressDraftStartedBeforeFinal) must survive so the progress draft still
+  // gets collapsed into a summary instead of leaving a stuck progress bar.
+  it("latch survives gate cancellation after markFinalReplyStarted (abort race)", async () => {
+    const ctrl = buildController();
+    await startGate(ctrl);
+    expect(ctrl.hasProgressDraftStarted).toBe(true);
+
+    ctrl.markFinalReplyStarted();
+    expect(ctrl.hasProgressDraftStarted).toBe(true);
+
+    // Simulate abort: cleanup cancels the compositor gate (sets hasStarted=false).
+    await ctrl.cleanup();
+    // Latch must survive — the abort happened after the final reply already
+    // decided to collapse the draft. If the latch were lost, the collapsed
+    // summary would never post and the user would see a stuck progress bar.
+    expect(ctrl.hasProgressDraftStarted).toBe(true);
+  });
+
   // Core #100782 regression fix: collapse guard prevents re-collapse.
   it("collapse guard: hasProgressDraftStarted is false after markPreviewFinalized", async () => {
     const ctrl = buildController();
