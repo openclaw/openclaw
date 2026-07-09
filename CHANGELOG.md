@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Local CLI TTS child streams:** fail and terminate synthesis when the audio pipe breaks while containing diagnostic-stream errors, preventing process crashes and truncated audio. (#102347) Thanks @zw-xysk.
 - **Browser actions on Node 24:** keep browser request cancellation bound to the client and response lifetime instead of Node 24.16+'s prematurely aborted body-stream signal, preventing valid POST actions from failing after JSON parsing. Thanks @obviyus and @vincentkoc.
 - **SecretRef model credentials:** keep resolved provider secrets behind process-local sentinels through auth storage, stream setup, SDK configuration, and managed local-provider probing, then inject plaintext only at the final network or provider-plugin boundary while retaining exact-value log redaction. (#102008, #102009)
 - **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
