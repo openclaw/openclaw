@@ -62,6 +62,32 @@ describe("memory batch state", () => {
     });
   });
 
+  it("treats malformed attempt counts as one failed attempt", () => {
+    expect(
+      recordMemoryBatchFailure(
+        { enabled: true, count: 0 },
+        { provider: "openai", message: "batch failed", attempts: Number.NaN },
+      ),
+    ).toEqual({
+      enabled: true,
+      count: 1,
+      lastError: "batch failed",
+      lastProvider: "openai",
+    });
+
+    expect(
+      recordMemoryBatchFailure(
+        { enabled: true, count: 0 },
+        { provider: "openai", message: "batch failed", attempts: Number.POSITIVE_INFINITY },
+      ),
+    ).toEqual({
+      enabled: true,
+      count: 1,
+      lastError: "batch failed",
+      lastProvider: "openai",
+    });
+  });
+
   it("leaves disabled state unchanged", () => {
     expect(
       recordMemoryBatchFailure(

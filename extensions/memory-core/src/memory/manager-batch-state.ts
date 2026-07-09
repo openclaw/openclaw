@@ -19,6 +19,10 @@ export function resetMemoryBatchFailureState(
   };
 }
 
+function normalizeFailureAttempts(value: number | undefined): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
 export function recordMemoryBatchFailure(
   state: MemoryBatchFailureState,
   params: {
@@ -33,7 +37,7 @@ export function recordMemoryBatchFailure(
   }
   const increment = params.forceDisable
     ? MEMORY_BATCH_FAILURE_LIMIT
-    : Math.max(1, params.attempts ?? 1);
+    : normalizeFailureAttempts(params.attempts);
   const count = state.count + increment;
   const enabled = !(params.forceDisable || count >= MEMORY_BATCH_FAILURE_LIMIT);
   return {
