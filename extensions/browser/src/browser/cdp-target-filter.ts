@@ -16,6 +16,7 @@ const BROWSER_INTERNAL_TARGET_URL_PREFIXES = [
 
 type BrowserTargetUrlLike = {
   url?: string | null;
+  type?: string | null;
 };
 
 /** Return true for browser-owned chrome/devtools/internal URLs. */
@@ -26,5 +27,9 @@ function isBrowserInternalTargetUrl(url: string | null | undefined): boolean {
 
 /** Return true when a CDP target should be selectable by user-facing actions. */
 export function isSelectableCdpBrowserTarget(target: BrowserTargetUrlLike): boolean {
+  const type = target.type?.trim().toLowerCase();
+  if (type && type !== "page") {
+    return false;
+  }
   return !isBrowserInternalTargetUrl(target.url);
 }
