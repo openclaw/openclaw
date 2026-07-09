@@ -1,6 +1,17 @@
 // Discord tests cover gateway supervisor plugin behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+
+const { gatewayLogError } = vi.hoisted(() => ({ gatewayLogError: vi.fn() }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({ error: gatewayLogError }),
+  };
+});
+
 import {
   classifyDiscordGatewayEvent,
   DiscordGatewayLifecycleError,
@@ -117,6 +128,7 @@ describe("createDiscordGatewaySupervisor", () => {
 
   it("keeps a single late error guard after repeated dispose", () => {
     const emitter = new EventEmitter();
+    gatewayLogError.mockClear();
 
     for (let index = 0; index < 3; index += 1) {
       const supervisor = createDiscordGatewaySupervisor({
@@ -128,9 +140,15 @@ describe("createDiscordGatewaySupervisor", () => {
       expect(emitter.listenerCount("error")).toBe(1);
       supervisor.dispose();
       expect(emitter.listenerCount("error")).toBe(1);
-      expect(() => emitter.emit("error", new Error(`late gateway error ${index}`))).not.toThrow();
+      const error = new Error(`late gateway error ${index}`);
+      expect(() => emitter.emit("error", error)).not.toThrow();
+      emitter.emit("error", error);
     }
 
     expect(emitter.listenerCount("error")).toBe(1);
+    expect(gatewayLogError).toHaveBeenCalledTimes(3);
+    expect(gatewayLogError).toHaveBeenLastCalledWith(
+      "suppressed late gateway error after dispose: Error: late gateway error 2",
+    );
   });
 });

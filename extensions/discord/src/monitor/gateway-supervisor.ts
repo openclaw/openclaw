@@ -1,6 +1,6 @@
 // Discord plugin module implements gateway supervisor behavior.
 import type { EventEmitter } from "node:events";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -41,6 +41,7 @@ export type DiscordGatewaySupervisor = {
 
 type GatewaySupervisorPhase = "active" | "buffering" | "disposed" | "teardown";
 
+const discordGatewayLog = createSubsystemLogger("discord/gateway");
 const discordGatewayLateErrorGuards = new WeakMap<EventEmitter, (err: unknown) => void>();
 
 function removeDiscordGatewayLateErrorGuard(emitter: EventEmitter): void {
@@ -56,7 +57,17 @@ function ensureDiscordGatewayLateErrorGuard(emitter: EventEmitter): void {
   if (emitter.listenerCount("error") > 0) {
     return;
   }
-  const guard = () => undefined;
+  const seenMessages = new Set<string>();
+  // Keep the emitter safe after its supervisor is gone without retaining the disposed runtime.
+  // A module-owned logger preserves one diagnostic per distinct late error until the next start.
+  const guard = (err: unknown) => {
+    const message = formatDiscordGatewayErrorMessage(err);
+    if (seenMessages.has(message)) {
+      return;
+    }
+    seenMessages.add(message);
+    discordGatewayLog.error(`suppressed late gateway error after dispose: ${message}`);
+  };
   discordGatewayLateErrorGuards.set(emitter, guard);
   emitter.on("error", guard);
 }
