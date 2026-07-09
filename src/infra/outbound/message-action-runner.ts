@@ -414,7 +414,12 @@ async function resolveActionTarget(params: {
       input: toRaw,
       accountId: params.accountId ?? undefined,
     });
-    params.args.to = resolved.to;
+    // Only overwrite arg when the resolved value is materially different from
+    // the raw input. Pure normalization (prefix + lowercase of same ID) is
+    // lossy for case-sensitive provider channel IDs (e.g. Slack C0XXX -> channel:c0xxx).
+    if (shouldApplyResolvedTargetArg(toRaw, resolved)) {
+      params.args.to = resolved.to;
+    }
     resolvedTarget = resolved;
   }
   const channelIdRaw = normalizeOptionalString(params.args.channelId) ?? "";
@@ -430,9 +435,31 @@ async function resolveActionTarget(params: {
           ? `Channel id "${channelIdRaw}" resolved to a user target.`
           : undefined,
     });
-    params.args.channelId = sanitizeGroupTargetId(resolved.to);
+    if (shouldApplyResolvedTargetArg(channelIdRaw, resolved)) {
+      params.args.channelId = sanitizeGroupTargetId(resolved.to);
+    }
   }
   return resolvedTarget;
+}
+
+/** Strips kind-prefixes from a raw target string. */
+function stripTargetKindPrefix(raw: string): string {
+  return raw.replace(/^(channel|group|user|telegram|slack|discord|signal):/i, "").trim();
+}
+
+/**
+ * Whether {@link resolved.to} (from the target resolver) should replace the
+ * raw argument value. Directory and plugin resolutions always apply. Pure
+ * normalization that only adds a kind prefix + lowercases is skipped so the
+ * original case is preserved for case-sensitive provider IDs.
+ */
+function shouldApplyResolvedTargetArg(raw: string, resolved: ResolvedMessagingTarget): boolean {
+  if (resolved.resolutionSource !== "normalized") {
+    return true;
+  }
+  const input = stripTargetKindPrefix(raw);
+  const resolvedId = stripTargetKindPrefix(resolved.to);
+  return !(resolvedId.toLowerCase() === input.toLowerCase() && resolvedId !== input);
 }
 
 function sanitizeGroupTargetId(target: string): string {
