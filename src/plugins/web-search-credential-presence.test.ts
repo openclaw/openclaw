@@ -10,9 +10,16 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const manifestMocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn(() => ({ plugins: [] })),
 }));
+const publicArtifactMocks = vi.hoisted(() => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => []),
+}));
 
 vi.mock("./manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: manifestMocks.loadManifestMetadataSnapshot,
+}));
+vi.mock("./web-provider-public-artifacts.explicit.js", () => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 }));
 
 let hasConfiguredWebSearchCredential: typeof import("./web-search-credential-presence.js").hasConfiguredWebSearchCredential;
@@ -24,6 +31,9 @@ beforeAll(async () => {
 describe("hasConfiguredWebSearchCredential", () => {
   beforeEach(() => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [],
+    );
   });
 
   it("does not statically import web-search runtime providers", () => {
@@ -209,6 +219,102 @@ describe("hasConfiguredWebSearchCredential", () => {
         origin: "bundled",
       }),
     ).toBe(true);
+  });
+
+  it("treats explicit keyless web search providers as configured", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "duckduckgo",
+          pluginId: "duckduckgo",
+          requiresCredential: false,
+        },
+      ],
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "duckduckgo" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+    expect(
+      publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledWith({ onlyPluginIds: ["duckduckgo"] });
+  });
+
+  it("does not treat explicit credentialed provider selection as configured without a key", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "brave",
+          pluginId: "brave",
+          requiresCredential: true,
+        },
+      ],
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "brave" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat unknown explicit provider selection as configured", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "duckduckgo",
+          pluginId: "duckduckgo",
+          requiresCredential: false,
+        },
+      ],
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "missing-search" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
   });
 
   it("treats manifest env var values as resolved literal credentials", () => {
