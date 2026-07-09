@@ -140,7 +140,10 @@ final class MacNodeModeCoordinator: NSObject {
         self.endpointRefreshTask = nil
         self.reconnectProbeTask?.cancel()
         self.reconnectProbeTask = nil
-        Task { await self.session.disconnect() }
+        Task {
+            await self.runtime.releaseHeldComputerInput()
+            await self.session.disconnect()
+        }
     }
 
     func setPreferredGatewayStableID(_ stableID: String?) {
@@ -168,6 +171,8 @@ final class MacNodeModeCoordinator: NSObject {
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
+            let codexThreadCatalogEnabled = OpenClawConfigFile.explicitlyEnabledPlugin(
+                MacNodeCodexThreadCatalogContract.pluginId)
 
             var attemptedURL: URL?
             do {
@@ -175,7 +180,15 @@ final class MacNodeModeCoordinator: NSObject {
                 attemptedURL = config.url
                 let caps = self.currentCaps(
                     browserControlEnabled: browserControlEnabled,
-                    cameraEnabled: cameraEnabled)
+                    cameraEnabled: cameraEnabled,
+                    codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+                // If Computer Control was turned off, release any button the
+                // computer.act service is still holding rather than waiting for
+                // the idle watchdog. This refresh loop re-runs on the settings
+                // change that drops the cap.
+                if !caps.contains(OpenClawCapability.computer.rawValue) {
+                    await self.runtime.releaseHeldComputerInput()
+                }
                 let commands = self.currentCommands(caps: caps)
                 let permissions = await self.currentPermissions()
                 let connectOptions = GatewayConnectOptions(
@@ -213,6 +226,7 @@ final class MacNodeModeCoordinator: NSObject {
                     onDisconnected: { [weak self] reason in
                         guard let self else { return }
                         await self.runtime.setEventSender(nil)
+                        await self.runtime.releaseHeldComputerInput()
                         await self.scheduleReconnectProbe()
                         self.logger.error("mac node disconnected: \(reason, privacy: .public)")
                     },
@@ -267,8 +281,10 @@ final class MacNodeModeCoordinator: NSObject {
     nonisolated static func resolvedCaps(
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
+        computerControlEnabled: Bool,
         locationMode: OpenClawLocationMode,
-        connectionMode: AppState.ConnectionMode) -> [String]
+        connectionMode: AppState.ConnectionMode,
+        codexThreadCatalogEnabled: Bool = false) -> [String]
     {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
@@ -280,19 +296,35 @@ final class MacNodeModeCoordinator: NSObject {
         if cameraEnabled {
             caps.append(OpenClawCapability.camera.rawValue)
         }
+        // Advertised only when the operator has enabled Computer Control; the
+        // command is dangerous and stays disarmed until allowlisted on the gateway.
+        if computerControlEnabled {
+            caps.append(OpenClawCapability.computer.rawValue)
+        }
         if locationMode != .off {
             caps.append(OpenClawCapability.location.rawValue)
+        }
+        if codexThreadCatalogEnabled {
+            caps.append(MacNodeCodexThreadCatalogContract.capability)
         }
         return caps
     }
 
-    private func currentCaps(browserControlEnabled: Bool, cameraEnabled: Bool) -> [String] {
+    private func currentCaps(
+        browserControlEnabled: Bool,
+        cameraEnabled: Bool,
+        codexThreadCatalogEnabled: Bool) -> [String]
+    {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        let computerControlEnabled =
+            UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
         return Self.resolvedCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
+            computerControlEnabled: computerControlEnabled,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
-            connectionMode: AppStateStore.shared.connectionMode)
+            connectionMode: AppStateStore.shared.connectionMode,
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
     }
 
     private func currentPermissions() async -> [String: Bool] {
@@ -330,6 +362,12 @@ final class MacNodeModeCoordinator: NSObject {
         }
         if capsSet.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
+        }
+        if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
+            commands.append(MacNodeCodexThreadCatalogContract.listCommand)
+        }
+        if capsSet.contains(OpenClawCapability.computer.rawValue) {
+            commands.append(OpenClawComputerCommand.act.rawValue)
         }
 
         return commands

@@ -1280,6 +1280,7 @@
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
+                  "plugins/vault",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1329,6 +1330,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
                   "tools/exec-approvals",
@@ -1695,6 +1697,7 @@
                   {
                     "group": "Node features",
                     "pages": [
+                      "nodes/computer-use",
                       "nodes/talk",
                       "nodes/voicewake",
                       "nodes/location-command"

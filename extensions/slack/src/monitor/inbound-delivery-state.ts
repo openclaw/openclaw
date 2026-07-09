@@ -33,24 +33,28 @@ const deliveredMessages = createPersistentDedupeCache<SlackInboundDeliveryRecord
   },
 });
 
-function makeKey(accountId: string, channelId: string, ts: string): string {
-  return `${accountId}:${channelId}:${ts}`;
+function makeKey(accountId: string, channelId: string, ts: string, teamId?: string): string {
+  return `${accountId}:${teamId ? `${teamId}:` : ""}${channelId}:${ts}`;
 }
 
 export async function hasSlackInboundMessageDelivery(params: {
   accountId: string;
   channelId: string | undefined;
   ts: string | undefined;
+  teamId?: string;
 }): Promise<boolean> {
   if (!params.accountId || !params.channelId || !params.ts) {
     return false;
   }
-  return await deliveredMessages.lookup(makeKey(params.accountId, params.channelId, params.ts));
+  return await deliveredMessages.lookup(
+    makeKey(params.accountId, params.channelId, params.ts, params.teamId),
+  );
 }
 
 export async function recordSlackInboundMessageDeliveries(params: {
   accountId: string;
   messages: readonly SlackMessageEvent[];
+  teamId?: string;
 }): Promise<void> {
   if (!params.accountId || params.messages.length === 0) {
     return;
@@ -61,7 +65,7 @@ export async function recordSlackInboundMessageDeliveries(params: {
     if (!message.channel || !message.ts) {
       continue;
     }
-    keys.add(makeKey(params.accountId, message.channel, message.ts));
+    keys.add(makeKey(params.accountId, message.channel, message.ts, params.teamId));
   }
   await Promise.all(
     Array.from(keys, (key) =>

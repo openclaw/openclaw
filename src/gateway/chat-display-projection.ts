@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
@@ -57,7 +58,7 @@ function truncateChatHistoryText(
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
+    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
     truncated: true,
   };
 }

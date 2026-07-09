@@ -29,7 +29,10 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -52,9 +55,11 @@ export function resolveGatewayScopedTools(params: {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
+  clientCaps?: string[];
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
@@ -175,6 +180,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
@@ -190,6 +196,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    clientCaps: params.clientCaps,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

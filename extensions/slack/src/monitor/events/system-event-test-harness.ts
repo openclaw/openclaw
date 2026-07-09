@@ -30,6 +30,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     botUserId: "U_BOT",
     botId: "B_BOT",
     teamId: "T_TEST",
+    installationIdentity: { kind: "workspace", teamId: "T_TEST" },
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
