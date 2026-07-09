@@ -154,6 +154,14 @@ describe("mime detection", () => {
     expect(mime).toBe("text/css");
   });
 
+  it("detects MIME types from encoded URL extensions", async () => {
+    const mime = await detectMime({
+      filePath: "https://cdn.example.com/render%2Emp4?download=1",
+    });
+
+    expect(mime).toBe("video/mp4");
+  });
+
   it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
     const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
     expect(mime).toBe("audio/aac");
@@ -197,8 +205,11 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "clip.avi", expected: "video/x-msvideo" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
     { filePath: "clip.webm", expected: "video/webm" },
+    { filePath: "https://cdn.example.com/render%2Emp4?download=1", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/clip%2Ewebm", expected: "video/webm" },
     { filePath: "clip.flv", expected: "video/x-flv" },
     { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
+    { filePath: "https://cdn.example.com/bad%E0%A4%A.mp4", expected: "video/mp4" },
     { filePath: "debug.log", expected: "text/plain" },
     { filePath: "config.yml", expected: "application/yaml" },
     { filePath: "config.yaml", expected: "application/yaml" },

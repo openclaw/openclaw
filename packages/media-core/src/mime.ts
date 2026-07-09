@@ -144,7 +144,13 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      return path.extname(url.pathname).toLowerCase() || undefined;
+      let pathname = url.pathname;
+      try {
+        pathname = decodeURIComponent(pathname);
+      } catch {
+        // fall back to the raw URL pathname when percent encoding is malformed
+      }
+      return path.extname(pathname).toLowerCase() || undefined;
     }
   } catch {
     // fall back to plain path parsing
