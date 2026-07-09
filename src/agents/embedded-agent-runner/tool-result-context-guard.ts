@@ -1,6 +1,7 @@
 /**
  * Installs context guards for oversized tool-result histories.
  */
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
@@ -141,7 +142,7 @@ function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] 
   return changed ? stripped : messages;
 }
 
-function truncateTextToBudget(text: string, maxChars: number): string {
+export function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
@@ -164,8 +165,9 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const sliced = sliceUtf16Safe(text, 0, cutPoint);
+  const omittedChars = text.length - sliced.length;
+  return sliced + formatContextLimitTruncationNotice(omittedChars);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {

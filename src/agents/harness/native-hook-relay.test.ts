@@ -23,6 +23,7 @@ import {
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
+  truncateText,
 } from "./native-hook-relay.js";
 
 afterEach(() => {
@@ -3437,5 +3438,25 @@ describe("native hook relay command builder", () => {
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
+  });
+});
+
+describe("truncateText", () => {
+  it("returns the original text when it fits within maxLength", () => {
+    expect(truncateText("hello", 10)).toBe("hello");
+  });
+
+  it("does not split a surrogate pair at the truncation boundary", () => {
+    // "aa🚀bbb" = 7 UTF-16 code units (a,a,high,low,b,b,b).
+    // maxLength 6 → body budget 3 → lands between the surrogate pair.
+    const result = truncateText("aa🚀bbb", 6);
+    expect(result).toBe("aa...");
+    expect(result).not.toContain("�");
+  });
+
+  it("truncates plain ASCII at the budget boundary", () => {
+    const result = truncateText("abcdefghij", 7);
+    expect(result).toBe("abcd...");
+    expect(result.length).toBeLessThanOrEqual(7);
   });
 });

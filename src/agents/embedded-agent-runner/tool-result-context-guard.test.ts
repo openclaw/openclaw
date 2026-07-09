@@ -15,6 +15,7 @@ import {
   installToolResultContextGuard,
   markTranscriptPromptText,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+  truncateTextToBudget,
 } from "./tool-result-context-guard.js";
 
 function makeUser(text: string): AgentMessage {
@@ -1141,5 +1142,32 @@ describe("installContextEngineLoopHook", () => {
     const retryResult = await callTransform(agent, withNew);
     expect(retryResult).toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("truncateTextToBudget", () => {
+  it("returns the original text when it fits within the budget", () => {
+    const result = truncateTextToBudget("hello", 200);
+    expect(result).toBe("hello");
+  });
+
+  it("truncates long text and appends a truncation notice", () => {
+    const input = "x".repeat(300);
+    const result = truncateTextToBudget(input, 200);
+    expect(result.length).toBeLessThan(input.length);
+    expect(result).toContain("more characters truncated");
+  });
+
+  it("does not produce broken surrogates when truncating emoji content", () => {
+    // "aa🚀" + 200 "b"s → forced truncation should not split the emoji
+    const input = `aa🚀${"b".repeat(200)}`;
+    const result = truncateTextToBudget(input, 120);
+    expect(result).not.toContain("�");
+  });
+
+  it("returns only the notice when maxChars is zero", () => {
+    const result = truncateTextToBudget("some text here", 0);
+    expect(result).not.toContain("some text here");
+    expect(result.length).toBeGreaterThan(0);
   });
 });
