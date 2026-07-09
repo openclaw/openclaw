@@ -832,6 +832,16 @@ async function executeSystemRunPhase(
 
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
+    // Deny-over-allow one-shot contract must cross the companion boundary too. The
+    // macOS exec host persists `.allowAlways` decisions in allowlist mode, so a
+    // denylist-approved command forwarded as `allow-always` would create durable
+    // allowlist trust on the companion despite the local `!phase.denylisted`
+    // persistence guard below. Downgrade a denylisted allow-always approval to a
+    // one-shot `allow-once` before it reaches runViaMacAppExecHost.
+    const companionApprovalDecision =
+      phase.denylisted && phase.approvalDecision === "allow-always"
+        ? "allow-once"
+        : phase.approvalDecision;
     const execRequest: ExecHostRequest = {
       command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
@@ -843,7 +853,7 @@ async function executeSystemRunPhase(
       needsScreenRecording: phase.needsScreenRecording,
       agentId: phase.agentId ?? null,
       sessionKey: phase.sessionKey ?? null,
-      approvalDecision: phase.approvalDecision,
+      approvalDecision: companionApprovalDecision,
     };
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,

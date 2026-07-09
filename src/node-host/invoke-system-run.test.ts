@@ -2013,6 +2013,43 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("downgrades denylist-approved allow-always to one-shot before mac companion delegation", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          denylist: [{ pattern: "echo *", reason: "stop" }],
+        },
+        agents: {},
+      },
+      run: async () => {
+        const { runViaMacAppExecHost, runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: true,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+          approvalDecision: "allow-always",
+          approved: true,
+          runViaResponse: createMacExecHostSuccess(),
+        });
+
+        expect(runViaMacAppExecHost).toHaveBeenCalledTimes(1);
+        expect(runCommand).not.toHaveBeenCalled();
+        const macHostCall = requireMacExecHostCall(runViaMacAppExecHost);
+        const forwardedDecision = (macHostCall.request as { approvalDecision?: string } | undefined)
+          ?.approvalDecision;
+        // The macOS exec host persists .allowAlways in allowlist mode, so a
+        // denylist-approved command must cross the companion boundary as one-shot.
+        expect(forwardedDecision).toBe("allow-once");
+        expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
+        expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+      },
+    });
+  });
+
   it("denies system.run when tools.exec.denylist from openclaw.json matches", async () => {
     setRuntimeConfigSnapshot({
       tools: {
