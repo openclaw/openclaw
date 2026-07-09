@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type GoogleAuthorizedUserCredentials = {
   type: "authorized_user";
@@ -372,7 +373,15 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
     return cached.token;
   }
 
-  const token = await auth.getAccessToken();
+  // Some google-auth-library ADC implementations bypass the configured Gaxios
+  // transporter, so this owner-level deadline also bounds STS and metadata paths.
+  const token = await withTimeout(
+    auth.getAccessToken(),
+    GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
+    {
+      createError: () => new DOMException("request timed out", "TimeoutError"),
+    },
+  );
   const normalized = normalizeOptionalString(token);
   if (!normalized) {
     throw new Error(

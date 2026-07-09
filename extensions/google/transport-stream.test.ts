@@ -1138,6 +1138,27 @@ describe("google transport stream", () => {
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
+  it("bounds google-auth-library ADC token resolution at the Vertex owner", async () => {
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "openclaw-google-vertex-authlib-timeout-"),
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.useFakeTimers();
+    googleAuthGetAccessTokenMock.mockReturnValueOnce(new Promise(() => {}));
+
+    const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(vi.fn());
+    const refreshError = pendingRefresh.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(googleAuthGetAccessTokenMock).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(refreshError).resolves.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+  });
+
   it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-expiry-"));
     vi.useFakeTimers();
