@@ -45,18 +45,6 @@
     grid-template-areas: "session model";
   }
 
-  .chat-controls__session-row--has-quota {
-    grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr)
-      minmax(96px, auto);
-    grid-template-areas: "agent session model quota";
-  }
-
-  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr) minmax(96px, auto);
-    grid-template-areas: "session model quota";
-  }
-
   .chat-controls__agent {
     grid-area: agent;
   }
@@ -67,11 +55,6 @@
 
   .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-controls__quota {
-    grid-area: quota;
-    min-width: 96px;
   }
 
   .chat-controls__session,
@@ -124,6 +107,10 @@
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
   }
 
+  .sidebar-resizer {
+    display: none;
+  }
+
   .shell--nav-drawer-open .shell-nav,
   .shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
     transform: translateX(0);
@@ -148,6 +135,11 @@
     pointer-events: auto;
   }
 
+  /* Inside the drawer there is no Escape key to hint at. */
+  .settings-sidebar__esc {
+    display: none;
+  }
+
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
      the desktop rail toggle makes no sense once the sidebar is a drawer. */
   .topbar .topbar-nav-toggle {
@@ -169,6 +161,10 @@
     justify-content: center;
   }
 
+  .topbar-brand {
+    display: flex;
+  }
+
   .topnav-shell__actions {
     min-width: 0;
     justify-content: flex-end;
@@ -182,10 +178,6 @@
     height: 38px;
     min-height: 38px;
     padding: 0;
-  }
-
-  .topbar-search__kbd {
-    display: none;
   }
 
   .sidebar-brand__actions {
@@ -297,22 +289,12 @@
     justify-content: center;
   }
 
-  .topnav-shell .dashboard-header {
-    display: none;
-  }
-
   .topbar-brand {
     display: flex;
   }
 
   .topbar .topbar-nav-toggle {
     display: inline-flex;
-  }
-
-  .topbar-status {
-    gap: 6px;
-    width: auto;
-    flex-wrap: nowrap;
   }
 
   .topbar-search {
@@ -325,36 +307,8 @@
     padding: 0;
   }
 
-  .topbar-search__kbd {
-    display: none;
-  }
-
-  .topbar-theme-mode {
-    display: none;
-  }
-
   .sidebar-mode-switch {
     display: block;
-  }
-
-  .sidebar-mode-switch .topbar-theme-mode {
-    display: inline-flex;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .topbar-status .pill {
-    padding: 4px 8px;
-    font-size: 12px; /* was 11px */
-    gap: 4px;
-  }
-
-  .topbar-status .pill .mono {
-    display: none;
-  }
-
-  .topbar-status .pill span:nth-child(2) {
-    display: none;
   }
 
   .shell-nav,
@@ -450,22 +404,6 @@
       "model";
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "agent session"
-      "model model"
-      "quota quota";
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "session"
-      "model"
-      "quota";
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
     min-width: unset;
     max-width: unset;
@@ -491,12 +429,6 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
-    width: 100%;
-    min-width: 0;
-    min-height: 40px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-trigger {
@@ -801,17 +733,12 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). The optional
    Group column in category mode shifts later indexes; grouping is a desktop
-   workflow, so the hide rules target the default 8-column roster. */
+   workflow, so the hide rules target the default 7-column roster. */
 
-/* ≤900px: hide Runtime (col 5); tighten padding */
+/* ≤900px: tighten padding */
 @media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 700px;
-  }
-
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
-    display: none;
+    min-width: 640px;
   }
 
   .data-table th,
@@ -820,14 +747,14 @@
   }
 }
 
-/* ≤768px: also hide Tokens (col 7); tighten padding; stack pagination */
+/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 540px;
+    min-width: 500px;
   }
 
-  .sessions-table th:nth-child(7),
-  .sessions-table td:nth-child(7) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -897,7 +824,7 @@
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 6); keep live status visible */
+/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
     min-width: 320px;
@@ -905,8 +832,8 @@
 
   .sessions-table th:nth-child(3),
   .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
     display: none;
   }
 
@@ -914,6 +841,12 @@
     width: 106px;
     min-width: 106px;
     max-width: 106px;
+  }
+
+  /* The 106px key column has no room for the kind avatar; run state stays
+     visible through the status column, which this breakpoint keeps. */
+  .sessions-table .session-avatar {
+    display: none;
   }
 
   .sessions-table .session-status-col {

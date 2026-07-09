@@ -64,7 +64,7 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -307,12 +307,12 @@ const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerApprovalPolicySchema = z.enum([
-  "never",
-  "on-request",
-  "on-failure",
-  "untrusted",
-]);
+const codexAppServerApprovalPolicySchema = z.preprocess(
+  // Preserve the rest of a shipped plugin config until doctor persists the
+  // canonical value. Rejecting this field would discard the whole config.
+  (value) => (value === "on-failure" ? "on-request" : value),
+  z.enum(["never", "on-request", "untrusted"]),
+);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
@@ -1479,6 +1479,11 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
+  // Codex 0.143 keeps this deprecated requirements-file alias in its core
+  // parser, but app-server exposes only the canonical on-request value.
+  if (normalized === "on-failure") {
+    return "on-request";
+  }
   return resolveApprovalPolicy(normalized);
 }
 
@@ -1500,9 +1505,6 @@ function selectGuardianApprovalPolicy(
     throw new Error(
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
     );
-  }
-  if (allowedApprovalPolicies.has("on-failure")) {
-    return "on-failure";
   }
   if (allowedApprovalPolicies.has("untrusted")) {
     return "untrusted";
@@ -1810,12 +1812,10 @@ function selectGuardianSandbox(
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
-  return value === "on-request" ||
-    value === "on-failure" ||
-    value === "untrusted" ||
-    value === "never"
-    ? value
-    : undefined;
+  if (value === "on-failure") {
+    return "on-request";
+  }
+  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
 }
 
 function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {

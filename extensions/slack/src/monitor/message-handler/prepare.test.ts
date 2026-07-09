@@ -20,6 +20,7 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { testing as slackRoutingTesting } from "./prepare-routing.js";
@@ -187,6 +188,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.BodyForAgent).toContain(body);
   });
 
+  it("keeps a whole code point when the inbound preview boundary crosses an emoji", async () => {
+    const prefix = "a".repeat(159);
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: `${prefix}😀tail` }));
+
+    assertPrepared(prepared);
+    expect(prepared.preview).toBe(prefix);
+  });
+
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);
@@ -243,6 +252,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared, "open-policy Slack DM");
     expect(prepared.ctxPayload.RawBody).toContain("hello");
     expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
+  it("uses the validated event workspace as the standardized conversation space", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.teamId = "";
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true,
+      teamId: "T_ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack DM");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
   });
 
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
@@ -786,7 +817,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T1");
   });
 
-  it("does not enable Slack status reactions when the message timestamp is missing", async () => {
+  it("uses event_ts as the standalone message id without enabling reactions", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         messages: {
@@ -808,6 +839,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     } as SlackMessageEvent);
 
     assertPrepared(prepared);
+    expect(prepared.ctxPayload.MessageSid).toBe("1.000");
+    expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
     expect(prepared?.ackReactionMessageTs).toBeUndefined();
     expect(prepared?.ackReactionPromise).toBeNull();
   });
@@ -1804,7 +1837,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
       expectMainScopedDmClassification(prepared, { includeFromCheck: testCase.name !== "raw im" });
       expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
-      expect(prepared!.ctxPayload.ReplyToId).toBe("1.000");
+      expect(prepared!.ctxPayload.ReplyToId).toBeUndefined();
     }
   });
 
@@ -1817,6 +1850,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.MessageThreadId).toBe("1.000");
+    expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
   });
 
   it("classifies MPIM group DMs as group chat context", async () => {
@@ -3800,7 +3834,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
   });
 
-  it("preserves single-use reply mode metadata on seeded top-level roots", async () => {
+  it("preserves seeded top-level roots without reply_to_id self-references", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
 
@@ -3835,7 +3869,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
       );
       expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
-      expect(prepared.ctxPayload.ReplyToId).toBe(rootTs);
+      expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
     }
   });
 });

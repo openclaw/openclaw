@@ -37,6 +37,8 @@ struct SettingsProTab: View {
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0
+    @AppStorage(NotificationServingPreference.storageKey) var notificationServingEnabled: Bool =
+        NotificationServingPreference.defaultEnabled
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
@@ -61,6 +63,8 @@ struct SettingsProTab: View {
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
     @State var locationPermissionSummary = LocationPermissionSummary(
         desiredMode: .off,
         locationServicesEnabled: true,
@@ -262,7 +266,7 @@ struct SettingsProTab: View {
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
-                    onContinue: self.requestNotificationAuthorizationFromSettings)
+                    onContinue: self.acceptNotificationRelayDisclosure)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {
