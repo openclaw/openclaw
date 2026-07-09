@@ -40,6 +40,14 @@
     "AskForApproval": {
       "oneOf": [
         {
+          "enum": [
+            "untrusted",
+            "on-request",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "granular": {
@@ -75,14 +83,6 @@
           ],
           "title": "GranularAskForApproval",
           "type": "object"
-        },
-        {
-          "enum": [
-            "untrusted",
-            "on-request",
-            "never"
-          ],
-          "type": "string"
         }
       ]
     },
@@ -90,12 +90,12 @@
       "properties": {
         "end": {
           "format": "uint",
-          "minimum": 0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "start": {
           "format": "uint",
-          "minimum": 0,
+          "minimum": 0.0,
           "type": "integer"
         }
       },
@@ -109,13 +109,29 @@
       "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
       "oneOf": [
         {
+          "enum": [
+            "contextWindowExceeded",
+            "sessionBudgetExceeded",
+            "usageLimitExceeded",
+            "serverOverloaded",
+            "cyberPolicy",
+            "internalServerError",
+            "unauthorized",
+            "badRequest",
+            "threadRollbackFailed",
+            "sandboxError",
+            "other"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0,
+                  "minimum": 0.0,
                   "type": [
                     "integer",
                     "null"
@@ -139,7 +155,7 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0,
+                  "minimum": 0.0,
                   "type": [
                     "integer",
                     "null"
@@ -163,7 +179,7 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0,
+                  "minimum": 0.0,
                   "type": [
                     "integer",
                     "null"
@@ -187,7 +203,7 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0,
+                  "minimum": 0.0,
                   "type": [
                     "integer",
                     "null"
@@ -224,22 +240,6 @@
           ],
           "title": "ActiveTurnNotSteerableCodexErrorInfo",
           "type": "object"
-        },
-        {
-          "enum": [
-            "contextWindowExceeded",
-            "sessionBudgetExceeded",
-            "usageLimitExceeded",
-            "serverOverloaded",
-            "cyberPolicy",
-            "internalServerError",
-            "unauthorized",
-            "badRequest",
-            "threadRollbackFailed",
-            "sandboxError",
-            "other"
-          ],
-          "type": "string"
         }
       ]
     },
@@ -638,12 +638,12 @@
       "properties": {
         "lineEnd": {
           "format": "uint32",
-          "minimum": 0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "lineStart": {
           "format": "uint32",
-          "minimum": 0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "note": {
@@ -684,6 +684,13 @@
       "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
       "oneOf": [
         {
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "custom": {
@@ -695,13 +702,6 @@
           ],
           "title": "CustomMultiAgentMode",
           "type": "object"
-        },
-        {
-          "enum": [
-            "explicitRequestOnly",
-            "proactive"
-          ],
-          "type": "string"
         }
       ]
     },
@@ -893,6 +893,16 @@
     "SessionSource": {
       "oneOf": [
         {
+          "enum": [
+            "cli",
+            "vscode",
+            "exec",
+            "appServer",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "custom": {
@@ -917,16 +927,6 @@
           ],
           "title": "SubAgentSessionSource",
           "type": "object"
-        },
-        {
-          "enum": [
-            "cli",
-            "vscode",
-            "exec",
-            "appServer",
-            "unknown"
-          ],
-          "type": "string"
         }
       ]
     },
@@ -940,6 +940,14 @@
     },
     "SubAgentSource": {
       "oneOf": [
+        {
+          "enum": [
+            "review",
+            "compact",
+            "memory_consolidation"
+          ],
+          "type": "string"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -1003,14 +1011,6 @@
           ],
           "title": "OtherSubAgentSource",
           "type": "object"
-        },
-        {
-          "enum": [
-            "review",
-            "compact",
-            "memory_consolidation"
-          ],
-          "type": "string"
         }
       ]
     },
@@ -1074,17 +1074,6 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
-        "extra": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadExtra"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional implementation-specific thread data."
-        },
         "forkedFromId": {
           "description": "Source thread id when this thread was created by forking another thread.",
           "type": [
@@ -1102,15 +1091,6 @@
             }
           ],
           "description": "Optional Git metadata captured when the thread was created."
-        },
-        "historyMode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ThreadHistoryMode"
-            }
-          ],
-          "default": "legacy",
-          "description": "Persisted thread history contract selected when this thread was created."
         },
         "id": {
           "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
@@ -1839,7 +1819,7 @@
           "properties": {
             "durationMs": {
               "format": "uint64",
-              "minimum": 0,
+              "minimum": 0.0,
               "type": "integer"
             },
             "id": {
@@ -2428,18 +2408,6 @@
     }
   },
   "properties": {
-    "activePermissionProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ActivePermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Named or implicit built-in profile that produced the active permissions, when known."
-    },
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
@@ -2468,15 +2436,6 @@
     "modelProvider": {
       "type": "string"
     },
-    "multiAgentMode": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/MultiAgentMode"
-        }
-      ],
-      "default": "explicitRequestOnly",
-      "description": "@deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior."
-    },
     "reasoningEffort": {
       "anyOf": [
         {
@@ -2486,14 +2445,6 @@
           "type": "null"
         }
       ]
-    },
-    "runtimeWorkspaceRoots": {
-      "default": [],
-      "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      },
-      "type": "array"
     },
     "sandbox": {
       "allOf": [
