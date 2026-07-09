@@ -307,18 +307,18 @@ type HeredocTerminator = {
 
 function collectHeredocTerminators(commandLine: string): HeredocTerminator[] {
   const terminators: HeredocTerminator[] = [];
-  scanTopLevelChars(commandLine, (char, index) => {
-    if (char !== "<" || commandLine[index + 1] !== "<" || commandLine[index + 2] === "<") {
-      return true;
+  for (let i = 0; i < commandLine.length; i += 1) {
+    const char = commandLine[i];
+    if (char !== "<" || commandLine[i + 1] !== "<" || commandLine[i + 2] === "<") {
+      continue;
     }
 
-    const stripLeadingTabs = commandLine[index + 2] === "-";
-    const parsed = parseHeredocTerminator(commandLine, index + (stripLeadingTabs ? 3 : 2));
+    const stripTabs = commandLine[i + 2] === "-";
+    const parsed = parseHeredocTerminator(commandLine, i + (stripTabs ? 3 : 2));
     if (parsed) {
-      terminators.push({ value: parsed, stripLeadingTabs });
+      terminators.push({ value: parsed, stripLeadingTabs: stripTabs });
     }
-    return true;
-  });
+  }
   return terminators;
 }
 

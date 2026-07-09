@@ -243,9 +243,34 @@ export function scanTopLevelChars(
 ): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
+  let heredocDelimiter: string | undefined;
+  let heredocBodyStartIndex: number | undefined;
+  let heredocEndIndex: number | undefined;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i];
+
+    if (heredocDelimiter !== undefined && heredocBodyStartIndex !== undefined && i >= heredocBodyStartIndex) {
+      const newlineAfterHeredoc = command.indexOf("\n", i);
+      let lineEnd = newlineAfterHeredoc !== -1 ? newlineAfterHeredoc : command.length;
+      let lineContent = command.slice(i, lineEnd).trimEnd();
+
+      if (lineContent === heredocDelimiter) {
+        heredocDelimiter = undefined;
+        heredocBodyStartIndex = undefined;
+        heredocEndIndex = undefined;
+        i = lineEnd;
+        continue;
+      }
+      i = lineEnd;
+      continue;
+    }
+
+    if (i < (heredocEndIndex ?? -1)) {
+      i = (heredocEndIndex ?? i) - 1;
+      heredocEndIndex = undefined;
+      continue;
+    }
 
     if (escaped) {
       escaped = false;
@@ -268,10 +293,118 @@ export function scanTopLevelChars(
       continue;
     }
 
+    if (heredocDelimiter === undefined && char === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
+      const stripTabs = command[i + 2] === "-";
+      const delimiterStart = i + (stripTabs ? 3 : 2);
+      const delimiter = parseHeredocDelimiter(command, delimiterStart);
+      if (delimiter) {
+        heredocDelimiter = delimiter;
+        const newlineIndex = command.indexOf("\n", delimiterStart);
+        if (newlineIndex !== -1) {
+          heredocBodyStartIndex = newlineIndex + 1;
+        }
+        const heredocEnd = findHeredocDelimiterEnd(command, delimiterStart);
+        heredocEndIndex = heredocEnd !== undefined ? heredocEnd + 1 : delimiterStart + delimiter.length;
+        i = heredocEndIndex - 1;
+        continue;
+      }
+    }
+
     if (visit(char, i) === false) {
       return;
     }
   }
+}
+
+function findHeredocDelimiterEnd(command: string, start: number): number | undefined {
+  let index = start;
+  while (index < command.length && /\s/u.test(command[index] ?? "")) {
+    index += 1;
+  }
+
+  let quote: '"' | "'" | undefined;
+
+  while (index < command.length) {
+    const char = command[index] ?? "";
+
+    if (quote) {
+      if (char === quote) {
+        return index;
+      }
+      if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        index += 2;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (/[\s;&|<>]/u.test(char)) {
+      return index - 1;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      index += 1;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+
+  return undefined;
+}
+
+function parseHeredocDelimiter(command: string, start: number): string | undefined {
+  let index = start;
+  while (index < command.length && /\s/u.test(command[index] ?? "")) {
+    index += 1;
+  }
+
+  let value = "";
+  let quote: '"' | "'" | undefined;
+
+  while (index < command.length) {
+    const char = command[index] ?? "";
+
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        index += 1;
+        continue;
+      }
+      if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        index += 1;
+        value += command[index] ?? "";
+        index += 1;
+        continue;
+      }
+      value += char;
+      index += 1;
+      continue;
+    }
+
+    if (/[\s;&|<>]/u.test(char)) {
+      break;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      index += 1;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      index += 1;
+      value += command[index] ?? "";
+      index += 1;
+      continue;
+    }
+    value += char;
+    index += 1;
+  }
+
+  return value || undefined;
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
