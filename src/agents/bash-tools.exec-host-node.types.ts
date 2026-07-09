@@ -1,3 +1,4 @@
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 /**
  * Node-host exec command parameter contracts.
  * Centralizes the full host/runtime boundary so node exec callers and handlers
@@ -43,4 +44,10 @@ export type ExecuteNodeHostCommandParams = {
   notifySessionKey?: string;
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /**
+   * openclaw.json config-layer exec denylist (`tools.exec.denylist` and the
+   * per-agent `agents.list.<id>.tools.exec.denylist`). Unioned with the
+   * node approvals-file denylist; deny in either layer denies.
+   */
+  execConfigDenylist?: ExecDenylistEntry[];
 };

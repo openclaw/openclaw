@@ -7,9 +7,16 @@ import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
+  type ExecDenylistEntry,
+  resolveEffectiveExecDenylist,
+} from "../infra/exec-approvals-denylist.js";
+import {
+  type AllowAlwaysPersistenceDecision,
+  type ExecApprovalsFile,
   type ExecSecurity,
   maxAsk,
   requiresExecApproval,
+  resolveExecApprovalsFromFile,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
@@ -89,6 +96,38 @@ function nodePolicyBlocksAutoReview(params: {
   );
 }
 
+function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
+  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
+}
+
+async function fetchNodeApprovalsFileDenylist(params: {
+  nodeId: string;
+  agentId?: string;
+}): Promise<ExecDenylistEntry[] | null> {
+  try {
+    const approvalsSnapshot = await callGatewayTool<{ file: unknown }>(
+      "exec.approvals.node.get",
+      { timeoutMs: 10_000 },
+      { nodeId: params.nodeId },
+    );
+    const approvalsFile =
+      approvalsSnapshot && typeof approvalsSnapshot === "object"
+        ? approvalsSnapshot.file
+        : undefined;
+    if (!approvalsFile || typeof approvalsFile !== "object") {
+      return null;
+    }
+    const resolved = resolveExecApprovalsFromFile({
+      file: approvalsFile as ExecApprovalsFile,
+      agentId: params.agentId,
+      overrides: { security: "full" },
+    });
+    return resolveEffectiveExecDenylist({ layers: [resolved.denylist] });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Executes a command on a remote node, requesting approval when policy requires it.
  * Node-host approval combines caller policy and remote node approval snapshots.
@@ -103,16 +142,39 @@ export async function executeNodeHostCommand(
     host: "node",
   });
   const target = await resolveNodeExecutionTarget(params);
+  const configDenylist = resolveEffectiveExecDenylist({
+    layers: [params.execConfigDenylist],
+  });
+  let fastPathApprovalsFileDenylist: ExecDenylistEntry[] | null = null;
+  if (
+    hostSecurity === "full" &&
+    hostAsk === "off" &&
+    params.strictInlineEval !== true &&
+    configDenylist.length === 0
+  ) {
+    fastPathApprovalsFileDenylist = await fetchNodeApprovalsFileDenylist({
+      nodeId: target.nodeId,
+      agentId: params.agentId,
+    });
+  }
+  const fastPathDenylistKnownEmpty =
+    configDenylist.length === 0 &&
+    fastPathApprovalsFileDenylist !== null &&
+    fastPathApprovalsFileDenylist.length === 0;
   if (
     shouldSkipNodeApprovalPrepare({
       hostSecurity,
       hostAsk,
       strictInlineEval: params.strictInlineEval,
+      denylistMayApply: !fastPathDenylistKnownEmpty,
     })
   ) {
     return await invokeNodeSystemRunDirect({ request: params, target });
   }
 
+  const preparedDenylist = resolveEffectiveExecDenylist({
+    layers: [configDenylist, fastPathApprovalsFileDenylist ?? undefined],
+  });
   const prepared = await prepareNodeSystemRun({ request: params, target });
   const approvalAnalysis = await analyzeNodeApprovalRequirement({
     request: params,
@@ -120,6 +182,7 @@ export async function executeNodeHostCommand(
     prepared,
     hostSecurity,
     hostAsk,
+    effectiveDenylist: preparedDenylist,
   });
   const {
     analysisOk,
@@ -130,31 +193,42 @@ export async function executeNodeHostCommand(
     nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresDenylistApproval,
+    denylistWarning,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
   const approvalDecisionAsk =
     nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
+  const effectiveAllowAlwaysPersistence = requiresDenylistApproval
+    ? createOneShotAllowAlwaysDecision()
+    : allowAlwaysPersistence;
   const allowedDecisions = resolveExecApprovalAllowedDecisions({
     ask: approvalDecisionAsk,
-    allowAlwaysPersistence,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
   const unavailableDecisions = resolveExecApprovalUnavailableDecisions({
     ask: approvalDecisionAsk,
-    allowAlwaysPersistence,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
   const unavailableDecisionRequestParams =
     unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
+  const policyRequiresAsk = requiresExecApproval({
+    ask: hostAsk,
+    security: hostSecurity,
+    analysisOk,
+    allowlistSatisfied,
+    durableApprovalSatisfied,
+    denylisted: requiresDenylistApproval,
+  });
   const requiresAsk =
-    requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-      durableApprovalSatisfied,
-    }) ||
+    requiresDenylistApproval ||
+    policyRequiresAsk ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;
+  if (requiresDenylistApproval && denylistWarning) {
+    params.warnings.push(denylistWarning);
+  }
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
@@ -208,13 +282,15 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresDenylistApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
-      !requiresSecurityAuditSuppressionApproval
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresDenylistApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
@@ -366,7 +442,7 @@ export async function executeNodeHostCommand(
             approvalDecision = "allow-once";
           } else if (decision === "allow-always") {
             approvedByAsk = true;
-            approvalDecision = "allow-always";
+            approvalDecision = requiresDenylistApproval ? "allow-once" : "allow-always";
           }
 
           const strictBoundaryDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
@@ -408,7 +484,8 @@ export async function executeNodeHostCommand(
                 turnSourceThreadId: params.turnSourceThreadId,
                 approved: approvedByAsk,
                 approvalDecision:
-                  approvalDecision === "allow-always" && inlineEvalHit !== null
+                  approvalDecision === "allow-always" &&
+                  (inlineEvalHit !== null || requiresDenylistApproval)
                     ? "allow-once"
                     : approvalDecision,
                 runId: approvalId,

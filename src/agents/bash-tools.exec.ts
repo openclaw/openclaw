@@ -1890,6 +1890,7 @@ export function createExecTool(
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
+            execConfigDenylist: defaults?.denylist,
           });
         }
 

@@ -42,6 +42,7 @@ type MockExecAllowlistEntry = {
 };
 type MockExecApprovalsResolved = {
   allowlist: MockExecAllowlistEntry[];
+  denylist?: Array<{ pattern: string; reason?: string }>;
   file: { version: 1; agents: Record<string, unknown> };
   agent: {
     security: ExecSecurity;
@@ -120,6 +121,7 @@ const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
   vi.fn(
     (): MockExecApprovalsResolved => ({
       allowlist: [],
+      denylist: [],
       file: { version: 1, agents: {} },
       agent: {
         security: "full",
@@ -518,6 +520,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecApprovalsFromFileMock.mockReset();
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [],
+      denylist: [],
       file: { version: 1, agents: {} },
       agent: {
         security: "full",
@@ -2807,8 +2810,9 @@ describe("executeNodeHostCommand", () => {
       notifyOnExit: false,
     });
 
-    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    const call = requireGatewayCall(0);
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(2);
+    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
+    const call = requireGatewayCommand("system.run");
     expect(call.options.timeoutMs).toBe(35_000);
     const runParams = requireRunParams(call);
     expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
@@ -2834,8 +2838,172 @@ describe("executeNodeHostCommand", () => {
       sessionKey: "requested-session",
     });
 
-    const runParams = requireRunParams(requireGatewayCall(0));
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
     expect(Object.hasOwn(runParams, "cwd")).toBe(false);
+  });
+
+  it("requests approval for config denylist hits at full/off instead of direct node invoke", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      execConfigDenylist: [{ pattern: "bun **", reason: "stop" }],
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "exec.approvals.node.get",
+      { timeoutMs: 10_000 },
+      { nodeId: "node-1" },
+    );
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
+    expect(requiresExecApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ denylisted: true }),
+    );
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "off",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+  });
+
+  it("requests approval for approvals-file denylist hits at full/off instead of direct node invoke", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+    resolveExecApprovalsFromFileMock.mockReturnValue({
+      allowlist: [],
+      denylist: [{ pattern: "bun **", reason: "stop" }],
+      file: { version: 1, agents: {} },
+      agent: { security: "full", ask: "off" },
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
+    expect(requiresExecApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ denylisted: true }),
+    );
+  });
+
+  it("auto-runs non-matching config denylist commands through the prepare path at full/off", async () => {
+    usePolicyApprovalRequirementMock();
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      execConfigDenylist: [{ pattern: "rm *", reason: "destructive" }],
+    });
+
+    expect(result.details?.status).toBe("completed");
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(requireGatewayCommand("system.run")).toBeDefined();
+    expect(requiresExecApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ denylisted: false }),
+    );
+  });
+
+  it("takes the full/off fast path only after the node approvals-file denylist is known empty", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
+    expect(requireGatewayCommand("system.run")).toBeDefined();
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , params]) =>
+          method === "node.invoke" &&
+          (params as MockNodeInvokeParams | undefined)?.command === "system.run.prepare",
+      ),
+    ).toBe(false);
+  });
+
+  it("fails closed into prepare when the fast-path approvals-file denylist fetch fails", async () => {
+    callGatewayToolMock.mockImplementation(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "exec.approvals.node.get") {
+          throw new Error("node approvals unavailable");
+        }
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected gateway method: ${method}`);
+        }
+        if (params?.command === "system.run.prepare") {
+          return { payload: { plan: preparedPlan } };
+        }
+        if (params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "ok",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+    usePolicyApprovalRequirementMock();
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("completed");
+    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {
@@ -2869,8 +3037,11 @@ describe("executeNodeHostCommand", () => {
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {
-    callGatewayToolMock.mockImplementationOnce(
+    callGatewayToolMock.mockImplementation(
       async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "exec.approvals.node.get") {
+          return { file: { version: 1, agents: {} } };
+        }
         if (method === "node.invoke" && params?.command === "system.run") {
           return {
             payload: {

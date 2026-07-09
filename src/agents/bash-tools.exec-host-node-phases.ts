@@ -11,6 +11,12 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  evaluateExecDenylist,
+  type ExecDenylistEntry,
+  formatExecDenylistWarning,
+  resolveEffectiveExecDenylist,
+} from "../infra/exec-approvals-denylist.js";
+import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -75,6 +81,8 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  requiresDenylistApproval: boolean;
+  denylistWarning: string | null;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -214,9 +222,13 @@ export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
   strictInlineEval?: boolean;
+  denylistMayApply: boolean;
 }): boolean {
   return (
-    params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
+    params.hostSecurity === "full" &&
+    params.hostAsk === "off" &&
+    params.strictInlineEval !== true &&
+    !params.denylistMayApply
   );
 }
 
@@ -502,6 +514,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   prepared: PreparedNodeRun;
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
+  effectiveDenylist: readonly ExecDenylistEntry[];
 }): Promise<NodeApprovalAnalysis> {
   const approvalCommand = params.prepared.rawCommand;
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
@@ -569,6 +582,9 @@ export async function analyzeNodeApprovalRequirement(params: {
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
   let nodeApprovalsFileKnown = false;
+  let effectiveDenylist = resolveEffectiveExecDenylist({
+    layers: [params.effectiveDenylist],
+  });
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? (policyCommandEvals
@@ -600,7 +616,8 @@ export async function analyzeNodeApprovalRequirement(params: {
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
-      params.request.autoReview === true) &&
+      params.request.autoReview === true ||
+      effectiveDenylist.length > 0) &&
     analysisOk
   ) {
     try {
@@ -619,6 +636,9 @@ export async function analyzeNodeApprovalRequirement(params: {
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.prepared.agentId,
           overrides: { security: "full" },
+        });
+        effectiveDenylist = resolveEffectiveExecDenylist({
+          layers: [effectiveDenylist, resolved.denylist],
         });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         // POSIX node transport wraps commands, so mirror node policy by
@@ -677,6 +697,26 @@ export async function analyzeNodeApprovalRequirement(params: {
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
+  let denylistWarning: string | null = null;
+  let requiresDenylistApproval = false;
+  for (const entry of policyCommandEvals) {
+    const denylistEvaluation = evaluateExecDenylist({
+      command: entry.command,
+      segments: entry.allowlistEval.segments,
+      denylist: effectiveDenylist,
+      analysisOk,
+    });
+    if (denylistEvaluation.match) {
+      requiresDenylistApproval = true;
+      denylistWarning = formatExecDenylistWarning(denylistEvaluation.match);
+      break;
+    }
+    if (denylistEvaluation.conservativeApproval) {
+      requiresDenylistApproval = true;
+      denylistWarning =
+        "Warning: command could not be screened against the exec denylist; explicit approval is required.";
+    }
+  }
   return {
     analysisOk,
     allowlistSatisfied,
@@ -686,6 +726,8 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresDenylistApproval,
+    denylistWarning,
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,
