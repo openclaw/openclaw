@@ -166,6 +166,7 @@ describe("durable workflow worker", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-worker-env-"));
     try {
       const registry = createDurableWorkflowRegistry();
+      registry.registerStepHandler("tool", () => ({ kind: "succeeded" }));
       const worker = startDurableWorkflowWorkerFromEnv({
         registry,
         workerId: "enabled-worker",
@@ -192,6 +193,65 @@ describe("durable workflow worker", () => {
         running: false,
         stopped: true,
       });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed from env when no step handlers are registered", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-worker-env-empty-"));
+    try {
+      const store = openDurableWorkflowSqliteStore({ path: path.join(dir, "openclaw.sqlite") });
+      const run = store.createRun({
+        workflowId: "test.workflow",
+        status: "queued",
+        recoveryState: "runnable",
+      });
+      store.createStep({
+        workflowRunId: run.workflowRunId,
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+      });
+      store.close();
+
+      const worker = startDurableWorkflowWorkerFromEnv({
+        registry: createDurableWorkflowRegistry(),
+        workerId: "empty-registry-worker",
+        env: {
+          OPENCLAW_STATE_DIR: dir,
+          OPENCLAW_DURABLE_WORKFLOWS: "1",
+          OPENCLAW_DURABLE_WORKER: "1",
+          OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS: "5",
+        },
+      });
+
+      expect(worker.getStatus()).toMatchObject({
+        running: false,
+        stopped: true,
+        claimedSteps: 0,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      await worker.stop();
+
+      const verifyStore = openDurableWorkflowSqliteStore({
+        path: path.join(dir, "openclaw.sqlite"),
+      });
+      try {
+        expect(verifyStore.getRun(run.workflowRunId)).toMatchObject({
+          status: "queued",
+          recoveryState: "runnable",
+        });
+        expect(verifyStore.listSteps(run.workflowRunId)[0]).toMatchObject({
+          status: "queued",
+          recoveryState: "runnable",
+        });
+        expect(verifyStore.listSteps(run.workflowRunId)[0]?.claimedBy).toBeUndefined();
+      } finally {
+        verifyStore.close();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

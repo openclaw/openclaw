@@ -66,6 +66,7 @@ export type DurableWorkflowRegistry = {
   listWorkflows(): DurableWorkflowDefinition[];
   registerStepHandler(stepType: DurableWorkflowStepType, handler: DurableWorkflowStepHandler): void;
   getStepHandler(stepType: DurableWorkflowStepType): DurableWorkflowStepHandler | undefined;
+  listStepTypesWithHandlers(): DurableWorkflowStepType[];
 };
 
 function workflowKey(workflowId: string, version: string): string {
@@ -98,6 +99,10 @@ export function createDurableWorkflowRegistry(): DurableWorkflowRegistry {
 
     getStepHandler(stepType: DurableWorkflowStepType): DurableWorkflowStepHandler | undefined {
       return handlers.get(stepType);
+    },
+
+    listStepTypesWithHandlers(): DurableWorkflowStepType[] {
+      return [...handlers.keys()];
     },
   };
 }

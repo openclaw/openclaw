@@ -219,25 +219,37 @@ export function startDurableWorkflowWorkerFromEnv(
   options: StartDurableWorkflowWorkerFromEnvOptions,
 ): DurableWorkflowWorkerHandle {
   const env = options.env ?? process.env;
+  const disabledStatus = (): DurableWorkflowWorkerStatus => ({
+    workerId: options.workerId,
+    running: false,
+    stopped: true,
+    startedAt: Date.now(),
+    inFlight: 0,
+    claimedSteps: 0,
+    idleTicks: 0,
+    failedTicks: 0,
+    pollIntervalMs: resolveDurableWorkerPollIntervalMs(env),
+    maxConcurrency: resolveDurableWorkerMaxConcurrency(env),
+    claimTtlMs: resolveDurableWorkerClaimTtlMs(env),
+  });
+  const disabledHandle: DurableWorkflowWorkerHandle = {
+    getStatus(): DurableWorkflowWorkerStatus {
+      return disabledStatus();
+    },
+    async stop(): Promise<void> {},
+  };
+
   if (!isDurableWorkerEnabled(env)) {
-    return {
-      getStatus(): DurableWorkflowWorkerStatus {
-        return {
-          workerId: options.workerId,
-          running: false,
-          stopped: true,
-          startedAt: Date.now(),
-          inFlight: 0,
-          claimedSteps: 0,
-          idleTicks: 0,
-          failedTicks: 0,
-          pollIntervalMs: resolveDurableWorkerPollIntervalMs(env),
-          maxConcurrency: resolveDurableWorkerMaxConcurrency(env),
-          claimTtlMs: resolveDurableWorkerClaimTtlMs(env),
-        };
-      },
-      async stop(): Promise<void> {},
-    };
+    return disabledHandle;
+  }
+
+  const handlerStepTypes = options.registry.listStepTypesWithHandlers();
+  if (handlerStepTypes.length === 0) {
+    log.warn(
+      "durable workflow worker requested but no step handlers are registered; not starting worker",
+      { workerId: options.workerId },
+    );
+    return disabledHandle;
   }
 
   const store = openDurableWorkflowSqliteStore({ env });
