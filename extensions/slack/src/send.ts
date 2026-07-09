@@ -1,7 +1,7 @@
 // Slack plugin module implements send behavior.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
-import type { Block, ChatPostMessageArguments, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
@@ -11,21 +11,11 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  isSilentReplyText,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalString as normalizeSlackApiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,23 +23,21 @@ import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
+import {
+  postSlackMessageBestEffort,
+  uploadSlackFile,
+  withSlackDnsRequestRetry,
+} from "./client-delivery.js";
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
-import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
+import { resolveSlackTextChunks } from "./slack-text-chunks.js";
 import { parseSlackTarget } from "./targets.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
-const SLACK_UPLOAD_SSRF_POLICY = {
-  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
-  allowRfc2544BenchmarkRange: true,
-};
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
-const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
-const SLACK_DNS_RETRY_ATTEMPTS = 2;
-const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
 const SLACK_DELIVERY_METADATA_EVENT = "openclaw_delivery";
 const SLACK_DELIVERY_METADATA_KEY = "openclaw_delivery_id";
 const SLACK_DELIVERY_METADATA_PART_INDEX_KEY = "openclaw_delivery_part_index";
@@ -79,34 +67,6 @@ export type SlackSendIdentity = {
 };
 
 const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
-
-type SlackUnfurlOptions = {
-  unfurlLinks?: boolean;
-  unfurlMedia?: boolean;
-};
-
-type SlackPostThreadPayload =
-  | {
-      thread_ts: string;
-      reply_broadcast: true;
-    }
-  | {
-      thread_ts: string;
-      reply_broadcast?: never;
-    }
-  | {
-      thread_ts?: never;
-      reply_broadcast?: never;
-    };
-
-type SlackBasePostMessagePayload = SlackPostThreadPayload & {
-  channel: string;
-  text: string;
-  blocks?: (Block | KnownBlock)[];
-  metadata?: MessageMetadata;
-  unfurl_links?: boolean;
-  unfurl_media?: boolean;
-};
 
 type SlackSendOpts = {
   cfg: OpenClawConfig;
@@ -191,51 +151,6 @@ function resolveSlackSendIdentity(params: {
   );
 }
 
-function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
-  return {
-    // Default unfurl_links to false so bot messages don't expand inline
-    // link previews (Slack message links, URLs, etc.) unless the operator
-    // explicitly opts in via `channels.slack.unfurlLinks: true`.
-    unfurl_links: options?.unfurlLinks ?? false,
-    ...(typeof options?.unfurlMedia === "boolean" ? { unfurl_media: options.unfurlMedia } : {}),
-  };
-}
-
-function buildSlackPostMessagePayload(params: {
-  channelId: string;
-  text: string;
-  threadTs?: string;
-  replyBroadcast?: boolean;
-  blocks?: (Block | KnownBlock)[];
-  metadata?: MessageMetadata;
-  unfurl?: SlackUnfurlOptions;
-}): SlackBasePostMessagePayload {
-  const threadPayload =
-    params.replyBroadcast && params.threadTs
-      ? { thread_ts: params.threadTs, reply_broadcast: true as const }
-      : params.threadTs
-        ? { thread_ts: params.threadTs }
-        : {};
-  const unfurlPayload = buildSlackUnfurlPayload(params.unfurl);
-  if (params.blocks?.length) {
-    return {
-      channel: params.channelId,
-      text: params.text,
-      blocks: params.blocks,
-      ...(params.metadata ? { metadata: params.metadata } : {}),
-      ...threadPayload,
-      ...unfurlPayload,
-    };
-  }
-  return {
-    channel: params.channelId,
-    text: params.text,
-    ...(params.metadata ? { metadata: params.metadata } : {}),
-    ...threadPayload,
-    ...unfurlPayload,
-  };
-}
-
 function normalizeSlackScopeList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -292,166 +207,11 @@ function enrichSlackWebApiError(err: unknown): unknown {
   return new Error(message);
 }
 
-function readSlackRequestErrorCode(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const code = (value as { code?: unknown }).code;
-  return typeof code === "string" ? code.toUpperCase() : undefined;
-}
-
 function readSlackRequestErrorMessage(value: unknown): string {
   if (value instanceof Error) {
     return value.message;
   }
   return typeof value === "string" ? value : "";
-}
-
-function hasSlackDnsRequestSignal(err: unknown): boolean {
-  let current: unknown = err;
-  const seen = new Set<unknown>();
-  for (let depth = 0; current && typeof current === "object" && depth < 6; depth += 1) {
-    if (seen.has(current)) {
-      return false;
-    }
-    seen.add(current);
-    const code = readSlackRequestErrorCode(current);
-    if (code && SLACK_DNS_RETRY_CODES.has(code)) {
-      return true;
-    }
-    const message = readSlackRequestErrorMessage(current);
-    if (/\b(EAI_AGAIN|ENOTFOUND|UND_ERR_DNS_RESOLVE_FAILED)\b/i.test(message)) {
-      return true;
-    }
-    current =
-      (current as { original?: unknown; cause?: unknown }).original ??
-      (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-function delaySlackDnsRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
-  });
-}
-
-async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<T>): Promise<T> {
-  for (const attempt of Array.from({ length: SLACK_DNS_RETRY_ATTEMPTS + 1 }, (_, index) => index)) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt >= SLACK_DNS_RETRY_ATTEMPTS || !hasSlackDnsRequestSignal(err)) {
-        throw err;
-      }
-      logVerbose(
-        `slack send: retrying ${operation} after transient DNS request error (${attempt + 1}/${SLACK_DNS_RETRY_ATTEMPTS})`,
-      );
-      await delaySlackDnsRetry(attempt + 1);
-    }
-  }
-  throw new Error("unreachable Slack DNS retry loop exit");
-}
-
-function isSlackCustomizeScopeError(err: unknown): boolean {
-  const data = getSlackWebApiErrorData(err);
-  const code = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.error));
-  if (code !== "missing_scope") {
-    return false;
-  }
-  const needed = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.needed));
-  if (needed?.includes("chat:write.customize")) {
-    return true;
-  }
-  const scopes = [
-    ...normalizeSlackScopeList(data?.response_metadata?.scopes),
-    ...normalizeSlackScopeList(data?.response_metadata?.acceptedScopes),
-  ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
-  return scopes.includes("chat:write.customize");
-}
-
-function isSlackCustomIdentityRejectedError(err: unknown): boolean {
-  if (isSlackCustomizeScopeError(err)) {
-    return true;
-  }
-  const data = getSlackWebApiErrorData(err);
-  const code = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.error));
-  return code === "invalid_arguments" || code === "invalid_arg_name";
-}
-
-async function postSlackMessageBestEffort(params: {
-  client: WebClient;
-  channelId: string;
-  text: string;
-  threadTs?: string;
-  replyBroadcast?: boolean;
-  identity?: SlackSendIdentity;
-  blocks?: (Block | KnownBlock)[];
-  metadata?: MessageMetadata;
-  unfurl?: SlackUnfurlOptions;
-}) {
-  const basePayload = buildSlackPostMessagePayload(params);
-  const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
-  const post = async (payload: ChatPostMessageArguments, identity?: SlackSendIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
-    identity,
-  });
-  try {
-    // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
-    // Build payloads in explicit branches so TS and runtime stay aligned.
-    const identity = params.identity;
-    if (identity?.iconUrl) {
-      return await post(
-        {
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_url: identity.iconUrl,
-        },
-        identity,
-      );
-    }
-    if (identity?.iconEmoji) {
-      return await post(
-        {
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        },
-        identity,
-      );
-    }
-    return await post(
-      {
-        ...basePayload,
-        ...(identity?.username ? { username: identity.username } : {}),
-      },
-      identity,
-    );
-  } catch (err) {
-    const identity = params.identity;
-    if (!identity || !hasCustomIdentity(identity) || !isSlackCustomIdentityRejectedError(err)) {
-      throw err;
-    }
-    if (
-      !isSlackCustomizeScopeError(err) &&
-      identity.username &&
-      (identity.iconUrl || identity.iconEmoji)
-    ) {
-      logVerbose("slack send: custom icon rejected, retrying with username only");
-      try {
-        return await post(
-          { ...basePayload, username: identity.username },
-          { username: identity.username },
-        );
-      } catch (retryError) {
-        if (!isSlackCustomIdentityRejectedError(retryError)) {
-          throw retryError;
-        }
-      }
-    }
-    logVerbose("slack send: custom identity rejected, retrying without custom identity");
-    return post(basePayload);
-  }
 }
 
 function resolvePostedMessageThreadTs(response: {
@@ -1073,90 +833,18 @@ export async function reconcileSlackUnknownSend(
   }
 }
 
-async function uploadSlackFile(params: {
-  client: WebClient;
-  channelId: string;
-  mediaUrl: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
-  uploadFileName?: string;
-  uploadTitle?: string;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  caption?: string;
-  threadTs?: string;
-  maxBytes?: number;
-  onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<string> {
-  const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
-    maxBytes: params.maxBytes,
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
-  });
-  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
-  const uploadTitle = params.uploadTitle ?? uploadFileName;
-  // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
-  // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
-  // and can fail with missing_scope even when files:write is granted.
-  const uploadUrlResp = await withSlackDnsRequestRetry("files.getUploadURLExternal", () =>
-    params.client.files.getUploadURLExternal({
-      filename: uploadFileName,
-      length: buffer.length,
-    }),
-  );
-  if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
-    throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
-  }
-  const uploadFileId = uploadUrlResp.file_id;
-
-  // Upload the file content to the presigned URL
-  const uploadBody = new Uint8Array(buffer) as BodyInit;
-  const { response: uploadResp, release } = await fetchWithSsrFGuard(
-    withTrustedEnvProxyGuardedFetchMode({
-      url: uploadUrlResp.upload_url,
-      init: {
-        method: "POST",
-        ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-        body: uploadBody,
-      },
-      policy: SLACK_UPLOAD_SSRF_POLICY,
-      auditContext: "slack-upload-file",
-    }),
-  );
-  try {
-    if (!uploadResp.ok) {
-      throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
-    }
-  } finally {
-    await release();
-  }
-
-  // Complete the upload and share to channel/thread
-  await params.onPlatformSendDispatch?.();
-  const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
-    params.client.files.completeUploadExternal({
-      files: [{ id: uploadFileId, title: uploadTitle }],
-      channel_id: params.channelId,
-      ...(params.caption ? { initial_comment: params.caption } : {}),
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-    }),
-  );
-  if (!completeResp.ok) {
-    throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);
-  }
-
-  return uploadFileId;
-}
-
 export async function sendMessageSlack(
   to: string,
   message: string,
   opts: SlackSendOpts,
 ): Promise<SlackSendResult> {
   const trimmedMessage = normalizeOptionalString(message) ?? "";
+  const cfg = requireRuntimeConfig(opts.cfg, "Slack send");
+  const account = resolveSlackAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  assertSlackDirectSendAllowed(account);
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return {
@@ -1169,11 +857,6 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Slack send");
-  const account = resolveSlackAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
   const token = resolveToken({
     explicit: opts.token,
     accountId: account.accountId,
@@ -1298,24 +981,11 @@ async function sendMessageSlackQueuedInner(params: {
       }),
     });
   }
-  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
-    fallbackLimit: SLACK_TEXT_LIMIT,
-  });
-  const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
-  const tableMode = resolveMarkdownTableMode({
+  const resolvedChunks = resolveSlackTextChunks({
     cfg,
-    channel: "slack",
     accountId: account.accountId,
+    text: trimmedMessage,
   });
-  const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
-  const markdownChunks =
-    chunkMode === "newline"
-      ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
-      : [trimmedMessage];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-  );
-  const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024

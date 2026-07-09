@@ -45,6 +45,19 @@ function slackDnsRequestError(): Error {
 }
 
 describe("sendMessageSlack NO_REPLY guard", () => {
+  it("rejects silent enterprise sends before token or Slack API work", async () => {
+    const client = createSlackSendTestClient();
+    await expect(
+      sendMessageSlack("channel:C123", "NO_REPLY", {
+        cfg: {
+          channels: { slack: { enterpriseOrgInstall: true } },
+        },
+        client,
+      }),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
   it("suppresses NO_REPLY text before any Slack API call", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
