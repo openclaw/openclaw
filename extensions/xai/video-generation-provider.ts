@@ -1,4 +1,5 @@
 // Xai provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -128,10 +129,6 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
@@ -143,7 +140,7 @@ function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string 
   if (!input.buffer) {
     throw new Error("xAI image-to-video input is missing image data.");
   }
-  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
+  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
 }
 
 function resolveRequiredImageUrl(input: VideoGenerationSourceInput): string {

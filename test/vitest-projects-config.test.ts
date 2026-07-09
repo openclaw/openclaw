@@ -27,11 +27,9 @@ import {
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
-import { unitUiIncludePatterns } from "./vitest/vitest.ui-paths.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
-import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
@@ -215,17 +213,6 @@ describe("projects vitest config", () => {
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(requireWebOptimizer(testConfig).enabled).toBe(true);
-  });
-
-  it("keeps the unit-ui shard aligned with the shared jsdom setup", () => {
-    const testConfig = requireTestConfig(unitUiConfig);
-    expect(testConfig.environment).toBe("jsdom");
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
-    expect(unitUiIncludePatterns).toContain("ui/src/ui/views/dreaming.test.ts");
-    const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
-    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
-    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {

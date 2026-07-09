@@ -274,7 +274,7 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let payload = GatewayDeviceAuthPayload.buildV3(
+        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
             deviceId: identity.deviceId,
             clientId: clientId,
             clientMode: clientMode,
@@ -282,9 +282,7 @@ actor GatewayWizardClient {
             scopes: scopes,
             signedAtMs: signedAtMs,
             token: self.token,
-            nonce: connectNonce,
-            platform: platform,
-            deviceFamily: "Mac")
+            nonce: connectNonce)
         if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
             payload: payload,
             identity: identity,
@@ -373,6 +371,9 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
             if status == "done" || nextResult.done {
                 print("Wizard complete.")
                 return
+            }
+            if let error = nextResult.error, !opts.json {
+                fputs("wizard: \(error)\n", stderr)
             }
 
             if let step = nextResult.step {

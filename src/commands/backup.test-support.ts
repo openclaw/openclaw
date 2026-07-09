@@ -1,6 +1,7 @@
 // Backup test support provides temp config/state fixtures and mocked backup runtime helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
@@ -13,6 +14,24 @@ const backupTestMocks = vi.hoisted(() => ({
 }));
 
 export const { backupVerifyCommandMock, tarCreateMock } = backupTestMocks;
+
+export function createMockTarStream(
+  params: {
+    beforeRead?: () => Promise<void> | void;
+    contents?: string;
+    error?: Error;
+  } = {},
+): Readable {
+  return Readable.from(
+    (async function* () {
+      await params.beforeRead?.();
+      if (params.error) {
+        throw params.error;
+      }
+      yield params.contents ?? "archive-bytes";
+    })(),
+  );
+}
 
 vi.mock("tar", () => ({
   c: backupTestMocks.tarCreateMock,

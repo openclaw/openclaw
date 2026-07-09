@@ -12,6 +12,7 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const log = createSubsystemLogger("tts-local-cli");
 
@@ -204,35 +205,66 @@ async function runCli(params: {
   const args = baseArgs.map((a) => applyTemplate(a, ctx));
 
   return new Promise((resolve, reject) => {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-      // Escalate to SIGKILL if child ignores SIGTERM
-      setTimeout(() => proc.kill("SIGKILL"), 5000).unref();
-    }, params.timeoutMs);
-
     const env = params.env ? { ...process.env, ...params.env } : process.env;
     const proc = spawn(cmd, args, { cwd: params.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    let terminalFailure: Error | undefined;
+    let stdoutError: Error | undefined;
+    let stderrError: Error | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    const clearTimers = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(forceKillTimer);
+    };
+    const terminateFor = (error: Error) => {
+      if (settled || terminalFailure) {
+        return;
+      }
+      terminalFailure = error;
+      clearTimeout(timeoutTimer);
+      proc.kill();
+      forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+      forceKillTimer.unref();
+    };
+    const timeoutTimer = setTimeout(() => {
+      terminateFor(new Error(`CLI TTS timed out after ${params.timeoutMs}ms`));
+    }, params.timeoutMs);
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     proc.stdout.on("data", (c) => stdoutChunks.push(c));
+    proc.stdout.on("error", (e) => {
+      // A generated file is authoritative when present. Remember stdout
+      // failure so only the stdout-audio fallback is rejected after close.
+      stdoutError ??= new Error(`CLI TTS stdout stream error: ${e.message}`);
+    });
     proc.stderr.on("data", (c) => stderrChunks.push(c));
+    proc.stderr.on("error", (e) => {
+      stderrError ??= new Error(`CLI TTS stderr stream error: ${e.message}`);
+    });
 
     proc.on("error", (e) => {
-      clearTimeout(timer);
-      reject(new Error(`CLI TTS failed: ${e.message}`));
+      // Process errors can also report failed kill delivery. Keep timeout
+      // escalation armed and let close own cleanup and promise settlement.
+      terminalFailure ??= new Error(`CLI TTS failed: ${e.message}`);
     });
 
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(new Error(`CLI TTS timed out after ${params.timeoutMs}ms`));
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      if (terminalFailure) {
+        return reject(terminalFailure);
       }
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString("utf8");
-        return reject(new Error(`CLI TTS exit ${code}: ${stderr}`));
+        const diagnostic = stderrError
+          ? [stderr, stderrError.message].filter(Boolean).join("; ")
+          : stderr;
+        return reject(new Error(`CLI TTS exit ${code}: ${diagnostic}`));
       }
 
       const audioFile = findAudioFile(params.outputDir, params.filePrefix);
@@ -251,6 +283,9 @@ async function runCli(params: {
         });
       }
 
+      if (stdoutError) {
+        return reject(stdoutError);
+      }
       const stdout = Buffer.concat(stdoutChunks);
       if (stdout.length > 0) {
         // Assume WAV for stdout output; could be MP3 but caller should convert if needed
@@ -340,7 +375,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         throw new Error("CLI TTS not configured");
       }
 
-      log.debug(`synthesize: text=${req.text.slice(0, 50)}...`);
+      log.debug(`synthesize: text=${truncateUtf16Safe(req.text, 50)}...`);
 
       const temp = await tempWorkspace({
         rootDir: resolvePreferredOpenClawTmpDir(),
@@ -413,7 +448,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         throw new Error("CLI TTS not configured");
       }
 
-      log.debug(`synthesizeTelephony: text=${req.text.slice(0, 50)}...`);
+      log.debug(`synthesizeTelephony: text=${truncateUtf16Safe(req.text, 50)}...`);
 
       const temp = await tempWorkspace({
         rootDir: resolvePreferredOpenClawTmpDir(),

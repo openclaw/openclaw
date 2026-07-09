@@ -5,6 +5,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createRichMenu,
   createDefaultMenuConfig,
   createGridLayout,
   datetimePickerAction,
@@ -14,19 +15,33 @@ import {
   uriAction,
 } from "./rich-menu.js";
 
-const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
+const {
+  createRichMenuMock,
+  setRichMenuImageMock,
+  MessagingApiClientMock,
+  MessagingApiBlobClientMock,
+} = vi.hoisted(() => {
+  const createRichMenuMockLocal = vi.fn();
   const setRichMenuImageMockLocal = vi.fn();
+  const MessagingApiClientMockLocal = vi.fn(function () {
+    return { createRichMenu: createRichMenuMockLocal };
+  });
   const MessagingApiBlobClientMockLocal = vi.fn(function () {
     return { setRichMenuImage: setRichMenuImageMockLocal };
   });
   return {
+    createRichMenuMock: createRichMenuMockLocal,
     setRichMenuImageMock: setRichMenuImageMockLocal,
+    MessagingApiClientMock: MessagingApiClientMockLocal,
     MessagingApiBlobClientMock: MessagingApiBlobClientMockLocal,
   };
 });
 
 vi.mock("@line/bot-sdk", () => ({
-  messagingApi: { MessagingApiBlobClient: MessagingApiBlobClientMock },
+  messagingApi: {
+    MessagingApiClient: MessagingApiClientMock,
+    MessagingApiBlobClient: MessagingApiBlobClientMock,
+  },
 }));
 
 afterAll(() => {
@@ -240,6 +255,37 @@ const richMenuUploadCfg: OpenClawConfig = {
     },
   },
 };
+
+describe("createRichMenu", () => {
+  beforeEach(() => {
+    createRichMenuMock.mockReset();
+    createRichMenuMock.mockResolvedValue({ richMenuId: "rich-menu-1" });
+    MessagingApiClientMock.mockClear();
+  });
+
+  it("truncates names and chat bar text by grapheme cluster", async () => {
+    const emoji = "😀";
+    const familyEmoji = "👨‍👩‍👧‍👦";
+
+    await createRichMenu(
+      {
+        size: { width: 2500, height: 843 },
+        name: emoji.repeat(301),
+        chatBarText: familyEmoji.repeat(15),
+        areas: [],
+      },
+      { cfg: richMenuUploadCfg },
+    );
+
+    expect(MessagingApiClientMock).toHaveBeenCalledWith({ channelAccessToken: "line-token" });
+    expect(createRichMenuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: emoji.repeat(300),
+        chatBarText: familyEmoji.repeat(14),
+      }),
+    );
+  });
+});
 
 describe("uploadRichMenuImage", () => {
   let tempRoot: string;

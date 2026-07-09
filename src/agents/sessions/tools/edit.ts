@@ -10,6 +10,7 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -108,7 +109,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
     return input as EditToolInput;
   }
 
-  const args = input as Record<string, unknown>;
+  const args = { ...(input as Record<string, unknown>) };
 
   // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
   if (typeof args.edits === "string") {
@@ -121,14 +122,24 @@ function prepareEditArguments(input: unknown): EditToolInput {
   }
 
   const legacy = args as LegacyEditToolInput;
-  if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
-    return args as unknown as EditToolInput;
+  if (typeof legacy.oldText === "string" && typeof legacy.newText === "string") {
+    const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
+    edits.push({ oldText: legacy.oldText, newText: legacy.newText });
+    args.edits = edits;
   }
 
-  const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-  edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-  const { oldText: _oldText, newText: _newText, ...rest } = legacy;
-  return { ...rest, edits } as EditToolInput;
+  const edits = Array.isArray(args.edits)
+    ? args.edits.map((edit) => {
+        if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
+          return edit;
+        }
+        const candidate = edit as Record<string, unknown>;
+        return { oldText: candidate.oldText, newText: candidate.newText };
+      })
+    : args.edits;
+
+  // Keep the strict provider schema while tolerating model-added metadata.
+  return { path: args.path, edits } as EditToolInput;
 }
 
 function validateEditInput(input: EditToolInput): {
@@ -177,7 +188,7 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+      : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });

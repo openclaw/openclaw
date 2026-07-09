@@ -213,6 +213,7 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
@@ -386,6 +387,8 @@ export type ChannelFocusedBindingContext = {
 export type ChannelOutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: {
     kind: ChatType;
     id: string;
@@ -458,6 +461,8 @@ export type ChannelThreadingContext = {
   To?: string;
   ChatType?: string;
   CurrentMessageId?: string | number;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: MsgContext["ReplyToMode"];
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;
@@ -635,6 +640,11 @@ export type ChannelMessagingAdapter = {
   /**
    * Provider-specific session-route builder used after target resolution.
    * Keep session-key orchestration in core and channel-native routing rules here.
+   * Set `recipientSessionExact` to true only when the target maps unambiguously
+   * to the same canonical session that inbound delivery uses. `direct-alias`
+   * may be used when only the direct chat kind is authoritative.
+   * `delivery-identity` requires a stable outbound-only recipient identity and
+   * a provider-keyed session that stays isolated from the agent main session.
    */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;

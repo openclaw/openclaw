@@ -7,6 +7,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { createAbortError } from "../infra/abort-signal.js";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
@@ -117,9 +118,7 @@ export function createApplyPatchTool(
         throw new Error("Provide a patch input.");
       }
       if (signal?.aborted) {
-        const err = new Error("Aborted");
-        err.name = "AbortError";
-        throw err;
+        throw createAbortError("Aborted");
       }
 
       const result = await applyPatch(input, {
@@ -163,9 +162,7 @@ export async function applyPatch(
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
-      const err = new Error("Aborted");
-      err.name = "AbortError";
-      throw err;
+      throw createAbortError("Aborted");
     }
 
     if (hunk.kind === "add") {

@@ -23,7 +23,7 @@ export const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
 // flood window, the dispatcher logs a warning and forces the wake to defer to
 // the next scheduled tick. Tuned so a normal heartbeat that legitimately uses
 // `manual` retry doesn't trip it but a feedback loop does.
-export const DEFAULT_FLOOD_WINDOW_MS = 60_000;
+const DEFAULT_FLOOD_WINDOW_MS = 60_000;
 export const DEFAULT_FLOOD_THRESHOLD = 5;
 
 export type DeferDecision =

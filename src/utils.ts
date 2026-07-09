@@ -9,8 +9,8 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
-import { resolveTimerTimeoutMs } from "./shared/number-coercion.js";
 export { escapeRegExp } from "./shared/regexp.js";
+export { sleep } from "./utils/sleep.js";
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
@@ -55,24 +55,14 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
-}
-
-/** Promise-based sleep that clamps timer inputs through the shared timeout resolver. */
-export function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
-  });
+  const digits = withoutPrefix.replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
 }
 
 // Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI
 // bundles can import them without pulling in filesystem code. Re-exported here
 // to preserve the historical `utils.ts` import surface.
-export { sliceUtf16Safe, truncateUtf16Safe } from "./shared/utf16-slice.js";
+export { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 /** Resolves `~` and OpenClaw home-relative paths with injectable env/home sources. */
 export function resolveUserPath(

@@ -39,7 +39,7 @@ export function resolveModelFallbackOptions(
 }
 
 /** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-export function resolveEnforceFinalTagWithResolver(
+function resolveEnforceFinalTagWithResolver(
   run: FollowupRun["run"],
   provider: string,
   model: string,
@@ -101,6 +101,7 @@ export function buildEmbeddedRunBaseParams(params: {
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    clientCaps: params.run.clientCaps,
     provider: params.provider,
     model: params.model,
     modelFallbacksOverride,

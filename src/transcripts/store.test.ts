@@ -1,7 +1,18 @@
-// Tests TranscriptsStore stream cleanup and transcript reading behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+// Tests TranscriptsStore stream cleanup and transcript reading behavior.
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const createReadStreamMock = vi.hoisted(() => vi.fn());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    createReadStream: (...args: Parameters<typeof actual.createReadStream>) =>
+      createReadStreamMock(...args) ?? actual.createReadStream(...args),
+  };
+});
 import { listOpenFileDescriptorsForPath } from "../../src/infra/open-file-descriptors.test-support.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { TranscriptsStore } from "./store.js";
@@ -105,4 +116,25 @@ describe("TranscriptsStore.readUtterancesFromSessionDir", () => {
       expect(leaked).toHaveLength(0);
     },
   );
+
+  it("rejects non-ENOENT read stream errors", async () => {
+    const tmpDir = makeTempDir(tempRoots, "openclaw-transcript-test-");
+    const store = new TranscriptsStore(tmpDir);
+    const sessionDir = path.join(tmpDir, "2026-07-01", "session-1");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "transcript.jsonl"), "");
+
+    createReadStreamMock.mockImplementation(() => {
+      const stream = new PassThrough();
+      setTimeout(() => {
+        stream.write(JSON.stringify({ text: "hello", sessionId: "session-1" }) + "\n");
+        stream.destroy(new Error("read failed"));
+      }, 10);
+      return stream;
+    });
+
+    await expect(
+      store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 }),
+    ).rejects.toThrow("read failed");
+  });
 });

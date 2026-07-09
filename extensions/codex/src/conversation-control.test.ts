@@ -7,13 +7,53 @@ import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readCodexAppServerBinding,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
-} from "./app-server/session-binding.js";
+} from "./app-server/session-binding.test-helpers.js";
 import {
-  setCodexConversationFastMode,
-  setCodexConversationModel,
-  setCodexConversationPermissions,
+  setCodexConversationFastMode as setCodexConversationFastModeImpl,
+  setCodexConversationModel as setCodexConversationModelImpl,
+  setCodexConversationPermissions as setCodexConversationPermissionsImpl,
 } from "./conversation-control.js";
+
+function controlTarget(sessionFile: string) {
+  return {
+    identity: { kind: "session" as const, agentId: "main", sessionId: sessionFile },
+    bindingStore: testCodexAppServerBindingStore,
+  };
+}
+
+function setCodexConversationFastMode(
+  params: Omit<
+    Parameters<typeof setCodexConversationFastModeImpl>[0],
+    "identity" | "bindingStore"
+  > & {
+    sessionFile: string;
+  },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationFastModeImpl({ ...rest, ...controlTarget(sessionFile) });
+}
+
+function setCodexConversationModel(
+  params: Omit<Parameters<typeof setCodexConversationModelImpl>[0], "identity" | "bindingStore"> & {
+    sessionFile: string;
+  },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationModelImpl({ ...rest, ...controlTarget(sessionFile) });
+}
+
+function setCodexConversationPermissions(
+  params: Omit<
+    Parameters<typeof setCodexConversationPermissionsImpl>[0],
+    "identity" | "bindingStore"
+  > & { sessionFile: string },
+) {
+  const { sessionFile, ...rest } = params;
+  return setCodexConversationPermissionsImpl({ ...rest, ...controlTarget(sessionFile) });
+}
 
 let tempDir: string;
 
@@ -29,6 +69,7 @@ vi.mock("./app-server/shared-client.js", () => ({
 
 describe("codex conversation controls", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -97,11 +138,9 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({ sessionFile, agentDir, model: "gpt-5.5" }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
-    const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
     const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
     expect(sharedClientParams?.agentDir).toBe(agentDir);
-    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.5");

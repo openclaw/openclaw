@@ -1,7 +1,8 @@
 // Verifies plain-text sanitization strips runtime scaffolding, tool-call blocks,
 // prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
-import { sanitizeForPlainText, stripInternalRuntimeScaffolding } from "./sanitize-text.js";
+import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
+import { sanitizeForPlainText } from "./sanitize-text.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeForPlainText

@@ -31,7 +31,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-const OPENCLAW_STATE_SCHEMA_VERSION = 1;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 1;
 /** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
@@ -86,7 +86,7 @@ function bestEffortChmodSync(target: string, mode: number): void {
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
-function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
+export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
   const isDefaultStateDatabase =
@@ -307,6 +307,57 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   }
 }
 
+function ensureStartupMigrationCheckpointSchema(db: DatabaseSync, pathname: string): void {
+  assertSupportedSchemaVersion(db, pathname);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      meta_key TEXT NOT NULL PRIMARY KEY,
+      role TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      agent_id TEXT,
+      app_version TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS state_leases (
+      scope TEXT NOT NULL,
+      lease_key TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      expires_at INTEGER,
+      heartbeat_at INTEGER,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (scope, lease_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
+      ON state_leases(expires_at, scope, lease_key)
+      WHERE expires_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_state_leases_owner
+      ON state_leases(owner, updated_at DESC);
+  `);
+  ensureColumn(db, "schema_meta", "app_version TEXT");
+}
+
+export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
+  callback: (db: DatabaseSync) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T {
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  ensureOpenClawStatePermissions(pathname, env);
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname);
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  try {
+    ensureStartupMigrationCheckpointSchema(db, pathname);
+    return callback(db);
+  } finally {
+    db.close();
+    ensureOpenClawStatePermissions(pathname, env);
+  }
+}
+
 function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   if (!tableExists(db, "cron_run_logs") || !tableHasColumn(db, "cron_run_logs", "entry_json")) {
     return;
@@ -405,6 +456,46 @@ function failureDestinationField(
   }
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : "";
+}
+
+function migrateLegacyCronDeliveryThreadIds(db: DatabaseSync): void {
+  const rows = db
+    .prepare(
+      `SELECT store_key, job_id, job_json, delivery_thread_id
+         FROM cron_jobs
+        WHERE delivery_thread_id_type IS NULL`,
+    )
+    .all() as Array<{
+    store_key: string;
+    job_id: string;
+    job_json: string;
+    delivery_thread_id: string | null;
+  }>;
+  const update = db.prepare(
+    `UPDATE cron_jobs
+        SET delivery_thread_id = ?, delivery_thread_id_type = ?
+      WHERE store_key = ? AND job_id = ? AND delivery_thread_id_type IS NULL`,
+  );
+  for (const row of rows) {
+    const job = parseJsonRecord(row.job_json);
+    const delivery = job ? recordField(job, "delivery") : null;
+    const typed = delivery?.threadId;
+    if (row.delivery_thread_id === null) {
+      // The first normalized cron migration could not project numeric thread IDs.
+      // Recover only that known lost shape while this type column is first added.
+      if (typeof typed === "number" && Number.isFinite(typed)) {
+        update.run(String(typed), "number", row.store_key, row.job_id);
+      }
+      continue;
+    }
+    const type =
+      typeof typed === "number" &&
+      Number.isFinite(typed) &&
+      String(typed) === row.delivery_thread_id
+        ? "number"
+        : "string";
+    update.run(row.delivery_thread_id, type, row.store_key, row.job_id);
+  }
 }
 
 function backfillCronJobsFromJobJson(db: DatabaseSync): void {
@@ -687,6 +778,10 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
   backfillCronRunLogEntryJson(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
+  ensureColumn(db, "cron_jobs", "declaration_key TEXT");
+  ensureColumn(db, "cron_jobs", "display_name TEXT");
+  ensureColumn(db, "cron_jobs", "owner_agent_id TEXT");
+  ensureColumn(db, "cron_jobs", "owner_session_key TEXT");
   ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
@@ -702,6 +797,8 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
   ensureColumn(db, "cron_jobs", "session_target TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "cron_jobs", "wake_mode TEXT NOT NULL DEFAULT 'auto'");
+  ensureColumn(db, "cron_jobs", "trigger_script TEXT");
+  ensureColumn(db, "cron_jobs", "trigger_once INTEGER");
   ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
   ensureColumn(db, "cron_jobs", "payload_message TEXT");
   ensureColumn(db, "cron_jobs", "payload_model TEXT");
@@ -751,6 +848,12 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
   ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
   backfillCronJobsFromJobJson(db);
+  runSqliteImmediateTransactionSync(db, () => {
+    const addedDeliveryThreadIdType = ensureColumn(db, "cron_jobs", "delivery_thread_id_type TEXT");
+    if (addedDeliveryThreadIdType) {
+      migrateLegacyCronDeliveryThreadIds(db);
+    }
+  });
   ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
   ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
   ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
@@ -811,6 +914,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
   runSqliteImmediateTransactionSync(db, () => {
     const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
     if (addedTaskRequesterAgentId) {

@@ -1,7 +1,7 @@
 // Workboard tests cover command plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleWorkboardCommand } from "./command.js";
-import type { WorkboardSubagentRuntime } from "./dispatcher.js";
+import type { WorkboardSubagentRuntime, WorkboardWorktreeRuntime } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -23,11 +23,16 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): {
-  runtime: { subagent: WorkboardSubagentRuntime };
+  runtime: { subagent: WorkboardSubagentRuntime; worktrees: WorkboardWorktreeRuntime };
 } {
   return {
     runtime: {
       subagent: { run },
+      worktrees: {
+        create: vi.fn(),
+        release: vi.fn(),
+        removeIfLossless: vi.fn(),
+      },
     },
   };
 }
@@ -98,6 +103,53 @@ describe("handleWorkboardCommand", () => {
     );
     expect(api.runtime.subagent.run).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("requires admin scope for slash-command worktree materialization", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const createWorktree = vi.mocked(api.runtime.worktrees.create);
+    createWorktree.mockResolvedValue({
+      id: "managed-id",
+      path: "/state/worktrees/fingerprint/wb-card",
+      branch: "openclaw/wb-card",
+    });
+    await store.create({
+      title: "Denied checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo-denied" },
+    });
+
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: "dispatch",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ text: expect.stringContaining("operator.admin") }),
+    );
+    expect(createWorktree).not.toHaveBeenCalled();
+    const denied = (await store.list()).find((card) => card.title === "Denied checkout");
+    expect(denied).toMatchObject({ status: "ready" });
+    await store.update(denied!.id, { status: "blocked" });
+
+    const allowed = await store.create({
+      title: "Allowed checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo-allowed" },
+    });
+    await handleWorkboardCommand({
+      api,
+      store,
+      args: "dispatch",
+      gatewayClientScopes: ["operator.admin"],
+    });
+
+    expect(createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ repoRoot: "/repo-allowed", ownerId: allowed.id }),
+    );
   });
 
   it("rejects ambiguous card id prefixes", async () => {

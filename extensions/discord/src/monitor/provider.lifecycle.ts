@@ -6,6 +6,7 @@ import {
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
@@ -420,6 +421,7 @@ export async function runDiscordGatewayLifecycle(params: {
   gatewayRuntimeReadyTimeoutMs?: number;
 }) {
   const gateway = params.gateway;
+  const gatewayReadyAtLifecycleStart = gateway?.isConnected === true;
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
@@ -513,6 +515,18 @@ export async function runDiscordGatewayLifecycle(params: {
     // Drain gateway errors emitted before lifecycle listeners were attached.
     if (drainPendingGatewayErrors() === "stop") {
       return;
+    }
+
+    if (gatewayReadyAtLifecycleStart && params.voiceManager) {
+      // READY may precede lazy voice-listener registration. Reconcile only after lifecycle
+      // ownership begins so every startup failure still destroys the manager in `finally`.
+      void params.voiceManager
+        .autoJoin()
+        .catch((err: unknown) =>
+          params.runtime.error?.(
+            danger(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+          ),
+        );
     }
 
     await waitForGatewayReady({

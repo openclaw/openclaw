@@ -99,8 +99,9 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   it("keeps plugin-only allowlists on the shared tool policy path", () => {
     const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
 
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }))
-      .toHaveProperty("includeCoreTools", false);
+    expect(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
+    ).toHaveProperty("includeCoreTools", false);
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
     ).toEqual(["memory_search"]);
@@ -207,6 +208,28 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includePluginTools: false,
       },
     });
+  });
+
+  it("short-circuits tool construction when the model disables tools", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({
+        toolsEnabled: false,
+        toolsAllow: ["message"],
+        forceMessageTool: true,
+      }),
+      {
+        constructTools: false,
+        includeCoreTools: false,
+        runtimeToolAllowlist: undefined,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
@@ -326,6 +349,23 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    for (const toolName of ["spawn_task", "dismiss_task"]) {
+      expectConstructionPlan(
+        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
+        {
+          constructTools: true,
+          includeCoreTools: true,
+          runtimeToolAllowlist: [toolName],
+          coding: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        },
+      );
+    }
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {

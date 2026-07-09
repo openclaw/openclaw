@@ -61,6 +61,16 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  it("keeps previous-message query context UTF-16 well-formed", () => {
+    const query = testing.buildSearchQuery({
+      latestUserMessage: "why?",
+      recentTurns: [{ role: "user", text: `${"x".repeat(119)}🚀tail` }],
+    });
+
+    expect(query).toBe(`${"x".repeat(119)} why?`);
+    expect(query).not.toContain("\uD83D");
+  });
+
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
@@ -290,6 +300,27 @@ describe("active-memory plugin", () => {
       (result as { prependContext?: unknown } | undefined)?.prependContext,
       "expected prependContext",
     );
+  const runRecallWithSummary = async (params: {
+    prompt: string;
+    summary: string;
+    memoryText?: string;
+  }): Promise<string> => {
+    runEmbeddedAgent.mockImplementationOnce(async (runParams: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(runParams.sessionFile, params.memoryText ?? params.summary);
+      return { payloads: [{ text: params.summary }] };
+    });
+    return requirePrependContext(
+      await hooks.before_prompt_build(
+        { prompt: params.prompt, messages: [] },
+        {
+          agentId: "main",
+          trigger: "user",
+          sessionKey: "agent:main:main",
+          messageProvider: "webchat",
+        },
+      ),
+    );
+  };
   const expectPrependContextContains = (result: unknown, text: string) => {
     expect(requirePrependContext(result)).toContain(text);
   };
@@ -2839,10 +2870,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(200);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1_000,
+      timeoutMs: 100,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -4781,13 +4812,14 @@ describe("active-memory plugin", () => {
     ).not.toEqual([]);
   });
 
-  it("caps active-memory log field lengths", async () => {
+  it("caps active-memory log field lengths without splitting surrogate pairs", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    const hugeSession = `agent:main:${"x".repeat(500)}`;
+    const sessionPrefix = `agent:main:${"x".repeat(288)}`;
+    const hugeSession = `${sessionPrefix}😀tail`;
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? long log value", messages: [] },
@@ -4805,7 +4837,8 @@ describe("active-memory plugin", () => {
     const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
     const line = requireNonEmptyString(startLine, "active memory start log line missing");
     expect(line.length).toBeLessThan(500);
-    expect(line).toContain("...");
+    expect(line).toContain(`session=${sessionPrefix}...`);
+    expect(line).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {
@@ -5335,32 +5368,43 @@ describe("active-memory plugin", () => {
       maxSummaryChars: 40,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(params.sessionFile, "alpha beta gamma");
-      return {
-        payloads: [
-          {
-            text: "alpha beta gamma delta epsilon zetalongword",
-          },
-        ],
-      };
+    const prependContext = await runRecallWithSummary({
+      prompt: "what wings should i order? word-boundary-truncation-40",
+      summary: "alpha beta gamma delta epsilon zetalongword",
+      memoryText: "alpha beta gamma",
     });
-
-    const result = await hooks.before_prompt_build(
-      { prompt: "what wings should i order? word-boundary-truncation-40", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:main",
-        messageProvider: "webchat",
-      },
-    );
-
-    const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("alpha beta gamma");
     expect(prependContext).toContain("alpha beta gamma delta epsilon…");
     expect(prependContext).not.toContain("zetalo");
     expect(prependContext).not.toContain("zetalongword");
+  });
+
+  it.each([
+    {
+      name: "split surrogate",
+      summary: `${"a".repeat(38)}🎉TAILWORD`,
+      expected: `${"a".repeat(38)}…`,
+    },
+    {
+      name: "whitespace before a split surrogate",
+      summary: `alpha beta ${"c".repeat(26)} 🎉TAILWORD`,
+      expected: `alpha beta ${"c".repeat(26)}…`,
+    },
+  ])("keeps $name truncation UTF-16 safe", async ({ name, summary, expected }) => {
+    api.pluginConfig = {
+      agents: ["main"],
+      maxSummaryChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const prependContext = await runRecallWithSummary({
+      prompt: `recall summary boundary: ${name}`,
+      summary,
+      memoryText: expected,
+    });
+
+    expect(prependContext).toContain(expected);
+    expect(prependContext).not.toContain("TAILWORD");
   });
 
   it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {

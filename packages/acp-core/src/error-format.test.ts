@@ -1,6 +1,10 @@
 // Error-format helper tests cover the non-Error cause stringifier contract.
 import { describe, expect, it } from "vitest";
-import { stringifyNonErrorCause } from "./error-format.js";
+import {
+  configureAcpErrorRedactor,
+  redactSensitiveText,
+  stringifyNonErrorCause,
+} from "./error-format.js";
 
 describe("stringifyNonErrorCause", () => {
   it("returns a string for values JSON.stringify serializes to undefined", () => {
@@ -15,5 +19,18 @@ describe("stringifyNonErrorCause", () => {
     expect(stringifyNonErrorCause("hi")).toBe("hi");
     expect(stringifyNonErrorCause(42)).toBe("42");
     expect(stringifyNonErrorCause(null)).toBe("null");
+  });
+});
+
+describe("redactSensitiveText", () => {
+  it("applies fallback secret redaction after a configured redactor", () => {
+    configureAcpErrorRedactor((value) => value.replace("prefix", "host-redacted"));
+    try {
+      expect(redactSensitiveText("prefix ghp_123456789012345678901234")).toBe(
+        "host-redacted [REDACTED]",
+      );
+    } finally {
+      configureAcpErrorRedactor(undefined);
+    }
   });
 });

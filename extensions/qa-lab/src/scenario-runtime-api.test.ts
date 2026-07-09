@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import type { QaTransportCapabilities } from "./qa-transport.js";
+import type { QaTransportAdapter } from "./qa-transport.js";
 import {
   createQaScenarioRuntimeApi,
   type QaScenarioRuntimeConstants,
@@ -113,13 +113,13 @@ const browserAndWebRuntimeTools = [
 ] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
-  it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
+  it("builds a markdown-flow runtime surface from the transport adapter", async () => {
     const state = createQaBusState();
     const resetSpy = vi.spyOn(state, "reset");
     const inboundSpy = vi.spyOn(state, "addInboundMessage");
     const outboundSpy = vi.spyOn(state, "addOutboundMessage");
     const readSpy = vi.spyOn(state, "readMessage");
-    const waitForCondition: QaTransportCapabilities["waitForCondition"] = async <T>(
+    const waitForCondition: QaTransportAdapter["waitForCondition"] = async <T>(
       check: () => T | Promise<T | null | undefined> | null | undefined,
     ): Promise<T> => {
       const value = await check();
@@ -138,24 +138,26 @@ describe("createQaScenarioRuntimeApi", () => {
         },
         sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
           state.addInboundMessage(input),
+        sendNativeCommand: async (
+          input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+            command: string;
+          },
+        ) => {
+          const { command, ...message } = input;
+          state.addInboundMessage({
+            ...message,
+            text: `/${command}`,
+            nativeCommand: { name: command },
+          });
+        },
         waitForNoOutbound: vi.fn(async () => undefined),
         waitForOutbound: vi.fn(async () => {
           throw new Error("not used");
         }),
-        capabilities: {
-          waitForCondition,
-          getNormalizedMessageState: state.getSnapshot.bind(state),
-          resetNormalizedMessageState: async () => {
-            state.reset();
-          },
-          sendInboundMessage: state.addInboundMessage.bind(state),
-          injectOutboundMessage: state.addOutboundMessage.bind(state),
-          waitForOutboundMessage: state.waitFor.bind(state),
-          readNormalizedMessage: state.readMessage.bind(state),
-          executeGenericAction: vi.fn(async () => undefined),
-          waitForReady: vi.fn(async () => undefined),
-          assertNoFailureReplies: vi.fn(),
-        },
+        waitForOutboundSequence: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+        waitForCondition,
       },
     };
     const scenario = {

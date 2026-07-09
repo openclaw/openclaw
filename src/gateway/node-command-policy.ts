@@ -5,10 +5,11 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -54,11 +55,13 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
@@ -221,15 +224,15 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
 }
 
 export function listDangerousPluginNodeCommands(): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
   const commands = [
-    ...(registry.nodeHostCommands ?? [])
+    ...registry.nodeHostCommands
       .filter((entry) => entry.command.dangerous === true)
       .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? [])
+    ...registry.nodeInvokePolicies
       .filter((entry) => entry.policy.dangerous === true)
       .flatMap((entry) => entry.policy.commands),
   ];
@@ -237,11 +240,11 @@ export function listDangerousPluginNodeCommands(): string[] {
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
-  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+  const commands = registry.nodeInvokePolicies.flatMap((entry) => {
     if (entry.policy.dangerous === true) {
       return [];
     }
@@ -252,7 +255,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return false;
   }
@@ -260,11 +263,37 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   if (!normalized) {
     return false;
   }
-  return (registry.nodeInvokePolicies ?? []).some(
+  return registry.nodeInvokePolicies.some(
     (entry) =>
       entry.policy.foregroundRestrictedOnIos === true &&
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
+}
+
+export function filterLegacyNodeProtocolFeatures(params: {
+  caps: readonly string[];
+  commands: readonly string[];
+  pluginSurfaces: readonly string[];
+}): { caps: string[]; commands: string[] } {
+  // N-1 nodes predate plugin-hosted surfaces. Preserve their durable pairing
+  // declarations elsewhere, but hide unusable plugin features from this session.
+  const registry = getActivePluginGatewayNodePolicyRegistry();
+  if (!registry) {
+    return { caps: [...params.caps], commands: [...params.commands] };
+  }
+  const pluginIds = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.pluginId),
+    ...registry.nodeInvokePolicies.map((entry) => entry.pluginId),
+  ]);
+  const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
+  const pluginCommands = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.command.command),
+    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
+  ]);
+  return {
+    caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
+    commands: params.commands.filter((command) => !pluginCommands.has(command)),
+  };
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &

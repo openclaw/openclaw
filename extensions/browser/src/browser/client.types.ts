@@ -4,7 +4,7 @@
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
 /** Browser transport backing the selected profile. */
-export type BrowserTransport = "cdp" | "chrome-mcp";
+export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 type BrowserHeadlessSource =
   | "request"
   | "env"
@@ -17,7 +17,7 @@ type BrowserHeadlessSource =
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "extension";
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;

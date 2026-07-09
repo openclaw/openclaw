@@ -52,6 +52,7 @@ export function resolveGatewayScopedTools(params: {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
+  clientCaps?: string[];
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -190,6 +191,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    clientCaps: params.clientCaps,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
@@ -259,5 +261,6 @@ export function resolveGatewayScopedTools(params: {
   return {
     agentId,
     tools,
+    workspaceDir,
   };
 }

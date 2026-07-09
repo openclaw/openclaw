@@ -8,6 +8,7 @@ export { buildMSTeamsGraphMessageUrls, downloadMSTeamsGraphMedia } from "./attac
 export {
   buildMSTeamsAttachmentPlaceholder,
   extractMSTeamsHtmlAttachmentIds,
+  resolveMSTeamsInboundAttachmentPresentation,
   summarizeMSTeamsHtmlAttachments,
 } from "./attachments/html.js";
 export { buildMSTeamsMediaPayload } from "./attachments/payload.js";

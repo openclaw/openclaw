@@ -8,7 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -24,6 +24,7 @@ import {
   resolveVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
@@ -169,10 +170,10 @@ function createModelsListProviderAuthChecker(params: {
   workspaceDir: string;
 }): ModelsListProviderAuthChecker {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+  // Auth refreshes can be persisted by another CLI process while the gateway
+  // keeps an older execution snapshot, so browse availability reads SQLite.
+  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: false,
-    readOnly: true,
-    syncExternalCli: false,
   });
   return createInFlightProviderAuthChecker(
     (provider, modelApi) =>
@@ -195,17 +196,43 @@ function createModelsListProviderAuthChecker(params: {
 async function resolveModelsListEntryAvailability(
   providerAuthChecker: ModelsListProviderAuthChecker,
   entry: ModelCatalogEntry,
+  cfg: OpenClawConfig,
+  agentId: string,
 ): Promise<ModelsListAvailability> {
   const primary = await providerAuthChecker(entry.provider, entry.api);
-  if (primary === true || !isCodexRoutableOpenAIPlatformCatalogEntry(entry)) {
+  if (primary === true) {
     return primary;
   }
+  let available = primary;
+  const runtimeProvider = resolveCliRuntimeExecutionProvider({
+    provider: entry.provider,
+    cfg,
+    agentId,
+    modelId: entry.id,
+  });
+  if (
+    runtimeProvider &&
+    normalizeProviderId(runtimeProvider) !== normalizeProviderId(entry.provider)
+  ) {
+    const runtimeAvailable = await providerAuthChecker(runtimeProvider);
+    if (runtimeAvailable === true) {
+      return true;
+    }
+    if (available === false && runtimeAvailable === undefined) {
+      available = undefined;
+    }
+  }
+  if (!isCodexRoutableOpenAIPlatformCatalogEntry(entry)) {
+    return available;
+  }
   const codexResponses = await providerAuthChecker(entry.provider, OPENAI_CODEX_RESPONSES_API);
-  return codexResponses ?? primary;
+  return codexResponses ?? available;
 }
 
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
+  cfg: OpenClawConfig;
+  agentId: string;
   providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
@@ -215,6 +242,8 @@ async function buildPublicModelsListEntry(params: {
   const available = await resolveModelsListEntryAvailability(
     params.providerAuthChecker,
     params.entry,
+    params.cfg,
+    params.agentId,
   );
   return {
     ...publicEntry,
@@ -233,6 +262,8 @@ async function buildPublicModelsListEntries(params: {
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
+        cfg: params.cfg,
+        agentId: params.agentId,
         providerAuthChecker,
       }),
     ),

@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeModeCoordinatorTests {
+    @Test @MainActor func `fresh node uses durable dedicated identity for local auto approval`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .node)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .node)
+    }
+
+    @Test @MainActor func `upgraded node durably preserves its shipped primary identity`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .primary)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .primary)
+    }
+
     @Test func `remote mode does not advertise browser proxy`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
@@ -28,6 +50,66 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(caps.contains(OpenClawCapability.browser.rawValue))
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+    }
+
+    @Test func `codex supervisor config advertises native thread catalog`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            locationMode: .off,
+            connectionMode: .remote,
+            codexThreadCatalogEnabled: true)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+    }
+
+    @Test func `codex supervisor plugin activation respects global policy`() {
+        let enabled: [String: Any] = [
+            "plugins": [
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: enabled))
+
+        let denied: [String: Any] = [
+            "plugins": [
+                "deny": ["codex-supervisor"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: denied))
+
+        let omittedByAllowlist: [String: Any] = [
+            "plugins": [
+                "allow": ["other-plugin"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: omittedByAllowlist))
+
+        let paddedIds: [String: Any] = [
+            "plugins": [
+                "allow": [" codex-supervisor "],
+                "entries": [" codex-supervisor ": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedIds))
+
+        let paddedDeny: [String: Any] = [
+            "plugins": [
+                "deny": [" codex-supervisor "],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedDeny))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {

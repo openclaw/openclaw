@@ -437,6 +437,8 @@ describe("tool_result_persist hook", () => {
         cwd: "/tmp/".concat("workspace/".repeat(400)),
         name: "oversized fallback command ".repeat(200),
         fullOutputPath: "/tmp/".concat("output/".repeat(400)),
+        spilledChars: 2_000_000,
+        spillTruncated: true,
         aggregated: "x".repeat(120_000),
         tail: "tail ".repeat(800),
         sessions: Array.from({ length: 10 }, (_, i) => ({
@@ -453,6 +455,8 @@ describe("tool_result_persist hook", () => {
     expect(details.persistedDetailsTruncated).toBe(true);
     expect(details.finalDetailsTruncated).toBe(true);
     expect(details.status?.token).toBe("***");
+    expect(details.spilledChars).toBe(2_000_000);
+    expect(details.spillTruncated).toBe(true);
     expect(serialized).not.toContain(tokenValue);
   });
 

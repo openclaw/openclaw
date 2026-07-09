@@ -7,6 +7,13 @@ describe("base64 helpers", () => {
     expect(actual).toBe(expected);
   }
 
+  it("canonicalizeBase64 validates large payloads without cons-string overflow", () => {
+    const encoded = Buffer.alloc(1_900_000).toString("base64");
+
+    expect(canonicalizeBase64(encoded)).toBe(encoded);
+    expect(canonicalizeBase64(encoded + "!")).toBeUndefined();
+  });
+
   it.each([
     {
       name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",

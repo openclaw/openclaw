@@ -1,12 +1,12 @@
 /**
  * Resolves provider stream functions and API keys for embedded agents.
  */
-import { getApiProvider } from "../../llm/api-registry.js";
+import { getApiProvider } from "@openclaw/ai/internal/runtime";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
@@ -271,9 +271,10 @@ function wrapEmbeddedAgentStreamFn(
       resolvedApiKey,
       authStorage,
     });
+    const selectedApiKey = apiKey ?? options?.apiKey;
     return inner(m, transformContext(context), {
       ...mergeRunSignal(options),
-      apiKey: apiKey ?? options?.apiKey,
+      apiKey: selectedApiKey,
     });
   };
 }
