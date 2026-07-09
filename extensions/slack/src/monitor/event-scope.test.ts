@@ -44,8 +44,9 @@ describe("resolveSlackEventScope", () => {
       },
     });
     const methodPayload = { channel: "C123", text: "hello" };
+    const postChatMessage = teamScopedClient.chat.postMessage.bind(teamScopedClient.chat);
 
-    await teamScopedClient.chat.postMessage(methodPayload);
+    await postChatMessage(methodPayload);
 
     expect(methodPayload).not.toHaveProperty("team_id");
     expect(new URLSearchParams(encodedRequestBody).get("team_id")).toBe("T111");

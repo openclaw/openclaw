@@ -2,6 +2,7 @@
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "../accounts.js";
+import { formatSlackError } from "../errors.js";
 
 export type SlackInstallationIdentity =
   | {
@@ -192,7 +193,7 @@ export function resolveSlackInstallationIdentity(params: {
   if (!auth) {
     if (params.enterpriseOrgInstall) {
       throw new Error(
-        `Slack enterpriseOrgInstall=true requires a successful auth.test (${String(params.authError ?? "unknown error")})`,
+        `Slack enterpriseOrgInstall=true requires a successful auth.test (${formatSlackError(params.authError)})`,
       );
     }
     return { kind: "degraded", reason: "auth_test_failed" };
