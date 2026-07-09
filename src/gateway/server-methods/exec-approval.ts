@@ -171,6 +171,7 @@ export function createExecApprovalHandlers(
         ask?: string;
         warningText?: string | null;
         unavailableDecisions?: string[];
+        unavailableReasons?: ("no-reusable-pattern" | "prompt-only" | "runtime-payload" | "unplanned")[];
         commandSpans?: {
           startIndex: number;
           endIndex: number;
@@ -324,6 +325,7 @@ export function createExecApprovalHandlers(
         commandAnalysis,
         commandSpans,
         unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,
+        unavailableReasons: p.unavailableReasons?.length ? p.unavailableReasons : undefined,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions({
           ask: p.ask ?? null,
           unavailableDecisions,

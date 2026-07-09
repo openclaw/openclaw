@@ -54,6 +54,7 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  unavailableReasons?: readonly ("no-reusable-pattern" | "prompt-only" | "runtime-payload" | "unplanned")[];
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -371,9 +372,17 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    // Check if we have unavailable reasons to provide more specific messaging
+    const isOneShot = params.unavailableReasons?.includes("no-reusable-pattern");
+    if (isOneShot) {
+      lines.push(
+        "Allow Always is unavailable for commands with shell redirection or runtime payloads that cannot be safely persisted.",
+      );
+    } else {
+      lines.push(
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      );
+    }
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);

@@ -445,6 +445,8 @@ export const en: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable for commands with shell redirection or runtime payloads that cannot be safely persisted.",
     deny: "Deny",
     labels: {
       host: "Host",

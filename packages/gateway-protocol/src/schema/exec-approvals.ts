@@ -267,6 +267,17 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
         maxItems: 1,
       }),
     ),
+    unavailableReasons: Type.Optional(
+      Type.Array(
+        Type.String({
+          enum: ["no-reusable-pattern", "prompt-only", "runtime-payload", "unplanned"],
+        }),
+        {
+          description:
+            "Reasons why allow-always is unavailable. 'no-reusable-pattern' indicates shell redirection or runtime payloads prevent safe persistence.",
+        },
+      ),
+    ),
     commandSpans: Type.Optional(
       Type.Array(
         Type.Object(

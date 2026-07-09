@@ -160,9 +160,16 @@ function renderUnavailableDecisionWarning(
   active: ExecApprovalRequest,
   decisions: readonly ExecApprovalDecision[],
 ) {
-  return active.kind !== "exec" || decisions.includes("allow-always")
-    ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+  if (active.kind !== "exec" || decisions.includes("allow-always")) {
+    return nothing;
+  }
+  // Check if we have unavailable reasons to provide more specific messaging
+  const unavailableReasons = active.request.unavailableReasons;
+  const isOneShot = unavailableReasons?.includes("no-reusable-pattern");
+  const messageKey = isOneShot
+    ? "allowAlwaysUnavailableOneShot"
+    : "allowAlwaysUnavailable";
+  return html`<div class="exec-approval-warning">${t("execApproval." + messageKey)}</div>`;
 }
 
 function renderExecApprovalPrompt(props: ExecApprovalProps) {
