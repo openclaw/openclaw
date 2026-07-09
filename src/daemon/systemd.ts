@@ -408,8 +408,12 @@ function parseEnvironmentFileSpecs(raw: string): string[] {
   return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
-function decodeSystemdEnvironmentFileValue(value: string, quoted: boolean): string {
+function decodeSystemdEnvironmentFileValue(
+  value: string,
+  quoted: boolean,
+): { value: string; escapedDollar: boolean } {
   let decoded = "";
+  let escapedDollar = false;
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
     if (char !== "\\") {
@@ -424,14 +428,17 @@ function decodeSystemdEnvironmentFileValue(value: string, quoted: boolean): stri
     if (quoted && !['"', "\\", "`", "$"].includes(next)) {
       decoded += `${char}${next}`;
     } else {
+      escapedDollar ||= next === "$";
       decoded += next;
     }
     index += 1;
   }
-  return decoded;
+  return { value: decoded, escapedDollar };
 }
 
-function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
+function parseEnvironmentFileLine(
+  rawLine: string,
+): { key: string; value: string; escapedShellReference: boolean } | null {
   const trimmed = rawLine.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
     return null;
@@ -445,6 +452,7 @@ function parseEnvironmentFileLine(rawLine: string): { key: string; value: string
     return null;
   }
   let value = trimmed.slice(eq + 1).trim();
+  let escapedDollar = false;
   if (
     value.length >= 2 &&
     ((value.startsWith('"') && value.endsWith('"')) ||
@@ -453,12 +461,20 @@ function parseEnvironmentFileLine(rawLine: string): { key: string; value: string
     const quote = value[0];
     value = value.slice(1, -1);
     if (quote === '"') {
-      value = decodeSystemdEnvironmentFileValue(value, true);
+      const decoded = decodeSystemdEnvironmentFileValue(value, true);
+      value = decoded.value;
+      escapedDollar = decoded.escapedDollar;
     }
   } else {
-    value = decodeSystemdEnvironmentFileValue(value, false);
+    const decoded = decodeSystemdEnvironmentFileValue(value, false);
+    value = decoded.value;
+    escapedDollar = decoded.escapedDollar;
   }
-  return { key, value };
+  return {
+    key,
+    value,
+    escapedShellReference: escapedDollar && isUnresolvedShellReference(value),
+  };
 }
 
 function serializeSystemdEnvironmentFileValue(value: string): string {
@@ -481,8 +497,12 @@ function serializeSystemdEnvironmentFile(environment: Record<string, string>): s
     .join("\n");
 }
 
-async function readSystemdEnvironmentFile(pathname: string): Promise<Record<string, string>> {
+async function readSystemdEnvironmentFile(pathname: string): Promise<{
+  environment: Record<string, string>;
+  escapedShellReferenceKeys: Set<string>;
+}> {
   const environment: Record<string, string> = {};
+  const escapedShellReferenceKeys = new Set<string>();
   const content = await fs.readFile(pathname, "utf8");
   for (const rawLine of content.split(/\r?\n/)) {
     const parsed = parseEnvironmentFileLine(rawLine);
@@ -490,8 +510,13 @@ async function readSystemdEnvironmentFile(pathname: string): Promise<Record<stri
       continue;
     }
     environment[parsed.key] = parsed.value;
+    if (parsed.escapedShellReference) {
+      escapedShellReferenceKeys.add(parsed.key);
+    } else {
+      escapedShellReferenceKeys.delete(parsed.key);
+    }
   }
-  return environment;
+  return { environment, escapedShellReferenceKeys };
 }
 
 async function resolveSystemdEnvironmentFiles(params: {
@@ -517,7 +542,7 @@ async function resolveSystemdEnvironmentFiles(params: {
         : path.posix.resolve(unitDir, expanded);
       try {
         const fromFile = await readSystemdEnvironmentFile(pathname);
-        Object.assign(resolved, fromFile);
+        Object.assign(resolved, fromFile.environment);
       } catch {
         // Keep service auditing resilient even when env files are unavailable
         // in the current runtime context. Both optional and non-optional
@@ -1034,6 +1059,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   // file copy would override the fresh inline Environment= value because systemd's
   // EnvironmentFile takes precedence over inline Environment= directives.
   const existing: Record<string, string> = {};
+  const escapedShellReferenceKeys = new Set<string>();
   const legacyNodeEnvFilePath = resolveLegacyNodeSystemdEnvironmentFilePath({
     stateDir: params.stateDir,
     environment: params.environment,
@@ -1043,7 +1069,15 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       continue;
     }
     try {
-      Object.assign(existing, await readSystemdEnvironmentFile(sourceEnvFilePath));
+      const fromFile = await readSystemdEnvironmentFile(sourceEnvFilePath);
+      for (const [key, value] of Object.entries(fromFile.environment)) {
+        existing[key] = value;
+        if (fromFile.escapedShellReferenceKeys.has(key)) {
+          escapedShellReferenceKeys.add(key);
+        } else {
+          escapedShellReferenceKeys.delete(key);
+        }
+      }
     } catch {
       // File does not exist yet — nothing to preserve.
     }
@@ -1062,7 +1096,9 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       if (normalized && managedKeysToDrop.has(normalized)) {
         return false;
       }
-      return !isUnresolvedShellReference(value);
+      // An escaped `$VAR` was operator-authored literal data before decoding,
+      // not an unresolved state-dir reference eligible for stale cleanup.
+      return escapedShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
     }),
   );
   const merged = { ...operatorOnly, ...incoming };
@@ -1097,7 +1133,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   });
   let existing: Record<string, string>;
   try {
-    existing = await readSystemdEnvironmentFile(envFilePath);
+    ({ environment: existing } = await readSystemdEnvironmentFile(envFilePath));
   } catch {
     return;
   }

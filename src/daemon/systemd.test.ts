@@ -1648,6 +1648,29 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("preserves escaped literal shell references in operator env entries", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      await fs.writeFile(envFilePath, "OPENROUTER_API_KEY=\\$SECRET_FROM_SHELL\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      await expect(fs.readFile(envFilePath, "utf8")).resolves.toContain(
+        'OPENROUTER_API_KEY="\\$SECRET_FROM_SHELL"',
+      );
+    });
+  });
+
   it("removes a stale literal reference on re-stage when state-dir .env now skips that key (#88274)", async () => {
     await withStageFixture(async ({ env, stateDir, envFilePath }) => {
       // A prior install generated a literal reference for LLM_API_KEY (an unexpanded
