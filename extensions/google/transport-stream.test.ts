@@ -1,5 +1,7 @@
-// Google tests cover transport stream plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+// Google tests cover transport stream plugin behavior.
+import { createServer, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -969,6 +971,107 @@ describe("google transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("exceeds 16777216 bytes");
+  });
+
+  it("rejects oversized Google SSE bodies from a real TCP loopback server", async () => {
+    const sockets = new Set<Socket>();
+    const server: Server = createServer((_req, res) => {
+      const sse = `data: ${"x".repeat(16 * 1024 * 1024 + 1)}\n\n`;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(new TextEncoder().encode(sse));
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    guardedFetchMock.mockImplementation(
+      async (_url: string, init?: RequestInit) =>
+        await globalThis.fetch(`http://127.0.0.1:${port}`, init),
+    );
+
+    try {
+      const streamFn = createGoogleGenerativeAiTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          buildGeminiModel(),
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          } as unknown as Parameters<typeof streamFn>[1],
+          {
+            apiKey: "gemini-api-key",
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      const result = await stream.result();
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("exceeds 16777216 bytes");
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(resolve));
+    }
+  });
+
+  it("rejects oversized Google Vertex SSE bodies from a real TCP loopback server", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-loopback-"));
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "loopback-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.loopback-token");
+
+    const sockets = new Set<Socket>();
+    const server: Server = createServer((_req, res) => {
+      const sse = `data: ${"x".repeat(16 * 1024 * 1024 + 1)}\n\n`;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(new TextEncoder().encode(sse));
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    guardedFetchMock.mockImplementation(
+      async (_url: string, init?: RequestInit) =>
+        await globalThis.fetch(`http://127.0.0.1:${port}`, init),
+    );
+
+    try {
+      const streamFn = createGoogleVertexTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          buildGoogleVertexModel(),
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          } as unknown as Parameters<typeof streamFn>[1],
+          {
+            apiKey: "gcp-vertex-credentials",
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      const result = await stream.result();
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("exceeds 16777216 bytes");
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(resolve));
+    }
   });
 
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
