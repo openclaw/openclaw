@@ -45,6 +45,7 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import { composerLobsterSeed } from "./chat-composer-lobster.ts";
 import { renderChatVoiceActivity } from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -2173,6 +2174,18 @@ export function renderChatComposer(props: ChatComposerProps) {
     onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
   };
+  // The lobster only perches while the prompt is quietly idle: connected,
+  // empty draft (IME-aware), nothing queued, attached, or running.
+  const lobsterActive =
+    canCompose &&
+    !isBusy &&
+    !showAbortableUi &&
+    !showSubmittedProgressUi &&
+    actionDraft === "" &&
+    !hasAttachments &&
+    !props.replyTarget &&
+    !props.realtimeTalkActive &&
+    props.queue.length === 0;
   const slashMenuVisible = canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
@@ -2210,6 +2223,10 @@ export function renderChatComposer(props: ChatComposerProps) {
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
       >
+        <openclaw-composer-lobster
+          .seed=${composerLobsterSeed(props.sessionKey)}
+          .active=${lobsterActive}
+        ></openclaw-composer-lobster>
         ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
         ${renderAttachmentPreview(props)}
         ${props.replyTarget

@@ -1,4 +1,5 @@
 @import "./chat/layout.css";
+@import "./chat/composer-lobster.css";
 @import "./chat/text.css";
 @import "./chat/grouped.css";
 @import "./chat/tool-cards.css";
