@@ -1,4 +1,5 @@
 // Chat-owned composer, queue, status, context, and run controls.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
@@ -7,11 +8,11 @@ import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../.
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/tooltip.ts";
 import {
   renderProviderQuotaPill,
   type ProviderQuotaPillProps,
 } from "../../../components/provider-quota-pill.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -2216,7 +2217,8 @@ export function renderChatComposer(props: ChatComposerProps) {
                   >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
                 >
                 <span class="chat-reply-preview__text"
-                  >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
+                  >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text
+                    .length > 120
                     ? "..."
                     : ""}</span
                 >

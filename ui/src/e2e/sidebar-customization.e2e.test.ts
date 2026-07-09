@@ -23,6 +23,10 @@ async function trimmedTextContents(locator: Locator): Promise<string[]> {
   return (await locator.allTextContents()).map((text) => text.trim());
 }
 
+async function roundedWidth(locator: Locator): Promise<number> {
+  return Math.round((await locator.boundingBox())?.width ?? 0);
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
@@ -70,7 +74,48 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(0);
+      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
+      const shellNav = page.locator(".shell-nav");
+      const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+      await expect.poll(() => roundedWidth(shellNav)).toBe(258);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("258 pixels");
+      await captureUiProof(page, "00-sidebar-default-width.png");
+
+      const resizerBounds = await sidebarResizer.boundingBox();
+      if (!resizerBounds) {
+        throw new Error("expected visible desktop sidebar resizer");
+      }
+      const resizerX = resizerBounds.x + resizerBounds.width / 2;
+      const resizerY = resizerBounds.y + resizerBounds.height / 2;
+      await page.mouse.move(resizerX, resizerY);
+      await expect
+        .poll(() =>
+          page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName.toLowerCase(), {
+            x: resizerX,
+            y: resizerY,
+          }),
+        )
+        .toBe("resizable-divider");
+      await page.mouse.down();
+      await expect.poll(() => sidebarResizer.getAttribute("class")).toContain("dragging");
+      await page.mouse.move(resizerX + 100, resizerY);
+      await page.mouse.up();
+      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("358 pixels");
+      await captureUiProof(page, "00-sidebar-resized.png");
+
+      await page.reload();
+      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      await page.setViewportSize({ height: 900, width: 1300 });
+      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      await sidebarResizer.focus();
+      await page.keyboard.press("Home");
+      await expect.poll(() => roundedWidth(shellNav)).toBe(240);
+      await page.keyboard.press("End");
+      await expect.poll(() => roundedWidth(shellNav)).toBe(400);
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
@@ -101,9 +146,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .not.toContain("Workboard");
 
-      const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
+      const customizeButton = sidebar.getByRole("button", { name: "Edit pinned items" });
       await customizeButton.click();
-      const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
@@ -133,7 +178,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "03-persisted-customization.png");
 
       await customizeButton.click();
-      await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
+      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
       // The sidebar search field is the command palette entry point.
@@ -144,20 +189,30 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The sidebar toggle lives in the topbar, macOS style.
+      // The sidebar toggle lives in the sidebar brand row on desktop.
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
       await expect
-        .poll(() => collapseButton.evaluate((element) => Boolean(element.closest(".topbar"))))
+        .poll(() =>
+          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand"))),
+        )
         .toBe(true);
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
+      await expect
+        .poll(() =>
+          page
+            .locator(".shell")
+            .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
+        )
+        .toBe("78px");
+      await expect.poll(() => sidebarResizer.count()).toBe(0);
       // Rail mode keeps the palette entry reachable as an icon-only control.
       await expect.poll(() => searchButton.isVisible()).toBe(true);
       await page.reload();
       await expect
-        .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
+        .poll(() => sidebar.getByRole("button", { name: "Expand sidebar" }).isVisible())
         .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
 
@@ -176,12 +231,53 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toBe(false);
       await expect.poll(() => moreButton.isVisible()).toBe(true);
+      await expect.poll(() => sidebarResizer.isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          page
+            .locator(".shell")
+            .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
+        )
+        .toBe("0px");
       await expect
         .poll(() =>
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
         )
         .toBe(0);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
+
+      // Widening with the drawer open must not leave its stale state blocking
+      // the desktop collapse control.
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-collapsed");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-drawer-open");
+      await captureUiProof(page, "06-desktop-collapse-after-drawer.png");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await drawerButton.click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-drawer-open");
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-drawer-open");
+      await page.setViewportSize({ height: 852, width: 393 });
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
+        )
+        .toBeLessThanOrEqual(0);
+      await captureUiProof(page, "06-mobile-brand.png");
     } finally {
       await context.close();
     }

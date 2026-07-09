@@ -327,6 +327,26 @@ describe("installToolResultContextGuard", () => {
     expectOpenClawTruncation(getToolResultText(transformed[0]));
   });
 
+  it("truncates UTF-16 tool results without splitting surrogate pairs", async () => {
+    // With contextWindowTokens=1000, maxSingleToolResultChars=1024 and the
+    // text budget becomes 512. The legacy cut point falls inside the emoji
+    // at index 439, which used to emit a lone high surrogate.
+    const agent = makeGuardableAgent();
+    const text = "a".repeat(439) + "😀" + "b".repeat(1_000);
+    const contextForNextCall = [makeToolResult("call_utf16", text)];
+
+    const transformed = (await applyGuardToContext(
+      agent,
+      contextForNextCall,
+      1_000,
+    )) as AgentMessage[];
+
+    expect(getToolResultText(transformed[0])).toBe(
+      "a".repeat(439) + formatContextLimitTruncationNotice(1_002),
+    );
+    expect(getToolResultText(contextForNextCall[0])).toBe(text);
+  });
+
   it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
     // The signal carries route metadata so the run loop can compact/truncate
     // without guessing from a generic overflow error.

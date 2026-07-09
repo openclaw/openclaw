@@ -10,14 +10,7 @@ import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
-const ALLOWED_INVALID_COMMANDS = new Set([
-  "audit",
-  "doctor",
-  "logs",
-  "health",
-  "help",
-  "status",
-]);
+const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "run",
   "status",
@@ -177,6 +170,15 @@ function snapshotHasConfiguredSessionStore(
   return typeof store === "string" && store.trim().length > 0;
 }
 
+function shouldRequireStartupMigrationCheckpoint(commandPath: string[]): boolean {
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
+  return (
+    commandName === "gateway" &&
+    (subcommandName === undefined || subcommandName === "run" || subcommandName.trim() === "")
+  );
+}
+
 async function getConfigSnapshot() {
   // Tests often mutate config fixtures; caching can make those flaky.
   if (process.env.VITEST === "true") {
@@ -212,6 +214,9 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(shouldRequireStartupMigrationCheckpoint(commandPath)
+          ? { requireStartupMigrationCheckpoint: true }
+          : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),

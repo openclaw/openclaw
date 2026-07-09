@@ -3294,34 +3294,40 @@ export async function dispatchReplyFromConfig(
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
     };
-    const wrapProgressCallback = <Args extends unknown[]>(
-      callback: ((...args: Args) => Promise<void> | void) | undefined,
+    const wrapProgressCallback = <Args extends unknown[], Result extends false | void>(
+      callback: ((...args: Args) => Promise<Result> | Result) | undefined,
       options?: {
         allowWhenToolSummariesHidden?: boolean;
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
+        onVisible?: (...args: Args) => Promise<void> | void;
         waitForDirectBlockReplyDelivery?: boolean;
       },
-    ): ((...args: Args) => Promise<void>) | undefined => {
+    ): ((...args: Args) => Promise<Result | undefined>) | undefined => {
       if (!callback) {
         return undefined;
       }
       return async (...args: Args) => {
         if (isDispatchOperationAborted()) {
-          return;
+          return undefined;
         }
         markProgress();
         if (options?.waitForDirectBlockReplyDelivery) {
           await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
           if (isDispatchOperationAborted()) {
-            return;
+            return undefined;
           }
         }
         if (shouldForwardProgressCallback(options)) {
           await options?.onForward?.(...args);
-          await callback?.(...args);
+          const result = await callback?.(...args);
+          if (result === false) {
+            return result;
+          }
+          await options?.onVisible?.(...args);
         }
+        return undefined;
       };
     };
 
@@ -3344,7 +3350,7 @@ export async function dispatchReplyFromConfig(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
-          onForward: (payload) => {
+          onVisible: (payload) => {
             if (hasFailedProgressStatus(payload)) {
               markVisibleToolErrorProgress();
             }
@@ -3366,7 +3372,7 @@ export async function dispatchReplyFromConfig(
           if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
             await noteCommentaryProgress(payload);
           }
-          await forwardItemEvent?.(payload);
+          return await forwardItemEvent?.(payload);
         }
       : undefined;
     // Let draft-rendering channels yield their ephemeral commentary lines while
@@ -3438,7 +3444,7 @@ export async function dispatchReplyFromConfig(
                     forwardWhenSourceDeliverySuppressed: true,
                     requiresToolSummaryVisibility: true,
                     waitForDirectBlockReplyDelivery: true,
-                    onForward: (payload) => {
+                    onVisible: (payload) => {
                       if (hasFailedProgressStatus(payload)) {
                         markVisibleToolErrorProgress();
                       }
