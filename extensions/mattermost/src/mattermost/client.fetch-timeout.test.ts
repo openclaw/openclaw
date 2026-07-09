@@ -130,7 +130,9 @@ describe("Mattermost REST client fetch timeout", () => {
         await fetchResolved;
         // Let the client's post-fetch cleanup run before cancellation so this
         // specifically covers the response-body phase.
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         controller.abort(reason);
 
         const outcome = await settleWithin(request, 750);
