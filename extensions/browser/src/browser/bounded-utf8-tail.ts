@@ -17,7 +17,7 @@ export function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string 
 }
 
 export function createBoundedUtf8Tail(maxBytes: number) {
-  let chunks: Buffer[] = [];
+  const storage = Buffer.allocUnsafe(Math.max(0, maxBytes));
   let totalBytes = 0;
 
   return {
@@ -27,30 +27,23 @@ export function createBoundedUtf8Tail(maxBytes: number) {
         return;
       }
       if (buffer.length >= maxBytes) {
-        chunks = [buffer.subarray(buffer.length - maxBytes)];
+        buffer.copy(storage, 0, buffer.length - maxBytes);
         totalBytes = maxBytes;
         return;
       }
 
-      chunks.push(buffer);
-      totalBytes += buffer.length;
-      while (totalBytes > maxBytes) {
-        const first = chunks[0]!;
-        const overflowBytes = totalBytes - maxBytes;
-        if (overflowBytes < first.length) {
-          chunks[0] = first.subarray(overflowBytes);
-          totalBytes -= overflowBytes;
-          break;
-        }
-        chunks.shift();
-        totalBytes -= first.length;
+      const overflowBytes = Math.max(0, totalBytes + buffer.length - maxBytes);
+      if (overflowBytes > 0) {
+        storage.copyWithin(0, overflowBytes, totalBytes);
+        totalBytes -= overflowBytes;
       }
+      buffer.copy(storage, totalBytes);
+      totalBytes += buffer.length;
     },
     text() {
-      return decodeUtf8Tail(Buffer.concat(chunks, totalBytes));
+      return decodeUtf8Tail(storage.subarray(0, totalBytes));
     },
     clear() {
-      chunks = [];
       totalBytes = 0;
     },
   };

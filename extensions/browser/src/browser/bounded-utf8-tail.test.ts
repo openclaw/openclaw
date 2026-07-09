@@ -25,4 +25,13 @@ describe("bounded UTF-8 tail", () => {
     tail.clear();
     expect(tail.text()).toBe("");
   });
+
+  it("copies bytes out of caller-owned buffers", () => {
+    const tail = createBoundedUtf8Tail(4);
+    const source = Buffer.from("test");
+    tail.append(source);
+    source.fill(0);
+
+    expect(tail.text()).toBe("test");
+  });
 });
