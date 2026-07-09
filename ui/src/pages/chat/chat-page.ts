@@ -82,6 +82,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
     this.removeEventListener("dragenter", this.handleDragEnter);
