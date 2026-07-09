@@ -165,8 +165,12 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await contextUsage.click();
       await expect.poll(() => usage.isVisible()).toBe(true);
       await expect
-        .poll(async () => (await usage.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("Usage Remaining 28%");
+        .poll(async () =>
+          (await composer.locator(".context-usage__limit").first().textContent())
+            ?.replace(/\s+/g, " ")
+            .trim(),
+        )
+        .toBe("Weekly · all models 72%");
       await contextUsage.click();
 
       await model.click();

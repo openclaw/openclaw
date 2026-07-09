@@ -56,3 +56,95 @@ export function collectQuotaWindowsFromAuthStatus(
 ): QuotaWindowSummary[] {
   return collectQuotaWindows((status?.providers ?? []).filter(filter));
 }
+
+/** Auth-status source props for surfaces that render provider plan usage. */
+export type ProviderUsageDisplayProps = {
+  basePath?: string;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+};
+
+export type QuotaLimitSummary = {
+  label: string;
+  usedPercent: number;
+  resetAt?: number;
+};
+
+export type QuotaBudgetSummary = {
+  label?: string;
+  used: number;
+  limit: number;
+  unit: string;
+};
+
+export type ProviderQuotaGroup = {
+  /** Auth provider ids sharing this usage payload (e.g. anthropic + claude-cli). */
+  providers: string[];
+  displayName: string;
+  plan?: string;
+  windows: QuotaLimitSummary[];
+  budgets: QuotaBudgetSummary[];
+};
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+/**
+ * Groups provider usage windows and budget billing into per-provider plan
+ * summaries. Rows that share one usage payload (the same subscription exposed
+ * through several auth provider ids) collapse into a single group so the
+ * popover never repeats identical bars.
+ */
+export function collectProviderQuotaGroups(
+  status: ModelAuthStatusResult | null,
+  filter: (provider: ModelAuthStatusProvider) => boolean,
+): ProviderQuotaGroup[] {
+  const groups: Array<{ identity: string; group: ProviderQuotaGroup }> = [];
+  for (const provider of (status?.providers ?? []).filter(filter)) {
+    const usage = provider.usage;
+    if (!usage) {
+      continue;
+    }
+    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) => ({
+      label: (limit.label || "").trim(),
+      usedPercent: clampPercent(limit.usedPercent),
+      ...(limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {}),
+    }));
+    const budgets: QuotaBudgetSummary[] = (usage.billing ?? []).flatMap((entry) =>
+      entry.type === "budget" &&
+      Number.isFinite(entry.used) &&
+      Number.isFinite(entry.limit) &&
+      entry.used >= 0 &&
+      entry.limit > 0
+        ? [
+            {
+              ...(entry.label ? { label: entry.label } : {}),
+              used: entry.used,
+              limit: entry.limit,
+              unit: entry.unit,
+            },
+          ]
+        : [],
+    );
+    if (windows.length === 0 && budgets.length === 0) {
+      continue;
+    }
+    const identity = JSON.stringify([provider.displayName, windows, budgets]);
+    const existing = groups.find((group) => group.identity === identity);
+    if (existing) {
+      existing.group.providers.push(provider.provider);
+      continue;
+    }
+    groups.push({
+      identity,
+      group: {
+        providers: [provider.provider],
+        displayName: provider.displayName,
+        ...(usage.plan ? { plan: usage.plan } : {}),
+        windows,
+        budgets,
+      },
+    });
+  }
+  return groups.map((entry) => entry.group);
+}
