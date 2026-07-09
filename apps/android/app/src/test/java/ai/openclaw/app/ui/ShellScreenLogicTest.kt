@@ -298,7 +298,7 @@ class ShellScreenLogicTest {
       skillWorkshopProposalActionEnabled(
         isConnected = true,
         operatorAdminScopeAvailable = true,
-        mutating = false,
+        busy = false,
         status = "pending",
       ),
     )
@@ -306,7 +306,7 @@ class ShellScreenLogicTest {
       skillWorkshopProposalActionEnabled(
         isConnected = true,
         operatorAdminScopeAvailable = false,
-        mutating = false,
+        busy = false,
         status = "pending",
       ),
     )
@@ -314,7 +314,15 @@ class ShellScreenLogicTest {
       skillWorkshopProposalActionEnabled(
         isConnected = true,
         operatorAdminScopeAvailable = true,
-        mutating = false,
+        busy = true,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = false,
         status = "applied",
       ),
     )

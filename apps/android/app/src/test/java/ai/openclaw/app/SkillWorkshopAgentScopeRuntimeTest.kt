@@ -16,6 +16,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -71,6 +72,31 @@ class SkillWorkshopAgentScopeRuntimeTest {
     assertNull(runtime.skillWorkshopMutatingProposalId.value)
     assertNull(runtime.skillWorkshopErrorText.value)
     assertNull(runtime.skillWorkshopNoticeText.value)
+  }
+
+  @Test
+  fun busyProposalActionDoesNotInvalidateActiveRequestGenerations() {
+    val runtime = createTestRuntime()
+    seedConnectedRuntime(runtime)
+    readField<MutableStateFlow<GatewaySkillWorkshopSummary>>(runtime, "_skillWorkshopSummary").value =
+      GatewaySkillWorkshopSummary(
+        agentId = "main",
+        proposals = listOf(skillWorkshopProposal("proposal-1")),
+      )
+    readField<MutableStateFlow<List<String>>>(runtime, "_operatorScopes").value = listOf("operator.admin")
+    waitUntil { runtime.operatorAdminScopeAvailable.value }
+    readField<MutableStateFlow<String?>>(runtime, "_skillWorkshopMutatingProposalId").value = "proposal-1"
+    val mutationSeq = readField<AtomicLong>(runtime, "skillWorkshopMutationSeq").apply { set(41) }
+    val inspectSeq = readField<AtomicLong>(runtime, "skillWorkshopInspectSeq").apply { set(17) }
+
+    runtime.applySkillWorkshopProposal(proposalId = "proposal-1", agentId = "main")
+    runtime.inspectSkillWorkshopProposal(proposalId = "proposal-1", agentId = "main")
+    Thread.sleep(100)
+
+    assertEquals(41, mutationSeq.get())
+    assertEquals(17, inspectSeq.get())
+    assertEquals("proposal-1", runtime.skillWorkshopMutatingProposalId.value)
+    assertNull(runtime.skillWorkshopInspectingProposalId.value)
   }
 
   @Test

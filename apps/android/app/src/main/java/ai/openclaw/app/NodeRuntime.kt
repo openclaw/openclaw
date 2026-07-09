@@ -118,6 +118,17 @@ private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
 private const val OperatorAdminScope = "operator.admin"
 
+private enum class SkillWorkshopGatewayAction(
+  val methodSuffix: String,
+  val expectedStatus: String,
+  val notice: String,
+  val verb: String,
+) {
+  Apply("apply", "applied", "Proposal applied.", "apply"),
+  Reject("reject", "rejected", "Proposal rejected.", "reject"),
+  Quarantine("quarantine", "quarantined", "Proposal quarantined.", "quarantine"),
+}
+
 internal data class PendingNotificationNodeEvent(
   val event: String,
   val payloadJson: String?,
@@ -1447,27 +1458,27 @@ class NodeRuntime private constructor(
     proposalId: String,
     agentId: String? = null,
   ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "apply")
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Apply)
   }
 
   fun rejectSkillWorkshopProposal(
     proposalId: String,
     agentId: String? = null,
   ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "reject")
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Reject)
   }
 
   fun quarantineSkillWorkshopProposal(
     proposalId: String,
     agentId: String? = null,
   ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "quarantine")
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Quarantine)
   }
 
   private fun mutateSkillWorkshopProposal(
     proposalId: String,
     agentId: String?,
-    action: String,
+    action: SkillWorkshopGatewayAction,
   ) {
     val normalized = proposalId.trim()
     if (normalized.isEmpty()) return
@@ -3769,7 +3780,7 @@ class NodeRuntime private constructor(
     proposalId: String,
     agentId: String?,
   ) {
-    val inspectSeq = skillWorkshopInspectSeq.incrementAndGet()
+    var inspectSeq = 0L
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
@@ -3780,8 +3791,13 @@ class NodeRuntime private constructor(
     val scopeCurrent =
       publishGatewayData(gatewayScope) {
         val currentSummary = _skillWorkshopSummary.value
-        if (currentSummary.agentId == requestAgentId && currentSummary.proposals.any { it.id == proposalId }) {
+        if (
+          currentSummary.agentId == requestAgentId &&
+          currentSummary.proposals.any { it.id == proposalId } &&
+          _skillWorkshopMutatingProposalId.value == null
+        ) {
           inspectStarted = true
+          inspectSeq = skillWorkshopInspectSeq.incrementAndGet()
           _skillWorkshopInspectingProposalId.value = proposalId
           _skillWorkshopErrorText.value = null
         }
@@ -3835,9 +3851,9 @@ class NodeRuntime private constructor(
   private suspend fun mutateSkillWorkshopProposalOnGateway(
     proposalId: String,
     agentId: String?,
-    action: String,
+    action: SkillWorkshopGatewayAction,
   ) {
-    val mutationSeq = skillWorkshopMutationSeq.incrementAndGet()
+    var mutationSeq = 0L
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     if (!operatorAdminScopeAvailable.value) {
       _skillWorkshopErrorText.value = "Skill Workshop proposal actions require operator.admin scope."
@@ -3852,8 +3868,17 @@ class NodeRuntime private constructor(
     val scopeCurrent =
       publishGatewayData(gatewayScope) {
         val currentSummary = _skillWorkshopSummary.value
-        if (currentSummary.agentId == requestAgentId && currentSummary.proposals.any { it.id == proposalId }) {
+        if (
+          currentSummary.agentId == requestAgentId &&
+          currentSummary.proposals.any { it.id == proposalId } &&
+          _skillWorkshopMutatingProposalId.value == null
+        ) {
           mutationStarted = true
+          mutationSeq = skillWorkshopMutationSeq.incrementAndGet()
+          // A lifecycle action supersedes any older detail read. Without this
+          // guard, a late inspect response can restore the pre-action status.
+          skillWorkshopInspectSeq.incrementAndGet()
+          _skillWorkshopInspectingProposalId.value = null
           _skillWorkshopMutatingProposalId.value = proposalId
           _skillWorkshopErrorText.value = null
           _skillWorkshopNoticeText.value = null
@@ -3866,7 +3891,7 @@ class NodeRuntime private constructor(
       val res =
         requestGatewayData(
           gatewayScope,
-          "skills.proposals.$action",
+          "skills.proposals.${action.methodSuffix}",
           skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
         )
       val updatedProposal =
@@ -3878,18 +3903,17 @@ class NodeRuntime private constructor(
               ?.proposals
               ?.firstOrNull { it.id == proposalId },
         )
-      val expectedStatus = skillWorkshopActionStatus(action)
       var mutationConfirmed = false
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          if (updatedProposal?.status == expectedStatus) {
+          if (updatedProposal?.status == action.expectedStatus) {
             _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(updatedProposal)
-            _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+            _skillWorkshopNoticeText.value = action.notice
             mutationConfirmed = true
           } else {
             val statusLabel = updatedProposal?.status?.takeIf { it.isNotBlank() } ?: "unknown"
             _skillWorkshopErrorText.value =
-              "Gateway returned status '$statusLabel' after ${skillWorkshopActionVerb(action)}."
+              "Gateway returned status '$statusLabel' after ${action.verb}."
           }
         }
       }
@@ -3908,7 +3932,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not ${skillWorkshopActionVerb(action)} Skill Workshop proposal."
+          _skillWorkshopErrorText.value = "Could not ${action.verb} Skill Workshop proposal."
         }
       }
     } finally {
@@ -4636,30 +4660,6 @@ class NodeRuntime private constructor(
       .asStringOrNull()
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-
-  private fun skillWorkshopActionNotice(action: String): String =
-    when (action) {
-      "apply" -> "Proposal applied."
-      "reject" -> "Proposal rejected."
-      "quarantine" -> "Proposal quarantined."
-      else -> "Proposal updated."
-    }
-
-  private fun skillWorkshopActionStatus(action: String): String =
-    when (action) {
-      "apply" -> "applied"
-      "reject" -> "rejected"
-      "quarantine" -> "quarantined"
-      else -> "pending"
-    }
-
-  private fun skillWorkshopActionVerb(action: String): String =
-    when (action) {
-      "apply" -> "apply"
-      "reject" -> "reject"
-      "quarantine" -> "quarantine"
-      else -> "update"
-    }
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 

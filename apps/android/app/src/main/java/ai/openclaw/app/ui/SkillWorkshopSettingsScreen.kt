@@ -531,7 +531,7 @@ private fun SkillWorkshopProposalDetail(
         ClawSecondaryButton(
           text = if (inspecting) "Inspecting" else "Inspect",
           onClick = onInspect,
-          enabled = isConnected && !inspecting,
+          enabled = isConnected && !inspecting && !mutating,
           modifier = Modifier.weight(1f),
         )
         ClawPrimaryButton(
@@ -541,7 +541,7 @@ private fun SkillWorkshopProposalDetail(
             skillWorkshopProposalActionEnabled(
               isConnected = isConnected,
               operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              mutating = mutating,
+              busy = inspecting || mutating,
               status = proposal.status,
             ),
           modifier = Modifier.weight(1f),
@@ -561,7 +561,7 @@ private fun SkillWorkshopProposalDetail(
             skillWorkshopProposalActionEnabled(
               isConnected = isConnected,
               operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              mutating = mutating,
+              busy = inspecting || mutating,
               status = proposal.status,
             ),
           modifier = Modifier.weight(1f),
@@ -573,7 +573,7 @@ private fun SkillWorkshopProposalDetail(
             skillWorkshopProposalActionEnabled(
               isConnected = isConnected,
               operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              mutating = mutating,
+              busy = inspecting || mutating,
               status = proposal.status,
             ),
           modifier = Modifier.weight(1f),
@@ -639,9 +639,9 @@ internal fun skillWorkshopStatusMatchesFilter(
 internal fun skillWorkshopProposalActionEnabled(
   isConnected: Boolean,
   operatorAdminScopeAvailable: Boolean,
-  mutating: Boolean,
+  busy: Boolean,
   status: String,
-): Boolean = isConnected && operatorAdminScopeAvailable && !mutating && status == "pending"
+): Boolean = isConnected && operatorAdminScopeAvailable && !busy && status == "pending"
 
 private fun skillWorkshopFilterLabel(filter: String): String =
   when (filter) {
