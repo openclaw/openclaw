@@ -328,6 +328,8 @@ Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway
 
 Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
 
+The bundled Canvas plugin also provides [`show_widget`](/tools/show-widget) to render self-contained SVG or HTML directly from a tool call. The browser advertises the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel-originated runs do not receive this tool.
+
 <Tabs>
   <Tab title="strict">
     Disables script execution inside hosted embeds.

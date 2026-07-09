@@ -104,6 +104,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    clientCaps?: string[];
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;

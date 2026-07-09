@@ -3606,6 +3606,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
   - H2: Presence
@@ -9621,6 +9622,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Environment variable
   - H2: Plugin config reference
   - H2: Notes
+  - H2: Related
+
+## tools/show-widget.md
+
+- Route: /tools/show-widget
+- Headings:
+  - H2: Use the tool
+  - H2: Security and storage
   - H2: Related
 
 ## tools/skill-workshop.md

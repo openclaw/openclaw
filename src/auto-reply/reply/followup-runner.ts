@@ -1263,6 +1263,9 @@ export function createFollowupRunner(params: {
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
+                // Queued turns must keep the originating client's declared caps or
+                // capability-gated tools vanish between the live turn and its drain.
+                clientCaps: run.clientCaps,
                 chatType: run.chatType,
                 agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,

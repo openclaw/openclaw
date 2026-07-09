@@ -1330,6 +1330,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
                   "tools/exec-approvals",
