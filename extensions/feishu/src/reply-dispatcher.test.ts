@@ -527,7 +527,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
 
     const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
-    result.replyOptions.onPartialReply?.({ text: "partial" });
+    await result.replyOptions.onPartialReply?.({ text: "partial" });
     await options.deliver({ text: "final text overflow" }, { kind: "final" });
     await options.onIdle?.();
 
@@ -906,7 +906,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
-    result.replyOptions.onPartialReply?.({ text: "Working on it..." });
+    await result.replyOptions.onPartialReply?.({ text: "Working on it..." });
     await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
     await options.onIdle?.();
 
@@ -970,7 +970,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "```md\nidle streamed reply\n```" });
+    await result.replyOptions.onPartialReply?.({ text: "```md\nidle streamed reply\n```" });
     await options.onIdle?.();
     await options.deliver({ text: "```md\nidle streamed reply\n```" }, { kind: "final" });
 
@@ -1022,8 +1022,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "plain" });
-    result.replyOptions.onPartialReply?.({ text: "plain streamed answer" });
+    await result.replyOptions.onPartialReply?.({ text: "plain" });
+    await result.replyOptions.onPartialReply?.({ text: "plain streamed answer" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
@@ -1151,7 +1151,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "hello" });
+    await result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -1178,7 +1178,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "```md\npartial\n```" });
+    await result.replyOptions.onPartialReply?.({ text: "```md\npartial\n```" });
     await options.deliver({ text: "```md\npartial\n```" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -1205,11 +1205,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({
+    await result.replyOptions.onPartialReply?.({
       text: "Preparing the lookup plan with enough text to count as one block.",
     });
-    result.replyOptions.onPartialReply?.({ text: "Found" });
-    result.replyOptions.onPartialReply?.({ text: "Found the answer." });
+    await result.replyOptions.onPartialReply?.({ text: "Found" });
+    await result.replyOptions.onPartialReply?.({ text: "Found the answer." });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
@@ -1237,7 +1237,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({
+    await result.replyOptions.onPartialReply?.({
       text: "<thinking>private chain of thought</thinking>\nvisible answer",
     });
     await options.onIdle?.();
@@ -1298,7 +1298,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "spoken reply" });
+    await result.replyOptions.onPartialReply?.({ text: "spoken reply" });
     await options.deliver(
       {
         text: "spoken reply",
@@ -1326,7 +1326,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "caption from stream" });
+    await result.replyOptions.onPartialReply?.({ text: "caption from stream" });
     await options.deliver(
       {
         mediaUrl: "https://example.com/image.png",
@@ -1497,7 +1497,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "Dashboard caption" });
+    await result.replyOptions.onPartialReply?.({ text: "Dashboard caption" });
     streamingInstances[0].close = vi.fn(async () => {
       streamingInstances[0].active = false;
       return false;
@@ -1598,11 +1598,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
-    result.replyOptions.onReasoningStream?.({
+    await result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
+    await result.replyOptions.onReasoningStream?.({
       text: "thinking step 1\nstep 2",
     });
-    result.replyOptions.onPartialReply?.({ text: "answer part" });
+    await result.replyOptions.onPartialReply?.({ text: "answer part" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "answer part final" }, { kind: "final" });
     await options.onIdle?.();
@@ -1676,7 +1676,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "deep thought" });
+    await result.replyOptions.onReasoningStream?.({ text: "deep thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.onIdle?.();
 
@@ -1696,8 +1696,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "" });
-    result.replyOptions.onPartialReply?.({ text: "```ts\ncode\n```" });
+    await result.replyOptions.onReasoningStream?.({ text: "" });
+    await result.replyOptions.onPartialReply?.({ text: "```ts\ncode\n```" });
     await options.deliver({ text: "```ts\ncode\n```" }, { kind: "final" });
     await options.onIdle?.();
 
@@ -1714,7 +1714,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thought" });
+    await result.replyOptions.onReasoningStream?.({ text: "thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "```ts\nfinal answer\n```" }, { kind: "final" });
     await options.onIdle?.();
@@ -1827,7 +1827,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await options.onReplyStart?.();
     result.replyOptions.onToolStart?.({ name: "web_search" });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
@@ -1858,7 +1858,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       args: { command: "pnpm test -- --watch=false" },
       detailMode: "raw",
     });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
@@ -1882,7 +1882,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await options.onReplyStart?.();
     result.replyOptions.onToolStart?.({ name: "message" });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();

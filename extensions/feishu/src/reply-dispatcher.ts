@@ -656,7 +656,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           skippedFinalReason = null;
         }
         if (streamingEnabled && renderMode === "card") {
-          startStreaming();
+          await startStreaming();
         }
         await Promise.resolve(typingCallbacks?.onReplyStart?.());
       },
