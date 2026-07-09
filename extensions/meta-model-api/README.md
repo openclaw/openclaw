@@ -49,7 +49,7 @@ See `docs/providers/meta-model-api.md` for setup, onboarding, and smoke tests.
 export MODEL_API_KEY=<key>
 export OPENCLAW_LIVE_TEST=1
 export META_MODEL_API_LIVE_TEST=1
-npx vitest run extensions/meta-model-api/meta-model-api.live.test.ts
+pnpm test extensions/meta-model-api/meta-model-api.live.test.ts
 ```
 
 Live tests call `muse-spark` on `/v1/responses`.

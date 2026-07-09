@@ -7,13 +7,13 @@ read_when:
 ---
 
 The **Meta Model API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
-for the `muse-spark-1.1` reasoning model. This provider is delivered via an internal
-OpenClaw patch — it is not published to npm or ClawHub.
+for the `muse-spark-1.1` reasoning model. The provider ships as a bundled OpenClaw
+plugin.
 
 | Property          | Value                                       |
 | ----------------- | ------------------------------------------- |
 | Provider id       | `meta-model-api`                            |
-| Plugin            | bundled patch (`extensions/meta-model-api`) |
+| Plugin            | bundled provider                            |
 | Auth env var      | `MODEL_API_KEY`                             |
 | Onboarding flag   | `--auth-choice meta-model-api-api-key`      |
 | Direct CLI flag   | `--meta-model-api-key <key>`                |
@@ -25,10 +25,6 @@ OpenClaw patch — it is not published to npm or ClawHub.
 ## Getting started
 
 <Steps>
-  <Step title="Apply the internal patch">
-    Apply `openclaw-meta-model-api.patch` to your OpenClaw checkout, then run
-    `pnpm install`.
-  </Step>
   <Step title="Set the API key">
     <CodeGroup>
 
@@ -123,7 +119,7 @@ separately.
 export MODEL_API_KEY=<key>
 export OPENCLAW_LIVE_TEST=1
 export META_MODEL_API_LIVE_TEST=1
-npx vitest run extensions/meta-model-api/meta-model-api.live.test.ts
+pnpm test extensions/meta-model-api/meta-model-api.live.test.ts
 ```
 
 Live tests use deployed `muse-spark` against `POST /v1/responses`.
