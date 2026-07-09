@@ -17,7 +17,6 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import { supportsConversationReadPolicyV1 } from "../channels/plugins/conversation-read-origin.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   normalizeCommandDescriptorName,
@@ -652,9 +651,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names: normalized,
       declaredNames,
       optional,
-      ...(supportsConversationReadPolicyV1(opts?.conversationReadPolicy)
-        ? { conversationReadPolicy: opts.conversationReadPolicy }
-        : {}),
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -979,12 +976,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
         const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
         if (existingSetup) {
           existingSetup.plugin = plugin;
           existingSetup.pluginName = record.name;
+          existingSetup.origin = record.origin;
           existingSetup.source = record.source;
           existingSetup.enabled = record.enabled;
           existingSetup.rootDir = record.rootDir;
@@ -1005,6 +1004,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingSetup.pluginId === record.id) {
         existingSetup.plugin = plugin;
         existingSetup.pluginName = record.name;
+        existingSetup.origin = record.origin;
         existingSetup.source = record.source;
         existingSetup.enabled = record.enabled;
         existingSetup.rootDir = record.rootDir;
@@ -1026,6 +1026,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      origin: record.origin,
       source: record.source,
       enabled: record.enabled,
       rootDir: record.rootDir,
@@ -1037,6 +1038,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
     });

@@ -285,10 +285,6 @@ describe("discordPlugin outbound", () => {
     expect(messaging.inferTargetChatType({ to: "1470130713209602050" })).toBe("channel");
   });
 
-  it("attests the provider-I/O-safe conversation read policy", () => {
-    expect(discordPlugin.actions?.conversationReadPolicy).toBe("current-or-configured-v1");
-  });
-
   it("resolves Discord usernames through the messaging target resolver", async () => {
     vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
       { kind: "user", id: "user:999", name: "Jane" } as const,

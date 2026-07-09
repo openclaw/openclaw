@@ -365,7 +365,6 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     }),
     {
       name: "feishu_chat",
-      conversationReadPolicy: "current-or-configured-v1",
     },
   );
 }

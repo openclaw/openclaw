@@ -115,29 +115,6 @@ path until docs, diagnostics, and release notes announce a removal window.
 - legacy `plugins.installs` authored config and bundled plugin load-path
   aliases while install metadata moves into the state-managed plugin ledger
 
-### Conversation read policy attestation
-
-Message action adapters and plugin tools that read provider conversation
-content should declare
-`conversationReadPolicy: "current-or-configured-v1"` after they reject targets
-for which no permitted conversation classification remains before provider
-content I/O. Providers with opaque target IDs may fetch the minimum metadata
-needed to distinguish still-permitted classifications after a preliminary
-target, account, and policy gate. They must apply a final authorization gate
-before content reads and must not expose metadata lookup failures as a target
-existence oracle.
-
-Missing and unknown attestations remain legacy behavior. Direct operator
-operations stay available. Delegated read-dependent message actions are limited
-to an exact current conversation and matching account before the plugin handler
-runs. Known legacy plugin tools that cannot be bounded by the host are omitted
-from delegated tool resolution before their factory runs.
-
-This attestation is operation-local. It does not grant connection, session,
-runtime, or general plugin authority, and it does not bypass account selection,
-provider permissions, action allowlists, approvals, SSRF protections, or
-transport validation.
-
 ### WhatsApp inbound callback flat aliases
 
 WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical

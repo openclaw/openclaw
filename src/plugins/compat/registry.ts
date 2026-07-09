@@ -9,28 +9,6 @@ const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
 
 export const PLUGIN_COMPAT_RECORDS = [
   {
-    code: "conversation-read-policy-v1",
-    status: "active",
-    owner: "sdk",
-    introduced: "2026-07-08",
-    replacement:
-      '`conversationReadPolicy: "current-or-configured-v1"` on conversation-reading message action adapters and plugin tools',
-    docsPath: "/plugins/compatibility#conversation-read-policy-attestation",
-    surfaces: [
-      "ChannelMessageActionAdapter.conversationReadPolicy",
-      "OpenClawPluginToolOptions.conversationReadPolicy",
-      "legacy channel message-action fallback",
-      "legacy Feishu feishu_chat tool resolution",
-    ],
-    diagnostics: ["provider-I/O-safe delegated conversation-read rejection"],
-    tests: [
-      "src/channels/plugins/message-actions.security.test.ts",
-      "src/plugins/tools.optional.test.ts",
-    ],
-    releaseNote:
-      "Conversation-reading plugin surfaces can attest provider-I/O-safe current-or-configured authorization; legacy delegated reads fail closed when the host cannot prove the current conversation.",
-  },
-  {
     code: "legacy-before-agent-start",
     status: "deprecated",
     owner: "sdk",

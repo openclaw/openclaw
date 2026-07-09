@@ -1,6 +1,5 @@
 // Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ConversationReadInvocationOrigin,
@@ -62,7 +61,6 @@ export function createSlackActions(
   options?: { invoke?: SlackActionInvoke },
 ): ChannelMessageActionAdapter {
   return {
-    conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>

@@ -7,17 +7,14 @@ import {
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import {
-  normalizeConversationReadInvocationOrigin,
-  supportsConversationReadPolicyV1,
-  type ConversationReadPolicy,
-} from "../channels/plugins/conversation-read-origin.js";
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
-  isLegacyConversationReadTool,
-  registrationIncludesLegacyConversationReadTool,
-} from "./compat/conversation-read-policy.js";
+  isBundledConversationReadToolRegistration,
+  isHostRestrictedConversationReadTool,
+  registrationIncludesHostRestrictedConversationReadTool,
+} from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -216,37 +213,61 @@ function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPl
   );
 }
 
-function blocksLegacyConversationReadTool(params: {
+function blocksHostRestrictedConversationReadTool(params: {
   pluginId: string;
   toolNames: readonly string[];
-  conversationReadPolicy?: ConversationReadPolicy;
+  bundledOwner: boolean;
   ctx: OpenClawPluginToolContext;
 }): boolean {
   if (
     normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
       "direct-operator" ||
-    supportsConversationReadPolicyV1(params.conversationReadPolicy)
+    params.bundledOwner
   ) {
     return false;
   }
   return params.toolNames.some((toolName) =>
-    isLegacyConversationReadTool({ pluginId: params.pluginId, toolName }),
+    isHostRestrictedConversationReadTool({ pluginId: params.pluginId, toolName }),
   );
 }
 
-function blocksLegacyConversationReadRegistration(params: {
+function blocksHostRestrictedConversationReadRegistration(params: {
   entry: PluginToolRegistration;
+  manifestPlugin: PluginManifestRecord | undefined;
   ctx: OpenClawPluginToolContext;
 }): boolean {
   return (
-    registrationIncludesLegacyConversationReadTool(params.entry) &&
-    blocksLegacyConversationReadTool({
+    registrationIncludesHostRestrictedConversationReadTool(params.entry) &&
+    blocksHostRestrictedConversationReadTool({
       pluginId: params.entry.pluginId,
       toolNames: [...params.entry.names, ...(params.entry.declaredNames ?? [])],
-      conversationReadPolicy: params.entry.conversationReadPolicy,
+      bundledOwner: isBundledConversationReadToolRegistration({
+        entry: params.entry,
+        manifestPlugin: params.manifestPlugin,
+      }),
       ctx: params.ctx,
     })
   );
+}
+
+function resolveCurrentManifestPlugin(params: {
+  pluginId: string;
+  ctx: OpenClawPluginToolContext;
+  loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+}): PluginManifestRecord | undefined {
+  let config = params.ctx.runtimeConfig ?? params.ctx.config ?? params.loadContext.config;
+  if (params.ctx.getRuntimeConfig) {
+    try {
+      config = params.ctx.getRuntimeConfig() ?? config;
+    } catch {
+      return undefined;
+    }
+  }
+  return loadManifestContractSnapshot({
+    config,
+    workspaceDir: params.loadContext.workspaceDir,
+    env: params.loadContext.env,
+  }).plugins.find((plugin) => plugin.id === params.pluginId);
 }
 
 /**
@@ -766,7 +787,18 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
-        if (blocksLegacyConversationReadRegistration({ entry: candidate, ctx: params.ctx })) {
+        const manifestPlugin = resolveCurrentManifestPlugin({
+          pluginId,
+          ctx: params.ctx,
+          loadContext: params.loadContext,
+        });
+        if (
+          blocksHostRestrictedConversationReadRegistration({
+            entry: candidate,
+            manifestPlugin,
+            ctx: params.ctx,
+          })
+        ) {
           return undefined;
         }
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
@@ -901,10 +933,10 @@ function resolveCachedPluginTools(params: {
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
       if (
-        blocksLegacyConversationReadTool({
+        blocksHostRestrictedConversationReadTool({
           pluginId: plugin.id,
           toolNames: [cachedDescriptor.descriptor.name],
-          conversationReadPolicy: cachedDescriptor.conversationReadPolicy,
+          bundledOwner: plugin.origin === "bundled",
           ctx: params.ctx,
         })
       ) {
@@ -1318,7 +1350,13 @@ export function resolvePluginTools(params: {
     ) {
       continue;
     }
-    if (blocksLegacyConversationReadRegistration({ entry, ctx: params.context })) {
+    if (
+      blocksHostRestrictedConversationReadRegistration({
+        entry,
+        manifestPlugin,
+        ctx: params.context,
+      })
+    ) {
       continue;
     }
     const factoryResult = resolvePluginToolFactoryEntry({
@@ -1476,7 +1514,6 @@ export function resolvePluginTools(params: {
             pluginId: entry.pluginId,
             tool,
             optional,
-            conversationReadPolicy: entry.conversationReadPolicy,
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);

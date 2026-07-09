@@ -6,7 +6,6 @@ import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
@@ -1026,7 +1025,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         collectRuntimeConfigAssignments,
       },
       actions: {
-        conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {

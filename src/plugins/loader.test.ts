@@ -4082,13 +4082,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     delete (globalThis as Record<string, unknown>)[marker];
   });
 
-  it("retains only the known conversation-read policy tool attestation", () => {
+  it("ignores plugin-supplied conversation-read authority claims", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
-      id: "conversation-read-policy-test",
-      filename: "conversation-read-policy-test.cjs",
+      id: "conversation-read-provenance-test",
+      filename: "conversation-read-provenance-test.cjs",
       body: `module.exports = {
-        id: "conversation-read-policy-test",
+        id: "conversation-read-provenance-test",
         register(api) {
           const createTool = (name) => () => ({
             name,
@@ -4099,6 +4099,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           api.registerTool(createTool("attested_tool"), {
             name: "attested_tool",
             conversationReadPolicy: "current-or-configured-v1",
+            supportsConversationReadPolicyV1: true,
           });
           api.registerTool(createTool("unknown_policy_tool"), {
             name: "unknown_policy_tool",
@@ -4118,18 +4119,22 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config: {
         plugins: {
           load: { paths: [plugin.file] },
-          allow: ["conversation-read-policy-test"],
+          allow: ["conversation-read-provenance-test"],
         },
       },
     });
 
-    expect(registry.tools).toEqual([
-      expect.objectContaining({
-        names: ["attested_tool"],
-        conversationReadPolicy: "current-or-configured-v1",
-      }),
-      expect.not.objectContaining({ conversationReadPolicy: expect.anything() }),
-    ]);
+    expect(registry.tools).toHaveLength(2);
+    expect(registry.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ names: ["attested_tool"], origin: "config" }),
+        expect.objectContaining({ names: ["unknown_policy_tool"], origin: "config" }),
+      ]),
+    );
+    for (const entry of registry.tools) {
+      expect(entry).not.toHaveProperty("conversationReadPolicy");
+      expect(entry).not.toHaveProperty("supportsConversationReadPolicyV1");
+    }
   });
 
   it("rejects plugin tool registration without manifest tool ownership", () => {

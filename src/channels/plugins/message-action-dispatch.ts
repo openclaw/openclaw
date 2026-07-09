@@ -5,18 +5,15 @@
  */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
-import {
-  normalizeConversationReadInvocationOrigin,
-  supportsConversationReadPolicyV1,
-} from "./conversation-read-origin.js";
-import { getChannelPlugin } from "./index.js";
+import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+import { resolveChannelPluginRegistration } from "./registry.js";
 import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "./types.js";
 
-const LEGACY_CONVERSATION_READ_ACTIONS = new Set<ChannelMessageActionName>([
+const READ_DEPENDENT_ACTIONS = new Set<ChannelMessageActionName>([
   "poll-vote",
   "react",
   "reactions",
@@ -41,42 +38,115 @@ const LEGACY_CONVERSATION_READ_ACTIONS = new Set<ChannelMessageActionName>([
   "download-file",
 ]);
 
-function addTargetCandidates(params: {
-  candidates: Set<string>;
+// These bundled adapters have host-reviewed provider-side current/configured
+// gates. Other bundled adapters retain the exact-current compatibility limit.
+const BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES = new Set([
+  "discord",
+  "feishu",
+  "matrix",
+  "msteams",
+  "slack",
+]);
+
+type HostConversationTargetKind =
+  | "user"
+  | "channel"
+  | "room"
+  | "chat"
+  | "group"
+  | "dm"
+  | "conversation";
+
+type HostConversationTarget = {
+  id: string;
+  kind?: HostConversationTargetKind;
+};
+
+function normalizeHostConversationTarget(params: {
   value: unknown;
   channel: string;
-  plugin: ChannelPlugin;
-}): void {
+  impliedKind?: HostConversationTargetKind;
+}): HostConversationTarget | undefined {
   if (typeof params.value !== "string") {
-    return;
+    return undefined;
   }
   const value = params.value.trim();
   if (!value) {
-    return;
+    return undefined;
   }
-  const addWithProviderNormalization = (candidate: string) => {
-    params.candidates.add(candidate);
-    try {
-      const normalized = params.plugin.messaging?.normalizeTarget?.(candidate)?.trim();
-      if (normalized) {
-        params.candidates.add(normalized);
-      }
-    } catch {
-      // Legacy fallback must remain provider-I/O-free and fail closed on invalid targets.
-    }
-  };
-  addWithProviderNormalization(value);
   const providerPrefixPattern = new RegExp(
     `^${params.channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`,
     "i",
   );
   const withoutProvider = value.replace(providerPrefixPattern, "").trim();
-  if (withoutProvider && withoutProvider !== value) {
-    addWithProviderNormalization(withoutProvider);
+  if (!withoutProvider) {
+    return undefined;
+  }
+  const typedTarget = withoutProvider.match(
+    /^(user|channel|room|chat|group|dm|conversation):(.*)$/i,
+  );
+  if (typedTarget) {
+    const id = typedTarget[2]?.trim();
+    if (!id) {
+      return undefined;
+    }
+    return {
+      id,
+      kind: typedTarget[1]?.toLowerCase() as HostConversationTargetKind,
+    };
+  }
+  return {
+    id: withoutProvider,
+    ...(params.impliedKind ? { kind: params.impliedKind } : {}),
+  };
+}
+
+function targetKey(target: HostConversationTarget): string {
+  return `${target.kind ?? ""}\0${target.id}`;
+}
+
+function addHostConversationTarget(
+  targets: Map<string, HostConversationTarget>,
+  target: HostConversationTarget | undefined,
+): void {
+  if (target) {
+    targets.set(targetKey(target), target);
   }
 }
 
-function hasMatchingLegacyAccountContext(ctx: ChannelMessageActionContext): boolean {
+function hasConflictingTargetKinds(targets: HostConversationTarget[]): boolean {
+  const kindsById = new Map<string, Set<HostConversationTargetKind>>();
+  for (const target of targets) {
+    if (!target.kind) {
+      continue;
+    }
+    const kinds = kindsById.get(target.id) ?? new Set<HostConversationTargetKind>();
+    kinds.add(target.kind);
+    kindsById.set(target.id, kinds);
+  }
+  return Array.from(kindsById.values()).some((kinds) => kinds.size > 1);
+}
+
+function currentTargetsMatchRequested(params: {
+  currentTargets: HostConversationTarget[];
+  requestedTarget: HostConversationTarget;
+}): boolean {
+  const sameId = params.currentTargets.filter(
+    (currentTarget) => currentTarget.id === params.requestedTarget.id,
+  );
+  if (sameId.length === 0 || !params.requestedTarget.kind) {
+    return sameId.length > 0;
+  }
+  const typedCurrentTargets = sameId.filter((currentTarget) => currentTarget.kind);
+  if (typedCurrentTargets.length === 0) {
+    return false;
+  }
+  return typedCurrentTargets.some(
+    (currentTarget) => currentTarget.kind === params.requestedTarget.kind,
+  );
+}
+
+function hasMatchingCurrentAccountContext(ctx: ChannelMessageActionContext): boolean {
   const rawAccountId = ctx.accountId?.trim() ?? "";
   const rawRequesterAccountId = ctx.requesterAccountId?.trim() ?? "";
   if (!rawRequesterAccountId) {
@@ -91,70 +161,91 @@ function hasMatchingLegacyAccountContext(ctx: ChannelMessageActionContext): bool
   return normalizeAccountId(rawAccountId) === normalizeAccountId(rawRequesterAccountId);
 }
 
-function hasMatchingLegacyProviderContext(ctx: ChannelMessageActionContext): boolean {
+function hasMatchingCurrentProviderContext(ctx: ChannelMessageActionContext): boolean {
   const currentProvider = ctx.toolContext?.currentChannelProvider?.trim().toLowerCase();
   return Boolean(currentProvider && currentProvider === ctx.channel.trim().toLowerCase());
 }
 
-function isExactLegacyCurrentConversation(params: {
-  ctx: ChannelMessageActionContext;
-  plugin: ChannelPlugin;
-}): boolean {
+function isExactCurrentConversation(params: { ctx: ChannelMessageActionContext }): boolean {
   if (
-    !hasMatchingLegacyProviderContext(params.ctx) ||
-    !hasMatchingLegacyAccountContext(params.ctx)
+    !hasMatchingCurrentProviderContext(params.ctx) ||
+    !hasMatchingCurrentAccountContext(params.ctx)
   ) {
     return false;
   }
-  const requestedTargets = new Set<string>();
-  for (const key of ["target", "to", "channelId", "roomId", "chatId"]) {
-    addTargetCandidates({
-      candidates: requestedTargets,
-      value: params.ctx.params[key],
-      channel: params.ctx.channel,
-      plugin: params.plugin,
-    });
+  const requestedTargets = new Map<string, HostConversationTarget>();
+  for (const [key, impliedKind] of [
+    ["target", undefined],
+    ["to", undefined],
+    ["channelId", "channel"],
+    ["roomId", "room"],
+    ["chatId", "chat"],
+  ] as const) {
+    addHostConversationTarget(
+      requestedTargets,
+      normalizeHostConversationTarget({
+        value: params.ctx.params[key],
+        channel: params.ctx.channel,
+        impliedKind,
+      }),
+    );
   }
-  if (requestedTargets.size === 0) {
+  const requestedTargetList = Array.from(requestedTargets.values());
+  if (requestedTargetList.length === 0 || hasConflictingTargetKinds(requestedTargetList)) {
     return false;
   }
-  const currentTargets = new Set<string>();
+  const currentTargets = new Map<string, HostConversationTarget>();
   for (const value of [
     params.ctx.toolContext?.currentChannelId,
     params.ctx.toolContext?.currentMessagingTarget,
   ]) {
-    addTargetCandidates({
-      candidates: currentTargets,
-      value,
-      channel: params.ctx.channel,
-      plugin: params.plugin,
-    });
+    addHostConversationTarget(
+      currentTargets,
+      normalizeHostConversationTarget({
+        value,
+        channel: params.ctx.channel,
+      }),
+    );
   }
-  return Array.from(requestedTargets).some((candidate) => currentTargets.has(candidate));
-}
-
-function assertLegacyConversationReadAllowed(params: {
-  ctx: ChannelMessageActionContext;
-  plugin: ChannelPlugin;
-}): void {
-  if (
-    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
-      "direct-operator" ||
-    supportsConversationReadPolicyV1(params.plugin.actions?.conversationReadPolicy) ||
-    !LEGACY_CONVERSATION_READ_ACTIONS.has(params.ctx.action)
-  ) {
-    return;
+  const currentTargetList = Array.from(currentTargets.values());
+  if (hasConflictingTargetKinds(currentTargetList)) {
+    return false;
   }
-  if (isExactLegacyCurrentConversation(params)) {
-    return;
-  }
-  throw new Error(
-    `Delegated ${params.ctx.channel}:${params.ctx.action} requires a current conversation on this plugin version.`,
+  return requestedTargetList.every((requestedTarget) =>
+    currentTargetsMatchRequested({
+      currentTargets: currentTargetList,
+      requestedTarget,
+    }),
   );
 }
 
-function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
-  const plugin = getChannelPlugin(ctx.channel);
+function assertConversationReadAllowed(params: {
+  ctx: ChannelMessageActionContext;
+  pluginOrigin: string | undefined;
+}): void {
+  const usesBundledProviderReadGate =
+    params.pluginOrigin === "bundled" &&
+    BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES.has(params.ctx.channel);
+  if (
+    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
+      "direct-operator" ||
+    usesBundledProviderReadGate ||
+    !READ_DEPENDENT_ACTIONS.has(params.ctx.action)
+  ) {
+    return;
+  }
+  if (isExactCurrentConversation({ ctx: params.ctx })) {
+    return;
+  }
+  throw new Error(
+    `Delegated ${params.ctx.channel}:${params.ctx.action} requires the exact current conversation and account for this plugin.`,
+  );
+}
+
+function requiresTrustedRequesterSender(
+  ctx: ChannelMessageActionContext,
+  plugin: ChannelPlugin,
+): boolean {
   return Boolean(
     plugin?.actions?.requiresTrustedRequesterSender?.({
       action: ctx.action,
@@ -169,25 +260,32 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {
+  const registration = resolveChannelPluginRegistration(ctx.channel);
+  if (!registration) {
+    return null;
+  }
+  const { plugin } = registration;
+  const actions = plugin.actions;
+  if (!actions?.handleAction) {
+    return null;
+  }
+  // Loader provenance is host-owned. External and legacy registrations must
+  // prove the exact current conversation before any plugin callback can run.
+  assertConversationReadAllowed({
+    ctx,
+    pluginOrigin: registration.origin,
+  });
   // Some plugin actions depend on the sender identity to enforce channel-local
-  // trust. Reject tool-driven calls before invoking the plugin without it.
-  if (requiresTrustedRequesterSender(ctx) && !ctx.requesterSenderId?.trim()) {
+  // trust. Reject tool-driven calls before invoking the action without it.
+  if (requiresTrustedRequesterSender(ctx, plugin) && !ctx.requesterSenderId?.trim()) {
     throw new Error(
       `Trusted sender identity is required for ${ctx.channel}:${ctx.action} in tool-driven contexts.`,
     );
   }
-  const plugin = getChannelPlugin(ctx.channel);
-  if (!plugin?.actions?.handleAction) {
-    return null;
-  }
   // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
   // action names before the dispatcher enters channel-specific behavior.
-  if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
+  if (actions.supportsAction && !actions.supportsAction({ action: ctx.action })) {
     return null;
   }
-  // Older channel plugins predate the provider-I/O-safe read-policy contract.
-  // Keep exact current-conversation reads working, but reject unprovable or
-  // cross-conversation delegated reads before entering plugin code.
-  assertLegacyConversationReadAllowed({ ctx, plugin });
-  return await plugin.actions.handleAction(ctx);
+  return await actions.handleAction(ctx);
 }

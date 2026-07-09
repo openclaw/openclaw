@@ -878,6 +878,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: pinMessageMSTeamsMock,
       mockResult: { ok: true, pinnedMessageId: "pin-1" },
       action: "pin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         messageId: padded("msg-2"),
@@ -897,6 +898,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: editMessageMSTeamsMock,
       mockResult: { conversationId: editedConversationId },
       action: "edit",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         to: targetChannelId,
         messageId: editedMessageId,
@@ -924,6 +926,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: unpinMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "unpin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         messageId: padded("pin-2"),
@@ -941,6 +944,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: unpinMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "unpin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         pinnedMessageId: padded("pinned-resource-99"),
@@ -989,6 +993,9 @@ describe("msteamsPlugin message actions", () => {
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
+      accountId: "default",
+      requesterAccountId: "default",
       actionParams: {
         messageId: padded("msg-3"),
         emoji: padded(reactionType),
@@ -1178,6 +1185,57 @@ describe("msteamsPlugin message actions", () => {
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      action: "edit",
+      params: { to: targetChannelId, messageId: "msg-1", content: "updated" },
+      runtimeMock: editMessageMSTeamsMock,
+    },
+    {
+      action: "delete",
+      params: { to: targetChannelId, messageId: "msg-1" },
+      runtimeMock: deleteMessageMSTeamsMock,
+    },
+    {
+      action: "pin",
+      params: { to: targetChannelId, messageId: "msg-1" },
+      runtimeMock: pinMessageMSTeamsMock,
+    },
+    {
+      action: "unpin",
+      params: { to: targetChannelId, pinnedMessageId: "pin-1" },
+      runtimeMock: unpinMessageMSTeamsMock,
+    },
+    {
+      action: "react",
+      params: { to: targetChannelId, messageId: "msg-1", emoji: "like" },
+      runtimeMock: reactMessageMSTeamsMock,
+    },
+  ])("rejects a blocked $action target before the provider operation", async (testCase) => {
+    await expect(
+      runAction({
+        action: testCase.action,
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              dmPolicy: "pairing",
+            },
+          },
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        params: testCase.params,
+        toolContext: {
+          currentChannelProvider: "msteams",
+          currentChannelId,
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(testCase.runtimeMock).not.toHaveBeenCalled();
+  });
+
   it("restores the Graph route from a core-materialized channel target", async () => {
     // Core materializes an omitted target from currentChannelId before plugin
     // dispatch. Teams must restore the prepared Graph target for channel turns.
@@ -1187,12 +1245,16 @@ describe("msteamsPlugin message actions", () => {
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
+      accountId: "default",
+      requesterAccountId: "default",
       actionParams: {
         target: conversationTarget,
         messageId: "msg-channel-react",
         emoji: reactionType,
       },
       toolContext: {
+        currentChannelProvider: "msteams",
         currentChannelId: conversationTarget,
         currentChatType: "channel",
         currentMessagingTarget: teamChannelTarget,
@@ -1217,12 +1279,13 @@ describe("msteamsPlugin message actions", () => {
   it("preserves explicit teamId/channelId target over toolContext fallback", async () => {
     // Even in a channel context with a compound currentChannelId, an
     // explicit `target` param must take precedence.
-    const teamChannelTarget = "team-2/19:channel-def@thread.tacv2";
-    const explicitTarget = "team-explicit/19:other@thread.tacv2";
+    const teamChannelTarget = "22222222-2222-2222-2222-222222222222/19:channel-def@thread.tacv2";
+    const explicitTarget = "33333333-3333-3333-3333-333333333333/19:other@thread.tacv2";
     await expectSuccessfulAction({
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: explicitTarget,
         messageId: "msg-explicit",
@@ -1258,6 +1321,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         messageId: "msg-dm-react",
         emoji: reactionType,

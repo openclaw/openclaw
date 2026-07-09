@@ -1,13 +1,12 @@
 /** Caches plugin tool descriptors by plugin source, contract names, and runtime context. */
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ConversationReadPolicy } from "../channels/plugins/conversation-read-origin.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 2;
+const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 3;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
 /** Cached display descriptor for one plugin-created tool. */
@@ -16,7 +15,6 @@ export type CachedPluginToolDescriptor = {
   displaySummary?: string;
   requiredClientCaps?: string[];
   optional: boolean;
-  conversationReadPolicy?: ConversationReadPolicy;
 };
 
 const descriptorCache = new Map<string, CachedPluginToolDescriptor[]>();
@@ -153,7 +151,6 @@ export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
-  conversationReadPolicy?: ConversationReadPolicy;
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
@@ -163,9 +160,6 @@ export function capturePluginToolDescriptor(params: {
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
       : {}),
     optional: params.optional,
-    ...(params.conversationReadPolicy
-      ? { conversationReadPolicy: params.conversationReadPolicy }
-      : {}),
     descriptor: {
       name: params.tool.name,
       ...(title ? { title } : {}),

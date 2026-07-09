@@ -184,7 +184,6 @@ function resolveRuntimeDiscordMessageActions() {
 }
 
 const discordMessageActions = {
-  conversationReadPolicy: discordMessageActionsImpl.conversationReadPolicy,
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>

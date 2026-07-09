@@ -112,7 +112,6 @@ describe("registerFeishuChatTools", () => {
     expect(registerTool).toHaveBeenCalledTimes(1);
     expect(registerTool.mock.calls[0]?.[1]).toEqual({
       name: "feishu_chat",
-      conversationReadPolicy: "current-or-configured-v1",
     });
     const tool = resolveRegisteredTool(registerTool);
     expect(tool?.name).toBe("feishu_chat");

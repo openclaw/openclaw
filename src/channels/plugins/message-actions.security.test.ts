@@ -7,7 +7,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { CONVERSATION_READ_POLICY_V1 } from "./conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
 import type { ChannelPlugin } from "./types.js";
 
@@ -83,40 +82,58 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
   });
 });
 
-describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
-  function setReadPlugin(params?: { conversationReadPolicy?: typeof CONVERSATION_READ_POLICY_V1 }) {
+describe("dispatchChannelMessageAction conversation-read provenance", () => {
+  const supportsAction = vi.fn(() => true);
+  const requiresTrustedRequesterSender = vi.fn(() => false);
+
+  function setReadPlugin(params?: {
+    channel?: ChannelPlugin["id"];
+    origin?: string;
+    strayPolicy?: string;
+  }) {
+    const channel = params?.channel ?? "discord";
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
-        id: "discord",
-        label: "Discord",
+        id: channel,
+        label: channel,
         capabilities: { chatTypes: ["direct", "group"] },
         config: {
           listAccountIds: () => ["default"],
         },
       }),
-      messaging: {
-        normalizeTarget: (raw) => raw.replace(/^discord:/, ""),
-      },
       actions: {
-        ...(params?.conversationReadPolicy
-          ? { conversationReadPolicy: params.conversationReadPolicy }
+        ...(params?.strayPolicy
+          ? ({ conversationReadPolicy: params.strayPolicy } as Record<string, unknown>)
           : {}),
         describeMessageTool: () => ({ actions: ["read", "send"] }),
+        supportsAction,
+        requiresTrustedRequesterSender,
         handleAction,
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: channel,
+          source: "test",
+          plugin,
+          ...(params?.origin ? { origin: params.origin as never } : {}),
+        },
+      ]),
+    );
   }
 
   beforeEach(() => {
     handleAction.mockClear();
+    supportsAction.mockClear();
+    requiresTrustedRequesterSender.mockClear();
   });
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it("allows an unattested delegated read of the exact current conversation and account", async () => {
+  it("allows a non-bundled delegated read of the exact current conversation and account", async () => {
     setReadPlugin();
 
     await dispatchChannelMessageAction({
@@ -130,6 +147,29 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "discord:channel:current",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("matches a sanitized channelId to a typed current-channel target", async () => {
+    setReadPlugin();
+
+    await dispatchChannelMessageAction({
+      channel: "discord",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: {
+        target: "current",
+        channelId: "current",
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:current",
       },
     });
 
@@ -181,7 +221,7 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
       requesterAccountId: "default",
       currentChannelProvider: "slack",
     },
-  ])("rejects an unattested delegated read with $name before plugin code", async (testCase) => {
+  ])("rejects a non-bundled delegated read with $name before plugin code", async (testCase) => {
     setReadPlugin();
 
     await expect(
@@ -199,11 +239,13 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
           currentChannelId: "current",
         },
       }),
-    ).rejects.toThrow("requires a current conversation");
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(supportsAction).not.toHaveBeenCalled();
+    expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
     expect(handleAction).not.toHaveBeenCalled();
   });
 
-  it("allows direct operators through an unattested adapter", async () => {
+  it("allows direct operators through a non-bundled adapter", async () => {
     setReadPlugin();
 
     await dispatchChannelMessageAction({
@@ -234,11 +276,105 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
           currentMessagingTarget: "user:123",
         },
       }),
-    ).rejects.toThrow("requires a current conversation");
+    ).rejects.toThrow("requires the exact current conversation and account");
     expect(handleAction).not.toHaveBeenCalled();
   });
 
-  it("keeps non-read actions compatible on an unattested adapter", async () => {
+  it("does not match a typed request to an untyped current target", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { target: "user:123" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not let a bare current-channel alias erase a trusted target kind", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "channel:123",
+          channelId: "123",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123",
+          currentMessagingTarget: "user:123",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when trusted current targets disagree on semantic kind", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "123",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+          currentMessagingTarget: "user:123",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting target aliases even when one names the current conversation", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          channelId: "current",
+          target: "channel:other",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-read actions compatible on a non-bundled adapter", async () => {
     setReadPlugin();
 
     await dispatchChannelMessageAction({
@@ -252,8 +388,8 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
-  it("delegates configured-target policy to an attested adapter", async () => {
-    setReadPlugin({ conversationReadPolicy: CONVERSATION_READ_POLICY_V1 });
+  it("delegates configured-target policy to a bundled adapter", async () => {
+    setReadPlugin({ origin: "bundled" });
 
     await dispatchChannelMessageAction({
       channel: "discord",
@@ -265,4 +401,73 @@ describe("dispatchChannelMessageAction legacy conversation-read policy", () => {
 
     expect(handleAction).toHaveBeenCalledOnce();
   });
+
+  it("keeps unaudited bundled adapters on the exact-current host limit", async () => {
+    setReadPlugin({ channel: "telegram", origin: "bundled" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "telegram",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "configured" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not let an external adapter opt into bundled behavior with a stray property", async () => {
+    setReadPlugin({
+      origin: "workspace",
+      strayPolicy: "current-or-configured-v1",
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "configured" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "unknown", "global", "workspace", "config"] as const)(
+    "treats %s channel provenance as non-bundled",
+    async (origin) => {
+      setReadPlugin(origin ? { origin } : undefined);
+
+      await expect(
+        dispatchChannelMessageAction({
+          channel: "discord",
+          action: "read",
+          cfg: {} as OpenClawConfig,
+          params: { channelId: "configured" },
+          accountId: "default",
+          requesterAccountId: "default",
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "current",
+          },
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
 });

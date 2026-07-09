@@ -2,7 +2,6 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { CONVERSATION_READ_POLICY_V1 } from "openclaw/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -755,7 +754,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         },
       },
       actions: {
-        conversationReadPolicy: CONVERSATION_READ_POLICY_V1,
         describeMessageTool: describeMSTeamsMessageTool,
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
           normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===
@@ -849,10 +847,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               toolParams: ctx.params,
               currentChannelId: ctx.toolContext?.currentChannelId,
               run: async (target) => {
+                const to = await assertMSTeamsReadTargetAllowed({
+                  cfg: ctx.cfg,
+                  ctx,
+                  target: target.to,
+                });
                 const { editMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await editMessageMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
+                  to,
                   activityId: target.messageId,
                   text: content,
                 });
@@ -867,10 +870,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               toolParams: ctx.params,
               currentChannelId: ctx.toolContext?.currentChannelId,
               run: async (target) => {
+                const to = await assertMSTeamsReadTargetAllowed({
+                  cfg: ctx.cfg,
+                  ctx,
+                  target: target.to,
+                });
                 const { deleteMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await deleteMessageMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
+                  to,
                   activityId: target.messageId,
                 });
                 return jsonMSTeamsConversationResult(result.conversationId);
@@ -912,10 +920,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               currentChatType: ctx.toolContext?.currentChatType,
               graphOnly: true,
               run: async (target) => {
+                const to = await assertMSTeamsReadTargetAllowed({
+                  cfg: ctx.cfg,
+                  ctx,
+                  target: target.to,
+                });
                 const { pinMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await pinMessageMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
+                  to,
                   messageId: target.messageId,
                 });
                 return jsonMSTeamsActionResult("pin", result);
@@ -932,10 +945,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               currentChatType: ctx.toolContext?.currentChatType,
               graphOnly: true,
               run: async (target) => {
+                const to = await assertMSTeamsReadTargetAllowed({
+                  cfg: ctx.cfg,
+                  ctx,
+                  target: target.to,
+                });
                 const { unpinMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await unpinMessageMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
+                  to,
                   pinnedMessageId: target.pinnedMessageId,
                 });
                 return jsonMSTeamsActionResult("unpin", result);
@@ -990,11 +1008,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     },
                   };
                 }
+                const to = await assertMSTeamsReadTargetAllowed({
+                  cfg: ctx.cfg,
+                  ctx,
+                  target: target.to,
+                });
                 if (remove) {
                   const { unreactMessageMSTeams } = await loadMSTeamsChannelRuntime();
                   const result = await unreactMessageMSTeams({
                     cfg: ctx.cfg,
-                    to: target.to,
+                    to,
                     messageId: target.messageId,
                     reactionType: emoji,
                   });
@@ -1007,7 +1030,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 const { reactMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await reactMessageMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
+                  to,
                   messageId: target.messageId,
                   reactionType: emoji,
                 });
