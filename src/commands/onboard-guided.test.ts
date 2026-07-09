@@ -244,14 +244,14 @@ describe("runGuidedOnboarding", () => {
       confirm: vi.fn(async () => false),
     });
     const activate = vi
-      .fn()
+      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
       .mockResolvedValueOnce({
         ok: true,
         modelRef: "openai/gpt-5.5",
         latencyMs: 900,
         lines: ["Gateway: running"],
-      }) as GuidedOnboardingDeps["activate"];
+      });
     const unknownClaude = {
       ...candidate("claude-cli", "Claude Code"),
       detail: "installed",

@@ -15,6 +15,7 @@ import {
   activateSetupInference,
   detectSetupInference,
   listSetupInferenceManualProviders,
+  type ActivateSetupInferenceDeps,
   verifySetupInference,
 } from "./setup-inference.js";
 
@@ -604,10 +605,14 @@ describe("activateSetupInference", () => {
       order.push("apply");
       return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
     });
-    const runEmbeddedAgent = vi.fn(async () => {
-      order.push("probe");
-      return { meta: { finalAssistantVisibleText: "OK" } };
-    });
+    const runEmbeddedAgent = vi.fn(
+      async (
+        _params: Parameters<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>[0],
+      ) => {
+        order.push("probe");
+        return { meta: { finalAssistantVisibleText: "OK" } };
+      },
+    );
     const runCliAgent = vi.fn();
     const originalConfig = {
       plugins: {

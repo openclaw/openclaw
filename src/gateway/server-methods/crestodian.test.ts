@@ -126,7 +126,7 @@ describe("crestodian.chat", () => {
         apiKey: "test-key",
         workspace: "/tmp/work",
       },
-      respond: (ok, payload, error) => {
+      respond: (ok: boolean, payload?: unknown, error?: unknown) => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount);
         respond(ok, payload, error);
       },
