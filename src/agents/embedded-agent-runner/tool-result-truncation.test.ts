@@ -166,6 +166,32 @@ describe("truncateToolResultText", () => {
     expect(result).toContain("[custom-truncated]");
     expect(result.length).toBeGreaterThan(250);
   });
+
+  it("keeps direct and suffix-only cuts on complete code points", () => {
+    expect(
+      truncateToolResultText("aaa😀z", 5, {
+        suffix: "!",
+        minKeepChars: 0,
+      }),
+    ).toBe("aaa!");
+    expect(
+      truncateToolResultText("abcdef", 1, {
+        suffix: "😀",
+        minKeepChars: 0,
+      }),
+    ).toBe("");
+  });
+
+  it("keeps both head and tail cuts on complete code points", () => {
+    const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+    const text = `${"a".repeat(6)}😀${"m".repeat(100)}😀${"x".repeat(22)} Error`;
+    expect(
+      truncateToolResultText(text, 100, {
+        suffix: "!",
+        minKeepChars: 1,
+      }),
+    ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
+  });
 });
 
 describe("getToolResultTextLength", () => {
