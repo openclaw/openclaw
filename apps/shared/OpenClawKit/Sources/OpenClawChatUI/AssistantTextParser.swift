@@ -6,7 +6,7 @@ struct AssistantTextSegment: Identifiable {
         case response
     }
 
-    let id: String
+    let id: Int
     let kind: Kind
     let text: String
 }
@@ -16,7 +16,7 @@ enum AssistantTextParser {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard raw.contains("<") else {
-            return [AssistantTextSegment(id: "response-0", kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
         var segments: [AssistantTextSegment] = []
@@ -51,7 +51,7 @@ enum AssistantTextParser {
         }
 
         guard matchedTag else {
-            return [AssistantTextSegment(id: "response-0", kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
         if includeThinking {
@@ -148,7 +148,6 @@ enum AssistantTextParser {
         guard !trimmed.isEmpty else { return }
         // Parsing repeats during unrelated view updates. Stable positional IDs keep
         // SwiftUI from rebuilding unchanged markdown segments and visibly flickering.
-        let idPrefix = kind == .thinking ? "thinking" : "response"
-        segments.append(AssistantTextSegment(id: "\(idPrefix)-\(segments.count)", kind: kind, text: trimmed))
+        segments.append(AssistantTextSegment(id: segments.count, kind: kind, text: trimmed))
     }
 }
