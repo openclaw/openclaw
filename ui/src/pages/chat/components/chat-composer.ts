@@ -41,9 +41,11 @@ import {
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import { renderChatVoiceActivity } from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -92,6 +94,7 @@ type ChatComposerProps = {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
@@ -2065,6 +2068,9 @@ export function renderChatComposer(props: ChatComposerProps) {
         if (result.preventDefault) {
           event.preventDefault();
         }
+        // History navigation updates the renderer-owned draft outside a
+        // reactive property; commit it before placing the caret in the DOM.
+        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -2286,37 +2292,13 @@ export function renderChatComposer(props: ChatComposerProps) {
           }}
         />
 
-        ${props.realtimeTalkActive || props.realtimeTalkDetail
-          ? html`
-              <div
-                class="agent-chat__stt-interim agent-chat__talk-status"
-                role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
-              >
-                <span class="agent-chat__talk-status-text">
-                  ${props.realtimeTalkDetail ??
-                  (props.realtimeTalkStatus === "thinking"
-                    ? "Asking OpenClaw..."
-                    : props.realtimeTalkStatus === "connecting"
-                      ? "Connecting voice input..."
-                      : "Listening...")}
-                </span>
-                ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                  ? html`
-                      <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
-                        <button
-                          class="callout__dismiss"
-                          type="button"
-                          @click=${props.onDismissRealtimeTalkError}
-                          aria-label=${t("chat.composer.dismissVoiceInputError")}
-                        >
-                          ${icons.x}
-                        </button>
-                      </openclaw-tooltip>
-                    `
-                  : nothing}
-              </div>
-            `
-          : nothing}
+        ${renderChatVoiceActivity({
+          active: props.realtimeTalkActive,
+          status: props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
+          inputLevel: props.realtimeTalkInputLevel,
+          onDismissError: props.onDismissRealtimeTalkError,
+        })}
 
         <div class="agent-chat__composer-input-row">
           <details class="agent-chat__attach-menu">
