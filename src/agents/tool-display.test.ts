@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
+import { splitTopLevelStages } from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
@@ -517,6 +518,54 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+  });
+
+  it("keeps heredoc body separators out of top-level stage splitting", () => {
+    const stages = splitTopLevelStages(
+      [
+        "mkdir -p .openclaw/tmp/farm-notices",
+        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
+        "Buenos dias equipo; se ajusta la orden A1251718:",
+        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+        "Gracias.",
+        "EOF",
+        "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+      ].join("\n"),
+    );
+
+    expect(stages).toEqual([
+      [
+        "mkdir -p .openclaw/tmp/farm-notices",
+        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
+        "Buenos dias equipo; se ajusta la orden A1251718:",
+        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+        "Gracias.",
+        "EOF",
+        "./scripts/email_preview_new --to farm@example.com",
+      ].join("\n"),
+      "./scripts/email_preview_new --to farm2@example.com",
+    ]);
+  });
+
+  it("keeps heredoc body pipes out of top-level stage summaries", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: [
+            "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
+            "\tBuenos dias equipo; se ajusta la orden A1251718:",
+            "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+            "\tGracias.",
+            "\tEOF",
+            "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+          ].join("\n"),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("show > → run email_preview_new → run email_preview_new");
   });
 
   it("appends node name to exec detail when node is set", () => {

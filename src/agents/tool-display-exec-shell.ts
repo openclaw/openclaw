@@ -237,6 +237,90 @@ export function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
+type HeredocMarker = {
+  value: string;
+  stripLeadingTabs: boolean;
+};
+
+function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+  if (
+    command[operatorIndex] !== "<" ||
+    command[operatorIndex + 1] !== "<" ||
+    command[operatorIndex + 2] === "<"
+  ) {
+    return undefined;
+  }
+
+  const stripLeadingTabs = command[operatorIndex + 2] === "-";
+  let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
+  while (/[ \t]/u.test(command[index] ?? "")) {
+    index += 1;
+  }
+
+  let value = "";
+  let quote: '"' | "'" | undefined;
+  for (; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+      if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        index += 1;
+        value += command[index] ?? "";
+        continue;
+      }
+      value += char;
+      continue;
+    }
+
+    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+      break;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      index += 1;
+      value += command[index] ?? "";
+      continue;
+    }
+    value += char;
+  }
+
+  return value ? { value, stripLeadingTabs } : undefined;
+}
+
+function findHeredocBodyEnd(
+  command: string,
+  marker: HeredocMarker,
+  operatorIndex: number,
+): number | undefined {
+  const bodyStart = command.indexOf("\n", operatorIndex);
+  if (bodyStart === -1) {
+    return undefined;
+  }
+
+  let lineStart = bodyStart + 1;
+  while (lineStart <= command.length) {
+    const lineEnd = command.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? command.length : lineEnd;
+    const rawLine = command.slice(lineStart, end).replace(/\r$/u, "");
+    const candidate = marker.stripLeadingTabs ? rawLine.replace(/^\t+/u, "") : rawLine;
+    if (candidate === marker.value) {
+      return end;
+    }
+    if (lineEnd === -1) {
+      return undefined;
+    }
+    lineStart = lineEnd + 1;
+  }
+
+  return undefined;
+}
+
 export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
@@ -266,6 +350,15 @@ export function scanTopLevelChars(
     if (char === '"' || char === "'") {
       quote = char;
       continue;
+    }
+
+    const heredoc = parseHeredocMarker(command, i);
+    if (heredoc) {
+      const bodyEnd = findHeredocBodyEnd(command, heredoc, i);
+      if (bodyEnd !== undefined) {
+        i = bodyEnd - 1;
+        continue;
+      }
     }
 
     if (visit(char, i) === false) {
