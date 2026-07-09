@@ -16,6 +16,7 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -926,10 +927,12 @@ export function persistEventPayload(
   const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
   const previewLimit = params.previewLimit ?? 8192;
   // Store the whole payload as a blob but keep a small UTF-8 preview inline for
-  // fast CLI listings and query output.
+  // fast CLI listings and query output. Decode the full buffer first, then
+  // truncate on a UTF-8 character boundary so the preview never ends mid-codepoint
+  // (a naive byte subarray can split a multibyte sequence into U+FFFD).
   const blob = store.persistPayload(buffer, params.contentType);
   return {
-    dataText: buffer.subarray(0, previewLimit).toString("utf8"),
+    dataText: truncateUtf8Prefix(buffer.toString("utf8"), previewLimit),
     dataBlobId: blob.blobId,
     dataSha256: blob.sha256,
   };
