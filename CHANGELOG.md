@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
 - **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
+- **Control UI Settings shortcut:** open Settings with ⇧⌘, while leaving the browser-owned ⌘, shortcut unchanged. Thanks @shakkernerd.
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
 - **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
 - **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
