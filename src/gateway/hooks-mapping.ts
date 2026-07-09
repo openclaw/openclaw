@@ -272,7 +272,7 @@ function buildActionFromMapping(
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
-      sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKey: renderOptionalValidated(mapping.sessionKey, ctx, SESSION_KEY_ALLOWLIST),
       sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
@@ -484,6 +484,24 @@ function renderOptional(value: string | undefined, ctx: HookMappingContext) {
   const rendered = renderTemplate(value, ctx).trim();
   return rendered ? rendered : undefined;
 }
+
+// Renders a template and validates the result against a regex allowlist.
+// Returns undefined when validation fails, preventing template injection from
+// routing messages to attacker-controlled sessions.
+function renderOptionalValidated(
+  value: string | undefined,
+  ctx: HookMappingContext,
+  allowlist: RegExp,
+): string | undefined {
+  const rendered = renderOptional(value, ctx);
+  if (rendered && !allowlist.test(rendered)) {
+    return undefined;
+  }
+  return rendered;
+}
+
+/** Only allow alphanumeric, colon, dot, hyphen and underscore in session keys. */
+const SESSION_KEY_ALLOWLIST = /^[a-z0-9:._-]+$/i;
 
 function renderTemplate(template: string, ctx: HookMappingContext) {
   if (!template) {
