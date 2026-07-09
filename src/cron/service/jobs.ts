@@ -598,6 +598,10 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       job.state.runningAtMs = undefined;
       changed = true;
     }
+    if (job.state.pendingCatchupDeferral !== undefined) {
+      job.state.pendingCatchupDeferral = undefined;
+      changed = true;
+    }
     return { changed, skip: true };
   }
 
@@ -737,30 +741,18 @@ export function recomputeNextRunsForMaintenance(
       nowMs,
       deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
     });
-  const deferralIds = state.pendingCatchupDeferralJobIds;
-  // Drop deferral markers for jobs that no longer exist in the store or
-  // are disabled. They will not fire, so no deferral is needed.
-  if (state.store && deferralIds.size > 0) {
-    const relevantDeferralIds = new Set(
-      state.store.jobs.filter((job) => isJobEnabled(job)).map((job) => job.id),
-    );
-    for (const jobId of deferralIds) {
-      if (!relevantDeferralIds.has(jobId)) {
-        deferralIds.delete(jobId);
-      }
-    }
-  }
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
 
-      // Clear stale deferral markers once the deferred staggered slot arrives.
+      // Clear stale deferral markers once the deferred staggered slot arrives
+      // or the job has no deferred slot (e.g. schedule error cleared nextRunAtMs).
       // After the slot fires, future repair is safe for this job again.
-      if (deferralIds.has(job.id)) {
+      if (job.state.pendingCatchupDeferral === true) {
         const nextRun = job.state.nextRunAtMs;
-        if (hasScheduledNextRunAtMs(nextRun) && now >= nextRun) {
-          deferralIds.delete(job.id);
+        if (!hasScheduledNextRunAtMs(nextRun) || now >= nextRun) {
+          job.state.pendingCatchupDeferral = undefined;
           changed = true;
         }
       }
@@ -771,7 +763,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !deferralIds.has(job.id) &&
+        job.state.pendingCatchupDeferral !== true &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJob(job, now)) {

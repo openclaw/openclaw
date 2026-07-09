@@ -915,13 +915,13 @@ describe("cron service ops persist rollback", () => {
     if (state.timer) {
       clearTimeout(state.timer);
     }
-    state.pendingCatchupDeferralJobIds.add(job.id);
+    job.state.pendingCatchupDeferral = true;
 
     vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
 
     await expect(remove(state, job.id)).rejects.toThrow("disk full");
 
-    expect(state.pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+    expect(state.store?.jobs[0]?.state.pendingCatchupDeferral).toBe(true);
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 

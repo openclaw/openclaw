@@ -821,7 +821,6 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
     },
-    pendingCatchupDeferralJobIds: new Set<string>(),
   } as unknown as CronServiceState;
 }
 
@@ -1308,18 +1307,16 @@ describe("recomputeNextRuns", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: deferred },
+      state: { nextRunAtMs: deferred, pendingCatchupDeferral: true },
     };
-    const pendingCatchupDeferralJobIds = new Set([job.id]);
     const state = {
       ...createMockState(now),
-      pendingCatchupDeferralJobIds,
       store: { version: 1 as const, jobs: [job] },
     } as CronServiceState;
 
     expect(recomputeNextRunsForMaintenance(state)).toBe(false);
     expect(job.state.nextRunAtMs).toBe(deferred);
-    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+    expect(job.state.pendingCatchupDeferral).toBe(true);
 
     expect(
       recomputeNextRunsForMaintenance(state, {
@@ -1327,11 +1324,11 @@ describe("recomputeNextRuns", () => {
         repairFutureCronNextRunAtMs: true,
       }),
     ).toBe(true);
-    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(false);
+    expect(job.state.pendingCatchupDeferral).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 
-  it("drops startup catch-up deferral ids for jobs no longer relevant to maintenance", () => {
+  it("drops startup catch-up deferrals for disabled jobs", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const deferred = Date.parse("2026-05-05T12:02:00.000Z");
     const disabledJob: CronJob = {
@@ -1344,17 +1341,15 @@ describe("recomputeNextRuns", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: deferred },
+      state: { nextRunAtMs: deferred, pendingCatchupDeferral: true },
     };
-    const pendingCatchupDeferralJobIds = new Set([disabledJob.id, "removed-deferral"]);
     const state = {
       ...createMockState(now),
-      pendingCatchupDeferralJobIds,
       store: { version: 1 as const, jobs: [disabledJob] },
     } as CronServiceState;
 
     expect(recomputeNextRunsForMaintenance(state)).toBe(true);
-    expect([...pendingCatchupDeferralJobIds]).toEqual([]);
+    expect(disabledJob.state.pendingCatchupDeferral).toBeUndefined();
     expect(disabledJob.state.nextRunAtMs).toBeUndefined();
   });
 

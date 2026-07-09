@@ -340,6 +340,12 @@ export type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error for the last failed run's failure notification. */
   lastFailureNotificationDeliveryError?: string;
+  /**
+   * Persisted marker set when a deferred startup catch-up slot is assigned.
+   * Survives restarts so deferred slots are not advanced by
+   * `recomputeNextRunsForMaintenance` (see #102236).
+   */
+  pendingCatchupDeferral?: true;
 };
 
 export type CronTrigger = {

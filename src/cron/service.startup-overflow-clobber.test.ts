@@ -76,7 +76,7 @@ describe("CronService startup catch-up repair scoping", () => {
 
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
     expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
-    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+    expect(deferred?.state.pendingCatchupDeferral).toBe(true);
 
     await status(state);
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
@@ -87,7 +87,7 @@ describe("CronService startup catch-up repair scoping", () => {
     const completed = state.store?.jobs.find((job) => job.id === "daily-overflow");
     expect(completed?.state.lastRunStatus).toBe("ok");
     expect(completed?.state.nextRunAtMs).toBe(tomorrowNaturalSlot);
-    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(false);
+    expect(completed?.state.pendingCatchupDeferral).toBeUndefined();
 
     state.stopped = true;
     await store.cleanup();
