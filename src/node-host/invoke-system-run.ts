@@ -193,13 +193,13 @@ function resolveAgentExecConfig(
 }
 
 /** Resolves the effective exec security/ask policy for one system.run request. */
-export function resolveEffectiveSystemRunExecPolicy(params: {
+export async function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
   defaultSecurity: ExecSecurity;
   defaultAsk: ExecAsk;
   requireSocket: boolean;
-}): EffectiveSystemRunExecPolicy {
+}): Promise<EffectiveSystemRunExecPolicy> {
   const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
   const globalExec = params.cfg.tools?.exec;
   const layeredPolicy = applyExecPolicyLayer(
@@ -217,7 +217,7 @@ export function resolveEffectiveSystemRunExecPolicy(params: {
     security: layeredPolicy.security,
     ask: layeredPolicy.ask,
   });
-  const approvals = resolveExecApprovals(params.agentId, {
+  const approvals = await resolveExecApprovals(params.agentId, {
     security: modePolicy.security,
     ask: modePolicy.ask,
     requireSocket: params.requireSocket,
@@ -465,7 +465,7 @@ async function evaluateSystemRunPolicyPhase(
   parsed: SystemRunParsePhase,
 ): Promise<SystemRunPolicyPhase | null> {
   const cfg = await loadSystemRunConfig(opts);
-  const effectivePolicy = resolveEffectiveSystemRunExecPolicy({
+  const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
     agentId: parsed.agentId,
     defaultSecurity: opts.resolveExecSecurity(undefined),
@@ -838,8 +838,7 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always") {
-    persistAllowAlwaysDecision({
-      approvals: phase.approvals.file,
+    await persistAllowAlwaysDecision({
       agentId: phase.agentId,
       decision: resolveAllowAlwaysPersistenceDecision({
         segments: phase.segments,
@@ -851,14 +850,15 @@ async function executeSystemRunPhase(
         authorizationPlan: phase.authorizationPlan,
         runtimePayload: phase.inlineEvalHit !== null,
       }),
+      baseHash: phase.approvals.hash,
     });
   }
 
-  recordAllowlistMatchesUse({
-    approvals: phase.approvals.file,
+  await recordAllowlistMatchesUse({
     agentId: phase.agentId,
     matches: phase.allowlistMatches,
     command: phase.commandText,
+    baseHash: phase.approvals.hash,
     resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
   });
 

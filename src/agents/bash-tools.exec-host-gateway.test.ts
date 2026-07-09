@@ -118,7 +118,8 @@ const defaultExecAutoReviewerMock = vi.hoisted(() =>
     rationale: "allowed",
   })),
 );
-const recordAllowlistMatchesUseMock = vi.hoisted(() => vi.fn());
+const recordAllowlistMatchesUseMock = vi.hoisted(() => vi.fn(async () => undefined));
+const persistAllowAlwaysDecisionMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(async (): Promise<string | null | undefined> => undefined),
 );
@@ -159,13 +160,12 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   hasExactCommandDurableExecApproval: hasExactCommandDurableExecApprovalMock,
   buildEnforcedShellCommand: buildEnforcedShellCommandMock,
   requiresExecApproval: requiresExecApprovalMock,
-  recordAllowlistUse: vi.fn(),
   recordAllowlistMatchesUse: recordAllowlistMatchesUseMock,
+  persistAllowAlwaysDecision: persistAllowAlwaysDecisionMock,
+  resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
-  addAllowlistEntry: vi.fn(),
-  addDurableCommandApproval: vi.fn(),
 }));
 
 vi.mock("../infra/exec-auto-review.js", () => ({
@@ -307,6 +307,7 @@ describe("processGatewayAllowlist", () => {
       rationale: "allowed",
     });
     recordAllowlistMatchesUseMock.mockReset();
+    persistAllowAlwaysDecisionMock.mockReset();
     resolveApprovalDecisionOrUndefinedMock.mockReset();
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
     shouldResolveExecApprovalUnavailableInlineMock.mockReset();

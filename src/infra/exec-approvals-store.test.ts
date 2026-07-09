@@ -15,8 +15,6 @@ import type { ExecApprovalsFile } from "./exec-approvals.js";
 
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
-let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
-let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
@@ -24,7 +22,6 @@ let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecision"
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
-let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
 let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsDisplayPath: ExecApprovalsModule["resolveExecApprovalsDisplayPath"];
@@ -32,14 +29,13 @@ let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let resolveExecApprovalsTranscriptPath: ExecApprovalsModule["resolveExecApprovalsTranscriptPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
+let updateExecApprovals: ExecApprovalsModule["updateExecApprovals"];
 
 const tempDirs: string[] = [];
 const testEnvSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 beforeAll(async () => {
   ({
-    addAllowlistEntry,
-    addDurableCommandApproval,
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
@@ -47,7 +43,6 @@ beforeAll(async () => {
     persistAllowAlwaysPatterns,
     readExecApprovalsSnapshot,
     recordAllowlistMatchesUse,
-    recordAllowlistUse,
     requestExecApprovalViaSocket,
     resolveExecApprovals,
     resolveExecApprovalsDisplayPath,
@@ -55,6 +50,7 @@ beforeAll(async () => {
     resolveExecApprovalsSocketPath,
     resolveExecApprovalsTranscriptPath,
     saveExecApprovals,
+    updateExecApprovals,
   } = await import("./exec-approvals.js"));
 });
 
@@ -132,7 +128,7 @@ describe("exec approvals store helpers", () => {
     expect(resolveExecApprovalsDisplayPath()).toBe("~/.openclaw/exec-approvals.json");
   });
 
-  it("uses OPENCLAW_STATE_DIR for default file and socket paths", () => {
+  it("uses OPENCLAW_STATE_DIR for default file and socket paths", async () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -146,14 +142,14 @@ describe("exec approvals store helpers", () => {
     expect(resolveExecApprovalsDisplayPath()).toBe(stateApprovalsFilePath(stateDir));
     expect(resolveExecApprovalsTranscriptPath()).toBe("$OPENCLAW_STATE_DIR/exec-approvals.json");
 
-    const ensured = ensureExecApprovals();
+    const ensured = await ensureExecApprovals();
 
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
   });
 
-  it("fails closed without writing target approvals before state migration runs", () => {
+  it("fails closed without writing target approvals before state migration runs", async () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
@@ -175,7 +171,7 @@ describe("exec approvals store helpers", () => {
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
-    const resolved = resolveExecApprovals("main", {
+    const resolved = await resolveExecApprovals("main", {
       security: "full",
       ask: "off",
     });
@@ -186,7 +182,7 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
 
-    const ensured = ensureExecApprovals();
+    const ensured = await ensureExecApprovals();
 
     expect(ensured.defaults).toEqual({
       security: "deny",
@@ -195,15 +191,22 @@ describe("exec approvals store helpers", () => {
       autoAllowSkills: undefined,
     });
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
+
+    await expect(
+      updateExecApprovals({
+        update: (current) => ({ ...current, defaults: { security: "full" } }),
+      }),
+    ).rejects.toThrow("must be migrated");
+    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
   });
 
-  it("keeps the default approvals path when only legacy state exists", () => {
+  it("keeps the default approvals path when only legacy state exists", async () => {
     const dir = createHomeDir();
     fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
 
     expect(path.normalize(resolveExecApprovalsPath())).toBe(path.normalize(approvalsFilePath(dir)));
 
-    ensureExecApprovals();
+    await ensureExecApprovals();
 
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
     expect(fs.existsSync(path.join(dir, ".clawdbot", "exec-approvals.json"))).toBe(false);
@@ -264,10 +267,10 @@ describe("exec approvals store helpers", () => {
     expect(invalid.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
   });
 
-  it("ensures approvals file with default socket path and generated token", () => {
+  it("ensures approvals file with default socket path and generated token", async () => {
     const dir = createHomeDir();
 
-    const ensured = ensureExecApprovals();
+    const ensured = await ensureExecApprovals();
     const raw = fs.readFileSync(approvalsFilePath(dir), "utf8");
 
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
@@ -276,10 +279,20 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
   });
 
-  it("does not create an approvals file when resolving the missing default no-prompt policy", () => {
+  it("does not rewrite already-initialized approvals", async () => {
+    createHomeDir();
+    await ensureExecApprovals();
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    await ensureExecApprovals();
+
+    expect(renameSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not create an approvals file when resolving the missing default no-prompt policy", async () => {
     const dir = createHomeDir();
 
-    const resolved = resolveExecApprovals("main", {
+    const resolved = await resolveExecApprovals("main", {
       security: "full",
       ask: "off",
     });
@@ -291,13 +304,13 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
   });
 
-  it("does not rewrite an empty approvals file for the default no-prompt policy", () => {
+  it("does not rewrite an empty approvals file for the default no-prompt policy", async () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
     fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
     fs.writeFileSync(approvalsPath, "", "utf8");
 
-    const resolved = resolveExecApprovals("main", {
+    const resolved = await resolveExecApprovals("main", {
       security: "full",
       ask: "off",
     });
@@ -310,7 +323,7 @@ describe("exec approvals store helpers", () => {
 
   it.runIf(process.platform !== "win32")(
     "hardens existing token-bearing approvals files before resolving default no-prompt policy",
-    () => {
+    async () => {
       const dir = createHomeDir();
       const approvalsPath = approvalsFilePath(dir);
       fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
@@ -326,7 +339,7 @@ describe("exec approvals store helpers", () => {
       );
       fs.chmodSync(approvalsPath, 0o644);
 
-      const resolved = resolveExecApprovals("main", {
+      const resolved = await resolveExecApprovals("main", {
         security: "full",
         ask: "off",
       });
@@ -340,7 +353,7 @@ describe("exec approvals store helpers", () => {
 
   it.runIf(process.platform !== "win32")(
     "rejects symlinked approvals files before resolving the default no-prompt policy",
-    () => {
+    async () => {
       const dir = createHomeDir();
       const approvalsPath = approvalsFilePath(dir);
       const linkedPath = path.join(dir, "linked-approvals.json");
@@ -356,16 +369,16 @@ describe("exec approvals store helpers", () => {
       );
       fs.symlinkSync(linkedPath, approvalsPath);
 
-      expect(() =>
+      await expect(
         resolveExecApprovals("main", {
           security: "deny",
           ask: "always",
         }),
-      ).toThrow("Refusing to write exec approvals via symlink");
+      ).rejects.toThrow("Refusing to write exec approvals via symlink");
     },
   );
 
-  it("does not treat approvals path access errors as a missing default policy", () => {
+  it("does not treat approvals path access errors as a missing default policy", async () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
     const actualReadFileSync = fs.readFileSync.bind(fs);
@@ -376,18 +389,18 @@ describe("exec approvals store helpers", () => {
       return actualReadFileSync(target, options as never);
     });
 
-    expect(() =>
+    await expect(
       resolveExecApprovals("main", {
         security: "full",
         ask: "off",
       }),
-    ).toThrow("approval path blocked");
+    ).rejects.toThrow("approval path blocked");
   });
 
-  it("creates an approvals file when resolving a missing policy that may prompt", () => {
+  it("creates an approvals file when resolving a missing policy that may prompt", async () => {
     const dir = createHomeDir();
 
-    const resolved = resolveExecApprovals("main", {
+    const resolved = await resolveExecApprovals("main", {
       security: "allowlist",
       ask: "on-miss",
     });
@@ -398,10 +411,10 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).socket).toEqual(resolved.file.socket);
   });
 
-  it("creates an approvals file for default no-prompt policy when a socket is required", () => {
+  it("creates an approvals file for default no-prompt policy when a socket is required", async () => {
     const dir = createHomeDir();
 
-    const resolved = resolveExecApprovals("main", {
+    const resolved = await resolveExecApprovals("main", {
       security: "full",
       ask: "off",
       requireSocket: true,
@@ -464,7 +477,7 @@ describe("exec approvals store helpers", () => {
 
   it.runIf(process.platform !== "win32")(
     "keeps exec approvals strict when directory chmod fails",
-    () => {
+    async () => {
       const dir = createHomeDir();
       const approvalsDir = path.dirname(approvalsFilePath(dir));
       const actualChmodSync = fs.chmodSync.bind(fs);
@@ -475,7 +488,7 @@ describe("exec approvals store helpers", () => {
         return actualChmodSync(target, mode);
       });
 
-      expect(() => ensureExecApprovals()).toThrow("chmod denied");
+      await expect(ensureExecApprovals()).rejects.toThrow("chmod denied");
       expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
     },
   );
@@ -673,53 +686,18 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
   });
 
-  it("adds trimmed allowlist entries once and persists generated ids", () => {
-    const dir = createHomeDir();
-    vi.spyOn(Date, "now").mockReturnValue(123_456);
-
-    const approvals = ensureExecApprovals();
-    addAllowlistEntry(approvals, "worker", "  /usr/bin/rg  ");
-    addAllowlistEntry(approvals, "worker", "/usr/bin/rg");
-    addAllowlistEntry(approvals, "worker", "   ");
-
-    const allowlist = allowlistEntries(dir, "worker");
-    expect(allowlist).toHaveLength(1);
-    expectAllowlistEntryFields(allowlist[0] ?? {}, {
-      pattern: "/usr/bin/rg",
-      lastUsedAt: 123_456,
-    });
-    expect(allowlist[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
-  });
-
-  it("persists durable command approvals without storing plaintext command text", () => {
+  it("persists exact-command allow-always decisions as durable command approvals", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(321_000);
 
-    const approvals = ensureExecApprovals();
-    addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
-
-    const allowlist = allowlistEntries(dir, "worker");
-    expect(allowlist).toHaveLength(1);
-    expectAllowlistEntryFields(allowlist[0] ?? {}, {
-      source: "allow-always",
-      lastUsedAt: 321_000,
-    });
-    expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
-    expect(allowlist[0]).not.toHaveProperty("commandText");
-  });
-
-  it("persists exact-command allow-always decisions as durable command approvals", () => {
-    const dir = createHomeDir();
-    vi.spyOn(Date, "now").mockReturnValue(321_000);
-
-    const approvals = ensureExecApprovals();
-    persistAllowAlwaysDecision({
-      approvals,
+    await ensureExecApprovals();
+    await persistAllowAlwaysDecision({
       agentId: "worker",
       decision: {
         kind: "exact-command",
         commandText: 'printenv API_KEY="secret-value"',
       },
+      baseHash: readExecApprovalsSnapshot().hash,
     });
 
     const allowlist = allowlistEntries(dir, "worker");
@@ -754,22 +732,22 @@ describe("exec approvals store helpers", () => {
     expect(allowlist[0]).not.toHaveProperty("commandText");
   });
 
-  it("preserves source and argPattern metadata for allow-always entries", () => {
+  it("preserves source and argPattern metadata for allow-always entries", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(321_000);
 
-    const approvals = ensureExecApprovals();
-    addAllowlistEntry(approvals, "worker", "/usr/bin/python3", {
-      argPattern: "^script\\.py\x00$",
-      source: "allow-always",
-    });
-    addAllowlistEntry(approvals, "worker", "/usr/bin/python3", {
-      argPattern: "^script\\.py\x00$",
-      source: "allow-always",
-    });
-    addAllowlistEntry(approvals, "worker", "/usr/bin/python3", {
-      argPattern: "^other\\.py\x00$",
-      source: "allow-always",
+    await ensureExecApprovals();
+    await persistAllowAlwaysDecision({
+      agentId: "worker",
+      decision: {
+        kind: "patterns",
+        patterns: [
+          { pattern: "/usr/bin/python3", argPattern: "^script\\.py\x00$" },
+          { pattern: "/usr/bin/python3", argPattern: "^script\\.py\x00$" },
+          { pattern: "/usr/bin/python3", argPattern: "^other\\.py\x00$" },
+        ],
+      },
+      baseHash: readExecApprovalsSnapshot().hash,
     });
 
     const allowlist = allowlistEntries(dir, "worker");
@@ -788,7 +766,7 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("records allowlist usage on the matching entry and backfills missing ids", () => {
+  it("records allowlist usage on the matching entry and backfills missing ids", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(999_000);
 
@@ -803,13 +781,13 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(approvals, null, 2), "utf8");
 
-    recordAllowlistUse(
-      approvals,
-      undefined,
-      { pattern: "/usr/bin/rg" },
-      "rg needle",
-      "/opt/homebrew/bin/rg",
-    );
+    await recordAllowlistMatchesUse({
+      agentId: undefined,
+      matches: [{ pattern: "/usr/bin/rg" }],
+      command: "rg needle",
+      baseHash: readExecApprovalsSnapshot().hash,
+      resolvedPath: "/opt/homebrew/bin/rg",
+    });
 
     const allowlist = allowlistEntries(dir, "main");
     expect(allowlist).toHaveLength(2);
@@ -823,7 +801,7 @@ describe("exec approvals store helpers", () => {
     expect(allowlist[1]).toEqual({ pattern: "/usr/bin/jq", id: "keep-id" });
   });
 
-  it("dedupes allowlist usage by pattern and argPattern", () => {
+  it("dedupes allowlist usage by pattern and argPattern", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(777_000);
 
@@ -841,8 +819,7 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(approvals, null, 2), "utf8");
 
-    recordAllowlistMatchesUse({
-      approvals,
+    await recordAllowlistMatchesUse({
       agentId: undefined,
       matches: [
         { pattern: "/usr/bin/python3", argPattern: "^a\\.py\x00$" },
@@ -850,6 +827,7 @@ describe("exec approvals store helpers", () => {
         { pattern: "/usr/bin/python3", argPattern: "^b\\.py\x00$" },
       ],
       command: "python3 a.py",
+      baseHash: readExecApprovalsSnapshot().hash,
       resolvedPath: "/usr/bin/python3",
     });
 
@@ -867,15 +845,64 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("persists allow-always patterns with shared helper", () => {
+  it("does not restore a revoked entry across initialization and usage writeback", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "allowlist" },
+          agents: {
+            main: {
+              allowlist: [
+                { pattern: "/usr/bin/rg", id: "rg-id" },
+                { pattern: "/usr/bin/jq", id: "jq-id" },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const stale = readExecApprovalsSnapshot();
+    const revoke = updateExecApprovals({
+      baseHash: stale.hash,
+      update: (current) => ({
+        ...current,
+        agents: {
+          ...current.agents,
+          main: { allowlist: [{ pattern: "/usr/bin/jq", id: "jq-id" }] },
+        },
+      }),
+    });
+    const ensure = ensureExecApprovals();
+    const usage = recordAllowlistMatchesUse({
+      agentId: "main",
+      matches: [{ pattern: "/usr/bin/rg", id: "rg-id" }],
+      command: "rg needle",
+      baseHash: stale.hash,
+    });
+
+    await Promise.all([revoke, ensure, usage]);
+
+    const persisted = readApprovalsFile(dir);
+    expect(persisted.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(persisted.agents?.main?.allowlist).toEqual([{ pattern: "/usr/bin/jq", id: "jq-id" }]);
+  });
+
+  it("persists allow-always patterns with shared helper", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_321);
 
-    const approvals = ensureExecApprovals();
-    const patterns = persistAllowAlwaysPatterns({
-      approvals,
+    await ensureExecApprovals();
+    const patterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       platform: "win32",
+      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "/usr/bin/custom-tool.exe a.py",
@@ -912,15 +939,15 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("persists node command markers only for fully represented allow-always patterns", () => {
+  it("persists node command markers only for fully represented allow-always patterns", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_322);
 
-    const approvals = ensureExecApprovals();
-    const completePatterns = persistAllowAlwaysPatterns({
-      approvals,
+    await ensureExecApprovals();
+    const completePatterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
+      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "/usr/bin/tool ok",
@@ -949,10 +976,10 @@ describe("exec approvals store helpers", () => {
     ]);
     expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
 
-    const partialPatterns = persistAllowAlwaysPatterns({
-      approvals,
+    const partialPatterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       commandText: "sh -c '/bin/echo ok && missingcmd'",
+      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "sh -c '/bin/echo ok && missingcmd'",

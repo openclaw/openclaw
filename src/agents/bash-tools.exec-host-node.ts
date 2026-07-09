@@ -96,12 +96,13 @@ function nodePolicyBlocksAutoReview(params: {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const { hostSecurity, hostAsk, askFallback } = execHostShared.resolveExecHostApprovalContext({
-    agentId: params.agentId,
-    security: params.security,
-    ask: params.ask,
-    host: "node",
-  });
+  const { hostSecurity, hostAsk, askFallback } =
+    await execHostShared.resolveExecHostApprovalContext({
+      agentId: params.agentId,
+      security: params.security,
+      ask: params.ask,
+      host: "node",
+    });
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
   if (

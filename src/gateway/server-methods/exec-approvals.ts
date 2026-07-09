@@ -10,11 +10,11 @@ import {
   validateExecApprovalsSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  ensureExecApprovals,
+  ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
@@ -166,8 +166,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       respond(true, toExecApprovalsPayload(snapshot), undefined);
     });
   },
@@ -176,7 +175,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      ensureExecApprovals();
+      await ensureExecApprovalsSnapshot();
       const snapshot = readExecApprovalsSnapshot();
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
@@ -191,9 +190,14 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         return;
       }
       const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-      saveExecApprovals(next);
-      const nextSnapshot = readExecApprovalsSnapshot();
+      const nextSnapshot = await updateExecApprovals({
+        baseHash: snapshot.hash,
+        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
+      });
+      if (!nextSnapshot) {
+        requireApprovalsBaseHash(params, readExecApprovalsSnapshot(), respond);
+        return;
+      }
       respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
     });
   },

@@ -303,11 +303,11 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   }
 }
 
-function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
+async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
     return undefined;
   }
@@ -320,7 +320,7 @@ function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
     throw new Error("agent cron gateway calls require the trusted local gateway context");
   }
-  return mintAgentRuntimeIdentityToken(identity);
+  return await mintAgentRuntimeIdentityToken(identity);
 }
 
 function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
@@ -367,7 +367,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const agentRuntimeIdentityToken = resolveAgentRuntimeIdentityTokenForGatewayTool({
+  const agentRuntimeIdentityToken = await resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,

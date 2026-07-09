@@ -16,7 +16,7 @@ import {
 } from "./exec-approvals.js";
 
 describe("exec approvals wildcard agent", () => {
-  it("merges wildcard allowlist entries with agent entries", () => {
+  it("merges wildcard allowlist entries with agent entries", async () => {
     const dir = makeTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
@@ -39,7 +39,7 @@ describe("exec approvals wildcard agent", () => {
         ),
       );
 
-      const resolved = resolveExecApprovals("main");
+      const resolved = await resolveExecApprovals("main");
       expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
         "/bin/hostname",
         "/usr/bin/uname",

@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
 
-const ensureExecApprovalsMock = vi.hoisted(() => vi.fn());
+const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
 const readExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
-const saveExecApprovalsMock = vi.hoisted(() => vi.fn());
+const updateExecApprovalsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/exec-approvals.js")>();
   return {
     ...actual,
-    ensureExecApprovals: ensureExecApprovalsMock,
+    ensureExecApprovalsSnapshot: ensureExecApprovalsSnapshotMock,
     readExecApprovalsSnapshot: readExecApprovalsSnapshotMock,
-    saveExecApprovals: saveExecApprovalsMock,
+    updateExecApprovals: updateExecApprovalsMock,
   };
 });
 
@@ -29,9 +29,9 @@ function makeSnapshot(file: ExecApprovalsFile = { version: 1, agents: {} }) {
 
 describe("exec approvals gateway methods", () => {
   it("returns a structured unavailable error when local approvals get cannot read state", async () => {
-    ensureExecApprovalsMock.mockImplementationOnce(() => {
-      throw new Error("permission denied while ensuring approvals");
-    });
+    ensureExecApprovalsSnapshotMock.mockRejectedValueOnce(
+      new Error("permission denied while ensuring approvals"),
+    );
     const respond = vi.fn();
 
     await execApprovalsHandlers["exec.approvals.get"]({
@@ -54,11 +54,9 @@ describe("exec approvals gateway methods", () => {
   });
 
   it("returns a structured unavailable error when local approvals set cannot persist", async () => {
-    ensureExecApprovalsMock.mockReturnValue({ version: 1, agents: {} });
+    ensureExecApprovalsSnapshotMock.mockResolvedValue(makeSnapshot());
     readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
-    saveExecApprovalsMock.mockImplementationOnce(() => {
-      throw new Error("disk full while saving approvals");
-    });
+    updateExecApprovalsMock.mockRejectedValueOnce(new Error("disk full while saving approvals"));
     const respond = vi.fn();
 
     await execApprovalsHandlers["exec.approvals.set"]({

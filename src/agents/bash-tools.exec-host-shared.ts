@@ -226,13 +226,13 @@ export function resolveBaseExecApprovalDecision(params: {
 }
 
 /** Resolves effective exec policy for a gateway/node host. */
-export function resolveExecHostApprovalContext(params: {
+export async function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
   host: "gateway" | "node";
-}): ExecHostApprovalContext {
-  const approvals = resolveExecApprovals(params.agentId, {
+}): Promise<ExecHostApprovalContext> {
+  const approvals = await resolveExecApprovals(params.agentId, {
     security: params.security,
     ask: params.ask,
   });

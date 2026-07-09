@@ -459,7 +459,7 @@ async function resolveGatewayExecApprovalFollowupText(params: {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const { approvals, hostSecurity, hostAsk, askFallback } = resolveExecHostApprovalContext({
+  const { approvals, hostSecurity, hostAsk, askFallback } = await resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
     ask: params.ask,
@@ -529,10 +529,10 @@ export async function processGatewayAllowlist(
   }
   const recordMatchedAllowlistUse = (resolvedPath?: string) =>
     recordAllowlistMatchesUse({
-      approvals: approvals.file,
       agentId: params.agentId,
       matches: allowlistMatches,
       command: params.command,
+      baseHash: approvals.hash,
       resolvedPath,
     });
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -689,7 +689,7 @@ export async function processGatewayAllowlist(
           trigger: params.trigger,
           decision: "auto-review",
         });
-        recordMatchedAllowlistUse(
+        await recordMatchedAllowlistUse(
           resolveApprovalAuditTrustPath(
             allowlistEval.segments[0]?.resolution ?? null,
             params.workdir,
@@ -818,7 +818,7 @@ export async function processGatewayAllowlist(
         trigger: params.trigger,
         decision: preResolvedDecision,
       });
-      recordMatchedAllowlistUse(
+      await recordMatchedAllowlistUse(
         resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
@@ -880,10 +880,10 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        persistAllowAlwaysDecision({
-          approvals: approvals.file,
+        await persistAllowAlwaysDecision({
           agentId: params.agentId,
           decision: effectiveAllowAlwaysPersistence,
+          baseHash: approvals.hash,
         });
       }
 
@@ -938,7 +938,7 @@ export async function processGatewayAllowlist(
         };
       }
 
-      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
       return {
         execCommandOverride: enforcedCommand,
         allowWithoutEnforcedCommand: enforcedCommand === undefined,
@@ -980,7 +980,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null;
       try {
@@ -1062,7 +1062,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(
+  await recordMatchedAllowlistUse(
     resolveApprovalAuditTrustPath(allowlistEval.segments[0]?.resolution ?? null, params.workdir),
   );
 
