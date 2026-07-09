@@ -2,6 +2,7 @@
  * Timeout, terminal-release, and diagnostic helpers for Codex dynamic tool
  * calls.
  */
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
@@ -61,7 +62,7 @@ function normalizeLogField(value: unknown): string | undefined {
     return undefined;
   }
   return normalized.length > LOG_FIELD_MAX_LENGTH
-    ? `${normalized.slice(0, LOG_FIELD_MAX_LENGTH - 3)}...`
+    ? `${truncateUtf16Safe(normalized, LOG_FIELD_MAX_LENGTH - 3)}...`
     : normalized;
 }
 
