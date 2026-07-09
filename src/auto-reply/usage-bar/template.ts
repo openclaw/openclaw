@@ -12,8 +12,13 @@ type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher 
 const fileCache = new Map<string, CacheEntry>();
 /** Maximum number of template file paths to cache concurrently. */
 const MAX_CACHED_TEMPLATE_FILES = 64;
-// Cap warn-once dedupe to match the bounded fileCache pattern above.
-const warnedTemplateOverrides = createDedupeCache({ maxSize: 256, ttlMs: 0 });
+const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
+// Retain recent warning keys without accumulating every historical config value.
+// LRU eviction intentionally allows old invalid overrides to warn again.
+const warnedTemplateOverrides = createDedupeCache({
+  maxSize: MAX_WARNED_TEMPLATE_OVERRIDES,
+  ttlMs: 0,
+});
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
 function expandPath(p: string): string {
