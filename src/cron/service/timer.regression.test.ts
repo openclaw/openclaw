@@ -2939,6 +2939,94 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("keeps the pre-execution watchdog armed for bare runner entry (#93912)", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-10T09:06:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-runner-entry-only-93912",
+        name: "runner entry only regression",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      let abortReason: unknown;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const onIsolatedAgentSetupTimeout = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        onIsolatedAgentSetupTimeout,
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+          }) => {
+            onExecutionStarted?.({
+              jobId: "isolated-runner-entry-only-93912",
+              agentId: "main",
+              sessionId: "cron-run-session",
+              sessionKey: "agent:main:cron:isolated-runner-entry-only-93912:run:cron-run-session",
+              phase: "runner_entered",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+                abortReason = abortSignal.reason;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-runner-entry-only-93912");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(job.state.lastError).toContain("runner-entered");
+      expect(abortReason).toMatchObject({
+        name: "TimeoutError",
+        message: expect.stringContaining("runner-entered"),
+      });
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+      const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
+      expect(requireRecord(cleanupArgs.job).id).toBe("isolated-runner-entry-only-93912");
+      expect(cleanupArgs.timeoutMs).toBe(1_200_000);
+      const execution = requireRecord(cleanupArgs.execution);
+      expect(execution.jobId).toBe("isolated-runner-entry-only-93912");
+      expect(execution.phase).toBe("runner_entered");
+      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps isolated runs alive when setup phases keep progressing (#93530)", async () => {
     vi.useFakeTimers();
     try {

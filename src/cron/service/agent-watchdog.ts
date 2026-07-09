@@ -115,7 +115,9 @@ export function createCronAgentWatchdog(params: {
     }
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
-    if (stage !== undefined || info.firstModelCallStarted) {
+    const observedProgressAfterRunnerEntry =
+      info.phase !== undefined && info.phase !== "runner_entered";
+    if (observedProgressAfterRunnerEntry || info.firstModelCallStarted) {
       state = "executing";
       clearPreExecutionTimeout();
     }
