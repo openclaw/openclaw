@@ -146,7 +146,18 @@ extension OnboardingView {
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
             }
+            if let error = self.aiSetup.existingSetupPreflightError {
+                OnboardingErrorCard(
+                    title: "Couldn’t check this Gateway for AI setup",
+                    message: error,
+                    docsSlug: "start/onboarding",
+                    retryTitle: "Try again")
+                {
+                    self.preflightExistingSetupAndAdvance()
+                }
+            }
         }
+        .disabled(self.aiSetup.existingSetupPreflight == .checking)
         .onChange(of: self.state.connectionMode) { _, newValue in
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,

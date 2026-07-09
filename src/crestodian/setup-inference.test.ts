@@ -7,6 +7,7 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -57,7 +58,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe("detectSetupInference", () => {
-  it("marks the first non-logged-out candidate recommended", async () => {
+  it("marks the first candidate eligible for live verification recommended", async () => {
     const resolveManifestProviderAuthChoices = vi.fn(() => []);
     const detection = await detectSetupInference({ resolveManifestProviderAuthChoices });
     expect(detection.candidates).toHaveLength(2);
@@ -68,6 +69,42 @@ describe("detectSetupInference", () => {
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),
     );
+  });
+
+  it("keeps an installed CLI with unknown auth eligible for live verification", async () => {
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "claude-cli",
+        modelRef: "claude-cli/claude-opus-4-8",
+        label: "Claude Code",
+        detail: "installed",
+      },
+    ]);
+
+    const detection = await detectSetupInference({ resolveManifestProviderAuthChoices: () => [] });
+
+    expect(detection.candidates).toEqual([
+      expect.objectContaining({ kind: "claude-cli", recommended: true }),
+    ]);
+  });
+
+  it("marks a configured default-agent model as complete setup", async () => {
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "existing-model",
+        modelRef: "openai/gpt-5.5",
+        label: "Current model",
+        detail: "already configured",
+        credentials: true,
+      },
+    ]);
+
+    const detection = await detectSetupInference({ resolveManifestProviderAuthChoices: () => [] });
+
+    expect(detection).toMatchObject({
+      configuredModel: "openai/gpt-5.5",
+      setupComplete: true,
+    });
   });
 
   it("lists text-inference key and token methods from provider manifests", () => {
@@ -561,14 +598,206 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("runs the codex plugin ensure step only after a passing test", async () => {
-    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
+  it("prepares the Codex plugin before probing and persists it only after success", async () => {
+    const order: string[] = [];
+    const applySetup = vi.fn(async () => {
+      order.push("apply");
+      return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
+    });
+    const runEmbeddedAgent = vi.fn(async () => {
+      order.push("probe");
+      return { meta: { finalAssistantVisibleText: "OK" } };
+    });
+    const runCliAgent = vi.fn();
+    const originalConfig = {
+      plugins: {
+        allow: ["codex", "other"],
+        entries: {
+          codex: {
+            enabled: false,
+            hooks: { timeoutMs: 1_234 },
+            llm: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] },
+            subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] },
+            config: {
+              discovery: { enabled: true },
+              appServer: {
+                clearEnv: ["CUSTOM_ENV"],
+                sandbox: "read-only",
+                serviceTier: "fast",
+              },
+            },
+          },
+          other: { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const preparedConfig = {
+      ...structuredClone(originalConfig),
+      plugins: {
+        ...structuredClone(originalConfig.plugins),
+        entries: {
+          ...structuredClone(originalConfig.plugins.entries),
+          codex: {
+            ...structuredClone(originalConfig.plugins.entries.codex),
+            enabled: true,
+          },
+        },
+        load: { paths: ["/state/extensions/codex"] },
+        installs: {
+          codex: {
+            source: "npm",
+            spec: "@openclaw/codex",
+            installPath: "/state/extensions/codex",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const ensureCodex = vi.fn(async () => {
+      order.push("ensure");
+      return {
+        cfg: preparedConfig,
+        required: true,
+        installed: true,
+        status: "installed" as const,
+      };
+    });
+    let updatedConfig: OpenClawConfig | undefined;
+    const updateConfig = vi.fn(
+      async (
+        mutator: (
+          cfg: OpenClawConfig,
+          context: { runtimeConfig: OpenClawConfig },
+        ) => OpenClawConfig,
+      ) => {
+        order.push("update");
+        updatedConfig = mutator(structuredClone(originalConfig), {
+          runtimeConfig: structuredClone(originalConfig),
+        });
+        return updatedConfig;
+      },
+    );
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: originalConfig,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        runCliAgent: runCliAgent as never,
+        applySetup: applySetup as never,
+        ensureCodexRuntimePlugin: ensureCodex as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(["ensure", "probe", "update", "apply"]);
+    expect(ensureCodex).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        provider: "openai",
+        model: "gpt-5.5",
+        modelRun: true,
+        disableTools: true,
+        timeoutMs: 90_000,
+        config: expect.objectContaining({
+          agents: {
+            defaults: {
+              workspace: expect.stringContaining("setup-inference-test-"),
+              model: { primary: "openai/gpt-5.5" },
+            },
+          },
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+          tools: { exec: { mode: "full" } },
+        }),
+      }),
+    );
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      config: {
+        plugins: {
+          entries: {
+            codex: {
+              config: {
+                discovery: { enabled: true },
+                appServer: {
+                  clearEnv: ["CUSTOM_ENV"],
+                  sandbox: "read-only",
+                  serviceTier: "fast",
+                },
+              },
+            },
+          },
+          load: { paths: ["/state/extensions/codex"] },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/state/extensions/codex",
+            },
+          },
+        },
+      },
+    });
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "openai/gpt-5.5", surface: "gateway" }),
+    );
+    expect(updatedConfig?.plugins?.entries?.codex).toEqual({
+      ...originalConfig.plugins?.entries?.codex,
+      enabled: true,
+    });
+    expect(updatedConfig?.plugins?.entries?.other).toEqual({ enabled: true });
+    expect(updatedConfig?.plugins?.load?.paths).toEqual(["/state/extensions/codex"]);
+    expect(updatedConfig?.plugins?.installs?.codex).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/state/extensions/codex",
+    });
+  });
+
+  it("leaves config untouched when the Codex app-server completion fails", async () => {
     const ensureCodex = vi.fn(async () => ({
-      cfg: {},
-      required: false,
-      installed: false,
+      cfg: { plugins: { entries: { codex: { enabled: true } } } },
+      required: true,
+      installed: true,
+      status: "installed" as const,
     }));
-    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
+    const updateConfig = vi.fn();
+    const applySetup = vi.fn();
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        runEmbeddedAgent: vi.fn(async () => {
+          throw new Error("401 Unauthorized");
+        }) as never,
+        ensureCodexRuntimePlugin: ensureCodex as never,
+        updateConfig: updateConfig as never,
+        applySetup: applySetup as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "auth" });
+    expect(ensureCodex).toHaveBeenCalledOnce();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("does not persist Codex when its required runtime plugin cannot be installed", async () => {
+    const updateConfig = vi.fn();
+    const applySetup = vi.fn();
+    const runEmbeddedAgent = vi.fn(async () => ({
       meta: { finalAssistantVisibleText: "OK" },
     }));
     const result = await activateSetupInference({
@@ -577,18 +806,84 @@ describe("activateSetupInference", () => {
       runtime,
       deps: {
         runEmbeddedAgent: runEmbeddedAgent as never,
+        ensureCodexRuntimePlugin: vi.fn(async () => ({
+          cfg: {},
+          required: true,
+          installed: false,
+          status: "failed" as const,
+        })) as never,
+        updateConfig: updateConfig as never,
         applySetup: applySetup as never,
-        ensureCodexRuntimePlugin: ensureCodex as never,
         createTempDir: makeTempDir,
       },
     });
-    expect(result.ok).toBe(true);
-    expect(ensureCodex).toHaveBeenCalledOnce();
-    // Harness selection: codex tests run embedded with the codex harness.
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      provider: "openai",
+
+    expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("returns an unavailable result when policy blocks the prepared Codex plugin", async () => {
+    const ensureCodex = vi.fn();
+    const runEmbeddedAgent = vi.fn();
+    const updateConfig = vi.fn();
+    const applySetup = vi.fn();
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: { plugins: { deny: ["codex"] } },
+        })) as never,
+        ensureCodexRuntimePlugin: ensureCodex as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        updateConfig: updateConfig as never,
+        applySetup: applySetup as never,
+        createTempDir: makeTempDir,
+      },
     });
+
+    expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(ensureCodex).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("does not override an explicit non-Codex OpenAI runtime policy", async () => {
+    const runEmbeddedAgent = vi.fn();
+    const applySetup = vi.fn();
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+                },
+              },
+            },
+          },
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        applySetup: applySetup as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
   });
 });
 

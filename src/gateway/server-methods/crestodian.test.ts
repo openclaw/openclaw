@@ -11,11 +11,12 @@ import { crestodianHandlers, type CrestodianChatSession } from "./crestodian.js"
 import type { GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({
+  activateSetupInference: vi.fn(),
   detectSetupInference: vi.fn(),
 }));
 
 vi.mock("../../crestodian/setup-inference.js", () => ({
-  activateSetupInference: vi.fn(),
+  activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
 }));
 
@@ -47,6 +48,7 @@ function seededSession(overrides?: Partial<CrestodianChatSession>): CrestodianCh
 }
 
 afterEach(() => {
+  setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
   resetCommandQueueStateForTest();
 });
@@ -96,6 +98,54 @@ describe("crestodian.chat", () => {
     release.resolve();
     await pending;
 
+    expect(activeAtResponse).toEqual([1]);
+    expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(0);
+  });
+
+  it("forwards setup activation on the gateway lane until its response is sent", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const activationResult = {
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 250,
+      lines: ["Default model: openai/gpt-5.5"],
+    };
+    setupInferenceMocks.activateSetupInference.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+      return activationResult;
+    });
+    const { calls, respond } = makeRespond();
+    const activeAtResponse: number[] = [];
+
+    const pending = crestodianHandlers["crestodian.setup.activate"]({
+      params: {
+        kind: "api-key",
+        authChoice: "openai-api-key",
+        apiKey: "test-key",
+        workspace: "/tmp/work",
+      },
+      respond: (ok, payload, error) => {
+        activeAtResponse.push(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount);
+        respond(ok, payload, error);
+      },
+    } as never);
+
+    await started.promise;
+    expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(1);
+    release.resolve();
+    await pending;
+
+    expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
+      kind: "api-key",
+      authChoice: "openai-api-key",
+      apiKey: "test-key",
+      workspace: "/tmp/work",
+      surface: "gateway",
+      runtime: expect.objectContaining({ exit: expect.any(Function) }),
+    });
+    expect(calls).toEqual([{ ok: true, payload: activationResult, error: undefined }]);
     expect(activeAtResponse).toEqual([1]);
     expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(0);
   });

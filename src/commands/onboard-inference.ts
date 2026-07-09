@@ -1,11 +1,11 @@
+// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
+import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
-// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
 
@@ -37,8 +37,9 @@ export type InferenceBackendCandidate = {
   /** One-line provenance, e.g. "logged in", "ANTHROPIC_API_KEY set". */
   detail: string;
   /**
-   * true: credentials verified; false: definitively logged out; undefined:
-   * unknown (e.g. macOS keychain-backed logins we must not prompt for here).
+   * Credential evidence only, not inference health. true: credentials found;
+   * false: definitively logged out; undefined: unknown (for example a macOS
+   * keychain-backed login we must not prompt for here).
    */
   credentials?: boolean;
 };
@@ -107,7 +108,9 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const existingModel = resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
+  const existingModel = options.config
+    ? resolveAgentEffectiveModelPrimary(options.config, resolveDefaultAgentId(options.config))
+    : undefined;
   if (existingModel) {
     candidates.push({
       kind: "existing-model",

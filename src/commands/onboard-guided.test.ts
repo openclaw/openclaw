@@ -125,6 +125,43 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
   });
 
+  it("live-tests an unverified CLI before automatic setup", async () => {
+    const unverified = {
+      ...candidate("claude-cli", "Claude Code"),
+      detail: "installed",
+      recommended: false,
+      credentials: undefined,
+    };
+    const select = vi.fn(async () => "unexpected") as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({
+      text: vi.fn(async () => "/tmp/work"),
+      select,
+      confirm: vi.fn(async () => false),
+    });
+    const activate = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "claude-cli/opus",
+      latencyMs: 300,
+      lines: ["Workspace"],
+    })) as GuidedOnboardingDeps["activate"];
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () => detection({ candidates: [unverified] })),
+      activate,
+    });
+
+    const runtime = makeRuntime();
+    await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
+
+    expect(activate).toHaveBeenCalledWith({
+      kind: "claude-cli",
+      workspace: "/tmp/work",
+      surface: "cli",
+      runtime,
+    });
+    expect(select).not.toHaveBeenCalled();
+  });
+
   it("suppresses activation subsystem output and restores it when activation throws", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", consoleLevel: "info", file });
@@ -215,11 +252,16 @@ describe("runGuidedOnboarding", () => {
         latencyMs: 900,
         lines: ["Gateway: running"],
       }) as GuidedOnboardingDeps["activate"];
+    const unknownClaude = {
+      ...candidate("claude-cli", "Claude Code"),
+      detail: "installed",
+      credentials: undefined,
+    };
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () =>
         detection({
-          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+          candidates: [unknownClaude, candidate("codex-cli", "Codex")],
         }),
       ),
       activate,
@@ -228,6 +270,8 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
 
     expect(activate).toHaveBeenCalledTimes(2);
+    expect(activate.mock.calls.map(([call]) => call.kind)).toEqual(["claude-cli", "codex-cli"]);
+    expect(activate.mock.calls.map(([call]) => call.surface)).toEqual(["cli", "cli"]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("Claude Code");
     expect(notes).toContain("Authentication failed");

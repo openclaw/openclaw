@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Crestodian configured-Gateway onboarding:** bypass redundant AI setup when the connected Gateway already has a configured agent model, live-verify implicit provider and CLI candidates before persistence, reuse native Codex login state through the isolated app-server auth bridge, install its on-demand plugin under npm 12, preserve setup RPC responses across config restarts, hand off directly to agent chat, and keep named-profile approval migrations isolated. (#102844, #102845, #102846, #102918)
 - **Codex computer control:** publish fixed-length coordinate pairs as homogeneous array schemas so Codex app-server can start threads with the `computer` tool instead of rejecting tuple-valued `items`.
 - **Google Chat request deadlines:** bound control calls to 30 seconds while giving media transfers size-aware total budgets and a separate 30-second stalled-body guard, preventing hung Chat API requests without breaking large attachment uploads. (#102227) Thanks @hugenshen.
 - **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125.

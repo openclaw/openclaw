@@ -8,6 +8,7 @@ import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credenti
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../agents/failover-error.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
   isCliProvider,
   normalizeProviderId,
@@ -81,7 +82,7 @@ export type SetupInferenceDetection = {
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
-  /** Config already carries authored setup and a default model. */
+  /** The connected Gateway already has a configured model for its default agent. */
   setupComplete: boolean;
 };
 
@@ -138,14 +139,13 @@ export type DetectSetupInferenceDeps = {
 async function resolveSetupInferenceWorkspace(params: {
   configExists: boolean;
   configValid: boolean;
-}): Promise<{ workspace: string; hasAuthoredSetup: boolean }> {
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig(params);
+}): Promise<{ workspace: string }> {
+  const { authoredConfig } = await loadAuthoredSetupConfig(params);
   const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
   return {
     workspace: resolveUserPath(
       authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
     ),
-    hasAuthoredSetup,
   };
 }
 
@@ -184,14 +184,14 @@ export async function detectSetupInference(
   const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
   const raw = await detectInferenceBackends({ config: cfg });
-  // Recommended = the first candidate setup itself would bootstrap with; a
+  // Recommended = the first candidate setup itself would live-test; a
   // definitively logged-out CLI never gets the badge.
   const recommendedIndex = raw.findIndex((candidate) => candidate.credentials !== false);
   const candidates = raw.map((candidate, index) => ({
     ...candidate,
     recommended: index === recommendedIndex,
   }));
-  const { workspace, hasAuthoredSetup } = await resolveSetupInferenceWorkspace({
+  const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
   });
@@ -209,7 +209,7 @@ export async function detectSetupInference(
     manualProviders: listSetupInferenceManualProviders(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
-    setupComplete: hasAuthoredSetup && Boolean(configuredModel),
+    setupComplete: Boolean(configuredModel),
   };
 }
 
@@ -319,6 +319,17 @@ async function buildTestPlan(params: {
     }
     case "codex-cli": {
       const ref = parseRef(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+      const runtime = resolveAgentHarnessPolicy({
+        config: cfg,
+        provider: ref.provider,
+        modelId: ref.model,
+      }).runtime;
+      if (runtime !== "codex") {
+        return {
+          error:
+            "The current OpenAI runtime policy does not allow Codex to be selected automatically.",
+        };
+      }
       return {
         runner: "embedded",
         ...ref,
@@ -576,7 +587,7 @@ export async function activateSetupInference(
   const agentDir = (deps.resolveAgentDir ?? resolveAgentDir)(cfg, resolveDefaultAgentId(cfg));
   const testAgentDir = path.join(tempDir, "agent");
   try {
-    const plan = await buildTestPlan({
+    let plan = await buildTestPlan({
       kind: params.kind,
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
@@ -589,6 +600,58 @@ export async function activateSetupInference(
     });
     if ("error" in plan) {
       return { ok: false, status: "unavailable", error: plan.error };
+    }
+
+    let codexConfigPatch: unknown;
+    if (params.kind === "codex-cli") {
+      const selectable = enablePluginInConfig(cfg, "codex");
+      if (!selectable.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Codex runtime plugin is ${selectable.reason ?? "disabled"}.`,
+        };
+      }
+      const ensureCodex =
+        deps.ensureCodexRuntimePlugin ??
+        (await import("../commands/codex-runtime-plugin-install.js"))
+          .ensureCodexRuntimePluginForModelSelection;
+      const ensured = await ensureCodex({
+        cfg,
+        model: plan.modelRef,
+        prompter: createQuickstartNotePrompter(params.runtime),
+        runtime: params.runtime,
+        workspaceDir: tempDir,
+      });
+      if (!ensured.required) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: "Codex cannot be selected automatically with the current OpenAI endpoint.",
+        };
+      }
+      if (!ensured.installed) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: "The Codex runtime plugin could not be installed or enabled.",
+        };
+      }
+      const enabled = enablePluginInConfig(ensured.cfg, "codex");
+      if (!enabled.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Codex runtime plugin is ${enabled.reason ?? "disabled"}.`,
+        };
+      }
+      codexConfigPatch = createMergePatch(cfg, enabled.config);
+      // A fresh install is discoverable before config persistence. Merge its
+      // transient install record/load path into the isolated probe config.
+      plan = {
+        ...plan,
+        config: applyMergePatch(enabled.config, plan.config) as OpenClawConfig,
+      };
     }
 
     if (plan.manualAuth) {
@@ -607,25 +670,12 @@ export async function activateSetupInference(
       return test;
     }
 
-    // Test passed — persist. Codex routes openai/* through the Codex plugin,
-    // so make sure it is installed/enabled before the model ref lands in config.
-    if (params.kind === "codex-cli") {
-      const ensureCodex =
-        deps.ensureCodexRuntimePlugin ??
-        (await import("../commands/codex-runtime-plugin-install.js"))
-          .ensureCodexRuntimePluginForModelSelection;
-      const ensured = await ensureCodex({
-        cfg,
-        model: plan.modelRef,
-        prompter: createQuickstartNotePrompter(params.runtime),
-        runtime: params.runtime,
-        workspaceDir: tempDir,
-      });
-      if (ensured.required) {
-        const updateConfig =
-          deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-        await updateConfig((current) => enablePluginInConfig(current, "codex").config);
-      }
+    // Test passed — persist the prepared Codex plugin state before the model
+    // ref lands. Failed probes leave model/config untouched.
+    if (codexConfigPatch !== undefined) {
+      const updateConfig =
+        deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
+      await updateConfig((current) => applyMergePatch(current, codexConfigPatch) as OpenClawConfig);
     }
     if (plan.manualAuth) {
       const manualAuth = plan.manualAuth;

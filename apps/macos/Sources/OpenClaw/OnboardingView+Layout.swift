@@ -35,6 +35,7 @@ extension OnboardingView {
         .onAppear {
             self.onboardingVisible = true
             self.currentPage = 0
+            self.resetAISetupIfGatewayChanged()
             self.updateMonitoring(for: 0)
         }
         .onChange(of: currentPage) { _, newValue in
@@ -45,14 +46,32 @@ extension OnboardingView {
             self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
             self.updateDiscoveryMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: self.gatewaySetupIdentity) { _, _ in
+            guard self.resetAISetupIfGatewayChanged() else { return }
+            if let connectionCursor = self.pageOrder.firstIndex(of: self.connectionPageIndex) {
+                withAnimation { self.currentPage = connectionCursor }
+            }
+        }
         .onChange(of: needsBootstrap) { _, _ in
             if self.currentPage >= self.pageOrder.count {
                 self.currentPage = max(0, self.pageOrder.count - 1)
             }
         }
-        .onChange(of: cliInstalled) { _, installed in
+        .onChange(of: cliInstalled) { wasInstalled, installed in
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
+            let cliCursor = Self.pageOrder(
+                for: .local,
+                showOnboardingChat: self.showOnboardingChat,
+                requiresCLIInstall: true,
+                includeAISetup: false).firstIndex(of: self.cliPageIndex)
+            if !wasInstalled, !self.installingCLI, self.state.connectionMode == .local,
+               self.currentPage == cliCursor
+            {
+                Task { @MainActor in
+                    await self.preflightExistingSetupAfterCLIInstall()
+                }
+            }
         }
         .onDisappear {
             self.onboardingVisible = false
@@ -122,6 +141,11 @@ extension OnboardingView {
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
+                    let isSetupPreflightLocked = Self.shouldLockForSetupPreflight(
+                        pageCursor: index,
+                        connectionCursor: connectionLockIndex,
+                        mode: self.state.connectionMode,
+                        preflightComplete: self.aiSetup.existingSetupPreflightComplete)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
                     // past the AI page before a candidate passed its live test.
@@ -129,8 +153,8 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
-                        isAILocked
+                    let isLocked = isInstallLocked || isConnectionLocked ||
+                        isSetupPreflightLocked || isCLILocked || isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {

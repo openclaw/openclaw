@@ -141,7 +141,7 @@ setup workspace ~/Projects/work
 setup workspace ~/Projects/work model openai/gpt-5.5
 ```
 
-When no model is configured, setup picks the first usable backend in this order and tells you what it chose:
+When no model is configured, setup picks the first verified usable backend in this order and tells you what it chose:
 
 1. Existing explicit model, if already configured.
 2. `OPENAI_API_KEY` -> `openai/gpt-5.5`
@@ -150,9 +150,11 @@ When no model is configured, setup picks the first usable backend in this order 
 5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
 6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
 
+Credential detection only ranks candidates and skips known logouts. Before setup saves an implicit model, it asks the candidate for a real reply; failures leave no model configuration behind and setup tries the next candidate. An installed CLI with uncertain login state can therefore be tested automatically, but it is never persisted unless the completion succeeds.
+
 If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
-The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
+The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every candidate backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 
 ## AI conversation
 

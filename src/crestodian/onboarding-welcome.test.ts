@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 
 const mocks = vi.hoisted(() => ({
+  detectInferenceBackends: vi.fn(async () => [] as Array<Record<string, unknown>>),
   sourceConfig: {
     agents: { defaults: { workspace: "/existing/workspace" } },
     gateway: undefined as
@@ -29,7 +30,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 vi.mock("../commands/onboard-inference.js", () => ({
-  detectInferenceBackends: vi.fn(async () => []),
+  detectInferenceBackends: mocks.detectInferenceBackends,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({ DEFAULT_WORKSPACE: "/default/workspace" }));
@@ -59,6 +60,36 @@ describe("buildOnboardingWelcome", () => {
     expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/existing/workspace" });
     expect(welcome).toContain("Workspace: /existing/workspace");
     expect(welcome).toContain("configure a model provider with masked credential prompts");
+  });
+
+  it("promises to verify an installed CLI before reusing it", async () => {
+    mocks.detectInferenceBackends.mockResolvedValueOnce([
+      {
+        kind: "claude-cli",
+        modelRef: "claude-cli/claude-opus-4-8",
+        label: "Claude Code",
+        detail: "installed",
+      },
+    ]);
+    const welcome = await buildOnboardingWelcome({
+      engine: {
+        loadOverview: vi.fn(async () => ({
+          config: {
+            path: "/tmp/openclaw.json",
+            exists: false,
+            valid: false,
+            issues: [],
+            hash: null,
+          },
+          defaultModel: undefined,
+        })),
+        propose: vi.fn(),
+        noteAssistantMessage: vi.fn(),
+      } as never,
+    });
+
+    expect(welcome).toContain("AI: Claude Code");
+    expect(welcome).toContain("verify it with a real reply and reuse it only if it works");
   });
 
   it("ignores a blank authored workspace", async () => {

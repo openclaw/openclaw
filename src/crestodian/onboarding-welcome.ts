@@ -67,7 +67,8 @@ export async function buildOnboardingWelcome(params: {
     import("../commands/onboard-helpers.js"),
   ]);
   const candidates = await detectInferenceBackends({});
-  // Mirror chooseSetupModel: never advertise a definitively logged-out CLI.
+  // Mirror chooseSetupModel: known logouts are skipped; every advertised
+  // candidate still has to pass a real completion before setup saves it.
   const detected = candidates.find(
     (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
   );
@@ -80,7 +81,7 @@ export async function buildOnboardingWelcome(params: {
   params.engine.propose({ kind: "setup", workspace });
 
   const aiLine = detected
-    ? `- AI: ${detected.label} — ${detected.modelRef} (${detected.detail}). I'll reuse it; switching later is one sentence.`
+    ? `- AI: ${detected.label} — ${detected.modelRef} (${detected.detail}). I'll verify it with a real reply and reuse it only if it works; switching later is one sentence.`
     : "- AI: nothing detected yet (no Claude Code or Codex login, no OPENAI_API_KEY/ANTHROPIC_API_KEY). I'll set up the basics first, then ask whether you want to configure a model provider with masked credential prompts.";
 
   const welcome = [

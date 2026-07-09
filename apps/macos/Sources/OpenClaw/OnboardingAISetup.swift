@@ -42,6 +42,14 @@ final class OnboardingAISetupModel {
         case connected
     }
 
+    enum ExistingSetupPreflight: Equatable {
+        case idle
+        case checking
+        case needsSetup
+        case configured
+        case failed(message: String)
+    }
+
     struct ManualProvider: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -56,6 +64,8 @@ final class OnboardingAISetupModel {
                 : nil
         }
     }
+
+    private(set) var existingSetupPreflight: ExistingSetupPreflight = .idle
 
     private(set) var candidates: [Candidate] = []
     private(set) var manualProviders: [ManualProvider] = []
@@ -84,14 +94,36 @@ final class OnboardingAISetupModel {
     }
 
     var isBusy: Bool {
-        self.phase == .detecting || self.phase == .testing || self.manualTesting
+        self.existingSetupPreflight == .checking ||
+            self.phase == .detecting || self.phase == .testing || self.manualTesting
+    }
+
+    var needsAISetupPage: Bool {
+        self.existingSetupPreflight == .needsSetup
+    }
+
+    var existingSetupPreflightComplete: Bool {
+        switch self.existingSetupPreflight {
+        case .needsSetup, .configured:
+            true
+        case .idle, .checking, .failed:
+            false
+        }
+    }
+
+    var existingSetupPreflightError: String? {
+        guard case let .failed(message) = existingSetupPreflight else { return nil }
+        return message
     }
 
     /// Called when a candidate connects so the page can advance.
     var onConnected: (() -> Void)?
+    /// Called when the connected Gateway already has a configured agent model.
+    var onExistingSetup: (() -> Void)?
 
     private var started = false
     private var attemptToken = UUID()
+    private let requestSetupDetection: () async throws -> Data
 
     private struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
@@ -118,21 +150,106 @@ final class OnboardingAISetupModel {
         let error: String?
     }
 
+    init(requestSetupDetection: (() async throws -> Data)? = nil) {
+        self.requestSetupDetection = requestSetupDetection ?? {
+            try await GatewayConnection.shared.request(
+                method: "crestodian.setup.detect",
+                params: [:],
+                timeoutMs: 20000,
+                retryTransportFailures: true)
+        }
+    }
+
     func startIfNeeded() {
         guard !self.started else { return }
         self.started = true
         Task { await self.detectAndAutoConnect() }
     }
 
-    func retryFromScratch() {
+    /// Read-only preflight used on the connection page. A configured Gateway
+    /// can enter the agent UI without ever rendering the AI setup page.
+    func reuseExistingSetupIfAvailable(isCurrent: () -> Bool = { true }) async -> Bool {
+        switch self.existingSetupPreflight {
+        case .configured:
+            return true
+        case .needsSetup:
+            return false
+        case .checking:
+            return false
+        case .idle, .failed:
+            break
+        }
+        guard !self.started else {
+            self.existingSetupPreflight = .needsSetup
+            return false
+        }
+        let token = self.attemptToken
+        self.existingSetupPreflight = .checking
+        do {
+            let data = try await requestSetupDetection()
+            guard token == self.attemptToken, isCurrent() else {
+                if token == self.attemptToken {
+                    self.existingSetupPreflight = .idle
+                }
+                return false
+            }
+            let result = try JSONDecoder().decode(DetectResult.self, from: data)
+            guard let configuredModel = Self.configuredModelToReuse(
+                setupComplete: result.setupComplete,
+                configuredModel: result.configuredModel)
+            else {
+                self.existingSetupPreflight = .needsSetup
+                return false
+            }
+            self.finishExistingSetup(modelRef: configuredModel)
+            return true
+        } catch {
+            guard token == self.attemptToken, isCurrent() else {
+                if token == self.attemptToken {
+                    self.existingSetupPreflight = .idle
+                }
+                return false
+            }
+            self.existingSetupPreflight = .failed(
+                message: Self.friendlyTransportError(error.localizedDescription))
+            return false
+        }
+    }
+
+    func resetForGatewayChange() {
         self.attemptToken = UUID()
+        self.started = false
         self.phase = .idle
+        self.existingSetupPreflight = .idle
         self.candidates = []
         self.manualProviders = []
         self.providerCatalogLoaded = false
         self.providerCatalogError = nil
         self.statuses = [:]
         self.selectedKind = nil
+        self.connectedModelRef = nil
+        self.connectedLatencyMs = nil
+        self.detectError = nil
+        self.exhaustedAutoCandidates = false
+        self.manualProviderID = ""
+        self.manualKey = ""
+        self.manualError = nil
+        self.manualTesting = false
+        self.showManualEntry = false
+    }
+
+    func retryFromScratch() {
+        self.attemptToken = UUID()
+        self.phase = .idle
+        self.existingSetupPreflight = .needsSetup
+        self.candidates = []
+        self.manualProviders = []
+        self.providerCatalogLoaded = false
+        self.providerCatalogError = nil
+        self.statuses = [:]
+        self.selectedKind = nil
+        self.connectedModelRef = nil
+        self.connectedLatencyMs = nil
         self.detectError = nil
         self.exhaustedAutoCandidates = false
         self.manualError = nil
@@ -147,11 +264,7 @@ final class OnboardingAISetupModel {
         self.detectError = nil
         self.providerCatalogError = nil
         do {
-            let data = try await GatewayConnection.shared.request(
-                method: "crestodian.setup.detect",
-                params: [:],
-                timeoutMs: 20000,
-                retryTransportFailures: true)
+            let data = try await requestSetupDetection()
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
             let manualProviders = result.manualProviders ?? []
@@ -175,8 +288,15 @@ final class OnboardingAISetupModel {
             for candidate in self.candidates {
                 self.statuses[candidate.kind] = .untried
             }
+            if let configuredModel = Self.configuredModelToReuse(
+                setupComplete: result.setupComplete,
+                configuredModel: result.configuredModel)
+            {
+                self.finishExistingSetup(modelRef: configuredModel)
+                return
+            }
             self.phase = .ready
-            if let first = self.autoCandidateAfter(kind: nil) {
+            if let first = autoCandidateAfter(kind: nil) {
                 // Best candidate found: connect without asking. Switching later
                 // stays one click away while the test runs server-side.
                 await self.activate(kind: first.kind)
@@ -200,10 +320,29 @@ final class OnboardingAISetupModel {
         return raw
     }
 
+    static func configuredModelToReuse(setupComplete: Bool, configuredModel: String?) -> String? {
+        guard setupComplete, let configuredModel else { return nil }
+        let trimmed = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func finishExistingSetup(modelRef: String) {
+        let existingKind = self.candidates.first {
+            $0.kind == "existing-model" && $0.modelRef == modelRef
+        }?.kind ?? "existing-model"
+        self.selectedKind = existingKind
+        self.connectedModelRef = modelRef
+        self.connectedLatencyMs = nil
+        self.statuses[existingKind] = .connected
+        self.phase = .connected
+        self.existingSetupPreflight = .configured
+        self.onExistingSetup?()
+    }
+
     /// Candidates the automatic ladder may try: skip definitively logged-out
     /// installs and anything already attempted.
     private func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = self.candidates.firstIndex(where: { $0.kind == kind }) {
+        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
             index + 1
         } else {
             0
@@ -249,7 +388,9 @@ final class OnboardingAISetupModel {
             // socket after the server already tested and persisted the model.
             // A transport error means "outcome unknown", not "failed": re-read
             // server state before reporting failure.
-            if await self.reconcileActivationAfterTransportDrop(kind: kind, token: token) { return }
+            if await self.reconcileActivationAfterTransportDrop(kind: kind, token: token) {
+                return
+            }
             guard token == self.attemptToken else { return }
             self.statuses[kind] = .failed(message: Self.friendlyTransportError(error.localizedDescription))
             await self.tryNextAfterFailure(of: kind)
@@ -261,7 +402,7 @@ final class OnboardingAISetupModel {
     /// connected only when the server persisted exactly the model this
     /// candidate would have written. Returns true when reconciled.
     private func reconcileActivationAfterTransportDrop(kind: String, token: UUID) async -> Bool {
-        guard let expected = self.candidates.first(where: { $0.kind == kind })?.modelRef else {
+        guard let expected = candidates.first(where: { $0.kind == kind })?.modelRef else {
             return false
         }
         for delayMs in [2000, 4000, 6000] {
@@ -290,7 +431,7 @@ final class OnboardingAISetupModel {
 
     func submitManualKey() {
         let key = self.manualKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let provider = self.selectedManualProvider, !key.isEmpty, !self.manualTesting else { return }
+        guard let provider = selectedManualProvider, !key.isEmpty, !self.manualTesting else { return }
         self.manualError = nil
         self.manualTesting = true
         let token = self.attemptToken
@@ -334,7 +475,7 @@ final class OnboardingAISetupModel {
     }
 
     private func tryNextAfterFailure(of kind: String) async {
-        if let next = self.autoCandidateAfter(kind: kind) {
+        if let next = autoCandidateAfter(kind: kind) {
             await self.activate(kind: next.kind)
             return
         }
@@ -364,11 +505,11 @@ final class OnboardingAISetupModel {
     }
 
     var connectedSummary: String {
-        guard let modelRef = self.connectedModelRef else { return "Your AI is connected." }
+        guard let modelRef = connectedModelRef else { return "Your AI is connected." }
         let label = self.candidates.first { $0.kind == self.selectedKind }?.label ??
             (self.selectedKind == "api-key" ? self.selectedManualProvider?.label : nil)
         let via = label.map { " via \($0)" } ?? ""
-        if let latency = self.connectedLatencyMs {
+        if let latency = connectedLatencyMs {
             let seconds = Double(latency) / 1000
             return "\(modelRef)\(via) — replied in \(String(format: "%.1f", seconds))s"
         }
@@ -443,7 +584,7 @@ struct OnboardingAISetupView: View {
             self.noCandidatesIntro
         }
 
-        if let detectError = self.model.detectError {
+        if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: "Couldn’t check this Mac for AI accounts",
                 message: detectError,
@@ -454,7 +595,7 @@ struct OnboardingAISetupView: View {
             }
         }
 
-        if let providerCatalogError = self.model.providerCatalogError {
+        if let providerCatalogError = model.providerCatalogError {
             OnboardingErrorCard(
                 title: "Couldn’t load the full provider list",
                 message: providerCatalogError,

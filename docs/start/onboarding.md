@@ -66,12 +66,16 @@ Where does the **Gateway** run?
   itself. Existing compatible installations are reused.
 </Step>
 <Step title="Connect your AI">
-  Once the Gateway is ready, onboarding looks for AI access you already have:
-  a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
-  `ANTHROPIC_API_KEY`. The best option is tested with a real completion and
-  only saved after it answers; when a test fails the app automatically tries
-  the next option and shows why the previous one failed. If several options
-  are found you can switch between them before continuing.
+  A connected Gateway that already has a configured agent model skips this
+  page entirely and opens the normal agent UI. Crestodian and provider setup
+  only run for a fresh or incomplete Gateway.
+
+Once the Gateway is ready, onboarding looks for AI access you already have:
+a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
+`ANTHROPIC_API_KEY`. The best option is tested with a real completion and
+only saved after it answers; when a test fails the app automatically tries
+the next option and shows why the previous one failed. If several options
+are found you can switch between them before continuing.
 
 If nothing is found (or nothing works), the manual key/token picker loads the
 Gateway's active text-inference provider plugins instead of using a fixed app

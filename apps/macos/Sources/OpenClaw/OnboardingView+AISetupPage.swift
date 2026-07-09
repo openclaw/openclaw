@@ -40,6 +40,21 @@ extension OnboardingView {
         // Local mode reaches this page only after the CLI/gateway install page,
         // so the gateway is up before the first RPC.
         guard self.state.connectionMode != .local || self.cliInstalled else { return }
+        self.resetAISetupIfGatewayChanged()
+        self.configureAISetupCallbacks()
+        self.aiSetup.startIfNeeded()
+    }
+
+    @discardableResult
+    func resetAISetupIfGatewayChanged() -> Bool {
+        let identity = self.gatewaySetupIdentity
+        guard self.aiSetupGatewayIdentity != identity else { return false }
+        self.aiSetupGatewayIdentity = identity
+        self.aiSetup.resetForGatewayChange()
+        return true
+    }
+
+    func configureAISetupCallbacks() {
         if self.aiSetup.onConnected == nil {
             self.aiSetup.onConnected = { [self] in
                 // Setup authored the workspace (BOOTSTRAP.md); re-check so the
@@ -47,6 +62,17 @@ extension OnboardingView {
                 self.refreshBootstrapStatus()
             }
         }
-        self.aiSetup.startIfNeeded()
+        if self.aiSetup.onExistingSetup == nil {
+            self.aiSetup.onExistingSetup = { [self] in
+                // A connected Gateway with a configured agent model is already
+                // onboarded; go straight to the real agent.
+                guard self.onboardingVisible else { return }
+                guard self.aiSetupGatewayIdentity == self.gatewaySetupIdentity else {
+                    self.resetAISetupIfGatewayChanged()
+                    return
+                }
+                self.finish()
+            }
+        }
     }
 }

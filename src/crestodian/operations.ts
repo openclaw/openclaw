@@ -126,6 +126,7 @@ export type CrestodianCommandDeps = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applyCrestodianSetup;
+  activateSetupInference?: typeof import("./setup-inference.js").activateSetupInference;
   listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
   resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
   isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
@@ -554,7 +555,11 @@ async function chooseSetupModel(params: {
   overview: CrestodianOverview;
   requestedModel: string | undefined;
   deps?: CrestodianCommandDeps;
-}): Promise<{ model?: string; source: string }> {
+}): Promise<{
+  model?: string;
+  source: string;
+  candidates?: InferenceBackendCandidate[];
+}> {
   // Setup picks an existing/default local credential path before falling back to no model change.
   if (params.requestedModel?.trim()) {
     return { model: params.requestedModel.trim(), source: "requested" };
@@ -564,15 +569,18 @@ async function chooseSetupModel(params: {
   }
   const detect = params.deps?.detectInferenceBackends ?? detectInferenceBackends;
   const candidates = await detect({});
-  // A definitively logged-out CLI must never become the configured model:
-  // setup would claim working AI access while every agent run fails auth.
-  const detected: InferenceBackendCandidate | undefined = candidates.find(
+  const usableCandidates = candidates.filter(
     (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
   );
+  const detected = usableCandidates[0];
   if (!detected) {
     return { source: "none" };
   }
-  return { model: detected.modelRef, source: INFERENCE_SOURCE_LABELS[detected.kind] };
+  return {
+    model: detected.modelRef,
+    source: INFERENCE_SOURCE_LABELS[detected.kind],
+    candidates: usableCandidates,
+  };
 }
 
 function formatGatewayStatusLine(overview: CrestodianOverview): string {
@@ -798,7 +806,9 @@ async function executeSetup(
     const message = [
       formatCrestodianPersistentPlan(operation),
       setupModel.model
-        ? `Model choice: ${setupModel.model} (${setupModel.source}).`
+        ? setupModel.candidates
+          ? `Model candidate: ${setupModel.model} (${setupModel.source}); I will verify it before saving.`
+          : `Model choice: ${setupModel.model} (${setupModel.source}).`
         : setupModel.source === "existing default model"
           ? `Model choice: keep existing default ${overview.defaultModel}.`
           : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
@@ -807,6 +817,8 @@ async function executeSetup(
     return { applied: false, message };
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
+  let appliedModel = setupModel.model;
+  let appliedSource = setupModel.source;
   const result = await applyPersistentOperation({
     auditOperation: "crestodian.setup",
     operation,
@@ -815,36 +827,64 @@ async function executeSetup(
     run: async (ctx) => {
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
-      const applied = await applySetup({
+      const surface = ctx.deps?.setupSurface ?? "cli";
+      let applied: { configPath?: string; lines: string[] } | undefined;
+      if (setupModel.candidates) {
+        const activate =
+          ctx.deps?.activateSetupInference ??
+          (await import("./setup-inference.js")).activateSetupInference;
+        appliedModel = undefined;
+        appliedSource = "none";
+        // Activation owns the only model write. A failed candidate leaves config
+        // untouched, so the ladder can continue before one workspace-only fallback.
+        for (const candidate of setupModel.candidates) {
+          ctx.runtime.log(`Verifying ${candidate.label} (${candidate.modelRef})...`);
+          const activation = await activate({
+            kind: candidate.kind,
+            workspace,
+            surface,
+            runtime: ctx.runtime,
+          });
+          if (!activation.ok) {
+            ctx.runtime.log(`${candidate.label} did not pass verification (${activation.status}).`);
+            continue;
+          }
+          appliedModel = activation.modelRef;
+          appliedSource = INFERENCE_SOURCE_LABELS[candidate.kind];
+          applied = { lines: activation.lines };
+          break;
+        }
+      }
+      applied ??= await applySetup({
         workspace,
-        ...(setupModel.model ? { model: setupModel.model } : {}),
-        surface: ctx.deps?.setupSurface ?? "cli",
+        ...(appliedModel ? { model: appliedModel } : {}),
+        surface,
         runtime: ctx.runtime,
       });
       const after = await readConfigFileSnapshotLazy();
-      ctx.runtime.log(`Updated ${after.path || applied.configPath}`);
+      ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);
       }
-      if (!setupModel.model && overview.defaultModel) {
+      if (!appliedModel && overview.defaultModel) {
         ctx.runtime.log(`Default model: ${overview.defaultModel} (kept)`);
-      } else if (!setupModel.model) {
+      } else if (!appliedModel) {
         ctx.runtime.log("Default model: not configured yet");
       }
       return {
-        summary: setupModel.model
-          ? `Bootstrapped setup with ${setupModel.model}`
+        summary: appliedModel
+          ? `Bootstrapped setup with ${appliedModel}`
           : "Bootstrapped setup workspace",
         configPath: after.path || applied.configPath,
         details: {
           workspace,
-          modelSource: setupModel.source,
-          ...(setupModel.model ? { model: setupModel.model } : {}),
+          modelSource: appliedSource,
+          ...(appliedModel ? { model: appliedModel } : {}),
         },
       };
     },
   });
-  if (result.applied && !setupModel.model && !overview.defaultModel) {
+  if (result.applied && !appliedModel && !overview.defaultModel) {
     return {
       ...result,
       followUp: { kind: "model-setup", workspace },
