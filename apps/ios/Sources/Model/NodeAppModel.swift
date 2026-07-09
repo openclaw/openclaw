@@ -308,7 +308,7 @@ final class NodeAppModel {
     private var pttVoiceWakeWasSuspended = false
     private var pttSessionOwnsVoiceWakeLease = false
     private var talkInvokeInFlight = false
-    private var talkInvokeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var talkInvokeWaiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
@@ -2072,6 +2072,9 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        try await self.acquireTalkInvoke()
+        defer { self.releaseTalkInvoke() }
+
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
             try self.rejectTalkCaptureWhileVoiceNoteActive()
             self.acquirePttVoiceWakeLease()
@@ -2080,9 +2083,6 @@ final class NodeAppModel {
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         }
-
-        await self.acquireTalkInvoke()
-        defer { self.releaseTalkInvoke() }
 
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
@@ -2154,14 +2154,41 @@ final class NodeAppModel {
         self.pttVoiceWakeWasSuspended = false
     }
 
-    private func acquireTalkInvoke() async {
+    private func acquireTalkInvoke() async throws {
         if !self.talkInvokeInFlight {
+            try Task.checkCancellation()
             self.talkInvokeInFlight = true
             return
         }
-        await withCheckedContinuation { continuation in
-            self.talkInvokeWaiters.append(continuation)
+        let waiterID = UUID()
+        let acquired = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.talkInvokeWaiters.append((id: waiterID, continuation: continuation))
+            }
+        } onCancel: {
+            Task { @MainActor in
+                self.cancelTalkInvokeWaiter(id: waiterID)
+            }
         }
+        guard acquired else {
+            try Task.checkCancellation()
+            return
+        }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            self.releaseTalkInvoke()
+            throw error
+        }
+    }
+
+    private func cancelTalkInvokeWaiter(id: UUID) {
+        guard let index = self.talkInvokeWaiters.firstIndex(where: { $0.id == id }) else { return }
+        self.talkInvokeWaiters.remove(at: index).continuation.resume(returning: false)
     }
 
     private func releaseTalkInvoke() {
@@ -2169,7 +2196,7 @@ final class NodeAppModel {
             self.talkInvokeInFlight = false
             return
         }
-        self.talkInvokeWaiters.removeFirst().resume()
+        self.talkInvokeWaiters.removeFirst().continuation.resume(returning: true)
     }
 }
 

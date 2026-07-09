@@ -814,11 +814,17 @@ final class TalkModeManager: NSObject {
 
         _ = try await self.beginPushToTalk()
 
-        return await withCheckedContinuation { cont in
-            self.pttCompletion = cont
-            self.pttAutoStopEnabled = true
-            self.startSilenceMonitor()
-            self.schedulePTTTimeout(seconds: maxDurationSeconds)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { cont in
+                self.pttCompletion = cont
+                self.pttAutoStopEnabled = true
+                self.startSilenceMonitor()
+                self.schedulePTTTimeout(seconds: maxDurationSeconds)
+            }
+        } onCancel: {
+            Task { @MainActor in
+                _ = await self.cancelPushToTalk()
+            }
         }
     }
 
