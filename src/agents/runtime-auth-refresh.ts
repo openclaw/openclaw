@@ -16,14 +16,29 @@ export function clampRuntimeAuthRefreshDelayMs(params: {
   return resolveSafeTimeoutDelayMs(params.refreshAt - params.now, { minMs: params.minDelayMs });
 }
 
-// Hard backstop for a single runtime auth refresh. Covers at least the OAuth
-// manager's own call timeout (120s) plus a peer's stale-lock window (180s) so a
-// legitimately slow cross-agent refresh still completes, while any refresh that
-// hangs indefinitely (a provider auth hook, keychain/lock wait, or token
-// endpoint that never settles) is forced to reject. Without this backstop the
-// single-flight `refreshInFlight` promise can stay pending forever and every
-// subsequent model turn deadlocks awaiting it.
-export const RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS = 300_000;
+// Hard backstop for a single runtime auth refresh. The worst legitimate case
+// is two serialized in-lock budgets: waiting out a peer's held refresh lock
+// for its full critical section (OAUTH_REFRESH_INLOCK_TIMEOUT_MS, 150s) and
+// then running our own (another 150s) = 300s. 360s keeps 60s of real headroom
+// above that so legitimate contention never misreports as a hard timeout,
+// while any refresh that hangs indefinitely (a provider auth hook,
+// keychain/lock wait, or token endpoint that never settles) is still forced to
+// reject. Without this backstop the single-flight `refreshInFlight` promise
+// can stay pending forever and every subsequent model turn deadlocks awaiting
+// it.
+export const RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS = 360_000;
+
+/**
+ * Thrown when the hard deadline fires and abandons still-running auth work.
+ * The work cannot be cancelled, so callers use this type to invalidate any
+ * state snapshot the abandoned continuation could later write back.
+ */
+export class RuntimeAuthDeadlineError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`Runtime auth operation for ${label} exceeded hard deadline (${timeoutMs}ms)`);
+    this.name = "RuntimeAuthDeadlineError";
+  }
+}
 
 /**
  * Races a runtime auth operation (refresh, cold-start prep, profile rotation)
@@ -46,9 +61,7 @@ export async function withRuntimeAuthRefreshDeadline<T>(
       work,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(
-            new Error(`Runtime auth operation for ${label} exceeded hard deadline (${timeoutMs}ms)`),
-          );
+          reject(new RuntimeAuthDeadlineError(label, timeoutMs));
         }, timeoutMs);
         timer.unref?.();
       }),
