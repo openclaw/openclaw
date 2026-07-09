@@ -316,10 +316,66 @@ async function runCommand(
     let truncated = false;
     let timedOut = false;
     let settled = false;
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+
+    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
+    // synchronously instead of emitting `error`. Keep that failure inside the
+    // node result because runner.ts intentionally dispatches invokes with `void`.
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(argv[0], argv.slice(1), {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (err) {
+      resolve({
+        exitCode: undefined,
+        timedOut: false,
+        success: false,
+        stdout: "",
+        stderr: "",
+        error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
+        truncated: false,
+      });
+      return;
+    }
+
+    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
+      if (outputLen >= OUTPUT_CAP) {
+        truncated = true;
+        return;
+      }
+      const remaining = OUTPUT_CAP - outputLen;
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      outputLen += slice.length;
+      if (target === "stdout") {
+        stdoutChunks.push(slice);
+      } else {
+        stderrChunks.push(slice);
+      }
+      if (chunk.length > remaining) {
+        truncated = true;
+      }
+    };
+
+    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
+    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
+
     let timer: NodeJS.Timeout | undefined;
     let streamError: Error | undefined;
     let streamKillTimer: NodeJS.Timeout | undefined;
-    const windowsEncoding = resolveWindowsConsoleEncoding();
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, timeoutMs);
+    }
 
     const finalize = (exitCode?: number, error?: string | null) => {
       if (settled) {
@@ -350,55 +406,6 @@ async function runCommand(
         truncated,
       });
     };
-
-    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
-    // synchronously instead of emitting `error`. Route it through the same
-    // fail-closed result so the node host reports the real cause rather than
-    // crashing on an unhandled rejection (runner.ts dispatches with `void`).
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(argv[0], argv.slice(1), {
-        cwd,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch (err) {
-      finalize(undefined, clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd));
-      return;
-    }
-
-    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
-      if (outputLen >= OUTPUT_CAP) {
-        truncated = true;
-        return;
-      }
-      const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      outputLen += slice.length;
-      if (target === "stdout") {
-        stdoutChunks.push(slice);
-      } else {
-        stderrChunks.push(slice);
-      }
-      if (chunk.length > remaining) {
-        truncated = true;
-      }
-    };
-
-    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
-    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
-
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
 
     const onStreamError = (err: Error) => {
       if (settled || streamError) {
