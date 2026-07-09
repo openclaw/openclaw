@@ -364,6 +364,25 @@ describeControlUiE2e("Control UI browser Talk", () => {
       const textarea = page.locator(".agent-chat__input textarea");
       await textarea.fill("Keep working on the report");
       await textarea.press("Enter");
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId =
+        typeof sendRequest.params === "object" &&
+        sendRequest.params !== null &&
+        "idempotencyKey" in sendRequest.params
+          ? String(sendRequest.params.idempotencyKey)
+          : "";
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "Working on it.",
+        message: {
+          content: [{ text: "Working on it.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
       const stopRun = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
@@ -378,8 +397,14 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(await page.locator(".chat-send-btn--stop").count()).toBe(1);
       await captureComposerProof(page, "02-voice-plus-run-stop.png");
 
+      await page.emulateMedia({ colorScheme: "dark" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
+      await captureComposerProof(page, "03-voice-plus-run-stop-dark.png");
+
       await stopVoice.hover();
-      await captureComposerProof(page, "03-voice-live-hover-stop-glyph.png");
+      await captureComposerProof(page, "04-voice-live-hover-stop-glyph.png");
 
       // Stopping voice must leave the run (and its stop control) untouched.
       await stopVoice.click();
