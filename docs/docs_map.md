@@ -8659,6 +8659,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Non-goals and exclusions
   - H2: Rollout and rollback expectations
 
+## specs/durable-session-task-runtime-rfc.md
+
+- Route: /specs/durable-session-task-runtime-rfc
+- Headings:
+  - H1: Durable Session and Task Runtime RFC
+  - H2: Root Cause And Observed Issues
+  - H2: Durable Core Boundary
+  - H2: Proposed Core Components
+  - H2: Full 5-PR Stack
+  - H2: First Review Slice
+  - H2: Non-Goals
+  - H2: Maintainer Decision Requested
+
 ## start/bootstrapping.md
 
 - Route: /start/bootstrapping
