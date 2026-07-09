@@ -229,6 +229,39 @@ export type SlackMonitorContext = {
 const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
 const SLACK_ASSISTANT_CONTEXT_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
+/**
+ * Resolves the workspace (team) id carried by an inbound Slack payload,
+ * covering every shape the event surfaces treat as a team source: Events API
+ * envelopes (`team_id`), interaction bodies (`team.id`), view payloads
+ * (`view.team_id`), and shortcut payloads that only identify the user's home
+ * workspace (`user.team_id` — see events/interactions.shortcuts.ts). Ordered
+ * most-authoritative first; returns "" when no source is present.
+ */
+export function resolveIncomingSlackEventTeamId(body: unknown): string {
+  if (!body || typeof body !== "object") {
+    return "";
+  }
+  const raw = body as {
+    team_id?: unknown;
+    team?: { id?: unknown };
+    view?: { team_id?: unknown };
+    user?: { team_id?: unknown };
+  };
+  if (typeof raw.team_id === "string" && raw.team_id) {
+    return raw.team_id;
+  }
+  if (typeof raw.team?.id === "string" && raw.team.id) {
+    return raw.team.id;
+  }
+  if (typeof raw.view?.team_id === "string" && raw.view.team_id) {
+    return raw.view.team_id;
+  }
+  if (typeof raw.user?.team_id === "string" && raw.user.team_id) {
+    return raw.user.team_id;
+  }
+  return "";
+}
+
 export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -751,21 +784,14 @@ export function createSlackMonitorContext(params: {
       );
       return true;
     }
-    if (!body || typeof body !== "object") {
-      return false;
-    }
-    const raw = body as {
-      api_app_id?: unknown;
-      team_id?: unknown;
-      team?: { id?: unknown };
-    };
-    const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
-    const incomingTeamId =
-      typeof raw.team_id === "string"
-        ? raw.team_id
-        : typeof raw.team?.id === "string"
-          ? raw.team.id
-          : "";
+    const raw =
+      body && typeof body === "object"
+        ? (body as {
+            api_app_id?: unknown;
+          })
+        : undefined;
+    const incomingApiAppId = typeof raw?.api_app_id === "string" ? raw.api_app_id : "";
+    const incomingTeamId = raw ? resolveIncomingSlackEventTeamId(raw) : "";
 
     if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
       logVerbose(
@@ -775,6 +801,17 @@ export function createSlackMonitorContext(params: {
     }
     if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
       logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
+      return true;
+    }
+    // On a shared App, api_app_id is identical for every account, so team is
+    // the ONLY demux key. A payload without any team information would sail
+    // through every sharing account's filter and be processed by all of them
+    // (cross-tenant processing) — fail closed instead. Solo accounts keep the
+    // historical lenient pass-through for team-less payloads.
+    if (params.isSharedSocketGroup && !incomingTeamId) {
+      logVerbose(
+        `slack: drop event without team info for account ${params.accountId} (shared socket group)`,
+      );
       return true;
     }
     return false;

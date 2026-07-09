@@ -1,5 +1,6 @@
 // Slack tests cover the shared Socket Mode connection for multiple accounts
 // installed on the same Slack app (same app token).
+import { getEventListeners } from "node:events";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,6 +41,22 @@ function makeDirectMessageEvent(params: { channel: string; ts: string; text: str
     channel: params.channel,
     channel_type: "im" as const,
   };
+}
+
+/** Gives each team account its own healthy bot identity on its own client. */
+function mockHealthyTeamAuth() {
+  getSlackClientForToken(TEAM1_BOT_TOKEN).auth.test.mockResolvedValue({
+    user_id: "U_BOT1",
+    bot_id: "B_BOT1",
+    team_id: "T1",
+    api_app_id: "A0SHARED",
+  });
+  getSlackClientForToken(TEAM2_BOT_TOKEN).auth.test.mockResolvedValue({
+    user_id: "U_BOT2",
+    bot_id: "B_BOT2",
+    team_id: "T2",
+    api_app_id: "A0SHARED",
+  });
 }
 
 /** Starts both team accounts back-to-back (no await between the two calls) so
@@ -274,5 +291,126 @@ describe("monitorSlackProvider shared Socket Mode group", () => {
     } finally {
       await stopBothTeamAccounts(harness);
     }
+  });
+
+  it("resolves the creator's monitor promise on its own abort while the socket keeps serving siblings", async () => {
+    mockHealthyTeamAuth();
+
+    const harness = startBothTeamAccounts(sharedGroupConfig());
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+
+      // Stop ONLY the creator (team1). The connection now runs as a
+      // group-owned task, so the creator's monitor promise must resolve
+      // immediately (the gateway's per-account stop contract) instead of
+      // lingering until the whole group winds down.
+      harness.controller1.abort();
+      await harness.run1;
+
+      harness.setStatus1.mockClear();
+      harness.setStatus2.mockClear();
+
+      // The surviving sibling still processes its workspace's events on the
+      // connection the (stopped) creator originally opened...
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T2", ts: "777.007", text: "creator gone" }),
+        body: { api_app_id: "A0SHARED", team_id: "T2" },
+      });
+      expect(harness.setStatus2).toHaveBeenCalled();
+
+      // ...while the stopped creator's own workspace traffic is dropped.
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T1", ts: "888.008", text: "to stopped" }),
+        body: { api_app_id: "A0SHARED", team_id: "T1" },
+      });
+      expect(harness.setStatus1).not.toHaveBeenCalled();
+    } finally {
+      await stopBothTeamAccounts(harness);
+    }
+  });
+
+  it("releases members and the registry slot when the creator throws after joining but before the connection task starts", async () => {
+    // team1's boot-time auth.test fails AND its runtime.log throws: the warn
+    // emitted for the auth failure happens after the group slot was joined
+    // but before the connection task exists — exactly the window where a
+    // leaked reservation would leave members waiting forever.
+    getSlackClientForToken(TEAM1_BOT_TOKEN).auth.test.mockRejectedValue(new Error("nope"));
+    getSlackClientForToken(TEAM2_BOT_TOKEN).auth.test.mockResolvedValue({
+      user_id: "U_BOT2",
+      bot_id: "B_BOT2",
+      team_id: "T2",
+      api_app_id: "A0SHARED",
+    });
+
+    const config = sharedGroupConfig();
+    const controller1 = new AbortController();
+    const controller2 = new AbortController();
+    const run1 = monitorSlackProvider({
+      accountId: "team1",
+      config,
+      abortSignal: controller1.signal,
+      runtime: {
+        log: () => {
+          throw new Error("boom-after-join");
+        },
+        error: vi.fn(),
+        exit: vi.fn() as never,
+      },
+    });
+    const run2 = monitorSlackProvider({
+      accountId: "team2",
+      config,
+      abortSignal: controller2.signal,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
+    });
+
+    // The creator's monitor rejects with the boot error...
+    await expect(run1).rejects.toThrow("boom-after-join");
+    // ...and the member resolves on its own WITHOUT anyone aborting it: the
+    // creator's cleanup force-stopped the group, releasing the passive wait.
+    // (A leaked registry reservation would hang this await until the test
+    // times out.)
+    await run2;
+
+    // No connection was ever started by the failed round.
+    expect(getSlackTestState().appStartMock).not.toHaveBeenCalled();
+
+    // The registry slot must be free again: a fresh pair forms a NEW group
+    // whose creator actually starts the socket. If the dead group's slot had
+    // leaked, both fresh accounts would join it as members and no App would
+    // ever start.
+    mockHealthyTeamAuth();
+    const fresh = startBothTeamAccounts(config);
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+      expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await stopBothTeamAccounts(fresh);
+    }
+  });
+
+  it("propagates a fatal socket error to every sharing account and leaves no abort listeners behind", async () => {
+    mockHealthyTeamAuth();
+    // First socket start dies with a non-recoverable auth error: the
+    // group-owned task records it and tears the group down.
+    getSlackTestState().appStartMock.mockRejectedValue(new Error("invalid_auth"));
+
+    const harness = startBothTeamAccounts(sharedGroupConfig());
+
+    // Both accounts' monitor promises surface the fatal error (neither was
+    // stopped on purpose), symmetric between creator and member.
+    await expect(harness.run1).rejects.toThrow("invalid_auth");
+    await expect(harness.run2).rejects.toThrow("invalid_auth");
+
+    // The passive wait settled via the GROUP's stop signal, so the listener
+    // each account had registered on its OWN abort signal must have been
+    // removed on settle — a once-listener that never fires is never
+    // auto-removed, so forgetting the removeEventListener would leak here.
+    expect(getEventListeners(harness.controller1.signal, "abort")).toHaveLength(0);
+    expect(getEventListeners(harness.controller2.signal, "abort")).toHaveLength(0);
   });
 });
