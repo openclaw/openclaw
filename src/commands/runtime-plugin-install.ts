@@ -40,6 +40,7 @@ export type RuntimePluginEnsureParams = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  acknowledgeNonClawHubInstall?: boolean;
 };
 
 /** Parameters for doctor-style runtime plugin repair. */
@@ -75,6 +76,7 @@ async function ensureRuntimePluginForModelSelection(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  acknowledgeNonClawHubInstall?: boolean;
   descriptor: RuntimePluginInstallDescriptor;
   shouldEnsure: RuntimePluginSelection;
 }): Promise<RuntimePluginInstallResult> {
@@ -130,6 +132,7 @@ async function ensureRuntimePluginForModelSelection(params: {
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     promptInstall: false,
     autoConfirmSingleSource: true,
+    ...(params.acknowledgeNonClawHubInstall ? { acknowledgeNonClawHubInstall: true } : {}),
   });
   return {
     cfg: result.cfg,

@@ -668,6 +668,7 @@ describe("channelsAddCommand", () => {
         channel: "external-chat",
         account: "default",
         token: "tenant-scoped",
+        acknowledgeNonClawHubInstall: true,
       },
       runtime,
       { hasFlags: true },
@@ -675,6 +676,7 @@ describe("channelsAddCommand", () => {
 
     expect(installCall().entry).toBe(catalogEntry);
     expect(installCall().promptInstall).toBe(false);
+    expect(installCall().acknowledgeNonClawHubInstall).toBe(true);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(snapshotCall().forceSetupOnlyChannelPlugins).toBe(true);
     const refreshedChannels = requireRecord(

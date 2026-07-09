@@ -181,6 +181,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       runtime: params.runtime,
       workspaceDir,
       promptInstall: false,
+      acknowledgeNonClawHubInstall: params.opts.acknowledgeNonClawHubInstall === true,
     });
     if (!installResult.installed) {
       params.runtime.error(
@@ -265,6 +266,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     prompter: nonInteractivePrompter,
     runtime: params.runtime,
     workspaceDir,
+    acknowledgeNonClawHubInstall: params.opts.acknowledgeNonClawHubInstall === true,
   });
   if (codexInstall.installed) {
     // Non-interactive onboarding never auto-applies migration; emit a hint so
@@ -286,6 +288,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     prompter: nonInteractivePrompter,
     runtime: params.runtime,
     workspaceDir,
+    acknowledgeNonClawHubInstall: params.opts.acknowledgeNonClawHubInstall === true,
   });
   return copilotInstall.cfg;
 }

@@ -494,6 +494,7 @@ async function runSetupWizardOnce(
       forceAllowFromChannels: quickstartAllowFromChannels,
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",
+      acknowledgeNonClawHubInstall: opts.acknowledgeNonClawHubInstall === true,
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });

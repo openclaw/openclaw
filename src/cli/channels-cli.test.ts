@@ -70,6 +70,15 @@ describe("registerChannelsCli", () => {
     expect(getChannelAddOptionFlags(program)).toContain("--homeserver <url>");
   });
 
+  it("always registers non-ClawHub acknowledgement for channel add", async () => {
+    process.argv = ["node", "openclaw", "channels"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--acknowledge-non-clawhub-install");
+  });
+
   it("normalizes Windows launcher argv before channel-specific add option gating", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
       {

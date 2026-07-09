@@ -603,6 +603,7 @@ export async function setupChannels(
         runtime,
         workspaceDir,
         autoConfirmSingleSource: true,
+        acknowledgeNonClawHubInstall: options?.acknowledgeNonClawHubInstall === true,
       });
       next = result.cfg;
       if (!result.installed) {
@@ -640,6 +641,7 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          acknowledgeNonClawHubInstall: options?.acknowledgeNonClawHubInstall === true,
         });
         next = result.cfg;
         if (!result.installed) {
@@ -695,6 +697,7 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          acknowledgeNonClawHubInstall: options?.acknowledgeNonClawHubInstall === true,
         });
         next = result.cfg;
         if (!result.installed) {

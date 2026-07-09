@@ -48,6 +48,8 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   nonInteractive?: boolean;
   /** Required for non-interactive setup; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
+  /** Acknowledge setup plugin installs whose source is outside ClawHub review. */
+  acknowledgeNonClawHubInstall?: boolean;
   reset?: boolean;
   resetScope?: ResetScope;
   authChoice?: AuthChoice;

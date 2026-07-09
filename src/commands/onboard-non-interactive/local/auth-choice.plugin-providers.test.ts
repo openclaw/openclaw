@@ -201,7 +201,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
       authChoice: "groq-api-key",
-      opts: { groqApiKey: "groq-key" } as never,
+      opts: { groqApiKey: "groq-key", acknowledgeNonClawHubInstall: true } as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
       resolveApiKey: vi.fn(),
@@ -227,6 +227,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           trustedSourceLinkedOfficialInstall: true,
         },
         promptInstall: false,
+        acknowledgeNonClawHubInstall: true,
       }),
     );
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
@@ -405,7 +406,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
       authChoice: "openai-api-key",
-      opts: {} as never,
+      opts: { acknowledgeNonClawHubInstall: true } as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
       resolveApiKey: vi.fn(),
@@ -417,6 +418,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(ensureInput.cfg).toBe(selectedConfig);
     expect(ensureInput.model).toBe("openai/gpt-5.5");
     expect(ensureInput.runtime).toBe(runtime);
+    expect(ensureInput.acknowledgeNonClawHubInstall).toBe(true);
     expectWorkspaceDir(ensureInput.workspaceDir);
     expect(result).toBe(installedConfig);
     expect(offerPostInstallMigrations).toHaveBeenCalledOnce();
@@ -458,7 +460,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
       authChoice: "github-copilot",
-      opts: {} as never,
+      opts: { acknowledgeNonClawHubInstall: true } as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
       resolveApiKey: vi.fn(),
@@ -469,6 +471,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(ensureInput.cfg).toBe(selectedConfig);
     expect(ensureInput.model).toBe("github-copilot/gpt-5.5");
     expect(ensureInput.runtime).toBe(runtime);
+    expect(ensureInput.acknowledgeNonClawHubInstall).toBe(true);
     expectWorkspaceDir(ensureInput.workspaceDir);
     expect(result).toBe(installedConfig);
   });

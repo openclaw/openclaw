@@ -104,6 +104,7 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
+      "--acknowledge-non-clawhub-install",
       "--node-manager",
       "pnpm",
       "--json",
@@ -122,6 +123,7 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
+      acknowledgeNonClawHubInstall: true,
       nodeManager: "pnpm",
       json: true,
     });

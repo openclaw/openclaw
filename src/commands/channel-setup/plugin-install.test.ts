@@ -100,9 +100,7 @@ import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
 import {
@@ -379,6 +377,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       entry: baseEntry,
       prompter,
       runtime,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expect(result.installed).toBe(true);
@@ -415,6 +414,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       entry: baseEntry,
       prompter,
       runtime,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expectRecordFields(requireMockCallArg(installPluginFromNpmSpec, 0), "npm install args", {
@@ -510,6 +510,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       prompter,
       runtime,
       promptInstall: false,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expect(select).not.toHaveBeenCalled();
@@ -709,6 +710,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       prompter,
       runtime,
       autoConfirmSingleSource: true,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expect(select).not.toHaveBeenCalled();

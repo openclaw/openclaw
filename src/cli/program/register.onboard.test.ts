@@ -123,6 +123,11 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
+  it("forwards non-ClawHub install acknowledgement to setup wizard options", async () => {
+    await runCli(["onboard", "--acknowledge-non-clawhub-install"]);
+    expect(setupWizardOptions().acknowledgeNonClawHubInstall).toBe(true);
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret

@@ -11,6 +11,7 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { NON_CLAWHUB_INSTALL_ACK_FLAG } from "../non-clawhub-install-acknowledgement.js";
 import { parsePort } from "../shared/parse-port.js";
 import { pickOnboardAuthOptionValues, registerOnboardAuthOptions } from "./register.onboard.js";
 
@@ -34,6 +35,13 @@ function resolveInstallDaemonFlag(
     return Boolean(opts.installDaemon);
   }
   return undefined;
+}
+
+function normalizeNonClawHubInstallAcknowledgementOption(opts: {
+  acknowledgeNonClawHubInstall?: boolean;
+  acknowledgeNonClawhubInstall?: boolean;
+}): boolean {
+  return opts.acknowledgeNonClawHubInstall === true || opts.acknowledgeNonClawhubInstall === true;
 }
 
 /** Register the `setup` command as an onboarding alias. */
@@ -69,6 +77,11 @@ export function registerSetupCommand(program: Command): void {
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
+    .option(
+      NON_CLAWHUB_INSTALL_ACK_FLAG,
+      "Acknowledge setup plugin installs whose source is outside ClawHub review",
       false,
     )
     .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
@@ -125,6 +138,7 @@ export function registerSetupCommand(program: Command): void {
             workspace: opts.workspace as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
+            acknowledgeNonClawHubInstall: normalizeNonClawHubInstallAcknowledgementOption(opts),
             classic: Boolean(opts.classic),
             flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
             mode: opts.mode as "local" | "remote" | undefined,

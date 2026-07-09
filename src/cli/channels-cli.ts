@@ -11,6 +11,7 @@ import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { NON_CLAWHUB_INSTALL_ACK_FLAG } from "./non-clawhub-install-acknowledgement.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -225,6 +226,11 @@ export async function registerChannelsCli(
     .option("--base-url <url>", "Channel base URL")
     .option("--http-url <url>", "Channel HTTP service URL")
     .option("--auth-dir <path>", "Channel auth directory override")
+    .option(
+      NON_CLAWHUB_INSTALL_ACK_FLAG,
+      "Acknowledge setup plugin installs whose source is outside ClawHub review",
+      false,
+    )
     .option("--use-env", "Use env-backed credentials when supported", false);
 
   if (shouldRegisterChannelSetupOptions(argv, options)) {
