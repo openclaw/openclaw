@@ -34,6 +34,7 @@ import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.j
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+const DEFAULT_ELEVENLABS_VOICE_LIST_TIMEOUT_MS = 30_000;
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -540,7 +541,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       return listElevenLabsVoices({
         apiKey,
         baseUrl: req.baseUrl ?? config?.baseUrl,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: req.timeoutMs ?? DEFAULT_ELEVENLABS_VOICE_LIST_TIMEOUT_MS,
       });
     },
     isConfigured: ({ providerConfig }) =>
