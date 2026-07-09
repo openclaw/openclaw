@@ -1485,6 +1485,7 @@
                   "providers/litellm",
                   "providers/lmstudio",
                   "providers/longcat",
+                  "providers/meta",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",

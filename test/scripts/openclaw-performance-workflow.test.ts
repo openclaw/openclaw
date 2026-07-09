@@ -16,6 +16,11 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   steps?: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      include?: Array<{ include_filters?: string }>;
+    };
+  };
 };
 
 type Workflow = {
@@ -102,6 +107,25 @@ describe("OpenClaw performance workflow", () => {
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+    expect(runKova.run).toContain(
+      "profiling-affected resource thresholds with no baseline regression",
+    );
+  });
+
+  it("passes every configured scenario through one Kova include flag", () => {
+    const workflow = readWorkflow();
+    const includeFilters = workflow.jobs?.kova?.strategy?.matrix?.include?.map(
+      (lane) => lane.include_filters,
+    );
+    const runKova = findStep("Run Kova");
+
+    expect(includeFilters).toEqual([
+      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message",
+      "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
+      "scenario:agent-cold-warm-message",
+    ]);
+    expect(runKova.run).toContain('args+=(--include "$INCLUDE_FILTERS")');
+    expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {

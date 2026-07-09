@@ -6379,6 +6379,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/meta.md
+
+- Route: /plugins/reference/meta
+- Headings:
+  - H1: Meta plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/microsoft-foundry.md
 
 - Route: /plugins/reference/microsoft-foundry
@@ -7688,6 +7697,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pricing
   - H2: Self-hosted LongCat-2.0
   - H2: Troubleshooting
+  - H2: Related
+
+## providers/meta.md
+
+- Route: /providers/meta
+- Headings:
+  - H2: Getting started
+  - H2: Non-interactive setup
+  - H2: Built-in catalog
+  - H2: Manual config
+  - H2: Smoke test
   - H2: Related
 
 ## providers/minimax.md
