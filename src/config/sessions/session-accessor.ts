@@ -707,6 +707,8 @@ export type DeleteSessionEntryLifecycleParams = {
   expectedLifecycleRevision?: string;
   /** Optional persisted revision guard checked under the storage writer lock. */
   expectedUpdatedAt?: number;
+  /** Fail when the underlying store cannot confirm a durable write. */
+  requireWriteSuccess?: boolean;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
