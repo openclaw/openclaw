@@ -3,6 +3,7 @@
  */
 import crypto from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { truncateUtf16Safe } from "../../utils.js";
 
 /** Subsystem logger for CLI backend execution diagnostics. */
 export const cliBackendLog = createSubsystemLogger("agent/cli-backend");
@@ -14,6 +15,6 @@ export const LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV = "OPENCLAW_CLAUDE_CLI_LOG_OUTPUT"
 /** Return a compact byte/hash summary for CLI backend output. */
 export function formatCliBackendOutputDigest(text: string): string {
   const outBytes = Buffer.byteLength(text, "utf8");
-  const outHash = crypto.createHash("sha256").update(text).digest("hex").slice(0, 12);
+  const outHash = truncateUtf16Safe(crypto.createHash("sha256").update(text).digest("hex"), 12);
   return `outBytes=${outBytes} outHash=${outHash}`;
 }

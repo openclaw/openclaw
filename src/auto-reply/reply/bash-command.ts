@@ -11,7 +11,7 @@ import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { clampInt } from "../../utils.js";
+import { clampInt, truncateUtf16Safe } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
@@ -54,7 +54,7 @@ function formatSessionSnippet(sessionId: string) {
   if (trimmed.length <= 12) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 8)}…`;
+  return `${truncateUtf16Safe(trimmed, 8)}…`;
 }
 
 function formatOutputBlock(text: string) {
