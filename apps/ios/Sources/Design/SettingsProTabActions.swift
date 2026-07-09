@@ -1169,7 +1169,7 @@ extension SettingsProTab {
     var notificationPresentation: SettingsNotificationPresentation {
         switch self.notificationStatus {
         case .checking:
-            .checking
+            return .checking
         case .allowed:
             if !self.notificationServingEnabled {
                 return .off
@@ -1179,11 +1179,11 @@ extension SettingsProTab {
             }
             return .enabled
         case .notAllowed:
-            .denied
+            return .denied
         case .notSet:
-            .notSet
+            return .notSet
         case .unknown:
-            .unknown
+            return .unknown
         }
     }
 
