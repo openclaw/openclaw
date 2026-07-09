@@ -1396,9 +1396,9 @@ export function buildRuntimeLine(
   defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
-  // Runtime line sits in the cached prompt prefix; isolated cron's volatile per-run `:run:<id>`
-  // scope (#91685) rendered verbatim re-busts byte-exact prefix caching for the tool catalog
-  // after it (#43148 class). Render the stable base key and drop the per-run id it duplicates.
+  // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
+  // isolated cron's volatile `:run:<id>` scope there defeats reuse across runs of the same job.
+  // Render the stable base key and drop the per-run session id it duplicates.
   const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
   const stableSessionId =
     runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;

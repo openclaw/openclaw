@@ -1339,14 +1339,14 @@ describe("buildAgentSystemPrompt", () => {
   it("preserves a stable session id that is not the run-scope id", () => {
     const line = buildRuntimeLine({
       agentId: "work",
-      sessionKey: "agent:main:main",
-      sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
+      sessionKey: "agent:work:cron:nightly-job:run:run-id",
+      sessionId: "stable-session-id",
       host: "host",
       os: "linux",
     });
 
-    expect(line).toContain("session=agent:main:main");
-    expect(line).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+    expect(line).toContain("session=agent:work:cron:nightly-job");
+    expect(line).toContain("sessionId=stable-session-id");
   });
 
   it("renders extra system prompt exactly once", () => {

@@ -296,7 +296,7 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
 
 /**
  * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
- * (`agent:<id>:cron:<job>:run:<runId>`, #91685), yielding the cache-stable base key.
+ * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
  * The run scope is only ever appended to cron keys, so this is gated to that exact
  * shape: any other key (including channel ids that embed a `:run:` segment) is returned
  * unchanged with `runId` undefined, never truncating an unrelated session identity.
