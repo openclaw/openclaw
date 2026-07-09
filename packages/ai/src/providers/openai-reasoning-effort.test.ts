@@ -132,6 +132,18 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("HIGH");
   });
 
+  it("preserves unmapped canonical-looking provider-native compat values", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["LOW", "MEDIUM", "HIGH"],
+      },
+    };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "HIGH" })).toBe("HIGH");
+  });
+
   it("omits unsupported disabled reasoning instead of falling back to enabled effort", () => {
     const model = { provider: "groq", id: "openai/gpt-oss-120b" };
 

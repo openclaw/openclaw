@@ -160,6 +160,16 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
   }
+  if (mapped === undefined) {
+    // Unmapped canonical requests may match compat values case-insensitively, but
+    // return the configured value so provider payload casing remains intact.
+    const canonicalMatch = supported.find(
+      (effort) => normalizeOpenAIReasoningEffort(effort) === requested,
+    );
+    if (canonicalMatch !== undefined) {
+      return canonicalMatch;
+    }
+  }
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
   }
