@@ -3903,13 +3903,15 @@ class NodeRuntime private constructor(
     // Publish ownership before returning to Compose so Activity recreation can
     // distinguish a retained Save from dead pending state after process death.
     val actionScope = captureGatewayDataScope()
+    if (actionScope == null) {
+      cronActionMutex.unlock()
+      return
+    }
     val started =
-      actionScope?.let { gatewayScope ->
-        publishGatewayData(gatewayScope) {
-          _cronActionState.value = GatewayCronActionState.Running(id = jobId, action = action)
-        }
-      } == true
-    if (!started || actionScope == null) {
+      publishGatewayData(actionScope) {
+        _cronActionState.value = GatewayCronActionState.Running(id = jobId, action = action)
+      }
+    if (!started) {
       cronActionMutex.unlock()
       return
     }

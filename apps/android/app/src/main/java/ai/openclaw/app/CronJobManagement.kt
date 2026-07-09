@@ -203,8 +203,9 @@ internal data class CronEditorDraftState(
 
 internal fun encodeCronEditorDraftState(state: CronEditorDraftState): String = Json.encodeToString(state)
 
-internal fun decodeCronEditorDraftState(raw: String): CronEditorDraftState? =
-  runCatching { Json.decodeFromString<CronEditorDraftState>(raw) }.getOrNull()
+internal fun decodeCronEditorDraftState(raw: String): CronEditorDraftState? = runCatching {
+  Json.decodeFromString<CronEditorDraftState>(raw)
+}.getOrNull()
 
 internal fun CronEditorDraftState.reconcileRestoredAction(
   isConnected: Boolean,

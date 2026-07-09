@@ -5,8 +5,6 @@ import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
-import ai.openclaw.app.decodeCronEditorDraftState
-import ai.openclaw.app.encodeCronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
@@ -28,6 +26,8 @@ import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
+import ai.openclaw.app.decodeCronEditorDraftState
+import ai.openclaw.app.encodeCronEditorDraftState
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -376,6 +376,7 @@ private fun CronJobDetailSettingsScreen(
   var restoredDraftNeedsActionCheck by remember(jobId) {
     mutableStateOf(editorDraft?.savePending == true)
   }
+
   fun updateEditorDraft(value: CronEditorDraftState?) {
     editorDraft = value
     savedEditorDraft = value?.let(::encodeCronEditorDraftState)
@@ -485,8 +486,7 @@ internal fun cronDetailRefreshEnabled(
     !loading &&
     (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
 
-internal fun cronDetailDisposalDismissesAction(isChangingConfigurations: Boolean): Boolean =
-  !isChangingConfigurations
+internal fun cronDetailDisposalDismissesAction(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
 @Composable
 private fun AgentsSettingsScreen(
