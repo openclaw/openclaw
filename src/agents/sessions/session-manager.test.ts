@@ -9,6 +9,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
+import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
   CURRENT_SESSION_VERSION,
@@ -249,6 +250,22 @@ describe("SessionManager.open", () => {
     expect(JSON.stringify(messages)).toContain("after compaction");
     expect(JSON.stringify(messages)).not.toContain("old prompt");
 
+    const contextRewrite = rewriteTranscriptEntriesInSessionManager({
+      sessionManager: tailManager,
+      replacements: [
+        {
+          entryId: "kept-user",
+          message: { role: "user", content: "kept prompt rewritten", timestamp: 3 },
+        },
+      ],
+    });
+    expect(contextRewrite.changed).toBe(true);
+    const fullAfterContextRewrite = SessionManager.open(sessionFile, dir, dir);
+    const contextRewriteBranch = fullAfterContextRewrite.getBranch();
+    expect(contextRewriteBranch.map((entry) => entry.id)).toContain("large-prefix");
+    expect(JSON.stringify(contextRewriteBranch)).toContain("kept prompt rewritten");
+    expect(JSON.stringify(contextRewriteBranch)).toContain("after compaction");
+
     await prepareSessionManagerForRun({
       sessionManager: tailManager,
       sessionFile,
@@ -267,10 +284,12 @@ describe("SessionManager.open", () => {
     const fullAfterHeaderRewrite = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
     expect(fullAfterHeaderRewrite.getEntries().map((entry) => entry.id)).toContain("large-prefix");
 
+    const appendParentId = tailManager.getBranch().at(-1)?.id;
+    expect(typeof appendParentId).toBe("string");
     tailManager.appendMessage(buildAssistantMessage("new answer"));
     const lastLine = (await fs.readFile(sessionFile, "utf8")).trim().split("\n").at(-1);
     const appended = JSON.parse(lastLine ?? "{}") as { parentId?: unknown; message?: unknown };
-    expect(appended.parentId).toBe("after-user");
+    expect(appended.parentId).toBe(appendParentId);
     expect(appended.message).toMatchObject({ role: "assistant" });
 
     const removed = tailManager.removeTrailingEntries(

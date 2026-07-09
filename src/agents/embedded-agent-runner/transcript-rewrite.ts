@@ -200,6 +200,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
+  params.sessionManager.prepareForFullFileRewrite();
   const branch = params.sessionManager.getBranch();
   if (branch.length === 0) {
     return {
