@@ -351,6 +351,21 @@ describe("parseCrestodianOperation", () => {
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
   });
 
+  it("keeps config-get output truncation UTF-16 safe", async () => {
+    const longValue = "x".repeat(1995) + "\uD83D\uDE80";
+    mockConfig.setConfig({ models: { providers: { local: { apiKey: longValue } } } });
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await executeCrestodianOperation(
+      { kind: "config-get", path: "models.providers.local" },
+      runtime,
+    );
+
+    const output = lines.join("\n");
+    expect(output).toContain("(truncated)");
+    expect(output).not.toContain("\uD83D\uDE80");
+  });
+
   it("parses channel listing and connect requests", () => {
     expect(parseCrestodianOperation("channels")).toEqual({ kind: "channel-list" });
     expect(parseCrestodianOperation("list channels")).toEqual({ kind: "channel-list" });
