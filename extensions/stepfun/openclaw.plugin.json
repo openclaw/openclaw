@@ -182,6 +182,19 @@
       "autoPriority": {
         "video": 20
       }
+    },
+    "stepfun-plan": {
+      "capabilities": [
+        "image",
+        "video"
+      ],
+      "defaultModels": {
+        "image": "step-3.7-flash",
+        "video": "step-3.7-flash"
+      },
+      "autoPriority": {
+        "video": 20
+      }
     }
   }
 }
