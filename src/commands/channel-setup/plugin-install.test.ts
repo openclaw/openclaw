@@ -436,6 +436,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       entry: baseEntry,
       prompter,
       runtime,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expectPluginLoadedFromLocalPath(result);
@@ -459,6 +460,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       },
       prompter,
       runtime,
+      acknowledgeNonClawHubInstall: true,
     });
 
     expect(result.installed).toBe(true);

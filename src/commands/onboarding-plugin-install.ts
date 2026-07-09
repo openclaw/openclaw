@@ -1189,7 +1189,54 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
   assertConfigWriteAllowedInCurrentMode();
 
+  const acknowledgeNonClawHubSource = async (paramsToAcknowledge: {
+    sourceClass: "local-path" | "npm";
+    spec: string;
+    installCommandSpec: string;
+  }): Promise<boolean> => {
+    const nonClawHubWarning = formatNonClawHubInstallWarning({
+      sourceClass: paramsToAcknowledge.sourceClass,
+      spec: paramsToAcknowledge.spec,
+    });
+    runtime.log?.(nonClawHubWarning);
+    if (params.acknowledgeNonClawHubInstall) {
+      return true;
+    }
+    let acknowledged = false;
+    try {
+      acknowledged = await prompter.confirm({
+        message: "Install this non-ClawHub plugin source?",
+        initialValue: false,
+      });
+    } catch (error) {
+      runtime.error?.(error instanceof Error ? error.message : String(error));
+    }
+    if (!acknowledged) {
+      runtime.error?.(
+        `Install cancelled; install the plugin with ${sanitizeTerminalText(`openclaw plugins install ${paramsToAcknowledge.installCommandSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} after reviewing the source, then rerun setup.`,
+      );
+      return false;
+    }
+    return true;
+  };
+
   if (choice === "local" && localPath) {
+    const isBundledLocalPath = pathsReferToSameDirectory(localPath, bundledLocalPath);
+    if (
+      !isBundledLocalPath &&
+      !(await acknowledgeNonClawHubSource({
+        sourceClass: "local-path",
+        spec: localPath,
+        installCommandSpec: localPath,
+      }))
+    ) {
+      return {
+        cfg: next,
+        installed: false,
+        pluginId: entry.pluginId,
+        status: "failed",
+      };
+    }
     // Bundled plugin sources are already part of the host checkout; enabling is
     // enough and no install record/load path should be added for that case.
     const enableResult = await applyPluginEnablement({
@@ -1207,7 +1254,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         status: "failed",
       };
     }
-    if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+    if (isBundledLocalPath) {
       return await markOnboardingPluginInstalled(
         {
           cfg: enableResult.config,
@@ -1350,34 +1397,19 @@ export async function ensureOnboardingPluginInstalled(params: {
     };
   }
 
-  const nonClawHubWarning = formatNonClawHubInstallWarning({
-    sourceClass: "npm",
-    spec: npmInstallSpec,
-  });
-  if (params.acknowledgeNonClawHubInstall) {
-    runtime.log?.(nonClawHubWarning);
-  } else {
-    runtime.log?.(nonClawHubWarning);
-    let acknowledged = false;
-    try {
-      acknowledged = await prompter.confirm({
-        message: "Install this non-ClawHub plugin source?",
-        initialValue: false,
-      });
-    } catch (error) {
-      runtime.error?.(error instanceof Error ? error.message : String(error));
-    }
-    if (!acknowledged) {
-      runtime.error?.(
-        `Install cancelled; install the plugin with ${sanitizeTerminalText(`openclaw plugins install npm:${npmInstallSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} after reviewing the source, then rerun setup.`,
-      );
-      return {
-        cfg: next,
-        installed: false,
-        pluginId: entry.pluginId,
-        status: "failed",
-      };
-    }
+  if (
+    !(await acknowledgeNonClawHubSource({
+      sourceClass: "npm",
+      spec: npmInstallSpec,
+      installCommandSpec: `npm:${npmInstallSpec}`,
+    }))
+  ) {
+    return {
+      cfg: next,
+      installed: false,
+      pluginId: entry.pluginId,
+      status: "failed",
+    };
   }
 
   const installOutcome = await installPluginFromNpmSpecWithProgress({
@@ -1468,6 +1500,22 @@ export async function ensureOnboardingPluginInstalled(params: {
       initialValue: true,
     });
     if (fallback) {
+      const isBundledLocalPath = pathsReferToSameDirectory(localPath, bundledLocalPath);
+      if (
+        !isBundledLocalPath &&
+        !(await acknowledgeNonClawHubSource({
+          sourceClass: "local-path",
+          spec: localPath,
+          installCommandSpec: localPath,
+        }))
+      ) {
+        return {
+          cfg: next,
+          installed: false,
+          pluginId: entry.pluginId,
+          status: "failed",
+        };
+      }
       const enableResult = await applyPluginEnablement({
         cfg: next,
         pluginId: entry.pluginId,
@@ -1483,7 +1531,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           status: "failed",
         };
       }
-      if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+      if (isBundledLocalPath) {
         return await markOnboardingPluginInstalled(
           {
             cfg: enableResult.config,
