@@ -22,6 +22,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
@@ -599,6 +600,39 @@ describe("promoteAuthProfileInOrder", () => {
       });
 
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood?.["openai"]).toBe(goodProfileId);
+    });
+  });
+
+  describe("loadAuthProfileStoreForSecretsRuntime excludeMainOverlay", () => {
+    it("does not inherit main OAuth profiles when excludeMainOverlay is true", async () => {
+      await withAuthProfileTestState("auth-secrets-exclude-main", async ({ agentDirFor }) => {
+        const mainDir = agentDirFor("main");
+        const otherDir = agentDirFor("other");
+        const profileId = "xai:oauth";
+        const mainProfile: AuthProfileStore = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "xai",
+              access: "main-access-token",
+              refresh: "main-refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        };
+        saveAuthProfileStore(mainProfile, mainDir);
+
+        const inheritedStore = loadAuthProfileStoreForSecretsRuntime(otherDir);
+        expect(inheritedStore.profiles[profileId]).toMatchObject({
+          access: "main-access-token",
+        });
+
+        const agentLocalStore = loadAuthProfileStoreForSecretsRuntime(otherDir, {
+          excludeMainOverlay: true,
+        });
+        expect(agentLocalStore.profiles[profileId]).toBeUndefined();
+      });
     });
   });
 });

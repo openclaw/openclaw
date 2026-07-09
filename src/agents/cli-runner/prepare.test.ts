@@ -2811,6 +2811,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
         senderIsOwner: undefined,
+        authProfileStore: expect.any(Object),
+        agentDir: expect.any(String),
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2825,6 +2827,176 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionId: "cli-session",
         drift: { reasons: ["prompt-tools"] },
       });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards the loaded auth profile store to loopback tool resolution", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "xai:oauth";
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-access-token",
+            refresh: "xai-refresh-token",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    registerMemoryPromptSection(() => []);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+    const resolveMcpLoopbackScopedTools = vi.fn(() => ({ agentId: "main", tools: [] }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer,
+      createMcpLoopbackServerConfig,
+      resolveMcpLoopbackScopedTools,
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "native-cli",
+          pluginId: "native-plugin",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file" as const,
+          config: {
+            command: "native-cli",
+            args: ["--print"],
+            systemPromptArg: "--system-prompt",
+            systemPromptWhen: "first",
+            output: "text",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-auth-store",
+        authProfileId,
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileStore: expect.objectContaining({
+            profiles: expect.objectContaining({
+              [authProfileId]: expect.objectContaining({ provider: "xai" }),
+            }),
+          }),
+          agentDir,
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads xai OAuth for loopback tool resolution in a claude-cli session without explicit authProfileId", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "xai:oauth";
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-access-token",
+            refresh: "xai-refresh-token",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    registerMemoryPromptSection(() => []);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+    const resolveMcpLoopbackScopedTools = vi.fn(() => ({ agentId: "main", tools: [] }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer,
+      createMcpLoopbackServerConfig,
+      resolveMcpLoopbackScopedTools,
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file" as const,
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            jsonlDialect: "claude-stream-json",
+            input: "stdin",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-claude-cli-loopback-oauth-no-profile-id",
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileStore: expect.objectContaining({
+            profiles: expect.objectContaining({
+              [authProfileId]: expect.objectContaining({ provider: "xai" }),
+            }),
+          }),
+          agentDir,
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

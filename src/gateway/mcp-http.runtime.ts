@@ -1,5 +1,6 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,6 +42,8 @@ type McpLoopbackScopeParams = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -64,6 +67,9 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+    const authProfileIds = params.authProfileStore
+      ? Object.keys(params.authProfileStore.profiles).toSorted()
+      : [];
     const cacheKey = [
       params.sessionKey,
       params.sessionId ?? "",
@@ -82,6 +88,8 @@ export class McpLoopbackToolCache {
         : params.senderIsOwner === false
           ? "non-owner"
           : "unknown-owner",
+      authProfileIds.join(","),
+      params.agentDir ?? "",
     ].join("\u0000");
     const now = Date.now();
     for (const [key, entry] of this.#entries) {
