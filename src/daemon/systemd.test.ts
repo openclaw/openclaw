@@ -1199,6 +1199,8 @@ describe("readSystemdServiceExecStart", () => {
           "; another comment",
           'OPENCLAW_GATEWAY_TOKEN="quoted token"', // pragma: allowlist secret
           'OPENCLAW_GATEWAY_PASSWORD="symbol \\" \\\\ \\$ \\`"', // pragma: allowlist secret
+          'MIXED_API_KEY="55\\"55" "FIVE" cinco',
+          'UNQUOTED_QUOTES_API_KEY=foo"bar"',
         ].join("\n");
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
@@ -1208,10 +1210,14 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environment).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "quoted token",
       OPENCLAW_GATEWAY_PASSWORD: 'symbol " \\ $ `', // pragma: allowlist secret
+      MIXED_API_KEY: '55"55FIVEcinco',
+      UNQUOTED_QUOTES_API_KEY: 'foo"bar"',
     });
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      MIXED_API_KEY: "file",
+      UNQUOTED_QUOTES_API_KEY: "file",
     });
   });
 });
@@ -1648,12 +1654,18 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("preserves escaped literal shell references in operator env entries", async () => {
+  it("preserves explicit literal shell references and mixed quoted values", async () => {
     await withStageFixture(async ({ env, envFilePath }) => {
-      await fs.writeFile(envFilePath, "OPENROUTER_API_KEY=\\$SECRET_FROM_SHELL\n", {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      await fs.writeFile(
+        envFilePath,
+        [
+          "OPENROUTER_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
+          'MIXED_API_KEY="foo"bar',
+        ].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
 
       mockSystemctlStatusOk();
 
@@ -1665,9 +1677,11 @@ describe("stageSystemdService", () => {
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
       });
 
-      await expect(fs.readFile(envFilePath, "utf8")).resolves.toContain(
-        'OPENROUTER_API_KEY="\\$SECRET_FROM_SHELL"',
-      );
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toContain('OPENROUTER_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain("MIXED_API_KEY=foobar");
     });
   });
 
@@ -2025,6 +2039,8 @@ describe("systemd service install and uninstall", () => {
           "OPENROUTER_API_KEY=operator-key",
           "LLM_API_KEY=$SECRET_FROM_SHELL",
           "LITERAL_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
         ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
@@ -2050,7 +2066,12 @@ describe("systemd service install and uninstall", () => {
       }
       expect(accessError?.code).toBe("ENOENT");
       await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(
-        'OPENROUTER_API_KEY=operator-key\nLITERAL_API_KEY="\\$SECRET_FROM_SHELL"\n',
+        [
+          "OPENROUTER_API_KEY=operator-key",
+          'LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+        ].join("\n") + "\n",
       );
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
