@@ -10,7 +10,7 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
-import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
+import type { TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
@@ -90,12 +90,10 @@ export type QuickSettingsProps = {
   themeMode: ThemeMode;
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
-  borderRadius: number;
   textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  setBorderRadius: (value: number) => void;
   setTextScale: (value: number) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
@@ -137,14 +135,6 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw" },
   { id: "knot", label: "Knot" },
   { id: "dash", label: "Dash" },
-];
-
-const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
-  { value: 0, label: "None" },
-  { value: 25, label: "Slight" },
-  { value: 50, label: "Default" },
-  { value: 75, label: "Round" },
-  { value: 100, label: "Full" },
 ];
 
 const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
@@ -597,14 +587,119 @@ function renderSecurityCard(props: QuickSettingsProps) {
   `;
 }
 
-function renderSystemRow(label: string, value: string, title?: string) {
+type SystemStat = {
+  label: string;
+  value: string;
+  unit?: string;
+  detail?: string;
+  /** Used share of the resource (0..1); renders the meter bar when present. */
+  usedFraction?: number;
+  title?: string;
+};
+
+// Meter tones reuse the badge palette: calm until 75%, warn to 92%, critical beyond.
+function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
+  if (fraction >= 0.92) {
+    return "critical";
+  }
+  if (fraction >= 0.75) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function renderSystemMeter(label: string, fraction: number) {
+  const clamped = Math.min(Math.max(fraction, 0), 1);
+  const percent = Math.round(clamped * 100);
   return html`
-    <div class="qs-row">
-      <span class="qs-row__label">${label}</span>
-      <span class="qs-row__value" title=${title ?? ""}>${value}</span>
+    <div
+      class="qs-meter"
+      role="meter"
+      aria-label="${label} usage"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${percent}
+    >
+      <div
+        class="qs-meter__fill qs-meter__fill--${systemMeterTone(clamped)}"
+        style="--qs-meter-fill: ${percent}%"
+      ></div>
     </div>
   `;
 }
+
+function renderSystemStat(stat: SystemStat) {
+  return html`
+    <div class="qs-stat" title=${stat.title ?? ""}>
+      <div class="qs-stat__label">${stat.label}</div>
+      <div class="qs-stat__value">
+        ${stat.value}${stat.unit ? html` <span class="qs-stat__unit">${stat.unit}</span>` : nothing}
+      </div>
+      ${stat.usedFraction == null ? nothing : renderSystemMeter(stat.label, stat.usedFraction)}
+      ${stat.detail ? html`<div class="qs-stat__detail">${stat.detail}</div>` : nothing}
+    </div>
+  `;
+}
+
+function usedFraction(totalBytes: number | undefined, freeBytes: number | undefined) {
+  if (totalBytes == null || freeBytes == null || totalBytes <= 0) {
+    return undefined;
+  }
+  return (totalBytes - freeBytes) / totalBytes;
+}
+
+function formatUsedPercent(fraction: number) {
+  return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
+}
+
+function buildSystemStats(info: SystemInfoResult): SystemStat[] {
+  const load = info.loadAverage?.[0];
+  const loadTitle = info.loadAverage
+    ? `Load average: ${info.loadAverage.map((value) => value.toFixed(1)).join(" · ")}`
+    : undefined;
+  const cpuTitle = [info.cpuModel, loadTitle].filter(Boolean).join(" · ") || undefined;
+  const coresLabel = `${info.cpuCount} core${info.cpuCount === 1 ? "" : "s"}`;
+  const cpu: SystemStat =
+    load == null
+      ? { label: "CPU", value: coresLabel, detail: info.cpuModel, title: cpuTitle }
+      : {
+          label: "CPU",
+          value: load.toFixed(1),
+          unit: "load",
+          detail: coresLabel,
+          // 1-minute load over core count approximates saturation; >100% clamps full.
+          usedFraction: info.cpuCount > 0 ? load / info.cpuCount : undefined,
+          title: cpuTitle,
+        };
+  const memoryUsed = usedFraction(info.memoryTotalBytes, info.memoryFreeBytes);
+  const memory: SystemStat = {
+    label: "Memory",
+    value: memoryUsed == null ? "—" : formatUsedPercent(memoryUsed),
+    unit: memoryUsed == null ? undefined : "used",
+    detail: `${formatBytes(info.memoryFreeBytes)} free of ${formatBytes(info.memoryTotalBytes)}`,
+    usedFraction: memoryUsed,
+  };
+  const stats = [cpu, memory];
+  const diskUsed = usedFraction(info.diskTotalBytes, info.diskAvailableBytes);
+  // Disk info is optional in the protocol; skip the tile instead of showing an empty gauge.
+  if (diskUsed != null) {
+    stats.push({
+      label: "Disk",
+      value: formatUsedPercent(diskUsed),
+      unit: "used",
+      detail: `${formatBytes(info.diskAvailableBytes)} free of ${formatBytes(info.diskTotalBytes)}`,
+      usedFraction: diskUsed,
+      title: info.diskPath,
+    });
+  }
+  return stats;
+}
+
+const SYSTEM_STATS_PLACEHOLDER: SystemStat[] = [
+  { label: "CPU", value: "—" },
+  { label: "Memory", value: "—" },
+  { label: "Disk", value: "—" },
+];
 
 function renderSystemCard(props: QuickSettingsProps) {
   if (props.systemInfoUnavailable) {
@@ -615,34 +710,34 @@ function renderSystemCard(props: QuickSettingsProps) {
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
-    : placeholder;
-  const osLabel = info ? `${info.osLabel} · ${info.arch}` : placeholder;
-  const runtime = info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder;
-  const cpu = info
-    ? `${info.cpuCount} cores${info.loadAverage ? ` · load ${info.loadAverage[0].toFixed(1)}` : ""}`
-    : placeholder;
-  const loadTitle = info?.loadAverage
-    ? `Load average: ${info.loadAverage.map((value) => value.toFixed(1)).join(" · ")}`
     : undefined;
-  const cpuTitle = [info?.cpuModel, loadTitle].filter(Boolean).join(" · ") || undefined;
-  const memory = info
-    ? `${formatBytes(info.memoryFreeBytes)} free of ${formatBytes(info.memoryTotalBytes)}`
-    : placeholder;
-  const hasDisk = info?.diskAvailableBytes != null && info.diskTotalBytes != null;
-  const disk = hasDisk
-    ? `${formatBytes(info.diskAvailableBytes)} free of ${formatBytes(info.diskTotalBytes)}`
-    : placeholder;
+  const stats = info ? buildSystemStats(info) : SYSTEM_STATS_PLACEHOLDER;
 
   return html`
     <div class="qs-card qs-card--system">
-      ${renderCardHeader(icons.monitor, "Gateway Host")}
-      <div class="qs-card__body">
-        ${renderSystemRow("Host", info?.machineName ?? placeholder, hostTitle)}
-        ${renderSystemRow("Address", address)} ${renderSystemRow("OS", osLabel)}
-        ${renderSystemRow("Runtime", runtime)}
-        ${renderSystemRow("Uptime", info ? formatDurationHuman(info.uptimeMs) : placeholder)}
-        ${renderSystemRow("CPU", cpu, cpuTitle)} ${renderSystemRow("Memory", memory)}
-        ${info == null || hasDisk ? renderSystemRow("Disk", disk, info?.diskPath) : nothing}
+      ${renderCardHeader(
+        icons.monitor,
+        "Gateway Host",
+        info
+          ? html`<span class="qs-badge qs-badge--ok"
+              >Up ${formatDurationHuman(info.uptimeMs)}</span
+            >`
+          : undefined,
+      )}
+      <div class="qs-card__body qs-system">
+        <div class="qs-system__identity">
+          <div class="qs-system__name" title=${hostTitle ?? ""}>
+            ${info?.machineName ?? placeholder}
+          </div>
+          <div class="qs-system__meta">
+            ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
+          </div>
+          <div class="qs-system__meta">
+            ${info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder}
+          </div>
+          ${address ? html`<code class="qs-system__address">${address}</code>` : nothing}
+        </div>
+        <div class="qs-system__stats">${stats.map(renderSystemStat)}</div>
       </div>
     </div>
   `;
@@ -705,23 +800,6 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                   }}
                 >
                   ${mode.charAt(0).toUpperCase() + mode.slice(1)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">Roundness</span>
-          <div class="qs-segmented">
-            ${BORDER_RADIUS_STOPS.map(
-              (stop) => html`
-                <button
-                  class="qs-segmented__btn ${stop.value === props.borderRadius
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${() => props.setBorderRadius(stop.value)}
-                >
-                  ${stop.label}
                 </button>
               `,
             )}

@@ -145,6 +145,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     run.queuedLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
+    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",

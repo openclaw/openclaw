@@ -267,6 +267,7 @@ export const id: TranslationMap = {
     model: "Model",
     provider: "Penyedia",
     runtime: "Runtime",
+    runDuration: "Durasi berjalan",
     surface: "Permukaan",
     subject: "Subjek",
     room: "Ruang",
@@ -656,6 +657,57 @@ export const id: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Armada Codex",
+    title: "Sesi di semua komputer Anda",
+    subtitle:
+      "Tampilan hanya baca untuk sesi Codex di Gateway ini dan semua komputer terhubung yang membagikan sesi tersebut.",
+    summaryLabel: "Ringkasan sesi Codex",
+    summary: {
+      sessions: "sesi",
+      onlineHosts: "online",
+      hosts: "host",
+    },
+    searchLabel: "Cari sesi Codex",
+    searchPlaceholder: "Cari judul sesi",
+    scopeLabel: "Filter arsip sesi",
+    scope: {
+      active: "Aktif",
+      archived: "Diarsipkan",
+    },
+    refresh: "Muat ulang",
+    disconnected: "Hubungkan kembali ke Gateway untuk memuat ulang sesi Codex.",
+    partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
+    loading: "Memuat sesi Codex…",
+    loadMore: "Muat lebih banyak",
+    loadingMore: "Memuat…",
+    untitled: "Sesi Codex tanpa judul",
+    threadId: "Thread",
+    status: {
+      active: "Aktif",
+      idle: "Siaga",
+      archived: "Diarsipkan",
+      notLoaded: "Tersimpan",
+      systemError: "Kesalahan sistem",
+      unknown: "Tidak diketahui",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Node",
+      connected: "Terhubung",
+      offline: "Offline",
+      unavailable: "Katalog sesi tidak tersedia",
+      sessionCount: "{count} ditampilkan",
+    },
+    empty: {
+      title: "Tidak ditemukan host Codex",
+      subtitle:
+        "Aktifkan berbagi sesi Codex di Gateway atau komputer yang dipasangkan, lalu muat ulang tampilan ini.",
+      search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
+      active: "Tidak ada sesi aktif di host ini.",
+      archived: "Tidak ada sesi yang diarsipkan di host ini.",
+    },
   },
   logbook: {
     duration: {

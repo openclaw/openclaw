@@ -25,6 +25,10 @@ type ResponsePrefix = {
   truncated: boolean;
 };
 
+function decodePrefixBytes(bytes: Uint8Array, truncated: boolean): string {
+  return new TextDecoder().decode(bytes, truncated ? { stream: true } : undefined);
+}
+
 /** Read a small collapsed text snippet from a response body. */
 export async function readResponseTextSnippet(
   res: Response,
@@ -37,7 +41,7 @@ export async function readResponseTextSnippet(
     return "";
   }
 
-  const text = new TextDecoder().decode(joinChunks(prefix.bytes, prefix.length));
+  const text = decodePrefixBytes(joinChunks(prefix.bytes, prefix.length), prefix.truncated);
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return "";

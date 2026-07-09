@@ -90,16 +90,7 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
   return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
 }
 
-const SESSION_TABLE_HEADERS = [
-  "",
-  "Key",
-  "Kind",
-  "Status",
-  "Runtime",
-  "Updated",
-  "Tokens",
-  "Actions",
-];
+const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
@@ -701,7 +692,7 @@ describe("sessions view", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
-  it("renders and filters the session runtime", async () => {
+  it("filters by agent runtime and surfaces it in the details drawer", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -722,20 +713,22 @@ describe("sessions view", () => {
           ]),
         ),
         searchQuery: "fallback none",
+        expandedSessionKey: "agent:main:claude",
       }),
       container,
     );
     await Promise.resolve();
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
-      "claude-cli (fallback none)",
-    );
+    // The roster no longer has a Runtime column; the drawer carries it.
+    expect(container.querySelector(".session-runtime-cell")).toBeNull();
     const rows = container.querySelectorAll("tbody tr.session-data-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "agent:main:claude",
     );
+    const stats = readSessionDetailStats(container);
+    expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
   });
 
   it("does not filter terminal sessions as live when active-run flags are stale", async () => {
@@ -957,7 +950,8 @@ describe("sessions view", () => {
     expect(stats.get("Status")).toBe("running");
     expect(stats.get("Model")).toBe("gpt-5.5");
     expect(stats.get("Provider")).toBe("openai");
-    expect(stats.get("Runtime")).toBe("2m 5s");
+    expect(stats.get("Runtime")).toBe("pi");
+    expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
     expect(stats.get("Goal")).toBe(

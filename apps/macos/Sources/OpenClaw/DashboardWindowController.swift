@@ -206,7 +206,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
           --openclaw-native-titlebar-height: 50px;
         }
         @media (min-width: 700px) {
-          html.openclaw-native-macos .sidebar-shell {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
             padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
           }
         }

@@ -267,6 +267,7 @@ export const pt_BR: TranslationMap = {
     model: "Modelo",
     provider: "Provedor",
     runtime: "Runtime",
+    runDuration: "Duração da execução",
     surface: "Superfície",
     subject: "Assunto",
     room: "Sala",
@@ -655,6 +656,57 @@ export const pt_BR: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Frota do Codex",
+    title: "Sessões em todos os seus computadores",
+    subtitle:
+      "Uma visualização somente leitura das sessões do Codex neste Gateway e em todos os computadores conectados que as compartilham.",
+    summaryLabel: "Resumo das sessões do Codex",
+    summary: {
+      sessions: "sessões",
+      onlineHosts: "online",
+      hosts: "hosts",
+    },
+    searchLabel: "Pesquisar sessões do Codex",
+    searchPlaceholder: "Pesquisar títulos de sessões",
+    scopeLabel: "Filtro de arquivamento de sessões",
+    scope: {
+      active: "Ativas",
+      archived: "Arquivadas",
+    },
+    refresh: "Atualizar",
+    disconnected: "Reconecte-se ao Gateway para atualizar as sessões do Codex.",
+    partial: "Hosts indisponíveis: {count}. Os demais hosts continuam disponíveis.",
+    loading: "Carregando sessões do Codex…",
+    loadMore: "Carregar mais",
+    loadingMore: "Carregando…",
+    untitled: "Sessão do Codex sem título",
+    threadId: "Thread",
+    status: {
+      active: "Ativa",
+      idle: "Ociosa",
+      archived: "Arquivada",
+      notLoaded: "Armazenada",
+      systemError: "Erro de sistema",
+      unknown: "Desconhecido",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Nó",
+      connected: "Conectado",
+      offline: "Offline",
+      unavailable: "Catálogo de sessões indisponível",
+      sessionCount: "{count} exibido(s)",
+    },
+    empty: {
+      title: "Nenhum host do Codex encontrado",
+      subtitle:
+        "Ative o compartilhamento de sessões do Codex no Gateway ou em um computador pareado e atualize esta visualização.",
+      search: "Nenhuma sessão neste host corresponde à sua busca.",
+      active: "Nenhuma sessão ativa neste host.",
+      archived: "Nenhuma sessão arquivada neste host.",
+    },
   },
   logbook: {
     duration: {

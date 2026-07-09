@@ -49,6 +49,8 @@ type CanvasSidebarContent = {
   title?: string;
   entryUrl: string;
   preferredHeight?: number;
+  /** Per-preview sandbox ceiling; keeps widget iframes below the global embed mode. */
+  sandbox?: "strict" | "scripts";
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -433,7 +435,9 @@ function resolveSidebarCanvasSandbox(
   content: SidebarContent,
   embedSandboxMode: EmbedSandboxMode,
 ): string {
-  return content.kind === "canvas" ? resolveEmbedSandbox(embedSandboxMode) : "allow-scripts";
+  return content.kind === "canvas"
+    ? resolveEmbedSandbox(embedSandboxMode, content.sandbox)
+    : "allow-scripts";
 }
 
 type MarkdownSidebarProps = {
