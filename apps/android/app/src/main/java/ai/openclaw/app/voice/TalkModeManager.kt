@@ -1376,7 +1376,10 @@ class TalkModeManager internal constructor(
     cancelAppend: Boolean = true,
     preserveStatus: Boolean = false,
   ) {
+    // Capture both halves of the status so a preserved restore cannot split
+    // the user-visible text from the typed awaiting-agent flag.
     val status = _statusText.value
+    val awaiting = _awaitingAgent.value
     val (sessionId, captureJobs) =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1409,7 +1412,7 @@ class TalkModeManager internal constructor(
     _inputLevel.value = 0f
     stopRealtimePlayback()
     if (preserveStatus) {
-      setStatus(status)
+      setStatus(status, awaitingAgent = awaiting)
     }
     _isListening.value = false
     if (closeSession && !sessionId.isNullOrBlank()) {
@@ -2814,8 +2817,10 @@ class TalkModeManager internal constructor(
   private val listener =
     object : RecognitionListener {
       override fun onReadyForSpeech(params: Bundle?) {
-        if (_isEnabled.value) {
-          setStatus(if (_isListening.value) "Listening" else _statusText.value)
+        // Only a live listening session may claim the status; a speech-interrupt
+        // recognizer readying during playback must not touch Thinking state.
+        if (_isEnabled.value && _isListening.value) {
+          setStatus("Listening")
         }
       }
 
