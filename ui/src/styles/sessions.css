@@ -344,8 +344,17 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td {
+.session-data-row--expanded > td,
+.session-data-row--menu-open > td {
   background: var(--bg-hover);
+}
+
+/* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
+.session-data-row--menu-open .session-actions .icon-btn {
+  opacity: 1;
+}
+
+.session-data-row--expanded > td {
   border-bottom-color: transparent;
 }
 

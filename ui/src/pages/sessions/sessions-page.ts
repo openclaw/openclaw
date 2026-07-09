@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -11,6 +11,8 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import "../../components/session-menu.ts";
+import type { SessionMenuAction } from "../../components/session-menu.ts";
 import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
@@ -26,9 +28,11 @@ import {
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canArchiveSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
@@ -75,6 +79,7 @@ class SessionsPage extends LitElement {
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
+  @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
@@ -102,6 +107,7 @@ class SessionsPage extends LitElement {
   private sharedSessionsLoading = false;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private sessionMenuTrigger: HTMLElement | null = null;
 
   override createRenderRoot() {
     return this;
@@ -214,6 +220,8 @@ class SessionsPage extends LitElement {
       this.error = null;
       this.loading = false;
       this.selectedKeys = new Set();
+      this.sessionMenu = null;
+      this.sessionMenuTrigger = null;
       this.expandedSessionKey = null;
       this.deepLinkSessionKey = null;
       this.checkpointItemsByKey = {};
@@ -461,9 +469,8 @@ class SessionsPage extends LitElement {
   }
 
   private async deleteSelected() {
-    const context = this.context;
     const keys = [...this.selectedKeys];
-    if (!context || keys.length === 0 || this.loading) {
+    if (keys.length === 0 || this.loading) {
       return;
     }
     if (
@@ -471,6 +478,14 @@ class SessionsPage extends LitElement {
         `Delete ${keys.length} ${keys.length === 1 ? "session" : "sessions"}?\n\nThis will delete the session entries and archive their transcripts.`,
       )
     ) {
+      return;
+    }
+    await this.deleteSessions(keys);
+  }
+
+  private async deleteSessions(keys: string[]) {
+    const context = this.context;
+    if (!context || keys.length === 0 || this.loading) {
       return;
     }
     this.sessionMutationPending = true;
@@ -505,10 +520,38 @@ class SessionsPage extends LitElement {
       if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
         this.deepLinkSessionKey = null;
       }
+      // Deleting the currently targeted session must not leave the gateway
+      // pointing at a dead key; fall back to the agent main session, matching
+      // the archive path above and the sidebar delete path.
+      const deletedCurrent = result.deleted.find((key) =>
+        areUiSessionKeysEquivalent(key, context.gateway.snapshot.sessionKey),
+      );
+      if (deletedCurrent) {
+        context.gateway.setSessionKey(
+          buildAgentMainSessionKey({
+            agentId:
+              parseAgentSessionKey(deletedCurrent)?.agentId ??
+              context.agentSelection.state.selectedId ??
+              "main",
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          }),
+        );
+      }
     }
     if (result.errors.length > 0) {
       this.error = result.errors.join("; ");
     }
+  }
+
+  private async deleteSessionFromMenu(row: GatewaySessionRow) {
+    const label = normalizeOptionalString(row.label) ?? row.key;
+    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
+      return;
+    }
+    await this.deleteSessions([row.key]);
   }
 
   private knownCategories(): string[] {
@@ -562,6 +605,17 @@ class SessionsPage extends LitElement {
     if (sessionKey) {
       void this.patchSession(sessionKey, { category: name });
     }
+  }
+
+  private renameSession(row: GatewaySessionRow) {
+    const value = window.prompt(
+      t("sessionsView.renameSessionPrompt"),
+      normalizeOptionalString(row.label) ?? "",
+    );
+    if (value === null) {
+      return;
+    }
+    void this.patchSession(row.key, { label: normalizeOptionalString(value) ?? null });
   }
 
   private async patchSession(key: string, patch: Parameters<SessionsProps["onPatch"]>[1]) {
@@ -732,17 +786,115 @@ class SessionsPage extends LitElement {
     }
   }
 
+  private openSessionMenu(
+    row: GatewaySessionRow,
+    position: { x: number; y: number },
+    trigger: HTMLElement | null,
+  ) {
+    if (this.sessionMenu?.key === row.key && trigger) {
+      this.sessionMenu = null;
+      this.sessionMenuTrigger = null;
+      return;
+    }
+    this.sessionMenu = { key: row.key, ...position };
+    this.sessionMenuTrigger = trigger;
+  }
+
+  private renderSessionMenu() {
+    const menu = this.sessionMenu;
+    const context = this.context;
+    const row = menu ? this.result?.sessions.find((session) => session.key === menu.key) : null;
+    if (!menu || !context || !row) {
+      return nothing;
+    }
+    const gateway = context.gateway.snapshot;
+    const canCapture =
+      isWorkboardEnabledInConfigSnapshot(context.runtimeConfig.state.configSnapshot) &&
+      hasOperatorWriteAccess(gateway.hello?.auth ?? null);
+    const workboardState = context.workboard.state;
+    const capturedSessionKeys = new Set(
+      workboardState.cards
+        .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
+        .filter((key): key is string => typeof key === "string" && key.length > 0),
+    );
+    const archiveAllowed = canArchiveSessionRow(
+      row,
+      resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: gateway.hello,
+      }),
+    );
+    return html`
+      <openclaw-session-menu
+        .session=${{
+          key: row.key,
+          label: normalizeOptionalString(row.label) ?? row.key,
+          pinned: row.pinned === true,
+          unread: row.unread === true,
+          archived: row.archived === true,
+          category: normalizeOptionalString(row.category) ?? null,
+        }}
+        .x=${menu.x}
+        .y=${menu.y}
+        .trigger=${this.sessionMenuTrigger}
+        .disabled=${this.loading}
+        .forkDisabled=${false}
+        .archiveAllowed=${archiveAllowed}
+        .groups=${this.knownCategories()}
+        .canOpenChat=${row.kind !== "global"}
+        .workboard=${canCapture && row.kind !== "global"
+          ? {
+              captured: capturedSessionKeys.has(row.key),
+              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+            }
+          : null}
+        .onClose=${() => {
+          this.sessionMenu = null;
+          this.sessionMenuTrigger = null;
+        }}
+        .onAction=${(action: SessionMenuAction) => {
+          switch (action.kind) {
+            case "open-chat":
+              context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              break;
+            case "toggle-pin":
+              void this.patchSession(row.key, { pinned: row.pinned !== true });
+              break;
+            case "toggle-unread":
+              void this.patchSession(row.key, { unread: row.unread !== true });
+              break;
+            case "rename":
+              this.renameSession(row);
+              break;
+            case "fork":
+              void this.forkSession(row.key);
+              break;
+            case "workboard":
+              void this.addToWorkboard(row);
+              break;
+            case "move-to-group":
+              this.assignCategory(row.key, action.category);
+              break;
+            case "new-group":
+              this.requestNewCategory(row.key);
+              break;
+            case "toggle-archived":
+              void this.patchSession(row.key, { archived: row.archived !== true });
+              break;
+            case "delete":
+              void this.deleteSessionFromMenu(row);
+              break;
+          }
+        }}
+      ></openclaw-session-menu>
+    `;
+  }
+
   override render() {
     const context = this.context;
     if (!context) {
       return html``;
     }
-    const gateway = context.gateway.snapshot;
-    const workboardEnabled = isWorkboardEnabledInConfigSnapshot(
-      context.runtimeConfig.state.configSnapshot,
-    );
-    const canCapture = workboardEnabled && hasOperatorWriteAccess(gateway.hello?.auth ?? null);
-    const workboardState = context.workboard.state;
     return html`
       <section class="content-header content-header--page">
         <div>
@@ -759,10 +911,6 @@ class SessionsPage extends LitElement {
         includeGlobal: this.includeGlobal,
         includeUnknown: this.includeUnknown,
         showArchived: this.showArchived,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        }),
         basePath: context.basePath,
         searchQuery: this.searchQuery,
         agentIdentityById: this.sessionAgentIdentityById(this.result),
@@ -773,12 +921,7 @@ class SessionsPage extends LitElement {
         page: this.page,
         pageSize: this.pageSize,
         selectedKeys: this.selectedKeys,
-        workboardSessionKeys: new Set(
-          workboardState.cards
-            .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
-            .filter((key): key is string => typeof key === "string" && key.length > 0),
-        ),
-        workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
+        sessionMenu: this.sessionMenu,
         expandedSessionKey: this.expandedSessionKey,
         checkpointItemsByKey: this.checkpointItemsByKey,
         checkpointLoadingKey: this.checkpointLoadingKey,
@@ -843,16 +986,14 @@ class SessionsPage extends LitElement {
         onDeleteSelected: () => void this.deleteSelected(),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
-        onFork: (sessionKey) => this.forkSession(sessionKey),
-        onAddToWorkboard: canCapture
-          ? (session: GatewaySessionRow) => this.addToWorkboard(session)
-          : undefined,
+        onOpenSessionMenu: (row, position, trigger) => this.openSessionMenu(row, position, trigger),
         onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
         onBranchFromCheckpoint: (sessionKey, checkpointId) =>
           void this.branchCheckpoint(sessionKey, checkpointId),
         onRestoreCheckpoint: (sessionKey, checkpointId) =>
           void this.restoreCheckpoint(sessionKey, checkpointId),
       })}
+      ${this.renderSessionMenu()}
     `;
   }
 

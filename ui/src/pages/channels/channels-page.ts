@@ -339,7 +339,6 @@ class ChannelsPage extends LitElement {
         </div>
       </section>
       ${renderSettingsWorkspace(
-        context.basePath,
         renderChannels({
           connected: channels.connected,
           loading: channels.channelsLoading,
@@ -372,9 +371,6 @@ class ChannelsPage extends LitElement {
           onNostrProfileImport: () => void this.importNostrProfile(),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
         }),
-        "channels",
-        (routeId) => context.navigate(routeId),
-        (routeId) => context.preload(routeId),
       )}
     `;
   }
