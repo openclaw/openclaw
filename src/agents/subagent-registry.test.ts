@@ -3656,16 +3656,12 @@ describe("subagent registry seam flow", () => {
     mocks.getAgentRunContext.mockImplementation((runId: string) =>
       runId === "run-superseded-successor" ? ({} as never) : undefined,
     );
-    // Fail exactly the persist that commits the durable removal: at that point
-    // the retiring run is already deleted from the snapshot, while every earlier
-    // persist still contains it and succeeds. persistFails flips to false to
-    // model a transient failure clearing before the next sweep.
-    let persistFails = true;
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(
+    // Fail exactly the persist that commits the durable removal. The single-use
+    // failure models recovery before the next sweep without leaking mock state.
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(
       (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => {
-        if (persistFails && !runs.has(oldRunId)) {
-          throw new Error("disk full during superseded retirement");
-        }
+        expect(runs.has(oldRunId)).toBe(false);
+        throw new Error("disk full during superseded retirement");
       },
     );
     const attachmentsRootDir = await fs.mkdtemp(
@@ -3720,23 +3716,21 @@ describe("subagent registry seam flow", () => {
     expect(
       mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
     ).toBe(true);
-    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
     expect(mocks.removeInternalSessionEffectsTranscript).not.toHaveBeenCalled();
     await fs.access(attachmentsDir);
 
     // The transient failure clears; the next sweep must retry and complete the
     // retirement, removing the run and its transcript/attachments.
-    persistFails = false;
     await mod.testing.sweepOnceForTests();
 
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
     expect(
       mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
     ).toBe(false);
     expect(mocks.removeInternalSessionEffectsTranscript).toHaveBeenCalledWith(oldTranscriptFile);
     await expectPathMissing(attachmentsDir);
     await fs.rm(attachmentsRootDir, { recursive: true, force: true });
-    // Persistent conditional impl would leak; clearAllMocks does not reset it.
-    mocks.persistSubagentRunsToDiskOrThrow.mockReset();
   });
 
   it("checks the raw completion time before clamping an old run deadline", async () => {
