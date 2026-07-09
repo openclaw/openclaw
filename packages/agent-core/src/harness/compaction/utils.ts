@@ -102,7 +102,7 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-export function truncateForSummary(text: string, maxChars: number): string {
+function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }

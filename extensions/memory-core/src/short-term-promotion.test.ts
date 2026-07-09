@@ -31,8 +31,6 @@ import {
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   testing,
-  truncatePromotedSnippet,
-  truncateShortTermSnippet,
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
@@ -3590,41 +3588,70 @@ describe("short-term promotion", () => {
       });
     });
   });
-});
+  describe("UTF-16 snippet bounds", () => {
+    it("stores a complete-code-point short-term recall snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "y".repeat(testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS - 1);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 recall",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: `${prefix}🚀tail`,
+            },
+          ],
+        });
 
-describe("truncateShortTermSnippet", () => {
-  it("returns the original snippet when within the char limit", () => {
-    expect(truncateShortTermSnippet("short")).toBe("short");
-  });
+        const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+        expect(entries).toHaveLength(1);
+        expect(readEntrySnippet(entries[0])).toBe(prefix);
+      });
+    });
 
-  it("truncates oversize snippets to the cap", () => {
-    const input = "x".repeat(900);
-    const result = truncateShortTermSnippet(input);
-    expect(result.length).toBeLessThanOrEqual(800);
-  });
+    it("writes a complete-code-point promoted MEMORY.md snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "a".repeat(7);
+        const snippet = `${prefix}🚀tail`;
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 promotion",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+            },
+          ],
+        });
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
 
-  it("does not split a surrogate pair at the cap boundary", () => {
-    const input = `${"y".repeat(799)}🚀`;
-    const result = truncateShortTermSnippet(input);
-    expect(result).not.toContain("�");
-  });
-});
+        await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          maxPromotedSnippetTokens: 2,
+        });
 
-describe("truncatePromotedSnippet", () => {
-  it("returns the original snippet when within token limit", () => {
-    const result = truncatePromotedSnippet("short snippet", 100);
-    expect(result).toBe("short snippet");
-  });
-
-  it("truncates and appends ellipsis", () => {
-    const input = "x".repeat(500);
-    const result = truncatePromotedSnippet(input, 10);
-    expect(result.endsWith("...")).toBe(true);
-  });
-
-  it("does not split a surrogate pair at the boundary", () => {
-    const input = `aa🚀. ${"b".repeat(300)}`;
-    const result = truncatePromotedSnippet(input, 15);
-    expect(result).not.toContain("�");
+        const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+        expect(memoryText).toContain(`- ${prefix}... [`);
+        expect(memoryText).not.toContain("🚀");
+      });
+    });
   });
 });

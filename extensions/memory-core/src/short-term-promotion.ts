@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -17,6 +16,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -356,7 +356,7 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
-export function truncateShortTermSnippet(snippet: string): string {
+function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
@@ -2347,7 +2347,7 @@ function resolvePromotedSnippetCharLimit(maxTokens: number): number {
   return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
 }
 
-export function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   const limit = resolvePromotedSnippetCharLimit(maxTokens);
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
@@ -2365,7 +2365,7 @@ export function truncatePromotedSnippet(snippet: string, maxTokens: number): str
       : wordBoundary >= Math.floor(limit * 0.65)
         ? wordBoundary
         : limit;
-  return `${truncateUtf16Safe(hardLimit, cutAt).trimEnd()}...`;
+  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
 }
 
 function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {

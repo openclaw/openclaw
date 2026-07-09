@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../../../../llm-core/src/index.js";
-import { serializeConversation, truncateForSummary } from "./utils.js";
+import { serializeConversation } from "./utils.js";
 
 describe("serializeConversation", () => {
   it.each([
@@ -33,23 +33,18 @@ describe("serializeConversation", () => {
 
     expect(serializeConversation(messages)).toBe(`[Tool result]: ${expected}`);
   });
-});
 
-describe("truncateForSummary", () => {
-  it("returns the original text when it fits within maxChars", () => {
-    expect(truncateForSummary("hello", 100)).toBe("hello");
-  });
+  it("keeps truncated tool results UTF-16 safe and reports the exact omitted count", () => {
+    const prefix = "a".repeat(1_999);
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "toolResult", content: `${prefix}🚀tail` }],
+      },
+    ] as unknown as Message[];
 
-  it("truncates long text with a summary notice", () => {
-    const input = "x".repeat(200);
-    const result = truncateForSummary(input, 100);
-    expect(result.length).toBeLessThan(input.length);
-    expect(result).toContain("more characters truncated");
-  });
-
-  it("does not split a surrogate pair at the truncation boundary", () => {
-    const input = `aa🚀${"b".repeat(200)}`;
-    const result = truncateForSummary(input, 80);
-    expect(result).not.toContain("�");
+    expect(serializeConversation(messages)).toBe(
+      `[Tool result]: ${prefix}\n\n[... 6 more characters truncated]`,
+    );
   });
 });
