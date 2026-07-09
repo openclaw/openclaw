@@ -602,11 +602,7 @@ extension SettingsProTab {
             self.refreshLocationPermissionSummary(
                 desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
             let presentation = self.locationSettingsPresentation(selectedMode: mode)
-            self.locationStatusText = presentation.statusText ?? "Location permission was not granted."
-            if presentation.showsOpenSettingsAction {
-                self.pendingLocationMode = mode
-                self.openLocationSettings()
-            }
+            self.locationStatusText = presentation.statusText
         }
     }
 
@@ -631,19 +627,6 @@ extension SettingsProTab {
     func handleLocationSharingTap() {
         guard !self.isChangingLocationMode else { return }
         self.performLocationSettingsAction(self.locationSettingsPresentation.toggleAction())
-    }
-
-    func selectLocationAccessLevel(_ mode: OpenClawLocationMode) {
-        guard mode != .off else { return }
-        guard !self.isChangingLocationMode else { return }
-        let presentation = self.locationSettingsPresentation(selectedMode: mode)
-        self.performLocationSettingsAction(presentation.accessLevelAction(mode: mode))
-    }
-
-    func handleOpenLocationSettings() {
-        let mode = self.displayedLocationMode == .off ? OpenClawLocationMode.whileUsing : self.displayedLocationMode
-        self.pendingLocationMode = mode
-        self.openLocationSettings()
     }
 
     func performLocationSettingsAction(_ action: LocationSettingsAction) {

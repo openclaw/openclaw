@@ -254,6 +254,7 @@ extension SettingsProTab {
             .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaPadding(.top, self.destinationTopSafeAreaPadding(for: route))
             .task(id: route) {
                 guard route == .appleWatch else { return }
                 await self.appModel.refreshWatchMessagingStatus()
@@ -271,6 +272,13 @@ extension SettingsProTab {
                 }
             }
         }
+    }
+
+    func destinationTopSafeAreaPadding(for route: SettingsRoute) -> CGFloat {
+        if #available(iOS 26.0, *), route == .privacy {
+            return 16
+        }
+        return 0
     }
 
     var gatewayDestination: some View {
@@ -771,64 +779,50 @@ extension SettingsProTab {
     var locationModeCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    SettingsIcon(
-                        systemName: "location",
-                        color: self.locationSettingsPresentation.sharingControlIsOn ? OpenClawBrand.accent :
-                            .secondary)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Location")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    Spacer(minLength: 8)
-                    if self.isChangingLocationMode {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-
                 Button {
                     self.handleLocationSharingTap()
                 } label: {
                     HStack {
-                        Text("Location Sharing")
+                        Text("Location")
                             .font(OpenClawType.body)
                             .foregroundStyle(.primary)
                         Spacer(minLength: 8)
-                        OpenClawToggleIndicator(isOn: self.locationSettingsPresentation.sharingControlIsOn)
+                        ZStack {
+                            OpenClawToggleIndicator(isOn: self.locationSettingsPresentation.sharingControlIsOn)
+                                .opacity(self.isChangingLocationMode ? 0 : 1)
+                            if self.isChangingLocationMode {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(self.isChangingLocationMode)
                 .accessibilityIdentifier("settings-location-sharing-toggle")
+                .accessibilityLabel("Location Sharing")
                 .accessibilityValue(self.locationSettingsPresentation.sharingControlIsOn ? "On" : "Off")
 
                 if self.locationSettingsPresentation.showsAccessLevel,
                    let accessLevelText = self.locationSettingsPresentation.accessLevelText
                 {
                     Divider()
-                    Button {
-                        self.showLocationAccessDialog = true
-                    } label: {
-                        HStack {
-                            Text("Access Level")
-                                .font(OpenClawType.body)
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                            Text(accessLevelText)
-                                .font(OpenClawType.subhead)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Access Level")
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        Text(accessLevelText)
+                            .font(OpenClawType.subhead)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(self.isChangingLocationMode)
+                    .accessibilityElement(children: .ignore)
                     .accessibilityIdentifier("settings-location-access-level")
+                    .accessibilityLabel("Access Level")
                     .accessibilityValue(accessLevelText)
                 }
 
@@ -842,24 +836,6 @@ extension SettingsProTab {
                     Text(locationPermissionWarningText)
                         .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
-                }
-
-                if self.locationSettingsPresentation.showsOpenSettingsAction {
-                    Button {
-                        self.handleOpenLocationSettings()
-                    } label: {
-                        Label {
-                            Text("Open iOS Settings")
-                                .font(OpenClawType.captionSemiBold)
-                        } icon: {
-                            Image(systemName: "gearshape")
-                                .font(OpenClawType.captionSemiBold)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(OpenClawBrand.accent)
-                    .disabled(self.isChangingLocationMode)
-                    .accessibilityIdentifier("settings-location-open-ios-settings")
                 }
             }
         }

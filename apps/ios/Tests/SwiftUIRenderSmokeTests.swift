@@ -61,19 +61,22 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func `settings Privacy destination builds in light and dark mode`() {
+    @Test @MainActor func `settings Privacy destination builds across appearance and type size`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
-            let appModel = NodeAppModel()
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .privacy)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+                let root = SettingsProTab(directRoute: .privacy)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .preferredColorScheme(scheme)
+                    .environment(\.dynamicTypeSize, typeSize)
 
-            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+                _ = Self.host(root, size: CGSize(width: 393, height: 852))
+            }
         }
     }
 

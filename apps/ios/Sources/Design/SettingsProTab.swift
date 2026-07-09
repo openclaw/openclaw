@@ -60,7 +60,6 @@ struct SettingsProTab: View {
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
-    @State var showLocationAccessDialog = false
     @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
@@ -301,55 +300,30 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Access Level",
-                    isPresented: self.$showLocationAccessDialog,
+                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: { if !$0 { self.pendingForgetGateway = nil } }),
                     titleVisibility: .visible)
             {
-                Button {
-                    self.selectLocationAccessLevel(.whileUsing)
+                Button(role: .destructive) {
+                    self.forgetPendingGateway()
                 } label: {
-                    Text("While Using the App")
+                    Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                Button {
-                    self.selectLocationAccessLevel(.always)
+                Button(role: .cancel) {
+                    self.pendingForgetGateway = nil
                 } label: {
-                    Text("Always")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                Button(role: .cancel) {} label: {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 } message: {
-                    Text("Choose when OpenClaw may share this iPhone's location with gateway tools.")
+                    Text(
+                        "This removes saved credentials, device access, TLS trust, " +
+                            "and cached chats for this gateway.")
                         .font(OpenClawType.subhead)
                 }
-                .confirmationDialog(
-                        "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
-                        isPresented: Binding(
-                            get: { self.pendingForgetGateway != nil },
-                            set: { if !$0 { self.pendingForgetGateway = nil } }),
-                        titleVisibility: .visible)
-                {
-                    Button(role: .destructive) {
-                        self.forgetPendingGateway()
-                    } label: {
-                        Text("Forget Gateway")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    Button(role: .cancel) {
-                        self.pendingForgetGateway = nil
-                    } label: {
-                        Text("Cancel")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    } message: {
-                        Text(
-                            "This removes saved credentials, device access, TLS trust, " +
-                                "and cached chats for this gateway.")
-                            .font(OpenClawType.subhead)
-                    }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

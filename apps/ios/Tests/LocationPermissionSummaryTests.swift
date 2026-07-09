@@ -19,9 +19,17 @@ import Testing
                 locationServicesEnabled: true,
                 authorizationStatus: .authorizedAlways,
                 accuracyAuthorization: .fullAccuracy))
+        let whileUsingWithAlwaysGrant = LocationSettingsPresentation(
+            selectedMode: .whileUsing,
+            summary: LocationPermissionSummary(
+                desiredMode: .whileUsing,
+                locationServicesEnabled: true,
+                authorizationStatus: .authorizedAlways,
+                accuracyAuthorization: .fullAccuracy))
 
         #expect(whileUsing.accessLevelText == "While Using the App")
         #expect(always.accessLevelText == "Always")
+        #expect(whileUsingWithAlwaysGrant.accessLevelText == "Always")
         #expect(OpenClawLocationMode.off.locationAccessLevelText == nil)
     }
 
@@ -35,7 +43,8 @@ import Testing
                 accuracyAuthorization: .fullAccuracy))
 
         #expect(!presentation.sharingControlIsOn)
-        #expect(presentation.showsAccessLevel)
+        #expect(!presentation.showsAccessLevel)
+        #expect(presentation.accessLevelText == nil)
         #expect(presentation.statusText == "iOS permission is required to share location.")
         #expect(presentation.toggleAction() == .setMode(.whileUsing))
     }
@@ -54,21 +63,46 @@ import Testing
         #expect(presentation.toggleAction() == .setMode(.whileUsing))
     }
 
-    @Test func `location sharing toggle opens app settings when denied`() {
-        let presentation = LocationSettingsPresentation(
+    @Test func `access level remains visible for an ios grant when sharing is off`() {
+        let whileUsing = LocationSettingsPresentation(
             selectedMode: .off,
             summary: LocationPermissionSummary(
                 desiredMode: .off,
+                locationServicesEnabled: true,
+                authorizationStatus: .authorizedWhenInUse,
+                accuracyAuthorization: .fullAccuracy))
+        let always = LocationSettingsPresentation(
+            selectedMode: .off,
+            summary: LocationPermissionSummary(
+                desiredMode: .off,
+                locationServicesEnabled: true,
+                authorizationStatus: .authorizedAlways,
+                accuracyAuthorization: .fullAccuracy))
+
+        #expect(!whileUsing.sharingControlIsOn)
+        #expect(whileUsing.showsAccessLevel)
+        #expect(whileUsing.accessLevelText == "While Using the App")
+        #expect(always.showsAccessLevel)
+        #expect(always.accessLevelText == "Always")
+    }
+
+    @Test func `location sharing toggle opens app settings when denied`() {
+        let presentation = LocationSettingsPresentation(
+            selectedMode: .whileUsing,
+            summary: LocationPermissionSummary(
+                desiredMode: .whileUsing,
                 locationServicesEnabled: true,
                 authorizationStatus: .denied,
                 accuracyAuthorization: .fullAccuracy))
 
         #expect(!presentation.sharingControlIsOn)
         #expect(!presentation.showsAccessLevel)
+        #expect(presentation.accessLevelText == nil)
+        #expect(presentation.statusText == nil)
         #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
     }
 
-    @Test func `always selected while using effective shows settings guidance`() {
+    @Test func `access level reports effective ios grant without redundant guidance`() {
         let presentation = LocationSettingsPresentation(
             selectedMode: .always,
             summary: LocationPermissionSummary(
@@ -79,9 +113,8 @@ import Testing
 
         #expect(presentation.sharingControlIsOn)
         #expect(presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == "Always")
-        #expect(presentation.statusText == "iOS currently allows location only while using the app.")
-        #expect(presentation.showsOpenSettingsAction)
+        #expect(presentation.accessLevelText == "While Using the App")
+        #expect(presentation.statusText == nil)
         #expect(presentation.toggleAction() == .setMode(.off))
     }
 
@@ -96,7 +129,6 @@ import Testing
 
         #expect(presentation.sharingControlIsOn)
         #expect(presentation.statusText == nil)
-        #expect(!presentation.showsOpenSettingsAction)
     }
 
     @Test func `global location services off opens app settings action`() {
@@ -109,8 +141,8 @@ import Testing
                 accuracyAuthorization: .fullAccuracy))
 
         #expect(!presentation.sharingControlIsOn)
+        #expect(!presentation.showsAccessLevel)
         #expect(presentation.statusText == "Location Services are off in iOS Settings.")
-        #expect(presentation.showsOpenSettingsAction)
         #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
     }
 
@@ -124,8 +156,8 @@ import Testing
                 accuracyAuthorization: .fullAccuracy))
 
         #expect(!presentation.sharingControlIsOn)
+        #expect(!presentation.showsAccessLevel)
         #expect(presentation.statusText == "Location permission is restricted on this device.")
-        #expect(presentation.showsOpenSettingsAction)
         #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
     }
 

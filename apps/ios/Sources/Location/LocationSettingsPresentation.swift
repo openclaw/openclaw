@@ -16,11 +16,19 @@ struct LocationSettingsPresentation: Equatable {
     }
 
     var showsAccessLevel: Bool {
-        self.selectedMode != .off
+        self.accessLevelText != nil
     }
 
     var accessLevelText: String? {
-        self.selectedMode.locationAccessLevelText
+        guard self.summary.locationServicesEnabled else { return nil }
+        switch self.summary.authorizationStatus {
+        case .authorizedWhenInUse:
+            return OpenClawLocationMode.whileUsing.locationAccessLevelText
+        case .authorizedAlways:
+            return OpenClawLocationMode.always.locationAccessLevelText
+        default:
+            return nil
+        }
     }
 
     var statusText: String? {
@@ -35,26 +43,13 @@ struct LocationSettingsPresentation: Equatable {
         case .notDetermined:
             return "iOS permission is required to share location."
         case .denied:
-            return "Location permission is denied in iOS Settings."
+            return nil
         case .restricted:
             return "Location permission is restricted on this device."
-        case .authorizedWhenInUse where self.selectedMode == .always:
-            return "iOS currently allows location only while using the app."
+        case .authorizedWhenInUse:
+            return nil
         default:
             return "OpenClaw cannot determine the current iOS location permission."
-        }
-    }
-
-    var showsOpenSettingsAction: Bool {
-        guard self.selectedMode != .off else { return false }
-        if !self.summary.locationServicesEnabled { return true }
-        switch self.summary.authorizationStatus {
-        case .denied, .restricted:
-            return true
-        case .authorizedWhenInUse:
-            return self.selectedMode == .always
-        default:
-            return false
         }
     }
 
@@ -64,10 +59,6 @@ struct LocationSettingsPresentation: Equatable {
         }
         let mode = self.selectedMode == .off ? defaultEnabledMode : self.selectedMode
         return self.enableAction(mode: mode)
-    }
-
-    func accessLevelAction(mode: OpenClawLocationMode) -> LocationSettingsAction {
-        self.enableAction(mode: mode)
     }
 
     private func enableAction(mode: OpenClawLocationMode) -> LocationSettingsAction {
