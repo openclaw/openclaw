@@ -657,8 +657,9 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
   fileType?: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
   msgType: "image" | "file" | "audio" | "media";
 } {
-  const { fileName, contentType } = params;
+  const { fileName } = params;
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
+  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
   const mimeKind = mediaKindFromMime(contentType);
 
   const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
@@ -832,10 +833,11 @@ async function probeMediaDurationMs(params: {
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-probe-" },
       async (workspace) => {
         const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+        const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
         const inferredExt =
           ext && ext.length <= 12
             ? ext
-            : mediaKindFromMime(params.contentType) === "video"
+            : mediaKindFromMime(contentType) === "video"
               ? ".mp4"
               : ".ogg";
         const inputPath = await workspace.write(`input${inferredExt}`, params.buffer);

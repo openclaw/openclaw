@@ -437,6 +437,84 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
   });
 
+  it("routes mixed-case image content types to msg_type=image (MIME is case-insensitive)", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-image"),
+      fileName: "download",
+      kind: "image",
+      contentType: "Image/PNG",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/image",
+    });
+
+    expect(imageCreateMock).toHaveBeenCalledTimes(1);
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
+  });
+
+  it("routes lowercase image content types to msg_type=image (regression)", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-image"),
+      fileName: "download",
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/image",
+    });
+
+    expect(imageCreateMock).toHaveBeenCalledTimes(1);
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
+  });
+
+  it("keeps voice intent for mixed-case audio content types instead of degrading to file", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-voice"),
+      fileName: "voicemail",
+      kind: "audio",
+      contentType: "Audio/Ogg",
+    });
+
+    const result = await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/voicemail",
+      audioAsVoice: true,
+    });
+
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("opus");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
+    expect(result.voiceIntentDegradedToFile).not.toBe(true);
+  });
+
+  it("routes mixed-case video content types to msg_type=media with an mp4 probe input", async () => {
+    runFfprobeMock.mockResolvedValueOnce("8.9\n");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-video"),
+      fileName: "download",
+      kind: "video",
+      contentType: "Video/MP4",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/video",
+    });
+
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+  });
+
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
     messageCreateMock.mockRejectedValueOnce(
       Object.assign(new Error("Request failed with status code 400"), {
