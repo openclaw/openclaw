@@ -367,12 +367,11 @@ final class NodePairingApprovalPrompter {
 
         self.pendingLocalDecisionRequestIds.insert(request.requestId)
         let expected: PairingResolution = decision == .approve ? .approved : .rejected
-        let rpcOk: Bool
-        switch decision {
+        let rpcOk: Bool = switch decision {
         case .approve:
-            rpcOk = await self.approve(requestId: request.requestId)
+            await self.approve(requestId: request.requestId)
         case .reject:
-            rpcOk = await self.reject(requestId: request.requestId)
+            await self.reject(requestId: request.requestId)
         }
         self.pendingLocalDecisionRequestIds.remove(request.requestId)
 
