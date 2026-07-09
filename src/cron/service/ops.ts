@@ -1775,6 +1775,15 @@ async function finishPreparedManualRun(
           { scheduleMode: mode === "force" ? "preserve" : "advance" },
         );
       } else {
+        // A trigger evaluation that never fired ran no payload, so it is
+        // scheduler polling work — not a manual payload run. Manual isolation
+        // (skip deleteAfterRun / preserve retry counters) protects payload
+        // runs; a failing or unavailable watcher script must still bump
+        // consecutiveErrors and back off like the scheduled path, mirroring the
+        // quiet-tick reset above. `force` strips the trigger, so its payload run
+        // stays isolated (#83538, #83933).
+        const triggerEvalOnly =
+          executionJob.trigger !== undefined && coreResult.triggerEval?.fired !== true;
         shouldDelete = applyJobResult(
           state,
           job,
