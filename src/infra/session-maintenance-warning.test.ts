@@ -34,8 +34,6 @@ type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warn
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
 let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["testing"]["resetSessionMaintenanceWarningForTests"];
-let cacheMeta: SessionMaintenanceWarningModule["testing"]["cacheMeta"];
-let setWarnedContextForKeyTestOnly: SessionMaintenanceWarningModule["testing"]["setWarnedContextForKeyTestOnly"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -96,11 +94,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     }));
     ({
       deliverSessionMaintenanceWarning,
-      testing: {
-        resetSessionMaintenanceWarningForTests,
-        cacheMeta,
-        setWarnedContextForKeyTestOnly,
-      },
+      testing: { resetSessionMaintenanceWarningForTests },
     } = await import("./session-maintenance-warning.js"));
   });
 
@@ -111,7 +105,13 @@ describe("deliverSessionMaintenanceWarning", () => {
     process.env.NODE_ENV = "development";
     resetSessionMaintenanceWarningForTests();
     mocks.resolveSessionAgentId.mockClear();
-    mocks.deliveryContextFromSession.mockClear();
+    mocks.deliveryContextFromSession.mockReset();
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "mobilechat",
+      to: "+15550001",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
@@ -242,45 +242,37 @@ describe("deliverSessionMaintenanceWarning", () => {
     expect(firstSystemEventCall()?.[0]).toContain(`older than ${expected}`);
   });
 
-  it("evicts the least-recently-used context entry once the cache exceeds its cap", async () => {
-    const maxEntries = cacheMeta.MAX_WARNED_CONTEXTS;
-    const params0 = createParams({
-      sessionKey: "session:0",
-      warning: {
-        activeSessionKey: "session:0",
-        pruneAfterMs: 1_000,
-        maxEntries: 100,
-        wouldPrune: true,
-        wouldCap: false,
-      } as never,
-    });
+  it("keeps a recently used context while evicting the least-recently-used entry", async () => {
+    const maxEntries = 4096;
+    const createSessionParams = (sessionKey: string) =>
+      createParams({
+        sessionKey,
+        warning: {
+          activeSessionKey: sessionKey,
+          pruneAfterMs: 1_000,
+          maxEntries: 100,
+          wouldPrune: true,
+          wouldCap: false,
+        } as never,
+      });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined as never);
 
-    // Fill the cache so every slot holds a unique session.
-    // Seed with the same context pattern buildWarningContext produces so the
-    // later params1 lookup can only succeed via eviction, not a context miss.
-    for (let i = 1; i < maxEntries; i++) {
-      setWarnedContextForKeyTestOnly(`session:${i}`, `session:${i}|1000|100|prune`);
+    for (let i = 0; i < maxEntries; i++) {
+      await deliverSessionMaintenanceWarning(createSessionParams(`session:${i}`));
     }
-    // session:0 is not yet cached, so this delivers.
-    await deliverSessionMaintenanceWarning(params0);
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
 
-    // Insert one more — the least-recently-used entry (session:1) is evicted.
-    setWarnedContextForKeyTestOnly("session:extra", "ctx-extra");
+    // A duplicate read promotes session:0 from the LRU head without re-delivering.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
 
-    // session:1 was evicted, so this must deliver again.
-    const params1 = createParams({
-      sessionKey: "session:1",
-      warning: {
-        activeSessionKey: "session:1",
-        pruneAfterMs: 1_000,
-        maxEntries: 100,
-        wouldPrune: true,
-        wouldCap: false,
-      } as never,
-    });
-    await deliverSessionMaintenanceWarning(params1);
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    // Overflow evicts session:1 instead of the recently used session:0.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:extra"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:1"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4098);
   });
 
   it("re-delivers when the warning context changes for the same session", async () => {
