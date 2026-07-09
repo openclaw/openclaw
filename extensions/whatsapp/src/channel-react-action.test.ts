@@ -150,6 +150,43 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it("uses toolContext current chat for same-chat upload-file", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        filePath: "/tmp/pic.png",
+        caption: "picture caption",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+
+    expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      chatJid: "+1555",
+      accountId: "default",
+      actionLabel: "upload-file",
+    });
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "picture caption",
+      expect.objectContaining({
+        accountId: "default",
+        mediaReadFile,
+        mediaUrl: "/tmp/pic.png",
+      }),
+    );
+  });
+
   it("does not send upload-file when target authorization fails", async () => {
     hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockImplementationOnce(() => {
       throw new Error("WhatsApp upload-file blocked");
@@ -263,6 +300,33 @@ describe("whatsapp react action messageId resolution", () => {
     await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "❤️", to: "+1555" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "ctx-msg-42",
+        emoji: "❤️",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+      },
+      baseCfg,
+    );
+  });
+
+  it("falls back to toolContext current chat for same-chat reactions", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "❤️" },
       cfg: baseCfg,
       accountId: "default",
       toolContext: {

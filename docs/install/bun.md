@@ -7,10 +7,10 @@ title: "Bun (experimental)"
 ---
 
 <Warning>
-Bun is **not recommended for gateway runtime** (known issues with WhatsApp and Telegram). Use Node for production.
+Bun is not recommended for gateway runtime (known issues with WhatsApp and Telegram). Use Node for production.
 </Warning>
 
-Bun is an optional local runtime for running TypeScript directly (`bun run ...`, `bun --watch ...`). The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and will ignore it.
+Bun is an optional local runtime for running TypeScript directly (`bun run ...`, `bun --watch ...`). The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it.
 
 ## Install
 
@@ -39,10 +39,10 @@ Bun is an optional local runtime for running TypeScript directly (`bun run ...`,
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall` -- checks Node major >= 20 (OpenClaw defaults to Node 24 and still supports Node 22 LTS, currently `22.19+`)
-- `protobufjs` `postinstall` -- emits warnings about incompatible version schemes (no build artifacts)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 22.19+ or 23.11+, with Node 24 recommended)
+- `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
-If you hit a runtime issue that requires these scripts, trust them explicitly:
+If you hit a runtime issue that needs these scripts, trust them explicitly:
 
 ```sh
 bun pm trust baileys protobufjs
@@ -50,7 +50,7 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-Some scripts still hardcode pnpm (for example `check:docs`, `ui:*`, `protocol:check`). Run those via pnpm for now.
+Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 
 ## Related
 

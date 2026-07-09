@@ -6,6 +6,7 @@ import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import {
   stripReasoningTagsFromText,
   type ReasoningTagMode,
+  type ReasoningTagScope,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
 
@@ -29,7 +30,7 @@ const INTERNAL_CHANNEL_TRACE_LINE_RE =
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls)\b/i;
+  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
@@ -38,11 +39,13 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "function_response",
   "function",
   "tool_calls",
+  "antml:invoke",
+  "antml:parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
+  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -85,6 +88,61 @@ interface ParsedToolCallTag {
   isSelfClosing: boolean;
   tagName: string;
   isTruncated: boolean;
+}
+
+function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
+  if (text[start] !== "<") {
+    return null;
+  }
+
+  let cursor = start + 1;
+  while (cursor < text.length && /\s/.test(text[cursor])) {
+    cursor += 1;
+  }
+
+  let isClose = false;
+  if (text[cursor] === "/") {
+    isClose = true;
+    cursor += 1;
+    while (cursor < text.length && /\s/.test(text[cursor])) {
+      cursor += 1;
+    }
+  }
+
+  const nameStart = cursor;
+  if (!/[A-Za-z_:]/.test(text[cursor] ?? "")) {
+    return null;
+  }
+  cursor += 1;
+  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text[cursor])) {
+    cursor += 1;
+  }
+
+  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
+  if (!isToolCallBoundary(text[cursor])) {
+    return null;
+  }
+  const contentStart = cursor;
+  const closeIndex = findTagCloseIndex(text, cursor);
+  if (closeIndex === -1) {
+    return {
+      contentStart,
+      end: text.length,
+      isClose,
+      isSelfClosing: false,
+      tagName,
+      isTruncated: true,
+    };
+  }
+
+  return {
+    contentStart,
+    end: closeIndex + 1,
+    isClose,
+    isSelfClosing: !isClose && /\/\s*$/.test(text.slice(cursor, closeIndex)),
+    tagName,
+    isTruncated: false,
+  };
 }
 
 function isToolCallBoundary(char: string | undefined): boolean {
@@ -276,64 +334,148 @@ function findAdjacentOpeningToolCallTag(
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
-  if (text[start] !== "<") {
-    return null;
-  }
+  const tag = parseXmlTagAt(text, start);
+  return tag && TOOL_CALL_TAG_NAMES.has(tag.tagName) ? tag : null;
+}
 
-  let cursor = start + 1;
+function hasMatchingXmlCloseTag(text: string, start: number, tagName: string): boolean {
+  let depth = 1;
+  for (let idx = start; idx < text.length; idx += 1) {
+    if (text[idx] !== "<") {
+      continue;
+    }
+    const tag = parseXmlTagAt(text, idx);
+    if (!tag || tag.tagName !== tagName || tag.isTruncated) {
+      continue;
+    }
+    if (tag.isClose) {
+      depth -= 1;
+      if (depth === 0) {
+        return true;
+      }
+    } else if (!tag.isSelfClosing) {
+      depth += 1;
+    }
+    idx = Math.max(idx, tag.end - 1);
+  }
+  return false;
+}
+
+function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag): boolean {
+  if (tag.tagName !== "function" || !/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
+    return false;
+  }
+  let cursor = tag.end;
   while (cursor < text.length && /\s/.test(text[cursor])) {
     cursor += 1;
   }
+  const nextTag = parseXmlTagAt(text, cursor);
+  return nextTag?.tagName === "parameter" && !nextTag.isClose;
+}
 
-  let isClose = false;
-  if (text[cursor] === "/") {
-    isClose = true;
+function consumeImmediateLineBreak(text: string, start: number): number | null {
+  if (text[start] === "\r" && text[start + 1] === "\n") {
+    return start + 2;
+  }
+  return text[start] === "\n" || text[start] === "\r" ? start + 1 : null;
+}
+
+function trimImmediateLineBreakBefore(text: string, start: number, end: number): number {
+  if (end > start && text[end - 1] === "\n") {
+    return end - (end - 2 >= start && text[end - 2] === "\r" ? 2 : 1);
+  }
+  return end > start && text[end - 1] === "\r" ? end - 1 : end;
+}
+
+function isLineStartAt(text: string, start: number): boolean {
+  let cursor = start - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
+}
+
+function isLineEndAfter(text: string, end: number): boolean {
+  let cursor = end;
+  while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) {
     cursor += 1;
-    while (cursor < text.length && /\s/.test(text[cursor])) {
-      cursor += 1;
+  }
+  return cursor >= text.length || text[cursor] === "\n" || text[cursor] === "\r";
+}
+
+function unwrapStandaloneParameterTags(text: string): string {
+  if (!/<\s*\/?\s*parameter\b/i.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  const openTags: Array<{ name: string; unwrap: boolean; trimBoundaryLineBreaks: boolean }> = [];
+  let result = "";
+  let lastIndex = 0;
+
+  for (let idx = 0; idx < text.length; idx += 1) {
+    if (text[idx] !== "<" || isInsideCode(idx, codeRegions)) {
+      continue;
     }
+    const tag = parseXmlTagAt(text, idx);
+    if (!tag || tag.isTruncated) {
+      continue;
+    }
+
+    if (tag.isClose) {
+      const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
+      if (openIndex !== -1) {
+        const opening = openTags[openIndex];
+        if (opening.unwrap) {
+          const contentEnd =
+            opening.trimBoundaryLineBreaks &&
+            isLineStartAt(text, idx) &&
+            isLineEndAfter(text, tag.end)
+              ? trimImmediateLineBreakBefore(text, lastIndex, idx)
+              : idx;
+          result += text.slice(lastIndex, contentEnd);
+          lastIndex = tag.end;
+        }
+        openTags.splice(openIndex);
+      }
+    } else if (tag.isSelfClosing) {
+      if (tag.tagName === "parameter" && openTags.length === 0) {
+        result += text.slice(lastIndex, idx);
+        lastIndex = tag.end;
+      }
+    } else if (
+      hasMatchingXmlCloseTag(text, tag.end, tag.tagName) ||
+      isDanglingFunctionParameterParent(text, tag)
+    ) {
+      const unwrap = tag.tagName === "parameter" && openTags.length === 0;
+      let trimBoundaryLineBreaks = false;
+      if (unwrap) {
+        result += text.slice(lastIndex, idx);
+        lastIndex = tag.end;
+        const contentStart = isLineStartAt(text, idx)
+          ? consumeImmediateLineBreak(text, lastIndex)
+          : null;
+        if (contentStart !== null) {
+          lastIndex = contentStart;
+          trimBoundaryLineBreaks = true;
+        }
+      }
+      openTags.push({ name: tag.tagName, unwrap, trimBoundaryLineBreaks });
+    }
+    idx = Math.max(idx, tag.end - 1);
   }
 
-  const nameStart = cursor;
-  while (cursor < text.length && /[A-Za-z_]/.test(text[cursor])) {
-    cursor += 1;
-  }
-
-  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
-  if (!TOOL_CALL_TAG_NAMES.has(tagName) || !isToolCallBoundary(text[cursor])) {
-    return null;
-  }
-  const contentStart = cursor;
-
-  const closeIndex = findTagCloseIndex(text, cursor);
-  if (closeIndex === -1) {
-    return {
-      contentStart,
-      end: text.length,
-      isClose,
-      isSelfClosing: false,
-      tagName,
-      isTruncated: true,
-    };
-  }
-
-  return {
-    contentStart,
-    end: closeIndex + 1,
-    isClose,
-    isSelfClosing: !isClose && /\/\s*$/.test(text.slice(cursor, closeIndex)),
-    tagName,
-    isTruncated: false,
-  };
+  return result + text.slice(lastIndex);
 }
 
 export function stripToolCallXmlTags(
-  text: string,
+  input: string,
   options: {
     stripFunctionCallsXmlPayloads?: boolean;
     stripFunctionResponseAfterPluralToolCalls?: boolean;
   } = {},
 ): string {
+  const text = input;
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
   }
@@ -403,6 +545,7 @@ export function stripToolCallXmlTags(
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
+        tag.tagName === "antml:invoke" ||
         ((options.stripFunctionCallsXmlPayloads === true ||
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
@@ -480,7 +623,7 @@ export function stripToolCallXmlTags(
     result += text.slice(toolCallBlockStart);
   }
 
-  return result;
+  return unwrapStandaloneParameterTags(result);
 }
 
 /**
@@ -801,6 +944,7 @@ export function stripAssistantInternalTraceLines(text: string): string {
 
 export type AssistantVisibleTextSanitizerProfile =
   | "delivery"
+  | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
   | "tool-progress";
@@ -813,6 +957,7 @@ type AssistantVisibleTextPipelineOptions = {
   stripFunctionResponseAfterPluralToolCalls?: boolean;
   stripInternalTraceLines?: boolean;
   reasoningMode: ReasoningTagMode;
+  reasoningScope?: ReasoningTagScope;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
 };
@@ -825,6 +970,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     finalTrim: "both",
     stripFunctionResponseAfterPluralToolCalls: true,
     reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
+  "final-answer-delivery": {
+    finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
+    reasoningMode: "strict",
+    reasoningScope: "leading",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
   },
@@ -863,6 +1016,7 @@ function applyAssistantVisibleTextStagePipeline(
   const stripReasoning = (value: string) =>
     stripReasoningTagsFromText(value, {
       mode: options.reasoningMode,
+      scope: options.reasoningScope,
       trim: options.reasoningTrim,
     });
   const applyFinalTrim = (value: string) => {
@@ -923,6 +1077,11 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+/** Sanitizes text already marked as final-answer prose by the agent runtime. */
+export function sanitizeAssistantFinalAnswerText(text: string): string {
+  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
   readBestEffortConfigSnapshot: vi.fn(),
+  resolveGatewayPort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
+  resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({

@@ -52,6 +52,9 @@ export async function executeStatusScanFromOverview(params: {
     tailscaleMode: params.overview.tailscaleMode,
     tailscaleDns: params.overview.tailscaleDns,
     tailscaleHttpsUrl: params.overview.tailscaleHttpsUrl,
+    ...(params.overview.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.overview.advertisedControlUiLinks }
+      : {}),
     update: params.overview.update,
     gatewaySnapshot: params.overview.gatewaySnapshot,
     channelIssues: params.channelIssues,

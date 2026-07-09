@@ -7,7 +7,13 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
-import { derivePromptTokens, normalizeUsage } from "../../usage.js";
+import {
+  deriveContextPromptTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type ContextUsage,
+  type NormalizedUsage,
+} from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
@@ -16,6 +22,7 @@ type UsageSnapshot = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
 };
 
@@ -184,6 +191,20 @@ export function resolveReportedModelRef(params: {
   };
 }
 
+export function resolveLatestCallUsage(params: {
+  currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+}): {
+  currentAttempt: NormalizedUsage | undefined;
+  latest: NormalizedUsage | undefined;
+} {
+  const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  return {
+    currentAttempt,
+    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+  };
+}
+
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
@@ -194,9 +215,15 @@ export function buildUsageAgentMetaFields(params: {
   if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
-  const lastCallUsage =
-    normalizeUsage(params.lastAssistantUsage as never) ?? toLastCallUsage(params.usageAccumulator);
-  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
+  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
+    ? lastAssistantUsage
+    : hasNonzeroUsage(params.lastRunPromptUsage)
+      ? params.lastRunPromptUsage
+      : toLastCallUsage(params.usageAccumulator);
+  const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastRunPromptUsage,
+  });
   return {
     usage,
     lastCallUsage,

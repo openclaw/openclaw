@@ -69,7 +69,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -120,7 +120,7 @@ function executableExistsOnPath(command, env = process.env) {
   return false;
 }
 
-export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
@@ -244,7 +244,7 @@ export function createShrinkwrapGuardCommand(paths) {
   };
 }
 
-export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
+async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
   return await runManagedCommand({
     bin: "pnpm",
@@ -355,7 +355,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
       "release-metadata:check",
-      "--",
       ...(options.staged
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
@@ -568,7 +567,7 @@ function createTargetedOxlintCommand({
   };
 }
 
-export async function runChangedCheck(result, options = {}) {
+async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {

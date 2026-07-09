@@ -75,7 +75,8 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
   for (const agentId of cfg.acp?.allowedAgents ?? []) {
     addAcpAgentId(agentId);
   }
-  for (const agent of cfg.agents?.list ?? []) {
+  const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of configuredAgents) {
     if (agent.runtime?.type === "acp") {
       addAcpAgentId(agent.runtime.acp?.agent ?? agent.id);
     }

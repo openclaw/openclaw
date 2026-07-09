@@ -78,8 +78,8 @@ Expected result: the assistant responds by voice. Tap `Stop Talk` when done.
 ## Talk + Background Audio
 
 1. Tap the `Talk` tab.
-2. Confirm `Speakerphone` is on.
-3. Confirm `Background listening` is on.
+2. Confirm the speaker button is highlighted.
+3. Confirm the background-listening button is highlighted.
 4. Tap `Start Talk`.
 5. If iOS asks for microphone access, tap `Allow`.
 6. If iOS asks for Speech Recognition access, tap `Allow`.

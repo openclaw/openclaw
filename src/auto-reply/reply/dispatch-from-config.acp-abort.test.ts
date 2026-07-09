@@ -196,6 +196,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionEntry
+      .mockReset()
+      .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -214,6 +217,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     agentEventMocks.emitAgentEvent.mockReset();
+    agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     setNoAbort();
   });
@@ -514,6 +518,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
     };
     sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversation);
+    sessionStoreMocks.currentEntry = sessionStore[sourceSessionKey];
     sessionStoreMocks.loadSessionStore.mockReturnValue(sessionStore);
     sessionStoreMocks.resolveSessionStoreEntry.mockImplementation((...args: unknown[]) => {
       const params = args[0] as { store?: Record<string, unknown>; sessionKey?: string };
@@ -883,8 +888,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
 
     await hookStartedPromise;
-    expect(hookAbortSignal).toBe(existingOperation.abortSignal);
+    // The hook signal composes the operation signal with lifecycle/upstream
+    // signals, so assert propagation instead of instance identity.
+    expect(hookAbortSignal?.aborted).toBe(false);
     expect(replyRunRegistry.abort("agent:already-active-reply-dispatch")).toBe(true);
+    expect(existingOperation.abortSignal.aborted).toBe(true);
+    expect(hookAbortSignal?.aborted).toBe(true);
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,

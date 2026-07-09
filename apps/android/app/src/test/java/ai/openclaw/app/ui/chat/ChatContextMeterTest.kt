@@ -81,4 +81,11 @@ class ChatContextMeterTest {
     assertNull(contextMeterWidth(usage))
     assertEquals("Context -- · high", contextMeterLabel(usage, "high"))
   }
+
+  @Test
+  fun contextMeterHidesThinkingLabelWhenUnsupported() {
+    val usage = ChatContextUsage(totalTokens = 2_500L, totalTokensFresh = true, contextTokens = 10_000L)
+
+    assertEquals("Context 25%", contextMeterLabel(usage, "high", thinkingSupported = false))
+  }
 }

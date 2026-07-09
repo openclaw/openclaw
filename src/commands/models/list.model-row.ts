@@ -50,8 +50,10 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl ?? "");
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
+  const modelIsAvailable =
+    local || (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+  // Local provider rows use their baseUrl as the auth marker.
+  // Otherwise prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
   // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
   const available =

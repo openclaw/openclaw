@@ -14,6 +14,8 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -251,6 +253,38 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("treats crash-loop suppressed accounts as expected stopped", async () => {
+    let suppressed = true;
+    const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("safe mode"),
+        },
+      },
+      {
+        getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+
+    suppressed = false;
+    await vi.advanceTimersByTimeAsync(101);
+
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
+  });
+
   it("skips disabled channels", async () => {
     const manager = createSnapshotManager({
       imessage: {
@@ -272,6 +306,36 @@ describe("channel-health-monitor", () => {
       },
     });
     await expectNoStart(manager);
+  });
+
+  it("does not restart a channel with terminalDisconnect set", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts a stopped channel without terminalDisconnect", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: false,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
   });
 
   it("skips manually stopped channels", async () => {

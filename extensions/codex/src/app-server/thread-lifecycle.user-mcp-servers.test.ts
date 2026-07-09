@@ -5,8 +5,19 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  readCodexAppServerBinding,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
   return {
@@ -93,6 +104,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {

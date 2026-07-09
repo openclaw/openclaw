@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
@@ -24,7 +25,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (!response.ok) {
       throw new Error(`request failed ${response.status}: ${url}`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
   } finally {
     await release();
   }
@@ -75,11 +76,20 @@ async function waitForConfigRestartSettle(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
+  settleBufferMs = 750,
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  const readyAfterMs = restartDelayMs + 750;
+  const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
+
+  // A delay beyond this mutation's observation window intentionally keeps the
+  // current process alive so scenarios can prove config reads without restart.
+  if (restartDelayMs >= timeoutMs) {
+    await waitForGatewayHealthy(env, timeoutMs);
+    await waitForTransportReady(env, timeoutMs);
+    return;
+  }
 
   while (Date.now() < deadline) {
     try {
@@ -243,6 +253,7 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
@@ -270,7 +281,12 @@ async function runConfigMutation(params: {
         },
         { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -291,7 +307,12 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       const postRestartSnapshot = await readConfigSnapshot(params.env);
       if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
         return { ok: true, restarted: true };
@@ -320,6 +341,7 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
@@ -330,6 +352,7 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    restartSettleBufferMs: params.restartSettleBufferMs,
     replacePaths: params.replacePaths,
   });
 }

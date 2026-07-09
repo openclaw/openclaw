@@ -3,6 +3,7 @@ import java.util.Properties
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
@@ -55,11 +56,14 @@ plugins {
   alias(libs.plugins.ktlint)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 android {
   namespace = "ai.openclaw.app"
-  compileSdk = 36
+  // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
+  // targetSdk stays separate so runtime behavior changes remain an explicit migration.
+  compileSdk = 37
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -76,6 +80,7 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
 
@@ -215,6 +220,9 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
+  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  implementation(libs.androidx.room.runtime)
+  ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)
@@ -228,8 +236,9 @@ dependencies {
   implementation(libs.androidx.camera.core)
   implementation(libs.androidx.camera.camera2)
   implementation(libs.androidx.camera.lifecycle)
+  implementation(libs.androidx.camera.view)
   implementation(libs.androidx.camera.video)
-  implementation(libs.play.services.code.scanner)
+  implementation(libs.barcode.scanning)
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)
@@ -245,6 +254,33 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+}
+
+val validateThirdPartyLicenseAssets =
+  tasks.register("validateThirdPartyLicenseAssets") {
+    inputs.dir(thirdPartyLicensesDir)
+    doLast {
+      if (!thirdPartyLicensesDir.isDirectory) {
+        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
+      }
+      val invalidFiles =
+        thirdPartyLicensesDir
+          .walkTopDown()
+          .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
+          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
+          .toList()
+
+      if (invalidFiles.isNotEmpty()) {
+        error(
+          "Android third-party license assets must be .txt files:\n" +
+            invalidFiles.joinToString(separator = "\n") { path -> "- $path" },
+        )
+      }
+    }
+  }
+
+tasks.matching { task -> task.name == "preBuild" }.configureEach {
+  dependsOn(validateThirdPartyLicenseAssets)
 }
 
 androidComponents {

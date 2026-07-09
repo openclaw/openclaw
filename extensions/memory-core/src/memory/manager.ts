@@ -355,8 +355,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pending: INDEX_CACHE_PENDING,
       key,
       bypassCache: transient,
-      create: async () =>
-        new MemoryIndexManager({
+      create: async () => {
+        const manager = new MemoryIndexManager({
           cacheKey: key,
           cfg,
           agentId,
@@ -364,7 +364,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           settings,
           providerRequirement,
           purpose: params.purpose,
-        }),
+        });
+        // Lightweight dirty-file detection for status mode: check for unindexed
+        // session files on disk without triggering a full sync. This runs before
+        // any caller reads manager.status(), so the dirty flag is accurate when
+        // status() reads sessionsDirty.
+        if (purpose === "status" && manager.sources.has("sessions")) {
+          try {
+            await manager.markSessionStartupCatchupDirtyFiles();
+          } catch (err) {
+            log.warn("memory status session dirty detection failed: " + String(err));
+          }
+        }
+        return manager;
+      },
     });
   }
 
@@ -1351,14 +1364,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
     };
+    const reportPendingWorkError = (err: unknown) => {
+      log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
+    };
     const awaitCurrentSync = async () => {
       const pendingSync = this.syncing;
       if (!pendingSync) {
         return;
       }
-      await awaitPendingManagerWork({ pendingSync });
+      await awaitPendingManagerWork({
+        pendingSync,
+        onError: reportPendingWorkError,
+      });
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
+    await awaitPendingManagerWork({
+      pendingProviderInit,
+      onError: reportPendingWorkError,
+    });
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();

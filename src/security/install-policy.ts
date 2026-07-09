@@ -561,6 +561,18 @@ async function runPolicyCommand(params: {
       }
     };
 
+    const failCommand = (error: unknown, kill: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      if (kill) {
+        forceKillChildProcessTree(child);
+      }
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
     const armNoOutputTimer = () => {
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
@@ -575,12 +587,7 @@ async function runPolicyCommand(params: {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       outputBytes += Buffer.byteLength(text, "utf8");
       if (outputBytes > params.maxOutputBytes) {
-        forceKillChildProcessTree(child);
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          reject(new Error(`output exceeded maxOutputBytes (${params.maxOutputBytes})`));
-        }
+        failCommand(new Error(`output exceeded maxOutputBytes (${params.maxOutputBytes})`), true);
         return;
       }
       if (target === "stdout") {
@@ -593,14 +600,15 @@ async function runPolicyCommand(params: {
 
     armNoOutputTimer();
     child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error);
+      failCommand(error, false);
+    });
+    child.stdout?.on("error", (error) => {
+      failCommand(new Error(`policy stdout stream failed: ${formatErrorMessage(error)}`), true);
     });
     child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
+    child.stderr?.on("error", (error) => {
+      failCommand(new Error(`policy stderr stream failed: ${formatErrorMessage(error)}`), true);
+    });
     child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
     child.on("close", (code, signal) => {
       if (settled) {
@@ -621,9 +629,7 @@ async function runPolicyCommand(params: {
       if (isIgnorableStdinWriteError(error) || settled) {
         return;
       }
-      settled = true;
-      clearTimers();
-      reject(error instanceof Error ? error : new Error(String(error)));
+      failCommand(new Error(`policy stdin stream failed: ${formatErrorMessage(error)}`), true);
     };
     child.stdin?.on("error", handleStdinError);
     try {

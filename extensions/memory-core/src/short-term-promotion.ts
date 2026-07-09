@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -9,6 +10,7 @@ import {
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -74,12 +76,20 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const RAW_SESSION_METADATA_RE =
+  /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
+const MEMORY_FLUSH_PROMPT_RE =
+  /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+const PROMOTION_SCORE_METADATA_RE =
+  /\[\s*score=\d+(?:\.\d+)?\s+recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
-const inProcessShortTermLocks = new Map<string, Promise<void>>();
+const inProcessShortTermLocks = new KeyedAsyncQueue();
 
 type PromotionWeights = {
   frequency: number;
@@ -120,7 +130,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-export type ShortTermRecallStore = {
+type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -135,7 +145,7 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-export type ShortTermPhaseSignalStore = {
+type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
@@ -409,7 +419,12 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    RAW_SESSION_METADATA_RE.test(snippet) ||
+    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
+    PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
     return true;
   }
@@ -834,30 +849,8 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  inProcessShortTermLocks.set(lockPath, queued);
-
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (inProcessShortTermLocks.get(lockPath) === queued) {
-      inProcessShortTermLocks.delete(lockPath);
-    }
-  }
+  return await inProcessShortTermLocks.enqueue(lockPath, task);
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
@@ -1457,6 +1450,14 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1470,7 +1471,7 @@ export async function recordShortTermRecalls(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1606,6 +1607,14 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: item.path,
@@ -1619,7 +1628,7 @@ export async function recordGroundedShortTermCandidates(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1765,6 +1774,32 @@ export async function readLightStagedKeys(params: {
     }
   }
   return keys;
+}
+
+export async function filterFreshLightDreamingEntries(params: {
+  workspaceDir: string;
+  entries: readonly ShortTermRecallEntry[];
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir || params.entries.length === 0) {
+    return [];
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+  return params.entries.filter((entry) => {
+    const phaseSignal = phaseSignals.entries[entry.key];
+    if (!phaseSignal || phaseSignal.lightHits <= 0) {
+      return true;
+    }
+    const lastLightMs = parseStoreTimestampMs(phaseSignal.lastLightAt);
+    if (!Number.isFinite(lastLightMs)) {
+      return true;
+    }
+    const lastRecalledAtMs = parseStoreTimestampMs(entry.lastRecalledAt);
+    return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
+  });
 }
 
 export async function rankShortTermPromotionCandidates(
@@ -2217,15 +2252,21 @@ function lineRangeOverlapsDreamingFence(
   let insideFence = false;
   for (let i = 0; i < safeEnd; i += 1) {
     const line = lines[i] ?? "";
-    if (DREAMING_FENCE_START_RE.test(line)) {
-      insideFence = true;
-      continue;
-    }
-    if (DREAMING_FENCE_END_RE.test(line)) {
-      insideFence = false;
-      continue;
-    }
     const oneIndexed = i + 1;
+    const isStart = DREAMING_FENCE_START_RE.test(line);
+    const isEnd = DREAMING_FENCE_END_RE.test(line);
+    if (isStart || isEnd) {
+      // The marker line itself is managed-block content. A relocated range
+      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
+      // build its snippet from raw lines that contain that marker text and
+      // leak it into MEMORY.md alongside any adjacent fenced content captured
+      // by the same window. (#80613)
+      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+        return true;
+      }
+      insideFence = isStart;
+      continue;
+    }
     if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
     }
@@ -2808,55 +2849,43 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
+async function writeRawShortTermStoreForTest(
+  workspaceDir: string,
+  raw: unknown,
+  namespace: string,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asRecord(raw);
+  const entries = asRecord(record?.entries);
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace,
+      workspaceDir,
+      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: metaKey,
+      value: {
+        updatedAt:
+          typeof record?.updatedAt === "string" && record.updatedAt.trim()
+            ? record.updatedAt
+            : new Date().toISOString(),
+      },
+    }),
+  ]);
+}
+
 export const testing = {
   parseLockOwnerPid,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,
-  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "recall",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
-  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "phase",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
+  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
+  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
   writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
     await openMemoryCoreStateStore<ShortTermLockEntry>({
       namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2872,6 +2901,7 @@ export const testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  compareShortTermRecallRetention,
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,

@@ -18,6 +18,7 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
 import {
@@ -82,13 +83,24 @@ describe("xai provider plugin", () => {
     vi.unstubAllGlobals();
   });
 
-  it("exposes OAuth and device-code auth choices", async () => {
+  it("exposes xAI OAuth and preserves the explicit device-code alias", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth", "device-code"]);
+    const oauth = provider.auth?.find((method) => method.id === "oauth");
+    expect(oauth?.kind).toBe("oauth");
+    expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
     const deviceCode = provider.auth?.find((method) => method.id === "device-code");
     expect(deviceCode?.kind).toBe("device_code");
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+    expect(deviceCode?.wizard?.assistantVisibility).toBe("manual-only");
+    expect(manifest.providerAuthChoices).toContainEqual(
+      expect.objectContaining({
+        assistantVisibility: "manual-only",
+        choiceId: "xai-device-code",
+        method: "device-code",
+      }),
+    );
   });
 
   it("filters the xAI API-key catalog against live model ids", async () => {
@@ -96,7 +108,7 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
-          { id: "grok-4.3", object: "model" },
+          { id: "grok-4.5", object: "model" },
           { id: "not-in-manifest", object: "model" },
         ],
       }),
@@ -110,7 +122,7 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.3");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
     expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
@@ -538,6 +550,19 @@ describe("xai provider plugin", () => {
     expect(resolved?.reasoning).toBe(true);
     expect(resolved?.input).toEqual(["text", "image"]);
     expect(resolved?.contextWindow).toBe(1_000_000);
+
+    const buildAlias = provider.resolveDynamicModel?.({
+      provider: "xai",
+      modelId: "grok-build-latest",
+      modelRegistry: { find: () => null } as never,
+      providerConfig: {
+        api: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+      },
+    } as never);
+    expect(buildAlias?.id).toBe("grok-4.5");
+    expect(buildAlias?.reasoning).toBe(true);
+    expect(buildAlias?.contextWindow).toBe(500_000);
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", async () => {

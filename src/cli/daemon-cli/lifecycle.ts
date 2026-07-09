@@ -205,7 +205,8 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
     result.status === "coalesced"
       ? "safe restart request joined an existing pending gateway restart"
       : result.status === "deferred"
-        ? "safe restart requested; gateway will restart after active work drains"
+        ? "safe restart requested; gateway will restart after active work drains " +
+          "(bounded by gateway.reload.deferralTimeoutMs; may force after timeout expires)"
         : skipDeferral
           ? "safe restart requested; gateway bypassing active-work deferral"
           : "safe restart requested; gateway will restart momentarily";

@@ -59,6 +59,7 @@ export async function probeIMessageAccount(params?: {
   return await probeIMessage(params?.timeoutMs, {
     cliPath: params?.cliPath,
     dbPath: params?.dbPath,
+    forceRefresh: true,
   });
 }
 

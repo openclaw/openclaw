@@ -1,3 +1,4 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 /**
  * Tests provider-compatible tool schema normalization.
  * Protects caching, ref inlining, OpenAPI keyword cleanup, and no-parameter
@@ -7,7 +8,6 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   testing as beforeToolCallTesting,

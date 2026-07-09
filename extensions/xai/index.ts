@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
@@ -48,25 +49,14 @@ import {
 } from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
-type CodeExecutionModule = typeof import("./code-execution.js");
-type XSearchModule = typeof import("./x-search.js");
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
-let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
-let xSearchModulePromise: Promise<XSearchModule> | undefined;
+const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
 
-function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
-  codeExecutionModulePromise ??= import("./code-execution.js");
-  return codeExecutionModulePromise;
-}
-
-function loadXSearchModule(): Promise<XSearchModule> {
-  xSearchModulePromise ??= import("./x-search.js");
-  return xSearchModulePromise;
-}
+const loadXSearchModule = createLazyRuntimeModule(() => import("./x-search.js"));
 
 function classifyXaiFailoverReason(errorMessage: string) {
   if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {

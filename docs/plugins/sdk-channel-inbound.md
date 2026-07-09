@@ -7,7 +7,7 @@ read_when:
   - You are migrating old channel turn helpers to inbound/message APIs
 ---
 
-Channel plugins should model receive paths with inbound and message nouns:
+Channel receive paths follow one flow:
 
 ```text
 platform event -> inbound facts/context -> agent reply -> message delivery
@@ -15,10 +15,10 @@ platform event -> inbound facts/context -> agent reply -> message delivery
 
 Use `openclaw/plugin-sdk/channel-inbound` for inbound event normalization,
 formatting, roots, and orchestration. Use
-`openclaw/plugin-sdk/channel-outbound` for native
-send, receipt, durable delivery, and live preview behavior.
+`openclaw/plugin-sdk/channel-outbound` for native send, receipt, durable
+delivery, and live preview behavior.
 
-## Core Helpers
+## Core helpers
 
 ```ts
 import {
@@ -28,19 +28,19 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 ```
 
-- `buildChannelInboundEventContext(...)`: project normalized channel facts into
-  the prompt/session context. Use `channelContext` to pass channel-owned
-  sender/chat metadata through to plugin hook `ctx.channelContext`; augment
-  `PluginHookChannelSenderContext` or `PluginHookChannelChatContext` from this
-  subpath for channel-specific fields.
-- `runChannelInboundEvent(...)`: run ingest, classify, preflight, resolve,
+- `buildChannelInboundEventContext(...)`: projects normalized channel facts
+  into the prompt/session context. Pass channel-owned sender/chat metadata
+  through `channelContext`, which plugin hooks see as `ctx.channelContext`.
+  Augment `PluginHookChannelSenderContext` or `PluginHookChannelChatContext`
+  from this subpath for channel-specific fields.
+- `runChannelInboundEvent(...)`: runs ingest, classify, preflight, resolve,
   record, dispatch, and finalize for one inbound platform event.
-- `dispatchChannelInboundReply(...)`: record and dispatch an already assembled
-  inbound reply with a delivery adapter.
+- `dispatchChannelInboundReply(...)`: records and dispatches an already
+  assembled inbound reply with a delivery adapter.
 
-The injected plugin runtime exposes the same high-level helpers under
-`runtime.channel.inbound.*` for bundled/native channels that already receive the
-runtime object.
+Bundled/native channels that already receive the injected plugin runtime
+object can call the same helpers under `runtime.channel.inbound.*` instead of
+importing this subpath directly:
 
 ```ts
 await runtime.channel.inbound.run({
@@ -54,19 +54,21 @@ await runtime.channel.inbound.run({
 });
 ```
 
-Compatibility dispatchers should assemble `dispatchChannelInboundReply(...)`
-inputs and keep platform delivery in the delivery adapter. New send paths should
-prefer message adapters and durable message helpers.
+Assemble `dispatchChannelInboundReply(...)` inputs for compatibility
+dispatchers that keep platform delivery in the delivery adapter. New send
+paths should use message adapters and durable message helpers from
+`channel-outbound` instead.
 
 ## Migration
 
-The old `runtime.channel.turn.*` runtime aliases were removed. Use:
+`runtime.channel.turn.*` runtime aliases were removed. Use:
 
 - `runtime.channel.inbound.run(...)` for raw inbound events.
 - `runtime.channel.inbound.dispatchReply(...)` for assembled reply contexts.
 - `runtime.channel.inbound.buildContext(...)` for inbound context payloads.
-- `runtime.channel.inbound.runPreparedReply(...)` only for channel-owned prepared
-  dispatch paths that already assemble their own dispatch closure.
+- `runtime.channel.inbound.runPreparedReply(...)`, deprecated, only for
+  channel-owned prepared dispatch paths that already assemble their own
+  dispatch closure.
 
 New plugin code should not introduce `turn`-named channel APIs. Keep model or
 agent turn vocabulary inside agent/provider code; channel plugins use inbound,

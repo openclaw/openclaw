@@ -17,6 +17,7 @@ import {
   validateNodePresenceAlivePayload,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateTalkCatalogResult,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -91,6 +92,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
       }),
     ).toBe(true);
     expect(
@@ -116,6 +118,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -319,9 +322,40 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkCatalogResult", () => {
+  it("accepts provider registry aliases", () => {
+    expect(
+      validateTalkCatalogResult({
+        modes: ["realtime"],
+        transports: ["gateway-relay"],
+        brains: ["agent-consult"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "google",
+          providers: [
+            {
+              id: "google",
+              aliases: ["gemini-live"],
+              label: "Google Live Voice",
+              configured: true,
+            },
+          ],
         },
       }),
     ).toBe(true);
@@ -722,6 +756,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({
@@ -748,6 +794,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });

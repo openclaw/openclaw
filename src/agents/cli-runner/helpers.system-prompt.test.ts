@@ -63,6 +63,56 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Your working directory is: /tmp/openclaw-agent");
   });
 
+  it("renders the Bootstrap Pending gate for full bootstrap mode", () => {
+    // CLI-backend runs must gate the first reply on a pending BOOTSTRAP.md the
+    // same way the embedded runner does, not just inject the file as context.
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/BOOTSTRAP.md",
+          content: "Figure out who you are, then delete this file.",
+        },
+      ],
+      bootstrapMode: "full",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain(
+      "BOOTSTRAP.md is included below in Project Context; follow it before replying normally.",
+    );
+    expect(prompt).toContain(
+      "Do not use a generic first greeting or reply normally until after you have handled BOOTSTRAP.md.",
+    );
+    expect(prompt).toContain(
+      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+    );
+  });
+
+  it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      bootstrapMode: "limited",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("this run cannot safely complete the full BOOTSTRAP.md workflow here");
+  });
+
+  it("omits the bootstrap gate when bootstrap mode is not provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).not.toContain("## Bootstrap Pending");
+  });
+
   it("includes CLI-scoped plugin command guidance", () => {
     // Plugin command guidance is surface-filtered; CLI prompts must not leak
     // OpenClaw-main command text into external CLI backends.

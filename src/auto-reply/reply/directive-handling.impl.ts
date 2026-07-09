@@ -10,7 +10,11 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  adoptPersistedSessionSnapshot,
+  sessionModelOverrideChangesApplied,
+  sessionSnapshotChangesApplied,
+} from "../../config/sessions/session-snapshot-merge.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
@@ -34,11 +38,13 @@ import {
   formatInternalVerboseCurrentReplyOnlyText,
   formatInternalVerbosePersistenceDeniedText,
   enqueueModeSwitchEvents,
+  resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 /** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
@@ -372,6 +378,17 @@ export async function handleDirectiveOnly(
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
+  let modelSelectionApplied = true;
+  let sessionChangesApplied = true;
+  let appliedSessionEntry = sessionEntry;
+  const touchedSessionFields = resolveDirectiveTouchedSessionFields({
+    directives,
+    allowInternalExecPersistence,
+    allowInternalVerbosePersistence,
+  });
+  if (shouldRemapUnsupportedThinkLevel && !touchedSessionFields.includes("thinkingLevel")) {
+    touchedSessionFields.push("thinkingLevel");
+  }
   const shouldPersistSessionEntry =
     (directives.hasThinkDirective &&
       (Boolean(directives.thinkLevel) || directives.clearThinkLevel)) ||
@@ -395,6 +412,7 @@ export async function handleDirectiveOnly(
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (shouldPersistSessionEntry) {
+    const initialSessionEntry = { ...sessionEntry };
     if (directives.clearThinkLevel) {
       delete sessionEntry.thinkingLevel;
     } else if (
@@ -485,12 +503,64 @@ export async function handleDirectiveOnly(
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const persistence = await persistReplySessionEntry({
+        storePath,
+        sessionKey,
+        initialEntry: initialSessionEntry,
+        entry: sessionEntry,
+        reassertLiveModelSwitchPending:
+          modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
+        touchedFields: touchedSessionFields,
+      });
+      if (persistence.status === "current") {
+        const persistedEntry = persistence.entry;
+        sessionStore[sessionKey] = persistedEntry;
+        sessionChangesApplied = sessionSnapshotChangesApplied({
+          initial: initialSessionEntry,
+          next: sessionEntry,
+          current: persistedEntry,
+          touchedFields: touchedSessionFields,
+        });
+        if (modelSelection) {
+          modelSelectionApplied =
+            sessionChangesApplied &&
+            sessionModelOverrideChangesApplied({
+              initial: initialSessionEntry,
+              next: sessionEntry,
+              current: persistedEntry,
+              reassertLiveModelSwitchPending:
+                modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
+            });
+        }
+        adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
+        appliedSessionEntry = sessionEntry;
+      } else {
+        if (persistence.entry) {
+          sessionStore[sessionKey] = persistence.entry;
+        }
+        sessionChangesApplied = false;
+        if (modelSelection) {
+          modelSelectionApplied = false;
+        }
+      }
     }
-    if (modelSelection && modelSelectionUpdated && sessionKey) {
+    if (modelSelection && !modelSelectionApplied) {
+      sessionChangesApplied = false;
+    }
+    if (!sessionChangesApplied) {
+      if (params.persistenceState) {
+        params.persistenceState.sessionChangesApplied = false;
+      }
+      return {
+        text: modelSelection
+          ? "Model change was not applied because the session changed. Retry."
+          : "Session settings were not applied because the session changed. Retry.",
+      };
+    }
+    if (modelSelection && modelSelectionUpdated && modelSelectionApplied && sessionKey) {
       triggerSessionPatchHook({
         cfg: params.cfg,
-        sessionEntry,
+        sessionEntry: appliedSessionEntry,
         sessionKey,
         patch: {
           key: sessionKey,
@@ -511,7 +581,7 @@ export async function handleDirectiveOnly(
       });
     }
   }
-  if (modelSelection) {
+  if (modelSelection && modelSelectionApplied) {
     const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
     if (nextLabel !== initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
@@ -522,7 +592,7 @@ export async function handleDirectiveOnly(
   }
   enqueueModeSwitchEvents({
     enqueueSystemEvent,
-    sessionEntry,
+    sessionEntry: appliedSessionEntry,
     sessionKey,
     elevatedChanged,
     reasoningChanged,
@@ -637,7 +707,7 @@ export async function handleDirectiveOnly(
       `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
   }
-  if (modelSelection) {
+  if (modelSelection && modelSelectionApplied) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
@@ -648,6 +718,8 @@ export async function handleDirectiveOnly(
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
+  } else if (modelSelection) {
+    parts.push("Model change was not applied because the session changed. Retry.");
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));

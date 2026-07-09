@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -61,7 +62,7 @@ type AppendCronRunLogOptions = {
 
 const INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE = "invalid cron run log job id";
 
-function assertSafeCronRunLogJobId(jobId: string): string {
+export function normalizeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
   if (!trimmed) {
     throw new Error(INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE);
@@ -138,23 +139,23 @@ export async function appendCronRunLog(params: {
   entry: CronRunLogEntry;
   opts?: AppendCronRunLogOptions;
 }) {
-  // Normalize the jobId on write the same way reads do (assertSafeCronRunLogJobId
+  // Normalize the jobId on write the same way reads do (normalizeCronRunLogJobId
   // trims + validates). Otherwise a jobId with surrounding whitespace is stored
   // verbatim while reads trim before querying — the row is written but never read
   // back — and a jobId containing "/" or "\\" is rejected on read yet silently
   // accepted on write. Normalizing here keeps the write/read roundtrip symmetric.
-  const normalizedJobId = assertSafeCronRunLogJobId(params.entry.jobId);
+  const normalizedJobId = normalizeCronRunLogJobId(params.entry.jobId);
   const entry =
     normalizedJobId === params.entry.jobId
       ? params.entry
       : { ...params.entry, jobId: normalizedJobId };
   const storeKey = cronStoreKey(params.storePath);
   const writeKey = cronRunLogWriteKey(params.storePath, entry.jobId);
-  const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
   // Keep writes for the same store/job ordered so prune-by-count cannot race a later insert.
-  const next = prev
-    .catch(() => undefined)
-    .then(async () => {
+  await enqueueKeyedTask({
+    tails: writesByTarget,
+    key: writeKey,
+    task: async () => {
       runOpenClawStateWriteTransaction(({ db }) => {
         insertCronRunLogEntry(db, storeKey, entry);
         if (params.opts?.keepLines !== false) {
@@ -166,15 +167,8 @@ export async function appendCronRunLog(params: {
           );
         }
       });
-    });
-  writesByTarget.set(writeKey, next);
-  try {
-    await next;
-  } finally {
-    if (writesByTarget.get(writeKey) === next) {
-      writesByTarget.delete(writeKey);
-    }
-  }
+    },
+  });
 }
 
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */
@@ -185,7 +179,7 @@ export function readCronRunLogEntriesSync(params: {
 }): CronRunLogEntry[] {
   const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
   const storeKey = cronStoreKey(params.storePath);
-  const jobId = params.jobId ? assertSafeCronRunLogJobId(params.jobId) : undefined;
+  const jobId = params.jobId ? normalizeCronRunLogJobId(params.jobId) : undefined;
   const rows = readCronRunLogRows(openOpenClawStateDatabase().db, storeKey, jobId);
   return rows
     .map(parseStoredRunLogEntry)
@@ -286,7 +280,7 @@ function filterRunLogEntries(
 export async function readCronRunLogEntriesPage(
   opts: ReadCronRunLogPageOptions & { storePath: string; jobNameById?: Record<string, string> },
 ): Promise<CronRunLogPageResult> {
-  const jobId = opts.jobId ? assertSafeCronRunLogJobId(opts.jobId) : undefined;
+  const jobId = opts.jobId ? normalizeCronRunLogJobId(opts.jobId) : undefined;
   await drainPendingWrite(opts.storePath, jobId);
   const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
   const statuses = normalizeRunStatuses(opts);
