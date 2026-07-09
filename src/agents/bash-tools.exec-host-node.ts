@@ -435,8 +435,10 @@ export async function executeNodeHostCommand(
           expiresAtMs,
           initiatingSurface,
           sentApproverDms,
+          unavailableReason,
           ask: hostAsk,
           allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+          nodeId: target.nodeId,
         });
       }
     }
