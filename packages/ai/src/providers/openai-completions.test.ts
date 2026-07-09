@@ -1500,7 +1500,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
             index: 0,
             message: { role: "assistant", refusal: "I cannot comply with that request." },
             finish_reason: "stop",
-          },
+          } as never,
         ],
       },
     ];
