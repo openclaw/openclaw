@@ -614,16 +614,21 @@ class AppSidebar extends LitElement {
     }
   }
 
-  private openSessionSortMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+  private toggleSessionSortMenu(trigger: HTMLElement) {
+    if (this.sessionSortMenuPosition) {
+      this.closeSessionSortMenu();
+      return;
+    }
     const menuWidth = 200;
     const menuMaxHeight = 280;
+    const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
-      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+      x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
     };
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
@@ -764,6 +769,9 @@ class AppSidebar extends LitElement {
 
   private readonly handleDocumentPointerDown = (event: PointerEvent) => {
     const path = event.composedPath();
+    if (this.sessionSortMenuTrigger && path.includes(this.sessionSortMenuTrigger)) {
+      return;
+    }
     const menu = this.querySelector(
       ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu",
     );
@@ -1496,8 +1504,7 @@ class AppSidebar extends LitElement {
                           aria-expanded=${String(this.sessionSortMenuPosition !== null)}
                           @click=${(event: MouseEvent) => {
                             const trigger = event.currentTarget as HTMLElement;
-                            const rect = trigger.getBoundingClientRect();
-                            this.openSessionSortMenu(rect.right, rect.bottom + 4, trigger);
+                            this.toggleSessionSortMenu(trigger);
                           }}
                         >
                           ${icons.listFilter}

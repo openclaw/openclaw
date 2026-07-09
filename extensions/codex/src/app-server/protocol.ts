@@ -4,7 +4,6 @@ export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
   | "untrusted"
-  | "on-failure"
   | "on-request"
   | {
       granular: {
@@ -287,6 +286,8 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  historyMode?: "legacy" | "paginated";
+  extra?: JsonObject | null;
   name?: string | null;
   preview?: string | null;
   createdAt?: number | null;

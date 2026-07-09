@@ -247,10 +247,15 @@ function asUnitInterval(value: unknown): number | undefined {
 type OpenAIRealtimeApiKeyResolution =
   | { status: "available"; value: string }
   | { status: "missing" };
+type OpenAIRealtimePlatformAuthResolution =
+  | { status: "available"; value: string; source: "api-key" | "oauth" }
+  | { status: "missing" };
 
 const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in";
 const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
+const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
+  "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source; Codex OAuth is used only when no API-key source is configured";
 const OPENAI_REALTIME_PLATFORM_AUTH_PROFILE_TYPES = ["api_key", "oauth"] as const;
 const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
 const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
@@ -380,13 +385,15 @@ function normalizeOpenAIRealtimeTools(
 async function resolveOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<OpenAIRealtimeApiKeyResolution> {
+}): Promise<OpenAIRealtimePlatformAuthResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
     configured.status === "available" ||
     hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)
   ) {
-    return configured;
+    return configured.status === "available"
+      ? { ...configured, source: "api-key" }
+      : configured;
   }
 
   const profileApiKey = await resolveProviderAuthProfileApiKey({
@@ -395,7 +402,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
     profileTypes: ["api_key"],
   });
   if (profileApiKey) {
-    return { status: "available", value: profileApiKey };
+    return { status: "available", value: profileApiKey, source: "api-key" };
   }
   const hasConfiguredApiKeyProfile = isProviderAuthProfileConfigured({
     provider: "openai",
@@ -405,7 +412,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
 
   const envApiKey = resolveOpenAIRealtimeEnvApiKey();
   if (envApiKey.status === "available") {
-    return envApiKey;
+    return { ...envApiKey, source: "api-key" };
   }
   if (hasConfiguredApiKeyProfile || hasOpenAIRealtimeApiKeyInput(undefined)) {
     return { status: "missing" };
@@ -418,19 +425,19 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
     includeExternalCliAuth: true,
   });
   if (oauthToken) {
-    return { status: "available", value: oauthToken };
+    return { status: "available", value: oauthToken, source: "oauth" };
   }
 
   return { status: "missing" };
 }
 
-async function requireOpenAIRealtimePlatformAuthToken(params: {
+async function requireOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<string> {
+}): Promise<Extract<OpenAIRealtimePlatformAuthResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params);
   if (resolved.status === "available") {
-    return resolved.value;
+    return resolved;
   }
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
@@ -815,11 +822,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     url: string;
     headers: Record<string, string>;
   }> {
-    const authToken = await requireOpenAIRealtimePlatformAuthToken({
+    const auth = await requireOpenAIRealtimePlatformAuth({
       configuredApiKey: this.config.apiKey,
       cfg: this.config.cfg,
     });
-    return this.resolveApiKeyConnectionParams(authToken, model);
+    return this.resolveApiKeyConnectionParams(auth.value, model);
   }
 
   private resolveApiKeyConnectionParams(
@@ -1465,7 +1472,7 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-  const authToken = await requireOpenAIRealtimePlatformAuthToken({
+  const auth = await requireOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
   });
@@ -1507,9 +1514,12 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const clientSecret = await createOpenAIRealtimeClientSecret({
-    authToken,
+    authToken: auth.value,
     auditContext: "openai-realtime-browser-session",
     session,
+    ...(auth.source === "api-key"
+      ? { authRejectedMessage: OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED }
+      : {}),
   });
   const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders();
   return {

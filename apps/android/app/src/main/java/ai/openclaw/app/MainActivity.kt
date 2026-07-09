@@ -1,6 +1,5 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.ui.AndroidScreenshotModeScreen
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
@@ -48,6 +47,7 @@ class MainActivity : ComponentActivity() {
   private var didStartViewModelCollectors = false
   private var foreground = false
   private var pendingIntent: Intent? = null
+  private var screenshotScene: AndroidScreenshotScene? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -55,10 +55,8 @@ class MainActivity : ComponentActivity() {
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
     if (BuildConfig.DEBUG) {
-      parseAndroidScreenshotModeIntent(intent)?.let { scene ->
-        enterScreenshotMode(scene)
-        return
-      }
+      screenshotScene = parseAndroidScreenshotModeIntent(intent)
+      if (screenshotScene != null) hideScreenshotModeStatusBar()
     }
 
     setContent {
@@ -70,6 +68,7 @@ class MainActivity : ComponentActivity() {
           (application as NodeApp).prefs
         }
         val readyViewModel = viewModel
+        screenshotScene?.let(readyViewModel::enterScreenshotFixtureMode)
         activateViewModel(readyViewModel)
         activeViewModel = readyViewModel
       }
@@ -85,13 +84,6 @@ class MainActivity : ComponentActivity() {
           RootScreen(viewModel = currentViewModel)
         }
       }
-    }
-  }
-
-  private fun enterScreenshotMode(scene: AndroidScreenshotScene) {
-    hideScreenshotModeStatusBar()
-    setContent {
-      AndroidScreenshotModeScreen(scene = scene)
     }
   }
 
@@ -160,6 +152,10 @@ class MainActivity : ComponentActivity() {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
         readyViewModel.runtimeInitialized.collect { ready ->
           if (!ready || didAttachRuntimeUi) return@collect
+          if (screenshotScene != null) {
+            didAttachRuntimeUi = true
+            return@collect
+          }
           // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
           readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
           didAttachRuntimeUi = true

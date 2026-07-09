@@ -553,8 +553,12 @@ class OpenClawShell extends LitElement {
       this.navDrawerOpen = true;
       return;
     }
+    // A drawer that survived a breakpoint change is visually expanded even
+    // when the persisted desktop preference says collapsed.
+    const nextNavCollapsed = this.navDrawerOpen || !this.navCollapsed;
+    this.closeNavDrawer();
     context.navigation.update({
-      navCollapsed: !this.navCollapsed,
+      navCollapsed: nextNavCollapsed,
     });
   }
 

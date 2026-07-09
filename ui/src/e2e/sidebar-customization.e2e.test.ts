@@ -190,6 +190,23 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
 
+      // Widening with the drawer open must not leave its stale state blocking
+      // the desktop collapse control.
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-collapsed");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-drawer-open");
+      await captureUiProof(page, "06-desktop-collapse-after-drawer.png");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await drawerButton.click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-drawer-open");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
