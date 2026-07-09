@@ -1567,7 +1567,7 @@ describe("runContextEngineMaintenance", () => {
             "Background task update: Context engine turn maintenance.",
           ),
         );
-        const [task] = listTasksForOwnerKey(sessionKey).filter(
+        const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         const parentFlowId = task?.parentFlowId;
@@ -1633,7 +1633,7 @@ describe("runContextEngineMaintenance", () => {
             "Background task failed: Context engine turn maintenance",
           ),
         );
-        const [task] = listTasksForOwnerKey(sessionKey).filter(
+        const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         const parentFlowId = task?.parentFlowId;
