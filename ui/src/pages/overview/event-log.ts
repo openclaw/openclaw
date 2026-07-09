@@ -4,6 +4,7 @@ import type { EventLogEntry } from "../../api/event-log.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatEventPayload } from "../../lib/presenter.ts";
 
 type OverviewEventLogProps = {
@@ -32,7 +33,7 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
               <span class="ov-event-log-name">${entry.event}</span>
               ${entry.payload
                 ? html`<span class="ov-event-log-payload muted"
-                    >${formatEventPayload(entry.payload).slice(0, 120)}</span
+                    >${truncateUtf16Safe(formatEventPayload(entry.payload), 120)}</span
                   >`
                 : nothing}
             </div>
