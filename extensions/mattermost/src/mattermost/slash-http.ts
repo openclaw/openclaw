@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -142,35 +143,37 @@ function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
 
 function sanitizeCommandLookupError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return raw
-    .replace(/[\r\n\t]/gu, " ")
-    .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
-      try {
-        const url = new URL(urlText);
-        if (url.username || url.password) {
-          url.username = "redacted";
-          url.password = "redacted";
-        }
-        for (const key of url.searchParams.keys()) {
-          if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
-            url.searchParams.set(key, "redacted");
+  return truncateUtf16Safe(
+    raw
+      .replace(/[\r\n\t]/gu, " ")
+      .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
+        try {
+          const url = new URL(urlText);
+          if (url.username || url.password) {
+            url.username = "redacted";
+            url.password = "redacted";
           }
+          for (const key of url.searchParams.keys()) {
+            if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
+              url.searchParams.set(key, "redacted");
+            }
+          }
+          return url.toString();
+        } catch {
+          return urlText;
         }
-        return url.toString();
-      } catch {
-        return urlText;
-      }
-    })
-    .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
-    .replace(
-      /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
-      "$1$2[redacted]",
-    )
-    .slice(0, 300);
+      })
+      .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
+      .replace(
+        /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
+        "$1$2[redacted]",
+      ),
+    300,
+  );
 }
 
 function sanitizeMattermostLogValue(value: string): string {
-  return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
+  return truncateUtf16Safe(value.replace(/[\r\n\t]/gu, " "), 200);
 }
 
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
