@@ -551,14 +551,17 @@ export class ModelRegistry {
           continue;
         }
 
-        const compat = mergeCompat(providerConfig.compat, modelDef.compat);
-        this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
-
-        // Persisted config and catalogs may advertise richer media metadata than the
-        // execution contract. Keep the row, but pass only supported runtime inputs.
+        // Project richer persisted metadata to runtime's text/image contract.
+        // Unsupported-only rows are not runnable; explicit empty input stays valid.
         const runtimeInput = (modelDef.input ?? ["text"]).filter(
           (input): input is "text" | "image" => input === "text" || input === "image",
         );
+        if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
+          continue;
+        }
+
+        const compat = mergeCompat(providerConfig.compat, modelDef.compat);
+        this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
           id: modelDef.id,

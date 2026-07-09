@@ -238,8 +238,11 @@ describe("ModelRegistry models.json auth", () => {
       "text",
       "image",
     ]);
-    expect(registry.find("nvidia", "audio-only")?.input).toEqual([]);
+    expect(registry.find("nvidia", "audio-only")).toBeUndefined();
     expect(registry.find("nvidia", "explicit-empty")?.input).toEqual([]);
+    const availableRefs = registry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+    expect(availableRefs).not.toContain("nvidia/audio-only");
+    expect(availableRefs).toContain("nvidia/explicit-empty");
   });
 
   it("isolates invalid generated plugin catalog shards from valid models", () => {
