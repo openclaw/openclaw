@@ -1,36 +1,62 @@
-// Checks web-search credential presence from config and plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+// Checks web-search credential presence from config and plugin metadata.
+import { coerceSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
-function hasConfiguredCredentialValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
+function hasConfiguredCredentialValue(value: unknown, env?: NodeJS.ProcessEnv): boolean {
+  const ref = coerceSecretRef(value);
+  if (ref?.source === "env") {
+    return hasConfiguredLiteralCredentialValue(env?.[ref.id]);
   }
-  return value !== undefined && value !== null;
+  if (ref) {
+    return true;
+  }
+  return hasConfiguredLiteralCredentialValue(value);
+}
+
+function hasConfiguredLiteralCredentialValue(value: unknown): boolean {
+  return normalizeSecretInputString(value) !== undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean {
+function hasConfiguredSearchCredentialCandidate(
+  searchConfig: unknown,
+  env?: NodeJS.ProcessEnv,
+): boolean {
   if (!isRecord(searchConfig)) {
     return false;
   }
-  return Object.entries(searchConfig).some(
-    ([key, value]) => key !== "enabled" && hasConfiguredCredentialValue(value),
-  );
+  if (
+    Object.hasOwn(searchConfig, "apiKey") &&
+    hasConfiguredCredentialValue(searchConfig.apiKey, env)
+  ) {
+    return true;
+  }
+  return Object.values(searchConfig).some((value) => {
+    if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+      return false;
+    }
+    return hasConfiguredCredentialValue(value.apiKey, env);
+  });
 }
 
-function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean {
+function hasConfiguredPluginWebSearchCandidate(
+  config: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): boolean {
   const entries = isRecord(config.plugins?.entries) ? config.plugins.entries : undefined;
   if (!entries) {
     return false;
   }
   return Object.values(entries).some((entry) => {
     const pluginConfig = isRecord(entry) ? entry.config : undefined;
-    return isRecord(pluginConfig) && hasConfiguredSearchCredentialCandidate(pluginConfig.webSearch);
+    return (
+      isRecord(pluginConfig) && hasConfiguredSearchCredentialCandidate(pluginConfig.webSearch, env)
+    );
   });
 }
 
@@ -57,7 +83,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
       ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
       ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
     ];
-    return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
+    return envVars.some((envVar) => hasConfiguredLiteralCredentialValue(env[envVar]));
   });
 }
 
@@ -71,8 +97,8 @@ export function hasConfiguredWebSearchCredential(params: {
     params.searchConfig ??
     (params.config.tools?.web?.search as Record<string, unknown> | undefined);
   return (
-    hasConfiguredSearchCredentialCandidate(searchConfig) ||
-    hasConfiguredPluginWebSearchCandidate(params.config) ||
+    hasConfiguredSearchCredentialCandidate(searchConfig, params.env) ||
+    hasConfiguredPluginWebSearchCandidate(params.config, params.env) ||
     hasManifestWebSearchEnvCredentialCandidate({
       config: params.config,
       env: params.env,
