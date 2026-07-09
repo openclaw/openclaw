@@ -424,13 +424,15 @@ export const streamOpenAICompletions: StreamFunction<
           hasFinishReason = true;
         }
 
-        if (choice.delta) {
+        const choiceDelta =
+          choice.delta ?? (choice as unknown as { message?: OpenAICompatibleDelta }).message;
+        if (choiceDelta) {
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
           // or reasoning (other openai compatible endpoints)
           // Use the first non-empty reasoning field to avoid duplication
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-          const deltaFields = choice.delta as Record<string, unknown>;
+          const deltaFields = choiceDelta as Record<string, unknown>;
           const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
@@ -454,11 +456,11 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
           if (
-            choice.delta.content !== null &&
-            choice.delta.content !== undefined &&
-            choice.delta.content.length > 0
+            choiceDelta.content !== null &&
+            choiceDelta.content !== undefined &&
+            choiceDelta.content.length > 0
           ) {
-            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+            appendPartitionedContent(choiceDelta.content, Boolean(foundReasoningField));
           }
 
           if (choice?.delta?.tool_calls) {
@@ -466,7 +468,7 @@ export const streamOpenAICompletions: StreamFunction<
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
-            for (const toolCall of choice.delta.tool_calls) {
+            for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
@@ -492,7 +494,7 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
 
-          const reasoningDetails = (choice.delta as { reasoning_details?: unknown })
+          const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
             .reasoning_details;
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
@@ -514,20 +516,6 @@ export const streamOpenAICompletions: StreamFunction<
             output.content.length === 0
           ) {
             appendTextDelta(refusalText);
-          }
-        }
-
-        // Aggregated (non-streaming) response: surface choice.message.refusal
-        // when content is absent, matching the streaming delta path above.
-        const choiceMessage = (choice as unknown as { message?: Record<string, unknown> }).message;
-        if (!choice.delta && choiceMessage) {
-          const messageRefusal = choiceMessage.refusal;
-          if (
-            typeof messageRefusal === "string" &&
-            messageRefusal.trim().length > 0 &&
-            output.content.length === 0
-          ) {
-            appendTextDelta(messageRefusal);
           }
         }
       }
