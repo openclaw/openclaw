@@ -174,45 +174,67 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
-  it("accepts audio and video input modalities from generated plugin catalogs", () => {
-    // Catalog fetch can produce input modalities beyond text/image for models
-    // like MiniMax-M3 (video) or phi-4-multimodal (audio). The schema must
-    // accept these so the model entry is not dropped on validation.
-    const modelsPath = writeModelsJsonWithPluginCatalog({
+  it("loads richer generated catalog metadata without widening runtime inputs", () => {
+    // Generated catalogs can report video/audio support. Keep those rows while
+    // projecting their metadata to the runtime execution contract.
+    const modelsPath = writeModelsJsonWithPluginCatalogs({
       root: { providers: {} },
-      pluginRelativePath: join("plugins", "minimax", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          minimax: {
-            baseUrl: "https://api.minimaxi.com/v1",
-            api: "openai-completions",
-            apiKey: "MINIMAX_API_KEY",
-            models: [
-              { id: "MiniMax-M3", name: "MiniMax M3", input: ["text", "image", "video"] },
-              {
-                id: "phi-4-multimodal-instruct",
-                name: "Phi-4 Multimodal",
-                input: ["text", "image", "audio"],
+      pluginCatalogs: [
+        {
+          pluginRelativePath: join("plugins", "minimax", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com/v1",
+                api: "openai-completions",
+                apiKey: "MINIMAX_API_KEY",
+                models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
               },
-            ],
+            },
           },
         },
-      },
+        {
+          pluginRelativePath: join("plugins", "nvidia", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                api: "openai-completions",
+                apiKey: "NVIDIA_API_KEY",
+                models: [
+                  {
+                    id: "microsoft/phi-4-multimodal-instruct",
+                    input: ["text", "image", "audio"],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
     });
 
     const registry = ModelRegistry.create(
-      AuthStorage.inMemory({ minimax: { type: "api_key", key: "sk-test" } }),
+      AuthStorage.inMemory({
+        minimax: { type: "api_key", key: "sk-minimax" },
+        nvidia: { type: "api_key", key: "sk-nvidia" },
+      }),
       modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("minimax", "minimax") },
+      {
+        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+          { providerId: "minimax", pluginId: "minimax" },
+          { providerId: "nvidia", pluginId: "nvidia" },
+        ]),
+      },
     );
 
     expect(registry.getError()).toBeUndefined();
-    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image", "video"]);
-    expect(registry.find("minimax", "phi-4-multimodal-instruct")?.input).toEqual([
+    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image"]);
+    expect(registry.find("nvidia", "microsoft/phi-4-multimodal-instruct")?.input).toEqual([
       "text",
       "image",
-      "audio",
     ]);
   });
 

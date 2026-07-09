@@ -554,6 +554,11 @@ export class ModelRegistry {
         const compat = mergeCompat(providerConfig.compat, modelDef.compat);
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
+        // Catalogs may advertise richer media metadata than the execution contract.
+        // Keep the model row, but pass only runtime-supported inputs to providers.
+        const runtimeInput = (modelDef.input ?? ["text"]).filter(
+          (input): input is "text" | "image" => input === "text" || input === "image",
+        );
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
           id: modelDef.id,
@@ -563,7 +568,7 @@ export class ModelRegistry {
           baseUrl,
           reasoning: modelDef.reasoning ?? false,
           thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: modelDef.input ?? ["text"],
+          input: runtimeInput.length > 0 ? runtimeInput : ["text"],
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
@@ -935,7 +940,7 @@ export interface ProviderConfigInput {
     baseUrl?: string;
     reasoning: boolean;
     thinkingLevelMap?: Model["thinkingLevelMap"];
-    input: ("text" | "image" | "audio" | "video")[];
+    input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
