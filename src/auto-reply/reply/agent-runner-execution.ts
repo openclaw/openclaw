@@ -1181,6 +1181,19 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     });
   }
 
+  // Handle typed overloaded FailoverError with appropriate copy
+  if (isOverloaded) {
+    const overloadedCopy = formatRateLimitOrOverloadedErrorCopy(message);
+    return markAgentRunFailureReplyPayload({
+      text: resolveExternalRunFailureTextForConversation({
+        text: overloadedCopy || "Service is temporarily overloaded. Please try again in a moment.",
+        sessionCtx: params.sessionCtx,
+        isGenericRunnerFailure: false,
+        cfg: params.cfg,
+      }),
+    });
+  }
+
   if (rateLimitOrOverloadedCopy) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
@@ -3501,15 +3514,17 @@ async function runAgentTurnWithFallbackInternal(
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? resolveBillingFailureReplyText(err)
-        : isRateLimit && !isOverloadedErrorMessage(message)
+        : isRateLimit && !isOverloaded
           ? buildRateLimitCooldownMessage(err)
-          : rateLimitOrOverloadedCopy
-            ? rateLimitOrOverloadedCopy
-            : isContextOverflow
-              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-              : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                : (externalRunFailureReply?.text ?? genericFallbackText);
+          : isOverloaded
+            ? formatRateLimitOrOverloadedErrorCopy(message) || "Service is temporarily overloaded. Please try again in a moment."
+            : rateLimitOrOverloadedCopy
+              ? rateLimitOrOverloadedCopy
+              : isContextOverflow
+                ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+                : shouldSurfaceToControlUi
+                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                  : (externalRunFailureReply?.text ?? genericFallbackText);
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
