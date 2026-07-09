@@ -113,6 +113,7 @@ import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
@@ -1512,10 +1513,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
                       accessMetadata: clientAccessMetadata,
+                      approvedVia: "silent",
                     });
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
+                } else {
+                  // Best-effort retirement of stale silent siblings; a prune
+                  // failure must never fail the fresh device's handshake.
+                  try {
+                    await pruneSupersededSilentPairingsAfterApproval({
+                      deviceId: approved.device.deviceId,
+                      context,
+                    });
+                  } catch (error) {
+                    logGateway.warn(
+                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
+                    );
+                  }
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
