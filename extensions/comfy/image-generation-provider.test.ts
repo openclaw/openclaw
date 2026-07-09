@@ -197,12 +197,12 @@ function installRealComfyFetchGuard(options: RealComfyFetchOptions): RealGuardHa
           headers: { location: options.redirectLocation },
         });
       }
-      return new Response(body, {
+      return new Response(new Uint8Array(body), {
         status: 200,
         headers: { "content-type": contentType },
       });
     }
-    return new Response(body, {
+    return new Response(new Uint8Array(body), {
       status: 200,
       headers: { "content-type": contentType },
     });
