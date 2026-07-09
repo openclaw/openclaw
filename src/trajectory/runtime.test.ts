@@ -9,7 +9,11 @@ import {
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
-import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
+import {
+  compareTrajectoryWindowLines,
+  createTrajectoryRuntimeRecorder,
+  toTrajectoryToolDefinitions,
+} from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
@@ -510,5 +514,56 @@ describe("trajectory runtime", () => {
     });
 
     expect(recorder).toBeNull();
+  });
+});
+
+describe("compareTrajectoryWindowLines total order", () => {
+  // parseTrajectoryWindowLine returns Infinity for corrupted/unparseable lines;
+  // the old comparator used subtraction (Infinity - Infinity === NaN), violating
+  // Array.sort's total-order contract. The fix uses relational comparisons so
+  // bad lines sort last and the result is always a finite number.
+  const goodEarly = '{"ts":"2024-01-01T00:00:00Z","seq":1}';
+  const goodLater = '{"ts":"2024-01-03T00:00:00Z","seq":3}';
+  const corruptA = "this is not json";
+  const corruptB = '{"no":"ts"}';
+
+  it("never returns NaN, including for two corrupted lines", () => {
+    const result = compareTrajectoryWindowLines(corruptA, corruptB);
+    expect(Number.isNaN(result)).toBe(false);
+    expect(typeof result).toBe("number");
+  });
+
+  it("sorts corrupted lines after all valid lines", () => {
+    expect(compareTrajectoryWindowLines(corruptA, goodEarly)).toBeGreaterThan(0);
+    expect(compareTrajectoryWindowLines(goodEarly, corruptA)).toBeLessThan(0);
+  });
+
+  it("orders valid lines by timestamp ascending", () => {
+    expect(compareTrajectoryWindowLines(goodEarly, goodLater)).toBeLessThan(0);
+    expect(compareTrajectoryWindowLines(goodLater, goodEarly)).toBeGreaterThan(0);
+  });
+
+  it("is antisymmetric across a mixed set", () => {
+    const lines = [goodLater, corruptA, goodEarly, corruptB];
+    for (let i = 0; i < lines.length; i++) {
+      for (let j = 0; j < lines.length; j++) {
+        const cij = compareTrajectoryWindowLines(lines[i], lines[j]);
+        const cji = compareTrajectoryWindowLines(lines[j], lines[i]);
+        expect(Number.isNaN(cij)).toBe(false);
+        expect(Number.isFinite(cij)).toBe(true);
+        const sign = (x: number) => (x > 0 ? 1 : x < 0 ? -1 : 0);
+        // Use == so +0 and -0 compare equal (sign can return 0 for equal lines).
+        expect(sign(cij) === -sign(cji)).toBe(true);
+      }
+    }
+  });
+
+  it("produces a deterministic sort with corrupted lines last", () => {
+    const lines = [goodLater, corruptA, goodEarly, corruptB];
+    const sorted = [...lines].sort(compareTrajectoryWindowLines);
+    expect(sorted[0]).toBe(goodEarly);
+    expect(sorted[1]).toBe(goodLater);
+    // Both corrupted lines end up at the tail in a deterministic raw-string order.
+    expect(sorted.slice(2)).toEqual([corruptA, corruptB].sort());
   });
 });

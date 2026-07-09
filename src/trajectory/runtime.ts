@@ -289,14 +289,29 @@ function trimJsonlWindow(lines: string[], maxBytes: number): number {
   return bytes;
 }
 
-function compareTrajectoryWindowLines(left: string, right: string): number {
+// Exported for tests asserting the total-order invariant on mixed valid/corrupt
+// lines. Not part of the trajectory runtime recorder public API.
+export function compareTrajectoryWindowLines(left: string, right: string): number {
   const leftEvent = parseTrajectoryWindowLine(left);
   const rightEvent = parseTrajectoryWindowLine(right);
-  const byTs = leftEvent.ts - rightEvent.ts;
-  if (byTs !== 0) {
-    return byTs;
+  // Compare with relational operators instead of subtraction: parseTrajectoryWindowLine
+  // returns Number.POSITIVE_INFINITY for corrupted/unparseable lines, and
+  // Infinity - Infinity is NaN, which violates Array.sort's total-order contract
+  // and yields engine-dependent ordering. Bad lines (Infinity) sort last; ties
+  // fall through to seq, then to the raw line for a deterministic order.
+  if (leftEvent.ts < rightEvent.ts) {
+    return -1;
   }
-  return leftEvent.seq - rightEvent.seq;
+  if (leftEvent.ts > rightEvent.ts) {
+    return 1;
+  }
+  if (leftEvent.seq < rightEvent.seq) {
+    return -1;
+  }
+  if (leftEvent.seq > rightEvent.seq) {
+    return 1;
+  }
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
