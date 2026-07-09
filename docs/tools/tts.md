@@ -870,6 +870,7 @@ Reply -> TTS enabled?
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
 
     Command stdout and generated or converted audio are limited to 50 MiB. Diagnostic stderr is limited to 1 MiB. OpenClaw terminates the command and fails synthesis when either limit is exceeded.
+
   </Accordion>
 
   <Accordion title="Microsoft (no API key)">
