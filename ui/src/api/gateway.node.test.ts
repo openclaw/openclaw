@@ -143,7 +143,6 @@ type ConnectFrame = {
     minProtocol?: number;
     caps?: string[];
     scopes?: string[];
-    caps?: string[];
   };
 };
 
