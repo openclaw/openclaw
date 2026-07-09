@@ -520,6 +520,26 @@ class SessionsPage extends LitElement {
       if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
         this.deepLinkSessionKey = null;
       }
+      // Deleting the currently targeted session must not leave the gateway
+      // pointing at a dead key; fall back to the agent main session, matching
+      // the archive path above and the sidebar delete path.
+      const deletedCurrent = result.deleted.find((key) =>
+        areUiSessionKeysEquivalent(key, context.gateway.snapshot.sessionKey),
+      );
+      if (deletedCurrent) {
+        context.gateway.setSessionKey(
+          buildAgentMainSessionKey({
+            agentId:
+              parseAgentSessionKey(deletedCurrent)?.agentId ??
+              context.agentSelection.state.selectedId ??
+              "main",
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          }),
+        );
+      }
     }
     if (result.errors.length > 0) {
       this.error = result.errors.join("; ");
