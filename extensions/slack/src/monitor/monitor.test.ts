@@ -244,7 +244,10 @@ describe("normalizeSlackChannelType", () => {
   it("infers channel types from ids when missing", () => {
     expect(normalizeSlackChannelType(undefined, "C123")).toBe("channel");
     expect(normalizeSlackChannelType(undefined, "D123")).toBe("im");
-    expect(normalizeSlackChannelType(undefined, "G123")).toBe("group");
+    // G-prefix is ambiguous (mpDM vs private channel) without an
+    // explicit channel_type — return undefined so the caller can
+    // default the peer kind to "group" (#102676).
+    expect(normalizeSlackChannelType(undefined, "G123")).toBeUndefined();
   });
 
   it("prefers explicit channel_type values", () => {

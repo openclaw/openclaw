@@ -41,6 +41,14 @@ export function normalizeSlackChannelType(
     }
     return normalized;
   }
+  // Without an explicit channel_type, a G-prefixed channel ID is ambiguous
+  // between an mpDM and a private channel.  Signal ambiguity (undefined) so
+  // the caller can default the peer kind to "group" instead of creating a
+  // parallel slack:channel:<id> session alongside the correct
+  // slack:group:<id> one (#102676).
+  if (!normalized && inferred === "group") {
+    return undefined;
+  }
   return inferred ?? "channel";
 }
 
