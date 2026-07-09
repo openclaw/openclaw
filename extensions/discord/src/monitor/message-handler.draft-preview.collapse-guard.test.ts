@@ -52,9 +52,9 @@ function buildController() {
     replyReference: replyRef as Parameters<
       typeof createDiscordDraftPreviewController
     >[0]["replyReference"],
-    tableMode: "discord",
+    tableMode: "off",
     maxLinesPerMessage: undefined,
-    chunkMode: "discord",
+    chunkMode: "length",
     log: () => {},
   });
 }
