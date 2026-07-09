@@ -93,6 +93,7 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
+    // DNS resolution still happens; loopback is allowed for allowlisted hostnames.
     expect(lookupFn).toHaveBeenCalledWith("agent.internal", { all: true });
   });
 
