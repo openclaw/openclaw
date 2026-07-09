@@ -3265,6 +3265,12 @@ export async function dispatchReplyFromConfig(
       (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
         options.allowWhenToolSummariesHidden === true);
     let hasPendingDirectBlockReplyDelivery = false;
+    const readSettledDispatcherCount = (kind: ReplyDispatchKind): number => {
+      const queued = dispatcher.getQueuedCounts()[kind] ?? 0;
+      const cancelled = dispatcher.getCancelledCounts?.()[kind] ?? 0;
+      const failed = readDispatcherFailedCounts(dispatcher)[kind] ?? 0;
+      return Math.max(0, queued - cancelled - failed);
+    };
     const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
       if (!hasPendingDirectBlockReplyDelivery) {
         return;
@@ -3274,6 +3280,18 @@ export async function dispatchReplyFromConfig(
       // callbacks and final completion where external ordering is visible.
       hasPendingDirectBlockReplyDelivery = false;
       await waitForReplyDispatcherIdle(dispatcher, abortSignal);
+    };
+    const confirmQueuedBlockReplyDelivery = async (
+      beforeSettledBlockCount: number,
+      abortSignal?: AbortSignal,
+    ) => {
+      await waitForReplyDispatcherIdle(dispatcher, abortSignal);
+      if (abortSignal?.aborted || isDispatchOperationAborted()) {
+        throw new DispatchReplyOperationAbortedError();
+      }
+      if (readSettledDispatcherCount("block") <= beforeSettledBlockCount) {
+        throw new Error("block reply delivery failed before streaming acknowledgement");
+      }
     };
     const shouldForwardProgressCallback = (options?: {
       allowWhenToolSummariesHidden?: boolean;
@@ -3794,9 +3812,17 @@ export async function dispatchReplyFromConfig(
                         );
                       } else {
                         markInboundDedupeReplayUnsafe();
+                        const beforeSettledBlockCount = readSettledDispatcherCount("block");
                         const delivered = dispatcher.sendBlockReply(normalizedPayload);
                         if (delivered) {
                           hasPendingDirectBlockReplyDelivery = true;
+                          if (context?.timeoutMs !== undefined) {
+                            hasPendingDirectBlockReplyDelivery = false;
+                            await confirmQueuedBlockReplyDelivery(
+                              beforeSettledBlockCount,
+                              context.abortSignal,
+                            );
+                          }
                         }
                       }
                     };

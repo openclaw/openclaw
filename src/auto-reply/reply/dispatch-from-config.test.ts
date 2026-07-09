@@ -1713,6 +1713,62 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("reports dispatcher-backed block delivery failure to streaming callers", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    let blockQueued = 0;
+    let blockFailed = 0;
+    let finalQueued = 0;
+    dispatcher.sendBlockReply = vi.fn(() => {
+      blockQueued += 1;
+      blockFailed += 1;
+      return true;
+    });
+    dispatcher.sendFinalReply = vi.fn(() => {
+      finalQueued += 1;
+      return true;
+    });
+    dispatcher.getQueuedCounts = vi.fn(() => ({
+      tool: 0,
+      block: blockQueued,
+      final: finalQueued,
+    }));
+    dispatcher.getFailedCounts = vi.fn(() => ({
+      tool: 0,
+      block: blockFailed,
+      final: 0,
+    }));
+    let blockDeliveryError: unknown;
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      try {
+        await requireBlockReplyHandler(opts?.onBlockReply)(
+          { text: "streamed block" },
+          { timeoutMs: 5000 },
+        );
+      } catch (err) {
+        blockDeliveryError = err;
+      }
+      return { text: "final after failed stream" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        SessionKey: "agent:main:feishu:direct:ou_test",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(blockDeliveryError).toBeInstanceOf(Error);
+    expect(String(blockDeliveryError)).toContain("block reply delivery failed");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "final after failed stream" }),
+    );
+  });
+
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
