@@ -26,6 +26,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         timeoutMs: Int?) async throws -> CLLocation
 
     func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
+    func releaseHeldInput()
 }
 
 @MainActor
@@ -85,5 +86,9 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
         try await self.computerAction.perform(params)
+    }
+
+    func releaseHeldInput() {
+        self.computerAction.releaseHeldInput()
     }
 }

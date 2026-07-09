@@ -535,6 +535,14 @@ actor MacNodeRuntime {
         return services
     }
 
+    /// Releases any synthetic input the computer.act service is still holding
+    /// (a left_mouse_down without its matching up) on lifecycle transitions:
+    /// node disconnect, node stop, or Computer Control disabled. Uses the cached
+    /// services directly so it never spins up services just to release nothing.
+    func releaseHeldComputerInput() async {
+        await self.cachedMainActorServices?.releaseHeldInput()
+    }
+
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         try await self.ensureA2UIHost()
 

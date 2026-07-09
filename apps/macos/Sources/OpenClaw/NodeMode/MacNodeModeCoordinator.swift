@@ -140,7 +140,10 @@ final class MacNodeModeCoordinator: NSObject {
         self.endpointRefreshTask = nil
         self.reconnectProbeTask?.cancel()
         self.reconnectProbeTask = nil
-        Task { await self.session.disconnect() }
+        Task {
+            await self.runtime.releaseHeldComputerInput()
+            await self.session.disconnect()
+        }
     }
 
     func setPreferredGatewayStableID(_ stableID: String?) {
@@ -179,6 +182,13 @@ final class MacNodeModeCoordinator: NSObject {
                     browserControlEnabled: browserControlEnabled,
                     cameraEnabled: cameraEnabled,
                     codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+                // If Computer Control was turned off, release any button the
+                // computer.act service is still holding rather than waiting for
+                // the idle watchdog. This refresh loop re-runs on the settings
+                // change that drops the cap.
+                if !caps.contains(OpenClawCapability.computer.rawValue) {
+                    await self.runtime.releaseHeldComputerInput()
+                }
                 let commands = self.currentCommands(caps: caps)
                 let permissions = await self.currentPermissions()
                 let connectOptions = GatewayConnectOptions(
@@ -216,6 +226,7 @@ final class MacNodeModeCoordinator: NSObject {
                     onDisconnected: { [weak self] reason in
                         guard let self else { return }
                         await self.runtime.setEventSender(nil)
+                        await self.runtime.releaseHeldComputerInput()
                         await self.scheduleReconnectProbe()
                         self.logger.error("mac node disconnected: \(reason, privacy: .public)")
                     },

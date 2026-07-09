@@ -103,6 +103,8 @@ struct MacNodeRuntimeTests {
             _ = params
             return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
         }
+
+        func releaseHeldInput() {}
     }
 
     @Test func `handle invoke rejects unknown command`() async {
@@ -112,7 +114,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
-    @Test func `handle invoke returns injected Codex thread catalog`() async throws {
+    @Test func `handle invoke returns injected Codex thread catalog`() async {
         let payload = #"{"sessions":[]}"#
         let runtime = MacNodeRuntime(
             codexThreadCatalogEnabled: { true },
@@ -308,6 +310,8 @@ struct MacNodeRuntimeTests {
                 _ = params
                 return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
             }
+
+            func releaseHeldInput() {}
         }
 
         let services = await MainActor.run { FakeMainActorServices() }
@@ -386,6 +390,8 @@ struct MacNodeRuntimeTests {
                 _ = params
                 return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
             }
+
+            func releaseHeldInput() {}
         }
 
         let services = await MainActor.run { FakeMainActorServices() }
@@ -509,6 +515,8 @@ struct MacNodeRuntimeTests {
             }
             return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
         }
+
+        func releaseHeldInput() {}
     }
 
     @Test func `handle invoke rejects computer act when control disabled`() async throws {

@@ -320,6 +320,20 @@ final class ComputerActionService {
         self.buttonReleaseTask = nil
     }
 
+    /// Releases any outstanding synthetic left button immediately. Called on
+    /// lifecycle transitions (node disconnect, node stop, Computer Control
+    /// disabled) so a stranded left_mouse_down is not held until the idle
+    /// watchdog fires. Idempotent when nothing is held.
+    func releaseHeldInput() {
+        self.buttonReleaseTask?.cancel()
+        self.buttonReleaseTask = nil
+        guard self.leftButtonDown else { return }
+        let point = self.automation.currentMouseLocation() ?? CGPoint.zero
+        try? self.rawMouseButton(down: false, at: point, flags: self.heldButtonFlags)
+        self.leftButtonDown = false
+        self.heldButtonFlags = []
+    }
+
     private func resolveDisplay(screenIndex: Int?) async throws -> ResolvedDisplay {
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
