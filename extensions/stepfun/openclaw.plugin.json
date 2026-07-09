@@ -168,5 +168,20 @@
     "mediaUnderstandingProviders": [
       "stepfun"
     ]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "stepfun": {
+      "capabilities": [
+        "image",
+        "video"
+      ],
+      "defaultModels": {
+        "image": "step-3.7-flash",
+        "video": "step-3.7-flash"
+      },
+      "autoPriority": {
+        "video": 20
+      }
+    }
   }
 }

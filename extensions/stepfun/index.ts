@@ -251,6 +251,18 @@ export default definePluginEntry({
       },
     });
 
-    api.registerMediaUnderstandingProvider(stepfunMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      ...stepfunMediaUnderstandingProvider,
+      id: STEPFUN_PROVIDER_ID,
+      defaultModels: { image: "step-3.7-flash", video: "step-3.7-flash" },
+      autoPriority: { video: 20 },
+    });
+
+    api.registerMediaUnderstandingProvider({
+      ...stepfunMediaUnderstandingProvider,
+      id: STEPFUN_PLAN_PROVIDER_ID,
+      defaultModels: { image: "step-3.7-flash", video: "step-3.7-flash" },
+      autoPriority: { video: 20 },
+    });
   },
 });
