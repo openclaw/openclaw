@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "../api/types.ts";
 // Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
@@ -8,7 +9,6 @@ import {
   formatDurationHuman,
   formatMs,
   formatUnknownText,
-  truncateUtf16Safe,
 } from "../lib/format.ts";
 
 export function formatPresenceAge(entry: PresenceEntry): string {
