@@ -218,13 +218,35 @@ Legacy aliases still normalize to the canonical bundled ids:
     The bundled `xai` plugin registers video generation through the shared
     `video_generate` tool.
 
-    - Default video model: `xai/grok-imagine-video`
-    - Modes: text-to-video, image-to-video, reference-image generation, remote
-      video edit, and remote video extension
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`
-    - Resolutions: `480P`, `720P`
-    - Duration: 1-15 seconds for generation/image-to-video, 1-10 seconds when
-      using `reference_image` roles, 2-10 seconds for extension
+    **Important (2026-07-09):** The developer API surface (`api.x.ai`) currently
+    returns 404 for video generation. The working consumer flow uses:
+
+    - `POST https://grok.com/rest/media/post/create`
+    - `modelName: "imagine-video-gen"`
+    - `mediaType: "MEDIA_POST_TYPE_VIDEO"`
+
+    Authentication is via Grok web session cookies, not `xai-` API keys.
+    The `video_generate` tool and `xai` provider have not yet been updated
+    for this consumer endpoint.
+
+    Until fixed, video generation via the `xai` provider may fail.
+
+    **Proof of current failure (2026-07-09):**
+
+    ```
+    $ openclaw video-generate --model xai/grok-imagine-video-1.5 "test prompt"
+    Error: xAI video generation failed (HTTP 404)
+    ```
+
+    The developer API (`api.x.ai/v1/videos/generations`) returns 404 even with
+    valid `xai-` keys that have video permissions. The working flow is the
+    consumer endpoint documented above.
+
+    - Declared default video model: `xai/grok-imagine-video`
+    - Declared modes: text-to-video, image-to-video, reference-image generation,
+      remote video edit, and remote video extension
+    - Declared aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`
+    - Declared resolutions: `480P`, `720P`
     - Reference-image generation: set `imageRoles` to `reference_image` for
       every supplied image; xAI accepts up to 7 such images
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
