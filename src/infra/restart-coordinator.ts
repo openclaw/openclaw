@@ -3,11 +3,11 @@ import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-s
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
-  getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
-} from "../tasks/task-registry.maintenance.js";
-import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
+  formatActiveTaskRestartBlocker,
+} from "../tasks/task-restart-blocker.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1

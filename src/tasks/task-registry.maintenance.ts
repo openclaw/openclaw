@@ -912,8 +912,6 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
-export type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
-
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
 ): status is ActiveTaskRestartBlocker["status"] {
