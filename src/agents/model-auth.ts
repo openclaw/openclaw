@@ -988,7 +988,20 @@ export function hasRuntimeAvailableProviderAuth(params: {
   ) {
     return true;
   }
-  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+  const managedRuntimeAuth = resolveManagedSecretRefRuntimeProviderAuth({
+    cfg: params.cfg,
+    provider,
+  });
+  if (
+    managedRuntimeAuth &&
+    (!isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source: managedRuntimeAuth.source,
+      store: params.store,
+    }) ||
+      inlineProviderApiKeyUsable)
+  ) {
     return true;
   }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
@@ -1634,6 +1647,16 @@ export async function resolveApiKeyForProvider(params: {
     secretSentinels: params.secretSentinels,
   });
   if (managedRuntimeAuth) {
+    if (
+      isConfigBackedInlineProviderApiKey({
+        cfg,
+        provider,
+        source: managedRuntimeAuth.source,
+        store,
+      })
+    ) {
+      assertInlineProviderApiKeyUsable({ store, provider });
+    }
     return managedRuntimeAuth;
   }
 

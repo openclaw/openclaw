@@ -1192,6 +1192,14 @@ describe("resolveApiKeyForProvider", () => {
       await expect(
         hasAvailableAuthForProvider({ provider: "cliproxyapi", cfg: sourceConfig, store }),
       ).resolves.toBe(false);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "cliproxyapi",
+          cfg: sourceConfig,
+          allowPluginSyntheticAuth: false,
+          store,
+        }),
+      ).toBe(false);
     },
   );
 
