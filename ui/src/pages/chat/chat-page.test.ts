@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The non-isolated UI shard shares custom elements across files. Leave the
+// production tag free so chat-pane tests can install its real class.
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
