@@ -28,6 +28,15 @@ type SessionListOptions = {
   totalCount: number;
 };
 
+type CuratedMockSession = {
+  key: string;
+  label: string;
+  messages: unknown[];
+  updatedAt: number;
+  model?: string;
+  modelProvider?: string;
+};
+
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
 const TOTAL_TELEGRAM_SESSIONS = 180;
@@ -200,6 +209,173 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   }
 
   return messages;
+}
+
+function chatHistoryResponse(session: CuratedMockSession) {
+  return {
+    messages: session.messages,
+    sessionId: `mock-${session.key.replaceAll(":", "-")}`,
+    sessionInfo: sessionRow(session.key, session.label, session.updatedAt, {
+      model: session.model,
+      modelProvider: session.modelProvider,
+    }),
+    thinkingLevel: null,
+  };
+}
+
+function chatStartupResponse(
+  session: CuratedMockSession,
+  agentsList: unknown,
+  models: Array<{ id: string; name: string; provider: string }>,
+) {
+  return {
+    ...chatHistoryResponse(session),
+    agentsList,
+    metadata: { models },
+  };
+}
+
+function buildCodingSessionMessages(baseTime: number): unknown[] {
+  return [
+    chatHistoryMessage(
+      "user",
+      "Audit the chat composer paste path and give me the smallest patch that keeps large code blocks readable.",
+      baseTime,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "I will check the paste handler, composer state, and markdown rendering path first. The goal is to keep the patch local to the composer unless the renderer is the actual boundary.",
+      baseTime + 30_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Read files:\n\n| Path | Reason |\n| --- | --- |\n| `ui/src/pages/chat/components/chat-composer.ts` | paste handling and textarea state |\n| `ui/src/pages/chat/chat-send.ts` | send payload shape |\n| `ui/src/pages/chat/components/chat-message.ts` | rendered markdown output |\n\nNo production gateway contract changes found.",
+      baseTime + 60_000,
+    ),
+    chatHistoryMessage("user", "Show the patch shape before editing.", baseTime + 90_000),
+    chatHistoryMessage(
+      "assistant",
+      'Patch shape:\n\n```ts\nfunction normalizePastedText(text: string): string {\n  const trimmed = text.replace(/\\r\\n/g, "\\n");\n  return shouldWrapAsCodeBlock(trimmed) ? `\\n\\n```\\n${trimmed}\\n```\\n` : trimmed;\n}\n```\n\nWarning: this needs a language-preserving path for fenced snippets that are already valid markdown.',
+      baseTime + 120_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Implementation note: the existing markdown parser already handles fenced blocks correctly, so the composer only needs to avoid flattening indentation. I am leaving renderer styles alone for this PR.",
+      baseTime + 150_000,
+    ),
+    chatHistoryMessage(
+      "user",
+      "Add the test that would fail before the patch.",
+      baseTime + 180_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      'Focused test:\n\n```ts\nit("preserves indentation when pasting a multi-line code block", async () => {\n  pasteComposerText("function demo() {\\n  return true;\\n}");\n  expect(readComposerValue()).toContain("  return true;");\n});\n```\n\nThis covers the regression without asserting internal helper names.',
+      baseTime + 210_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Validation result:\n\n| Check | Result |\n| --- | --- |\n| focused composer test | passing |\n| `git diff --check` | clean |\n| route reload | fixture state preserved |\n\nRemaining risk: none for production runtime because this is contained to mock/dev fixture coverage.",
+      baseTime + 240_000,
+    ),
+    chatHistoryMessage(
+      "user",
+      "Keep the PR body honest that this is design QA support.",
+      baseTime + 270_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Done. The body will describe it as dev/mock-only fixture coverage for future Control UI review, not as a shipped chat behavior change.",
+      baseTime + 300_000,
+    ),
+  ];
+}
+
+function buildResponseShapeSessionMessages(baseTime: number): unknown[] {
+  return [
+    chatHistoryMessage(
+      "user",
+      "Create a response-shape showcase that exercises summaries, JSON, warnings, and a small error state.",
+      baseTime,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Here is a compact response-shape pass with several common reviewer states in one transcript.",
+      baseTime + 30_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Status summary:\n\n| Area | State | Notes |\n| --- | --- | --- |\n| Gateway | ok | mock socket connected |\n| Sessions | warning | list is paginated |\n| Artifacts | ok | one image artifact available |\n| Tools | error | simulated command failed |\n\nWarning: this is fixture data, so it should not imply production health.",
+      baseTime + 60_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      'Structured payload preview:\n\n```json\n{\n  "status": "warning",\n  "sessionKey": "agent:openclaw-mock:response-shape-showcase",\n  "counts": {\n    "messages": 9,\n    "warnings": 1,\n    "errors": 1\n  }\n}\n```',
+      baseTime + 90_000,
+    ),
+    chatHistoryMessage(
+      "user",
+      "Add something that looks like a recoverable tool failure.",
+      baseTime + 120_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Tool result:\n\n```text\n$ pnpm ui:design-smoke --fixture response-shape\nError: fixture viewport is unavailable\nRecovery: restart the mock server and reload /chat?session=agent:openclaw-mock:response-shape-showcase\n```\n\nThe failure is intentionally recoverable and local to the mock.",
+      baseTime + 150_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Decision matrix:\n\n| Option | Trade-off | Recommendation |\n| --- | --- | --- |\n| Add runtime persistence | Higher realism, more code | Skip |\n| Add static curated sessions | Stable reloads, low risk | Use |\n| Change UI styles | Better screenshot polish, scope creep | Skip |",
+      baseTime + 180_000,
+    ),
+    chatHistoryMessage("user", "Does this cover the empty state too?", baseTime + 210_000),
+    chatHistoryMessage(
+      "assistant",
+      "Yes. The dedicated New session fixture has a stable key and an empty message array so route reloads show the normal empty chat state.",
+      baseTime + 240_000,
+    ),
+  ];
+}
+
+function buildMarkdownShowcaseMessages(baseTime: number): unknown[] {
+  return [
+    chatHistoryMessage("user", "Give me a markdown-heavy transcript for visual QA.", baseTime),
+    chatHistoryMessage(
+      "assistant",
+      "# Markdown QA\n\nThis message intentionally exercises headings, lists, links, tables, code fences, quotes, and inline code without depending on production data.",
+      baseTime + 30_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checklist:\n\n- [x] Headings have sane spacing\n- [x] Inline `code` stays readable\n- [x] Tables fit without breaking the chat column\n- [ ] Long output still needs scroll review\n\n> Fixture copy should stay quiet and useful for daily design review.",
+      baseTime + 60_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Table coverage:\n\n| Component | Dense content | Empty content | Error content |\n| --- | --- | --- | --- |\n| Composer | pasted block | placeholder | send failure |\n| Thread | long history | welcome state | warning callout |\n| Sidebar | file preview | no file | load failure |",
+      baseTime + 90_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "TypeScript sample:\n\n```ts\ntype FixtureState = {\n  readonly key: string;\n  readonly messages: readonly unknown[];\n};\n\nexport function hasMessages(state: FixtureState): boolean {\n  return state.messages.length > 0;\n}\n```\n\nShell sample:\n\n```sh\npnpm dev:ui:mock -- --port 5187\n```",
+      baseTime + 120_000,
+    ),
+    chatHistoryMessage(
+      "user",
+      "Add one long paragraph so wrapping can be checked in narrow layouts.",
+      baseTime + 150_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Long wrapping sample: this mock transcript includes a deliberately extended sentence that should wrap naturally inside the chat column, preserve comfortable line height, avoid horizontal overflow, and keep adjacent controls reachable when the viewport is narrow or the sidebar is open.",
+      baseTime + 180_000,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Small diff block:\n\n```diff\n+ Add curated mock sessions for visual QA.\n+ Keep fixture content stable across reloads.\n- Do not change production session APIs.\n```\n\nFinal note: all curated fixture chat content is English.",
+      baseTime + 210_000,
+    ),
+  ];
 }
 
 function searchPrefixes(term: string): string[] {
@@ -441,6 +617,64 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     model: "claude-sonnet-4-6",
     modelProvider: "anthropic",
   });
+  const curatedSessions: CuratedMockSession[] = [
+    {
+      key: "agent:openclaw-mock:new-session",
+      label: "New session",
+      messages: [],
+      updatedAt: baseTime + 30_000,
+    },
+    {
+      key: "agent:openclaw-mock:qa-coding-session",
+      label: "Coding session QA",
+      messages: buildCodingSessionMessages(baseTime + 60_000),
+      updatedAt: baseTime + 20_000,
+    },
+    {
+      key: "agent:openclaw-mock:response-shape-showcase",
+      label: "Response shape showcase",
+      messages: buildResponseShapeSessionMessages(baseTime + 120_000),
+      updatedAt: baseTime + 10_000,
+    },
+    {
+      key: "agent:openclaw-mock:markdown-showcase",
+      label: "Markdown showcase",
+      messages: buildMarkdownShowcaseMessages(baseTime + 180_000),
+      updatedAt: baseTime,
+    },
+  ];
+  const curatedSessionRows = curatedSessions.map((session) =>
+    sessionRow(session.key, session.label, session.updatedAt, {
+      model: session.model,
+      modelProvider: session.modelProvider,
+    }),
+  );
+  const allSessions = [...curatedSessionRows, ...sessions];
+  const models = [
+    { id: "gpt-5.5", name: "gpt-5.5", provider: "openai" },
+    { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "anthropic" },
+  ];
+  const agentsList = {
+    agents: [
+      {
+        id: "openclaw-mock",
+        identity: { name: "OpenClaw mock" },
+        name: "OpenClaw mock",
+        workspaceGit: false,
+      },
+    ],
+    defaultId: "openclaw-mock",
+    mainKey: "main",
+    scope: "agent",
+  };
+  const curatedChatHistoryCases = curatedSessions.map((session) => ({
+    match: { sessionKey: session.key },
+    response: chatHistoryResponse(session),
+  }));
+  const curatedChatStartupCases = curatedSessions.map((session) => ({
+    match: { sessionKey: session.key },
+    response: chatStartupResponse(session, agentsList, models),
+  }));
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
@@ -456,6 +690,12 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         urlSource: "mock",
       },
       "node.list": { nodes: [] },
+      "chat.history": {
+        cases: curatedChatHistoryCases,
+      },
+      "chat.startup": {
+        cases: curatedChatStartupCases,
+      },
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -555,14 +795,17 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases(sessions),
+          ...buildSessionListCases(allSessions),
         ],
       },
+      "sessions.create": {
+        key: "agent:openclaw-mock:new-session",
+        ok: true,
+        runStarted: false,
+        sessionId: "mock-agent-openclaw-mock-new-session",
+      },
     },
-    models: [
-      { id: "gpt-5.5", name: "gpt-5.5", provider: "openai" },
-      { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "anthropic" },
-    ],
+    models,
     sessionKey: "agent:alpha",
   };
 }
