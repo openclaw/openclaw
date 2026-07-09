@@ -81,6 +81,12 @@ export const it: TranslationMap = {
     waitForScan: "Attendi la scansione",
     logout: "Esci",
   },
+  nativeLinkMenu: {
+    label: "Azioni del link",
+    openInline: "Apri nella barra laterale",
+    openExternal: "Apri nel browser predefinito",
+    copy: "Copia link",
+  },
   channels: {
     health: {
       title: "Integrità canali",

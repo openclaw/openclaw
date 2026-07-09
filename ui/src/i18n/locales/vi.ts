@@ -81,6 +81,12 @@ export const vi: TranslationMap = {
     waitForScan: "Chờ quét",
     logout: "Đăng xuất",
   },
+  nativeLinkMenu: {
+    label: "Hành động liên kết",
+    openInline: "Mở trong Thanh bên",
+    openExternal: "Mở trong Trình duyệt mặc định",
+    copy: "Sao chép liên kết",
+  },
   channels: {
     health: {
       title: "Tình trạng kênh",

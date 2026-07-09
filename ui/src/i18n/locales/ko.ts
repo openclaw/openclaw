@@ -81,6 +81,12 @@ export const ko: TranslationMap = {
     waitForScan: "스캔 대기",
     logout: "로그아웃",
   },
+  nativeLinkMenu: {
+    label: "링크 작업",
+    openInline: "사이드바에서 열기",
+    openExternal: "기본 브라우저에서 열기",
+    copy: "링크 복사",
+  },
   channels: {
     health: {
       title: "채널 상태",

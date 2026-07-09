@@ -81,6 +81,12 @@ export const tr: TranslationMap = {
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
   },
+  nativeLinkMenu: {
+    label: "Bağlantı eylemleri",
+    openInline: "Kenar Çubuğunda Aç",
+    openExternal: "Varsayılan Tarayıcıda Aç",
+    copy: "Bağlantıyı Kopyala",
+  },
   channels: {
     health: {
       title: "Kanal durumu",
