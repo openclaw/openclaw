@@ -99,16 +99,16 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it("does not auto-approve alias search when its title path escapes cwd", () => {
+  it("auto-approves alias search when query-like title text contains a path label", () => {
     expect(
       classify({
-        title: "search: path: /etc",
-        rawInput: { name: "search", query: "shadow" },
+        title: "search: query: literal text, path: /etc",
+        rawInput: { name: "search", query: "literal text, path: /etc" },
       }),
     ).toEqual({
       toolName: "search",
-      approvalClass: "other",
-      autoApprove: false,
+      approvalClass: "readonly_search",
+      autoApprove: true,
     });
   });
 

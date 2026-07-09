@@ -537,22 +537,18 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
-  it("prompts for search when title path escapes cwd", async () => {
-    const prompt = vi.fn(async () => false);
-    const res = await resolvePermissionRequest(
-      makePermissionRequest({
+  it("auto-approves search when query-like title text contains a path label", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
         toolCall: {
-          toolCallId: "tool-search-title-escape-cwd",
-          title: "search: path: ~/.ssh",
+          toolCallId: "tool-search-title-query-path-label",
+          title: "search: query: literal text, path: ~/.ssh",
           status: "pending",
-          rawInput: { name: "search", query: "key" },
+          rawInput: { name: "search", query: "literal text, path: ~/.ssh" },
         },
-      }),
-      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
-    );
-    expect(prompt).toHaveBeenCalledTimes(1);
-    expect(prompt).toHaveBeenCalledWith("search", "search: path: ~/.ssh");
-    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+      },
+      cwd: "/tmp/openclaw-acp-cwd/workspace",
+    });
   });
 
   it("auto-approves search when only locations resolve inside cwd", async () => {
