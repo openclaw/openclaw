@@ -55,6 +55,27 @@ describe("DebugProxyCaptureStore", () => {
     expect(reopened.isClosed).toBe(false);
   });
 
+  it("rebinds a cached shared store after the state database closes underneath it", () => {
+    const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };
+    const stale = getDebugProxyCaptureStore(options);
+    stale.upsertSession({
+      id: "exit-session",
+      startedAt: 1,
+      mode: "proxy-run",
+      sourceScope: "openclaw",
+      sourceProcess: "cli",
+    });
+
+    // Exit-time hook closes the shared handle out from under the cached store;
+    // finalizeDebugProxyCapture then re-fetches and must not get a dead handle.
+    closeOpenClawStateDatabaseForTest();
+    expect(stale.isClosed).toBe(true);
+
+    const rebound = getDebugProxyCaptureStore(options);
+    expect(Object.is(rebound, stale)).toBe(false);
+    expect(() => rebound.endSession("exit-session")).not.toThrow();
+  });
+
   it("tracks and closes cached stores independently across paths", () => {
     const first = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-first-"),

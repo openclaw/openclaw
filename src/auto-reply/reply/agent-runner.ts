@@ -1261,21 +1261,29 @@ export async function runReplyAgent(params: {
   };
 
   if (effectiveShouldSteer && isActive) {
-    const steerSessionId =
-      (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
-      followupRun.run.sessionId;
+    const activeReplyOperation =
+      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.run.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+          : {}),
+        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
       },
     );
     if (steerOutcome.queued) {
+      activeReplyOperation?.recordActivity();
+      if (followupRun.currentInboundAudio === true) {
+        activeReplyOperation?.markAcceptedSteeredInboundAudio();
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;

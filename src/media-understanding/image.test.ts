@@ -3,6 +3,11 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../secrets/sentinel.js";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
@@ -26,6 +31,7 @@ const hoisted = vi.hoisted(() => ({
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const {
   completeMock,
@@ -41,6 +47,7 @@ const {
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
   resolveCopilotApiTokenMock,
+  unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
 
 type ResolveModelWithRegistryTestParams = {
@@ -98,6 +105,7 @@ vi.mock("../agents/models-config.js", async () => ({
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
@@ -105,6 +113,13 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
+
+vi.mock("../agents/provider-secret-egress.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
+    "../agents/provider-secret-egress.js",
+  )),
+  unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
 vi.mock("../agents/agent-model-discovery.js", () => ({
@@ -248,6 +263,36 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      source: "test",
+      mode: "api-key",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("resolved-minimax-secret");
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "MiniMax-VL-01",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
+      "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      "MiniMax VLM request",
+    );
+    const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
+    expect(fetchOptions.headers).toMatchObject({
+      Authorization: "Bearer resolved-minimax-secret",
+    });
+  });
+
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -298,6 +343,67 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
     expect(completeMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "profile:amazon-bedrock:default",
+      mode: "aws-sdk",
+    });
+    // Faithful to runtime: requireApiKey throws on an empty resolved key. The
+    // aws-sdk carve-out must return before reaching it.
+    requireApiKeyMock.mockImplementation((auth: { apiKey?: string; mode?: string }) => {
+      const key = auth.apiKey?.trim();
+      if (!key) {
+        throw new Error(
+          `No API key resolved for provider "amazon-bedrock" (auth mode: ${auth.mode}).`,
+        );
+      }
+      return key;
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6-v1",
+        input: ["text", "image"],
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "an orange tabby cat" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "an orange tabby cat",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+    });
+    // The carve-out returns before requireApiKey and skips persisting an
+    // empty-string secret; the empty key flows through to the model runtime.
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    const completeCall = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1325,7 +1431,7 @@ describe("describeImageWithModel", () => {
       timestamp: Date.now(),
       content: [{ type: "text", text: "A solid red square." }],
     };
-    const providerStreamFn = vi.fn(() => ({
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
       result: vi.fn(async () => providerStreamResult),
     }));
     registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
@@ -1355,6 +1461,7 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      config: {},
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
@@ -1376,6 +1483,60 @@ describe("describeImageWithModel", () => {
     const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
     expect(contentTypes).toContain("text");
     expect(contentTypes).toContain("image");
+  });
+
+  it("keeps an exchanged Copilot image token opaque for sentinel-backed auth", async () => {
+    const sourceSecret = "copilot-image-source-secret";
+    const sourceSentinel = mintSecretSentinel(sourceSecret, {
+      label: "model-auth:github-copilot",
+    });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: sourceSentinel,
+      source: "test",
+      mode: "token",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce(sourceSecret);
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
+      result: vi.fn(async () => ({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "github-copilot",
+        model: "gpt-4.1",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "ok" }],
+      })),
+    }));
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gpt-4.1",
+        input: ["text", "image"],
+        api: "openai-completions",
+      })),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gpt-4.1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: {},
+    });
+    const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
+    expect(looksLikeSecretSentinel(storedToken)).toBe(true);
+    expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
+    const streamOptions = providerStreamFn.mock.calls[0]?.[2] as { apiKey?: string };
+    expect(streamOptions.apiKey).toBe(storedToken);
   });
 
   it("fails github-copilot image runtime setup when token exchange fails", async () => {

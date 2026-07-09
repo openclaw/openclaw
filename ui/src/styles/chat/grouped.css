@@ -45,11 +45,38 @@
 /* Footer at bottom of message group (role + time) */
 .chat-group-footer {
   display: flex;
-  gap: 8px;
-  row-gap: 5px;
-  align-items: center;
   flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
   margin-top: 6px;
+}
+
+.chat-group-footer__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-group-footer-actions,
+.chat-message-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.chat-group-footer-actions {
+  flex: 0 0 auto;
+}
+
+.chat-message-actions-row {
+  align-self: stretch;
+  margin-top: 4px;
 }
 
 .chat-sender-name {
@@ -66,7 +93,8 @@
 }
 
 /* ── Group footer action buttons ── */
-.chat-group-footer button {
+.chat-group-footer button,
+.chat-message-actions-row button {
   background: none;
   border: none;
   cursor: pointer;
@@ -86,17 +114,20 @@
   justify-content: center;
 }
 
-.chat-group:hover .chat-group-footer button {
+.chat-group:hover .chat-group-footer button,
+.chat-group:hover .chat-message-actions-row button {
   opacity: 0.6;
   pointer-events: auto;
 }
 
-.chat-group-footer button:hover {
+.chat-group-footer button:hover,
+.chat-message-actions-row button:hover {
   opacity: 1 !important;
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
 }
 
-.chat-group-footer button svg {
+.chat-group-footer button svg,
+.chat-message-actions-row button svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -214,8 +245,8 @@ img.chat-avatar {
   display: block;
   border: 1px solid transparent;
   background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  padding: 16px;
   box-shadow: none;
   transition: border-color var(--duration-fast) ease-out;
   width: auto;
@@ -234,14 +265,6 @@ img.chat-avatar {
   border: 0;
   background: transparent;
   box-shadow: none;
-}
-
-.chat-bubble.has-copy {
-  padding-right: 70px;
-}
-
-.chat-bubble--has-actions {
-  padding-right: 70px;
 }
 
 .chat-duplicate-count {
@@ -265,45 +288,20 @@ img.chat-avatar {
   color: color-mix(in srgb, var(--foreground) 80%, var(--primary) 20%);
 }
 
-.chat-bubble-actions {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease-out;
-}
-
-.chat-bubble:hover .chat-bubble-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-bubble-actions {
+  .chat-group-footer-actions button,
+  .chat-message-actions-row button {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .chat-bubble--has-actions {
-    display: flex;
-    flex-direction: column;
-    padding-right: 14px;
-  }
-
-  .chat-bubble--has-actions .chat-bubble-actions {
-    position: static;
-    order: 2;
-    justify-content: flex-end;
-    margin-top: 8px;
-  }
-
-  .chat-bubble--has-actions .chat-copy-btn,
-  .chat-bubble--has-actions .chat-expand-btn {
+  .chat-group-footer-actions .chat-copy-btn,
+  .chat-group-footer-actions .chat-expand-btn,
+  .chat-group-footer-actions .chat-group-delete,
+  .chat-message-actions-row .chat-copy-btn,
+  .chat-message-actions-row .chat-expand-btn {
     min-width: 44px;
     min-height: 44px;
   }
@@ -431,7 +429,7 @@ img.chat-avatar {
   font-size: 12px; /* was 11px */
   line-height: 1;
   color: var(--muted);
-  flex-wrap: wrap;
+  position: relative;
 }
 
 .msg-meta__summary {
@@ -483,10 +481,23 @@ details.msg-meta:not([open]) .msg-meta__details {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  position: absolute;
+  right: auto;
+  bottom: 100%;
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(28rem, calc(100vw - 32px));
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--card);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 30%, transparent);
+}
+
+.chat-group.user .msg-meta__details {
+  right: 0;
+  left: auto;
 }
 
 .msg-meta__tokens,
@@ -623,7 +634,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 @media (max-width: 400px) {
   .chat-group-messages {
-    max-width: 100%;
+    max-width: 88%;
   }
 
   .chat-avatar,

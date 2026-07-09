@@ -2,6 +2,7 @@
 summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
+  - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
   - Debugging gateway discovery or canvas commands
 title: "iOS app"
@@ -16,7 +17,8 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
-- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotency keys so nothing sends twice, retry with backoff before surfacing as "Not sent" with retry/delete in the message context menu, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Requirements
 
@@ -41,7 +43,7 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** in the **Devices** card.
+   **Pair mobile device** in the **Nodes & devices** card.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
@@ -49,14 +51,8 @@ creation has a token or password auth path.
    If the setup code contains both LAN and Tailscale Serve routes, the app
    probes them in order and saves the first reachable endpoint.
 
-4. The official app connects automatically. If **Devices** shows a pending
+4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.
-
-The Apple Watch companion does not have a separate OpenClaw pairing approval.
-Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
-**Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
-devices. OpenClaw follows Apple Watch pairing and install changes immediately;
-the Gateway's device approval covers the iPhone node.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
@@ -91,6 +87,55 @@ This is disabled by default. It applies only to fresh `role: node` pairing with 
 openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
+
+By default, the Apple Watch companion keeps using the existing iPhone relay and
+does not need a separate Gateway pairing. Pair the Watch with the iPhone in
+Apple's Watch app, install OpenClaw from **Watch app -> My Watch -> Available
+Apps**, then open OpenClaw once on both devices.
+
+## Optional direct Apple Watch node
+
+Direct mode gives the watch its own signed node identity and Gateway connection.
+Supported node commands continue to work over watch Wi-Fi or cellular while
+OpenClaw is active, even when the paired iPhone is unavailable.
+
+Requirements:
+
+- The iPhone is connected to the Gateway with `operator.admin` scope.
+- The setup code advertises a `wss://` Gateway endpoint with a certificate trusted
+  by watchOS; the watch polls the corresponding `https://` origin. Plain HTTP and
+  self-signed or fingerprint-only trust are unsupported. See [Gateway-owned
+  pairing](/gateway/pairing) for endpoint configuration. Loopback, iPhone-only,
+  and tailnet-only routes are not independently reachable by the watch.
+- Cellular use requires a cellular-capable Apple Watch with active service.
+- OpenClaw is active on the watch. Apple does not allow ordinary watchOS apps to
+  keep generic WebSocket/TCP connections, so the direct node uses short HTTPS
+  polls and reconnects when the app returns to the foreground. See Apple's
+  [watchOS low-level networking guidance](https://developer.apple.com/documentation/technotes/tn3135-low-level-networking-on-watchOS).
+
+Setup:
+
+1. On iPhone, open **Settings -> Apple Watch**.
+2. Tap **Enable Direct Gateway Connection**.
+3. Open OpenClaw on the watch before the short-lived setup code expires.
+4. Verify the separate Apple Watch row with `openclaw nodes status`.
+
+The setup code contains a short-lived, node-only bootstrap credential; treat it
+like a password until it expires. It never contains the iPhone's saved Gateway
+password or token. After pairing, the watch stores its own device token and
+deletes the bootstrap credential. Direct mode covers only the commands below.
+Chat, Talk, approvals, and the existing `watch.*` notification flow remain
+iPhone-relay features and still require the paired iPhone.
+
+Direct watchOS node commands:
+
+| Surface       | Commands                       | Notes                                                   |
+| ------------- | ------------------------------ | ------------------------------------------------------- |
+| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
+| Notifications | `system.notify`                | While the app is active; requires watch permission.     |
+
+watchOS does not expose WebKit to third-party apps, so the direct watch node
+does not advertise Canvas commands.
 
 ## Relay-backed push for official builds
 
@@ -194,6 +239,15 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 ### Manual host/port
 
 In Settings, enable **Manual Host** and enter the gateway host + port (default `18789`).
+
+## Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateway** shows a **Paired Gateways** list with the active gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway. A quick-switch menu appears next to the connection row when more than one gateway is paired.
+- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per gateway. Switching never mixes state between gateways, and push registration follows the active gateway.
+- Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
+- Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
 
 ## Canvas + A2UI
 

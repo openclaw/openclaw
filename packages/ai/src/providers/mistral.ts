@@ -7,7 +7,9 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AssistantMessage,
@@ -57,9 +59,10 @@ const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
  */
 export function createBoundedMistralFetcher(
   maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
+  upstreamFetch: Fetcher = fetch,
 ): Fetcher {
   return async (input, init) => {
-    const response = init == null ? await fetch(input) : await fetch(input, init);
+    const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
     if (!response.body || typeof response.body.getReader !== "function") {
       return response;
     }
@@ -98,7 +101,7 @@ export function createBoundedMistralFetcher(
  */
 type MistralReasoningEffort = "none" | "high";
 
-export interface MistralOptions extends StreamOptions {
+interface MistralOptions extends StreamOptions {
   toolChoice?:
     | "auto"
     | "none"
@@ -139,7 +142,13 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
         // every `chat.stream` / `complete` call routes through
         // `HTTPClient.request` → `this.fetcher(req)`).
-        httpClient: new HTTPClient({ fetcher: createBoundedMistralFetcher() }),
+        // Mistral accepts HTTPClient.fetcher, so compose guarded egress with the byte cap.
+        httpClient: new HTTPClient({
+          fetcher: createBoundedMistralFetcher(
+            MISTRAL_STREAM_BODY_MAX_BYTES,
+            getAiTransportHost().buildModelFetch(model) ?? fetch,
+          ),
+        }),
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -287,7 +296,8 @@ function truncateErrorText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, maxChars)}... [truncated ${text.length - maxChars} chars]`;
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
 }
 
 function safeJsonStringify(value: unknown): string {

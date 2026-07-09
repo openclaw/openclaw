@@ -176,6 +176,33 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
+  async function withSkillUsageDiagnosticEvents(
+    run: (
+      emitted: DiagnosticEventPayload[],
+      privateData: DiagnosticEventPrivateData[],
+      flush: () => Promise<void>,
+    ) => Promise<void>,
+  ) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const skillUsagePrivateData: DiagnosticEventPrivateData[] = [];
+    const stopShared = onInternalDiagnosticEvent((event) => emitted.push(event));
+    const stopTrusted = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type === "skill.used") {
+        skillUsagePrivateData.push(privateData);
+      }
+    });
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    try {
+      await run(emitted, skillUsagePrivateData, flush);
+    } finally {
+      stopTrusted();
+      stopShared();
+    }
+  }
+
   function createPingPongTools(options?: { withProgress?: boolean }) {
     const readExecute = options?.withProgress
       ? vi.fn().mockImplementation(async (toolCallId: string) => ({
@@ -871,10 +898,10 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
         "tool-call-skill-read",
-        { path: path.join(".agents", "skills", "demo-skill", "SKILL.md") },
+        { path: `${path.join(".agents", "skills", "demo-skill", "SKILL.md")}</arg_value>>` },
         undefined,
         undefined,
       );
@@ -897,8 +924,10 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "read",
         toolCallId: "tool-call-skill-read",
       });
+      expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
+      expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
     });
   });
 
@@ -926,7 +955,7 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
         "tool-call-home-skill",
         { path: "~/.openclaw/skills/home-skill/SKILL.md" },
@@ -942,7 +971,50 @@ describe("before_tool_call loop detection behavior", () => {
         activation: "read",
         toolName: "read",
       });
+      expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain(os.homedir());
+      expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+    });
+  });
+
+  it("accounts sandbox skill reads against the original canonical file", async () => {
+    const workspaceDir = "/workspace";
+    const readPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+    const skillFile = "/agent-workspace/skills/demo/SKILL.md";
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      workspaceDir,
+      skillUsagePaths: [
+        {
+          readPath,
+          skillFile,
+          skillName: "demo",
+          skillSource: "workspace",
+        },
+      ],
+      loopDetection: { enabled: false },
+    });
+
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+      await tool.execute(
+        "tool-call-sandbox-skill",
+        { path: ".openclaw/sandbox-skills/skills/demo/SKILL.md" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        skillName: "demo",
+        skillSource: "workspace",
+        activation: "read",
+        toolName: "read",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain(skillFile);
+      expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFile);
     });
   });
 
@@ -990,6 +1062,8 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits skill usage diagnostics for command-dispatched skill tools", async () => {
+    const skillBaseDir = path.join("/tmp", "openclaw-skill-command", "skills", "matrix-profile");
+    const skillFilePath = path.join(skillBaseDir, "SKILL.md");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "sent" }] });
     const tool = wrapToolWithBeforeToolCallHook({ name: "message", execute } as any, {
       agentId: "main",
@@ -997,6 +1071,7 @@ describe("before_tool_call loop detection behavior", () => {
       sessionId: "session-id",
       skillCommand: {
         commandName: "set_profile",
+        skillFile: skillFilePath,
         skillName: "matrix-profile",
         skillSource: "workspace",
         toolName: "message",
@@ -1004,7 +1079,7 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
         "tool-call-skill-command",
         { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
@@ -1026,6 +1101,8 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "message",
         toolCallId: "tool-call-skill-command",
       });
+      expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
+      expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain("display name");
     });
   });

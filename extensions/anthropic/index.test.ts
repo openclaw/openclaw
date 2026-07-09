@@ -23,6 +23,7 @@ vi.mock("./cli-auth-seam.js", () => {
   };
 });
 
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import anthropicPlugin from "./index.js";
 
 beforeEach(() => {
@@ -88,6 +89,19 @@ describe("anthropic provider replay hooks", () => {
       command: "claude",
       modelArg: "--model",
       sessionArg: "--session-id",
+    });
+  });
+
+  it("publishes Claude Sonnet 5 CLI metadata without downgrading its API contract", () => {
+    expect(
+      buildClaudeCliCatalogEntries().find((model) => model.id === "claude-sonnet-5"),
+    ).toMatchObject({
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5 (Claude CLI)",
+      contextWindow: 1_000_000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
     });
   });
 
@@ -223,7 +237,7 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
-  it("backfills Sonnet into API-key agent model allowlists", async () => {
+  it("backfills current Sonnet models into API-key agent model allowlists", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     const next = provider.applyConfigDefaults?.({
@@ -248,6 +262,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
+    expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
 
@@ -624,6 +639,198 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-fable-5",
       }),
     ).toBe(false);
+  });
+
+  it("resolves Claude Sonnet 5 with its exact API contract", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+    } as never);
+    expect(levelIds(profile)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(requireRecord(profile, "Sonnet 5 thinking profile").defaultLevel).toBe("high");
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      model: {
+        ...(resolved as ProviderRuntimeModel),
+        reasoning: false,
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+    expectFields(normalized, {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("normalizes a Sonnet 5 model without cost metadata instead of crashing", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    const costlessModel = {
+      ...(resolved as ProviderRuntimeModel),
+      cost: undefined,
+    } as unknown as ProviderRuntimeModel;
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      model: costlessModel,
+    } as never);
+    // Compare against the resolver's own cost so the assertion survives the
+    // promotional -> standard pricing cutover.
+    expect(normalized?.cost).toEqual((resolved as ProviderRuntimeModel).cost);
+  });
+
+  it("resolves Claude Mythos 5 with its direct-only mandatory-adaptive contract", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-mythos-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-mythos-5",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: {
+        off: "low",
+        minimal: "low",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
+    expect(requireRecord(resolved, "Mythos model").mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "anthropic",
+        modelId: "claude-mythos-5",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "claude-cli",
+        modelId: "claude-mythos-5",
+        modelRegistry: createModelRegistry([]),
+      } as ProviderResolveDynamicModelContext),
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "claude-cli",
+        modelId: "claude-mythos-5",
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
+  it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 1));
+    try {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const model = {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      } as ProviderRuntimeModel;
+
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "anthropic",
+          modelId: model.id,
+          model,
+        } as never)?.cost,
+      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+      expect(
+        provider.resolveDynamicModel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-5-20260901",
+          modelRegistry: createModelRegistry([]),
+        } as ProviderResolveDynamicModelContext)?.cost,
+      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not apply direct API pricing to Claude CLI Sonnet 5", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const model = {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5 (Claude CLI)",
+      provider: "claude-cli",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    } as ProviderRuntimeModel;
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "claude-cli",
+        modelId: model.id,
+        model,
+      } as never)?.cost,
+    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("resolves dated modern Claude refs without discovery templates", async () => {

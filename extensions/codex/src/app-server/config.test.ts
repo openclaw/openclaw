@@ -23,6 +23,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
@@ -30,6 +31,20 @@ type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerR
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
 }
+
+describe("withMcpElicitationsApprovalPolicy", () => {
+  it("returns every field required by Codex granular approval policy", () => {
+    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
+      granular: {
+        mcp_elicitations: true,
+        request_permissions: false,
+        rules: false,
+        sandbox_approval: false,
+        skill_approval: false,
+      },
+    });
+  });
+});
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
@@ -874,7 +889,7 @@ describe("Codex app-server config", () => {
     });
   });
 
-  it("selects an allowed guardian approval policy when on-request is unavailable", () => {
+  it("normalizes the deprecated requirements on-failure alias to on-request", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
       modelProvider: "openai",
@@ -882,7 +897,7 @@ describe("Codex app-server config", () => {
     });
 
     expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-failure",
+      approvalPolicy: "on-request",
       sandbox: "workspace-write",
       approvalsReviewer: "auto_review",
     });
@@ -1162,6 +1177,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1213,6 +1229,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1269,6 +1286,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "ask",
       pluginPolicies: [
@@ -1325,6 +1343,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1355,6 +1374,44 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [],
+    });
+  });
+
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
+      configured: true,
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
+    });
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -1754,10 +1811,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
   it.each([
     { execMode: "auto", policies: ["never"] },
-    { execMode: "auto", policies: ["on-failure"] },
     { execMode: "auto", policies: ["untrusted"] },
     { execMode: "ask", policies: ["never"] },
-    { execMode: "ask", policies: ["on-failure"] },
     { execMode: "ask", policies: ["untrusted"] },
   ] as const)(
     "fails closed when normalized OpenClaw $execMode mode can only use $policies approvals",
@@ -1787,26 +1842,34 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("fails closed when normalized OpenClaw auto mode can only use on-failure approvals", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        execMode: "auto",
-        requirementsToml:
-          'allowed_sandbox_modes = ["read-only"]\nallowed_approval_policies = ["on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
-      }),
-    ).toThrow("tools.exec.mode=auto requires Codex app-server prompting approvals");
+  it("keeps auto mode prompting when requirements use the on-failure alias", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      execMode: "auto",
+      requirementsToml:
+        'allowed_sandbox_modes = ["read-only"]\nallowed_approval_policies = ["on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
   });
 
-  it("fails closed when normalized OpenClaw auto mode cannot force prompting over yolo", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        execMode: "auto",
-        requirementsToml:
-          'allowed_sandbox_modes = ["danger-full-access", "read-only"]\nallowed_approval_policies = ["never", "on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
-      }),
-    ).toThrow("tools.exec.mode=auto requires Codex app-server prompting approvals");
+  it("prefers the normalized on-request alias over a permitted never policy", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      execMode: "auto",
+      requirementsToml:
+        'allowed_sandbox_modes = ["danger-full-access", "read-only"]\nallowed_approval_policies = ["never", "on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
   });
 
   it("uses user approvals when normalized OpenClaw auto mode cannot use Codex auto-review", () => {
@@ -2395,21 +2458,31 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("lets explicit policy fields override guardian mode", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {
-        appServer: {
-          mode: "guardian",
-          approvalPolicy: "on-failure",
-          sandbox: "danger-full-access",
-          approvalsReviewer: "user",
-        },
+  it("normalizes the deprecated approval-policy config alias without dropping other settings", () => {
+    const pluginConfig = readCodexPluginConfig({
+      appServer: {
+        mode: "guardian",
+        approvalPolicy: "on-failure",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+        command: "/opt/codex/bin/codex",
       },
+    });
+    expect(pluginConfig.appServer).toMatchObject({
+      mode: "guardian",
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+      command: "/opt/codex/bin/codex",
+    });
+
+    const runtime = resolveRuntimeForTest({
+      pluginConfig,
       env: {},
     });
 
     expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-failure",
+      approvalPolicy: "on-request",
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });

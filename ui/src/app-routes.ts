@@ -15,6 +15,7 @@ import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
+import { page as profilePage } from "./pages/profile/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
@@ -23,7 +24,7 @@ import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-export type AppRouteModule = {
+type AppRouteModule = {
   render: (data: unknown) => unknown;
 };
 
@@ -42,6 +43,7 @@ const APP_ROUTE_TREE = [
   agentsPage,
   channelsPage,
   ...configPages,
+  profilePage,
   workboardPage,
   worktreesPage,
   instancesPage,
@@ -83,13 +85,11 @@ export async function startApplicationRouter(
 }
 
 export {
-  APP_ROUTE_DEFINITIONS,
   APP_ROUTE_IDS,
   inferBasePathFromPathname,
   isRouteId,
   locationForRoute,
   normalizeBasePath,
-  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

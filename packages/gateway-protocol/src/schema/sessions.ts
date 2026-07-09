@@ -256,6 +256,13 @@ export const SessionsCreateParamsSchema = Type.Object(
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
     worktree: Type.Optional(Type.Boolean()),
+    cwd: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -424,6 +431,12 @@ export const SessionsDeleteParamsSchema = Type.Object(
     expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
+    /**
+     * Restricts the delete to already-archived sessions (archive-then-delete).
+     * operator.write callers must set this; deletes without it require
+     * operator.admin.
+     */
+    archivedOnly: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -567,6 +580,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+    /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
+    timeZone: Type.Optional(NonEmptyString),
     /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */

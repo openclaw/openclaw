@@ -27,8 +27,10 @@ export type NodeSession = {
   modelIdentifier?: string;
   remoteIp?: string;
   declaredCaps: string[];
+  sessionCapsCeiling?: string[];
   caps: string[];
   declaredCommands: string[];
+  sessionCommandsCeiling?: string[];
   commands: string[];
   declaredPermissions?: Record<string, boolean>;
   permissions?: Record<string, boolean>;
@@ -44,7 +46,7 @@ type PendingInvoke = {
   systemRunEvent?: PendingSystemRunEvent;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 /** system.run metadata remembered while waiting for node events. */
@@ -70,7 +72,7 @@ type NodeInvokeResult = {
 };
 
 /** Connectivity probe result for a registered node. */
-type NodeConnectivityResult =
+export type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
 
@@ -94,6 +96,13 @@ const SLOW_CONSUMER_CLOSE_CODE = 1008;
 export type SerializedEventPayload = {
   readonly json: string;
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
+};
+
+/** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
+export type NodeEventTransport = {
+  send: (event: string, payload: unknown) => boolean;
+  sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
+  checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
 /** Serialize an event payload once so fanout can reuse the same JSON string. */
@@ -154,8 +163,8 @@ function resolvePendingSystemRunEvent(params: {
   };
 }
 
-/** Ensure system.run requests have a runId before they are sent to a node. */
-function withSystemRunEventRunId(params: { command: string; params?: unknown }): unknown {
+/** Keep node execution and Gateway authorization on the same canonical system.run fields. */
+function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
   if (
     params.command !== "system.run" ||
     !params.params ||
@@ -165,21 +174,46 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
     return params.params;
   }
   const obj = params.params as Record<string, unknown>;
-  if (normalizeString(obj.runId)) {
-    return params.params;
+  const normalized: Record<string, unknown> = {
+    ...obj,
+    runId: normalizeString(obj.runId) || randomUUID(),
+  };
+  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
+  if (timeoutMs === undefined) {
+    delete normalized.timeoutMs;
+  } else {
+    normalized.timeoutMs = timeoutMs;
   }
-  return { ...obj, runId: randomUUID() };
+  return normalized;
 }
 
 /** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
+  private eventTransportsByConn = new Map<string, NodeEventTransport>();
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
   /** Register a websocket client as the current connection for its node id. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
+    return this.registerSession(client, opts);
+  }
+
+  /** Register a node whose events are delivered by an HTTP polling transport. */
+  registerTransport(
+    client: GatewayWsClient,
+    opts: { remoteIp?: string | undefined },
+    transport: NodeEventTransport,
+  ) {
+    return this.registerSession(client, opts, transport);
+  }
+
+  private registerSession(
+    client: GatewayWsClient,
+    opts: { remoteIp?: string | undefined },
+    transport?: NodeEventTransport,
+  ) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
@@ -194,6 +228,18 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    // Session ceilings preserve protocol compatibility across later pairing
+    // approvals while declared* retains the durable approval surface.
+    const sessionCapsCeiling = Array.isArray(
+      (connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling,
+    )
+      ? ((connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling ?? [])
+      : declaredCaps;
+    const sessionCommandsCeiling = Array.isArray(
+      (connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling,
+    )
+      ? ((connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling ?? [])
+      : declaredCommands;
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
         ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
@@ -223,8 +269,10 @@ export class NodeRegistry {
       modelIdentifier: connect.client.modelIdentifier,
       remoteIp: opts.remoteIp,
       declaredCaps,
+      sessionCapsCeiling,
       caps,
       declaredCommands,
+      sessionCommandsCeiling,
       commands,
       declaredPermissions,
       permissions,
@@ -233,6 +281,11 @@ export class NodeRegistry {
     };
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    if (transport) {
+      this.eventTransportsByConn.set(client.connId, transport);
+    } else {
+      this.eventTransportsByConn.delete(client.connId);
+    }
     return session;
   }
 
@@ -243,6 +296,7 @@ export class NodeRegistry {
       return null;
     }
     this.nodesByConn.delete(connId);
+    this.eventTransportsByConn.delete(connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
       this.nodesById.delete(nodeId);
@@ -251,7 +305,9 @@ export class NodeRegistry {
       if (pending.connId !== connId) {
         continue;
       }
-      clearTimeout(pending.timer);
+      if (pending.timer !== undefined) {
+        clearTimeout(pending.timer);
+      }
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
     }
@@ -281,6 +337,10 @@ export class NodeRegistry {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
       };
+    }
+    const eventTransport = this.eventTransportsByConn.get(node.connId);
+    if (eventTransport) {
+      return eventTransport.checkConnectivity?.(timeoutMs) ?? { ok: true };
     }
     const socket = node.client.socket as PingableSocket;
     if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
@@ -375,14 +435,16 @@ export class NodeRegistry {
     }
 
     // Runtime approvals can only narrow capabilities/commands/permissions declared at connect.
-    const declaredCommands = new Set(node.declaredCommands);
-    const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
+    const sessionCommandsCeiling = new Set(node.sessionCommandsCeiling ?? node.declaredCommands);
+    const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
 
     if ("caps" in surface) {
-      const declaredCaps = new Set(node.declaredCaps);
-      const nextCaps = (surface.caps ?? []).filter((capability) => declaredCaps.has(capability));
+      const sessionCapsCeiling = new Set(node.sessionCapsCeiling ?? node.declaredCaps);
+      const nextCaps = (surface.caps ?? []).filter((capability) =>
+        sessionCapsCeiling.has(capability),
+      );
       node.caps = nextCaps;
       (node.client.connect as { caps?: string[] }).caps = nextCaps;
     }
@@ -433,17 +495,19 @@ export class NodeRegistry {
       };
     }
     const requestId = randomUUID();
-    const invokeParams = withSystemRunEventRunId({
+    const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
       params: params.params,
     });
+    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     const payload = {
       id: requestId,
       nodeId: params.nodeId,
       command: params.command,
       paramsJSON:
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
     const ok = this.sendEventToSession(node, "node.invoke.request", payload);
@@ -464,15 +528,17 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingInvokes.delete(requestId);
-        resolve({
-          ok: false,
-          error: { code: "TIMEOUT", message: "node invoke timed out" },
-        });
-      }, timeoutMs);
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              this.pendingInvokes.delete(requestId);
+              resolve({
+                ok: false,
+                error: { code: "TIMEOUT", message: "node invoke timed out" },
+              });
+            }, timeoutMs)
+          : undefined;
       this.pendingInvokes.set(requestId, {
         nodeId: params.nodeId,
         connId: node.connId,
@@ -480,7 +546,7 @@ export class NodeRegistry {
         systemRunEvent,
         resolve,
         reject,
-        timer,
+        ...(timer !== undefined ? { timer } : {}),
       });
     });
   }
@@ -650,7 +716,9 @@ export class NodeRegistry {
     if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer !== undefined) {
+      clearTimeout(pending.timer);
+    }
     this.pendingInvokes.delete(params.id);
     if (!params.ok && pending.systemRunEvent) {
       this.forgetAuthorizedSystemRunEvent({
@@ -689,6 +757,10 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
+    const eventTransport = this.eventTransportsByConn.get(node.connId);
+    if (eventTransport) {
+      return eventTransport.send(event, payload);
+    }
     if (this.rejectSlowNodeSocket(node)) {
       return false;
     }
@@ -717,6 +789,10 @@ export class NodeRegistry {
       !isSerializedEventPayload(payloadJSON)
     ) {
       return false;
+    }
+    const eventTransport = this.eventTransportsByConn.get(node.connId);
+    if (eventTransport) {
+      return eventTransport.sendRaw(event, payloadJSON);
     }
     if (this.rejectSlowNodeSocket(node)) {
       return false;

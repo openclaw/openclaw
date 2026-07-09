@@ -31,12 +31,17 @@ const hoisted = vi.hoisted(() => {
       );
     });
   });
-  return { computeBackoff, sleepWithAbort };
+  const startChannelApprovalHandlerBootstrap = vi.fn(async () => async () => {});
+  return { computeBackoff, sleepWithAbort, startChannelApprovalHandlerBootstrap };
 });
 
 vi.mock("../infra/backoff.js", () => ({
   computeBackoff: hoisted.computeBackoff,
   sleepWithAbort: hoisted.sleepWithAbort,
+}));
+
+vi.mock("../infra/approval-handler-bootstrap.js", () => ({
+  startChannelApprovalHandlerBootstrap: hoisted.startChannelApprovalHandlerBootstrap,
 }));
 
 type TestAccount = {
@@ -218,6 +223,7 @@ function createManager(options?: {
 }
 
 describe("server-channels auto restart", () => {
+  const stableChannelRunMs = 5 * 60_000;
   let previousRegistry: PluginRegistry | null = null;
 
   beforeEach(() => {
@@ -226,6 +232,8 @@ describe("server-channels auto restart", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     hoisted.computeBackoff.mockClear();
     hoisted.sleepWithAbort.mockClear();
+    hoisted.startChannelApprovalHandlerBootstrap.mockReset();
+    hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});
   });
 
   afterEach(async () => {
@@ -267,6 +275,76 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "resets the restart counter after a stable run that ends with %s",
+    async (outcome) => {
+      const attemptsAtStart: number[] = [];
+      let calls = 0;
+      const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+        attemptsAtStart.push(ctx.getStatus().reconnectAttempts ?? 0);
+        calls += 1;
+        if (calls === 3) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, stableChannelRunMs + 1_000);
+          });
+          if (outcome === "reject") {
+            throw new Error("stable run ended");
+          }
+        }
+      });
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createManager();
+
+      await manager.startChannels();
+      // Two instant exits accumulate attempts 1 and 2; the third run is stable.
+      await advanceTimersUntil(
+        () => startAccount.mock.calls.length >= 3,
+        "expected two crash-loop restarts before the stable run",
+        { stepMs: 10, maxMs: 500 },
+      );
+      await advanceTimersUntil(
+        () => startAccount.mock.calls.length >= 4,
+        "expected an auto-restart after the stable run exited",
+        { stepMs: 30_000, maxMs: 4 * stableChannelRunMs },
+      );
+
+      expect(attemptsAtStart[3]).toBe(1);
+    },
+  );
+
+  it("does not count slow cleanup as a stable channel run", async () => {
+    const attemptsAtStart: number[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      attemptsAtStart.push(ctx.getStatus().reconnectAttempts ?? 0);
+    });
+    hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
+      const run = hoisted.startChannelApprovalHandlerBootstrap.mock.calls.length;
+      return async () => {
+        if (run === 3) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, stableChannelRunMs + 1_000);
+          });
+        }
+      };
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 3,
+      "expected two crash-loop restarts before slow cleanup",
+      { stepMs: 10, maxMs: 500 },
+    );
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 4,
+      "expected an auto-restart after slow cleanup",
+      { stepMs: 30_000, maxMs: 4 * stableChannelRunMs },
+    );
+
+    expect(attemptsAtStart[3]).toBe(3);
   });
 
   it("records a clean channel monitor exit before auto-restart", async () => {

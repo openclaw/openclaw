@@ -77,48 +77,6 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
-vi.mock("../../../lib/agents/display.ts", () => {
-  const isRenderableControlUiAvatarUrl = (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-
-  return {
-    assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
-    isRenderableControlUiAvatarUrl,
-    resolveAssistantTextAvatar: (value: string | null | undefined) => {
-      const trimmed = value?.trim();
-      if (!trimmed || trimmed === "A") {
-        return null;
-      }
-      if (trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed)) {
-        return null;
-      }
-      if (
-        trimmed.length > 8 ||
-        /\s/.test(trimmed) ||
-        /[\\/.:]/.test(trimmed) ||
-        /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(trimmed)
-      ) {
-        return null;
-      }
-      return trimmed;
-    },
-    resolveChatAvatarRenderUrl: (
-      candidate: string | null | undefined,
-      agent: { identity?: { avatar?: string; avatarUrl?: string } },
-    ) => {
-      if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-        return candidate;
-      }
-      for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-        if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-          return value;
-        }
-      }
-      return null;
-    },
-  };
-});
-
 vi.mock("./chat-avatar.ts", () => ({
   renderChatAvatar: (role: string) => {
     const element = document.createElement("div");
@@ -579,7 +537,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("reserves bubble space when assistant message actions render", () => {
+  it("renders assistant message actions in the footer row", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -587,13 +545,11 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    const assistantBubble = expectElement(
-      container,
-      ".chat-group.assistant .chat-bubble",
-      HTMLElement,
-    );
-    expect(assistantBubble.classList.contains("has-copy")).toBe(true);
-    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+    const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
+    expect(assistantGroup.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      assistantGroup.querySelector(".chat-group-footer-actions .chat-copy-btn"),
+    ).toBeInstanceOf(HTMLElement);
 
     renderGroupedMessage(
       container,
@@ -608,6 +564,30 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
+  it("uses the displayed answer for assistant message actions", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<think>internal reasoning</think>\nVisible answer",
+        timestamp: 1000,
+      },
+      {
+        onOpenSidebar,
+        showReasoning: false,
+      },
+    );
+
+    container.querySelector<HTMLButtonElement>(".chat-expand-btn")?.click();
+
+    expect(requireFirstMockArg(onOpenSidebar, "sidebar open")).toMatchObject({
+      kind: "markdown",
+      content: "Visible answer",
+    });
   });
 
   it("renders user markdown without code-block copy chrome", () => {
@@ -2892,7 +2872,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
-  it("reserves layout space for assistant message actions", () => {
+  it("keeps assistant message actions outside the bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       id: "assistant-action-space",
@@ -2902,8 +2882,11 @@ describe("grouped chat rendering", () => {
     });
 
     const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
-    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
-    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(false);
+    expect(bubble?.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      container.querySelector(".chat-group.assistant .chat-group-footer-actions .chat-copy-btn"),
+    ).not.toBeNull();
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {

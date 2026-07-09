@@ -10,13 +10,13 @@
 // error boundary before a renderer runs, so renderers only see values.
 
 import type { TemplateResult } from "lit";
-import type { ApplicationConfig } from "../../../app/config.ts";
+import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import type { DashboardWidget } from "../types.ts";
 
 /** Ambient context a builtin may need beyond its own binding value. */
 export type BuiltinWidgetContext = {
   /** Control UI embed policy — only the iframe-embed widget consumes it. */
-  embed: Pick<ApplicationConfig, "embedSandboxMode" | "allowExternalEmbedUrls">;
+  embed: Pick<ApplicationConfigCapability["current"], "embedSandboxMode" | "allowExternalEmbedUrls">;
 };
 
 /** A builtin widget renderer: pure, side-effect-free, throws only on real bugs. */

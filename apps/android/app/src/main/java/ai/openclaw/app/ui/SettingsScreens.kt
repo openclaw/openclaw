@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -17,7 +18,11 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.currentSystemLanguageTag
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
@@ -26,6 +31,7 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
+import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -42,6 +48,9 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -83,15 +92,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -121,6 +133,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -146,6 +159,7 @@ internal enum class SettingsRoute {
   CronJobs,
   Usage,
   Skills,
+  SkillWorkshop,
   NodesDevices,
   Channels,
   Dreaming,
@@ -179,6 +193,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -615,16 +630,12 @@ private fun SettingsWaveformPanel(
       horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
-          Box(
-            modifier =
-              Modifier
-                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
-                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
-          )
-        }
-      }
+      // Thinking is the preview phase: no capture runs on this screen, so the
+      // synthetic swell demonstrates the animation without touching the mic.
+      TalkWaveform(
+        phase = if (active) TalkWaveformPhase.Thinking else TalkWaveformPhase.Idle,
+        modifier = Modifier.weight(1f).height(48.dp),
+      )
     }
   }
 }
@@ -1138,6 +1149,8 @@ private fun GatewaySettingsScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val pairedGateways by viewModel.pairedGateways.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -1148,6 +1161,14 @@ private fun GatewaySettingsScreen(
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+  var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  val transport =
+    remember(hostInput, tlsInput) {
+      gatewayManualTransportPresentation(
+        hostInput = hostInput,
+        requestedTls = tlsInput,
+      )
+    }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
@@ -1184,6 +1205,29 @@ private fun GatewaySettingsScreen(
     )
   }
 
+  pendingForgetStableId?.let { stableId ->
+    val entry = pairedGateways.firstOrNull { it.stableId == stableId }
+    AlertDialog(
+      onDismissRequest = { pendingForgetStableId = null },
+      title = { Text("Forget gateway?") },
+      text = { Text("Remove ${entry?.name ?: "this gateway"} and its saved credentials from this phone?") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            pendingForgetStableId = null
+            viewModel.forgetGateway(stableId)
+          },
+        ) {
+          Text("Forget")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text("Cancel") }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
+
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
       rows =
@@ -1203,17 +1247,61 @@ private fun GatewaySettingsScreen(
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
     ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "Gateways", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        if (pairedGateways.isEmpty()) {
+          Text(text = "No paired gateways.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          pairedGateways.forEachIndexed { index, entry ->
+            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+            ClawListItem(
+              title = entry.name,
+              subtitle =
+                when (entry.kind) {
+                  GatewayRegistryEntryKind.MANUAL -> "${entry.host}:${entry.port}"
+                  GatewayRegistryEntryKind.DISCOVERED -> entry.stableId
+                },
+              leading = {
+                if (entry.stableId == activeGatewayStableId) {
+                  ClawIconBadge(Icons.Default.Check)
+                } else {
+                  ClawIconBadge(Icons.Default.Cloud)
+                }
+              },
+              trailing = {
+                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                  Text("Forget")
+                }
+              },
+              onClick =
+                if (entry.stableId == activeGatewayStableId) {
+                  null
+                } else {
+                  { viewModel.switchToGateway(entry.stableId) }
+                },
+            )
+          }
+        }
+        ClawSecondaryButton(
+          text = "Add gateway",
+          onClick = viewModel::pairNewGateway,
+          modifier = Modifier.fillMaxWidth(),
+          icon = Icons.Default.QrCode2,
+        )
+      }
+    }
+    ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Gateway setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(
-          text = "Clear this phone's saved gateway access and scan a fresh setup code.",
+          text = "Scan or paste a setup code to add another gateway.",
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Add gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
           ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
@@ -1233,11 +1321,26 @@ private fun GatewaySettingsScreen(
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
           ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.62f))
         }
+        Text(text = "Connection security", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        val securityOptions = listOf("Unencrypted", "Secure (TLS)")
         ClawSegmentedControl(
-          options = listOf("Local", "TLS"),
-          selected = if (tlsInput) "TLS" else "Local",
-          onSelect = { selected -> tlsInput = selected == "TLS" },
+          options = securityOptions,
+          selected = if (transport.effectiveTls) "Secure (TLS)" else "Unencrypted",
+          onSelect = { selected -> tlsInput = selected == "Secure (TLS)" },
+          enabledOptions =
+            if (transport.requiresTls) {
+              setOf("Secure (TLS)")
+            } else {
+              securityOptions.toSet()
+            },
         )
+        transport.helperText?.let { helperText ->
+          Text(
+            text = helperText,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
           ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))
@@ -1258,7 +1361,7 @@ private fun GatewaySettingsScreen(
                 savedManualTls = manualTls,
                 manualHostInput = hostInput,
                 manualPortInput = portInput,
-                manualTlsInput = tlsInput,
+                manualTlsInput = transport.effectiveTls,
                 tokenInput = tokenInput,
                 bootstrapTokenInput = bootstrapTokenInput,
                 passwordInput = passwordInput,
@@ -1286,12 +1389,16 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val context = LocalContext.current
+  var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
+  val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
+  SettingsDetailFrame(title = "Appearance", subtitle = "Theme and translated Android text.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
+          SettingsMetric("Language", appLanguage.displayName),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
@@ -1306,7 +1413,57 @@ private fun AppearanceSettingsScreen(
         )
       }
     }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "App language", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        AppLanguage.entries.forEachIndexed { index, language ->
+          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+          AppLanguageRow(
+            language = language,
+            selected = language == appLanguage,
+            systemLanguageTag = systemLanguageTag,
+            onClick = {
+              appLanguage = language
+              setAppLanguage(language)
+            },
+          )
+        }
+      }
+    }
   }
+}
+
+@Composable
+private fun AppLanguageRow(
+  language: AppLanguage,
+  selected: Boolean,
+  systemLanguageTag: String,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = language.displayName,
+    subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
+    leading = { ClawIconBadge(Icons.Default.Language) },
+    trailing =
+      if (selected) {
+        {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "Selected",
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.primary,
+          )
+        }
+      } else {
+        null
+      },
+    onClick = onClick,
+  )
 }
 
 internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
@@ -1373,6 +1530,7 @@ private fun AboutSettingsScreen(
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
 
   SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
+    AboutHeroPanel()
     SettingsMetricPanel(
       rows =
         listOf(
@@ -1398,6 +1556,66 @@ private fun AboutSettingsScreen(
     ClawPanel {
       Text(text = aboutUpdateText(latestVersion = latestVersion), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
+    AboutLinksPanel()
+    Text(
+      text = "© 2026 OpenClaw Foundation — MIT License.",
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textSubtle,
+      modifier = Modifier.fillMaxWidth(),
+      textAlign = TextAlign.Center,
+    )
+  }
+}
+
+@Composable
+private fun AboutHeroPanel() {
+  ClawPanel {
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      OpenClawMascot(contentDescription = "OpenClaw logo", modifier = Modifier.size(96.dp))
+      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "OpenClaw", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Personal AI on your devices", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+/** External project links; static first-party URLs matching the iOS and macOS About screens. */
+private data class AboutLink(
+  val title: String,
+  val subtitle: String,
+  val url: String,
+)
+
+private val aboutLinks =
+  listOf(
+    AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
+    AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
+    AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
+    AboutLink("Discord", "discord.gg/clawd", "https://discord.gg/clawd"),
+  )
+
+@Composable
+private fun AboutLinksPanel() {
+  val uriHandler = LocalUriHandler.current
+  ClawListPanel(items = aboutLinks) { link ->
+    ClawListItem(
+      title = link.title,
+      subtitle = link.subtitle,
+      onClick = { uriHandler.openUri(link.url) },
+      trailing = {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+          contentDescription = null,
+          tint = ClawTheme.colors.textSubtle,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+    )
   }
 }
 

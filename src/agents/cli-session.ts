@@ -116,7 +116,7 @@ export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): vo
 
 type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
 
-export type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
+type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
 
 export type CliSessionReuseResult =
   | { mode: "none" }

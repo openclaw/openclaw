@@ -2,7 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelAuthStatusResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   getContextNoticeViewModel,
@@ -53,6 +53,109 @@ function getButton(container: Element, selector: string): HTMLButtonElement {
 describe("chat run controls", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
+  });
+
+  it("uses the primary action for voice when empty, send when composed, and stop while recording", () => {
+    const container = document.createElement("div");
+    const onToggleVoice = vi.fn();
+    const emptyProps = {
+      ...createProps({ showSecondary: false }),
+      onToggleVoice,
+    } as ChatRunControlsProps & {
+      onToggleVoice: () => void;
+    };
+
+    render(renderChatRunControls(emptyProps), container);
+
+    const voiceButton = getButton(container, 'button[aria-label="Start voice input"]');
+    expect(
+      container.querySelector(`button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).toBeNull();
+    voiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        draft: "Send this",
+      }),
+      container,
+    );
+    expect(getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`)).toBe(
+      container.querySelector(".chat-send-btn"),
+    );
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        voiceActive: true,
+      } as ChatRunControlsProps & {
+        onToggleVoice: () => void;
+        voiceActive: boolean;
+      }),
+      container,
+    );
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.querySelector(".agent-chat__voice-activity")).not.toBeNull();
+    stopVoiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps attachment-only messages on the send action", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatRunControls({
+        ...createProps({ showSecondary: false }),
+        hasAttachments: true,
+        onToggleVoice: () => undefined,
+      } as ChatRunControlsProps & {
+        hasAttachments: boolean;
+        onToggleVoice: () => void;
+      }),
+      container,
+    );
+
+    expect(
+      getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
+  it("keeps voice and generation stop actions available when both are active", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    const onToggleVoice = vi.fn();
+    render(
+      renderChatRunControls(
+        createProps({
+          canAbort: true,
+          onAbort,
+          onToggleVoice,
+          voiceActive: true,
+        }),
+      ),
+      container,
+    );
+
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    const stopGenerationButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
+
+    // Redesign guard: the two controls must stay visually distinct — a live
+    // waveform pill for voice and a single danger stop square for the run.
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(false);
+    expect(stopGenerationButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+
+    stopVoiceButton.click();
+    stopGenerationButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+    expect(onAbort).toHaveBeenCalledTimes(1);
   });
 
   it("switches between idle and abort actions", () => {
@@ -331,6 +434,166 @@ describe("context notice", () => {
     resetContextNoticeThemeCacheForTest();
   });
 
+  it("treats unavailable provider usage as absent content", () => {
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerUsage: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".context-usage")).toBeNull();
+
+    const session: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    };
+    render(
+      renderContextNotice(session, 200_000, {
+        providerUsage: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+    expect(container.querySelector(".context-usage")).not.toBeNull();
+    expect(container.querySelector(".context-usage__plan-header")).toBeNull();
+  });
+
+  it("keeps provider usage available before context token metrics arrive", () => {
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerUsage: {
+          basePath: "/rosita",
+          modelAuthStatusResult: {
+            ts: Date.now(),
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
+                usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
+              },
+            ],
+          },
+        },
+      }),
+      container,
+    );
+
+    const context = container.querySelector<HTMLElement>(".context-ring");
+    expect(context).toBeInstanceOf(HTMLElement);
+    expect(context?.getAttribute("aria-label")).toBe("Usage Remaining");
+    expect(context?.querySelector(".context-ring__detail")).toBeNull();
+    expect(container.querySelector(".context-usage__bar")).toBeNull();
+    expect(container.querySelector(".context-usage__stats")).toBeNull();
+    const planHeader = container.querySelector(".context-usage__plan-header");
+    expect(planHeader?.textContent?.replace(/\s+/g, " ").trim()).toBe("Plan usage");
+    const usageLink = container.querySelector<HTMLAnchorElement>(
+      ".context-usage__popover [data-chat-provider-usage='true']",
+    );
+    expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
+    const limitRow = container.querySelector(".context-usage__limit");
+    expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly · all models 72%");
+    const limitFill = container.querySelector<HTMLElement>(".context-usage__limit-bar span");
+    expect(limitFill?.style.width).toBe("72%");
+
+    render(renderContextNotice(undefined, 200_000), container);
+    expect(container.querySelector(".context-usage")).toBeNull();
+  });
+
+  it("shows plan windows and hides cost sections for subscription-billed sessions", () => {
+    // Single shared timestamp: both auth rows must dedupe to one group, and the
+    // 45s pad keeps formatQuotaReset at exactly "2h" despite wall-clock drift.
+    const fiveHourReset = Date.now() + 2 * 3_600_000 + 45_000;
+    const authStatus: ModelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
+          usage: {
+            providerId: "anthropic",
+            plan: "Max (20x)",
+            windows: [
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
+              { label: "Week", usedPercent: 25 },
+              { label: "Fable", usedPercent: 92 },
+            ],
+            billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD" }],
+          },
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
+          usage: {
+            providerId: "anthropic",
+            plan: "Max (20x)",
+            windows: [
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
+              { label: "Week", usedPercent: 25 },
+              { label: "Fable", usedPercent: 92 },
+            ],
+            billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD" }],
+          },
+        },
+      ],
+    };
+    const session: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 2,
+      outputTokens: 3,
+      totalTokens: 78_700,
+      contextTokens: 1_000_000,
+      estimatedCostUsd: 0.02,
+      model: "claude-fable-5",
+      // sessions.list canonicalizes CLI aliases (claude-cli -> anthropic); the
+      // popover must match plan usage through usage.providerId, not the auth
+      // row's provider id.
+      modelProvider: "anthropic",
+    };
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(session, 1_000_000, {
+        // Trailing user turn: no assistant cost stats to fall back on.
+        messages: [{ role: "user", content: "hi" }],
+        providerUsage: { modelAuthStatusResult: authStatus },
+      }),
+      container,
+    );
+
+    // Identical usage exposed via anthropic + claude-cli rows collapses to one group.
+    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
+    expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
+    const rows = [...container.querySelectorAll(".context-usage__limit")].map((row) =>
+      row.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(rows).toEqual([
+      "5-hour limit Resets 2h 22%",
+      "Weekly · all models 25%",
+      "Fable 92%",
+      "Usage credits $157.85 of $400.00",
+    ]);
+    const fills = [...container.querySelectorAll<HTMLElement>(".context-usage__limit-bar span")];
+    expect(fills.map((fill) => fill.style.width)).toEqual(["22%", "25%", "92%", "39%"]);
+    expect(fills[2]?.classList.contains("context-usage__limit-fill--danger")).toBe(true);
+
+    // Subscription-billed: token stats stay, dollar estimates disappear.
+    expect(container.querySelector(".context-usage__stats")).not.toBeNull();
+    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
+    expect(container.textContent).not.toContain("Est. cost");
+  });
+
   it("renders persistent fresh context usage and keeps high-usage warning behavior", () => {
     const container = document.createElement("div");
     vi.spyOn(window, "getComputedStyle").mockReturnValue({
@@ -379,6 +642,7 @@ describe("context notice", () => {
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
     expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
+    expect(lowNotice!.querySelector(".context-ring__detail")).toBeNull();
     expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k of 200k (23%)");
     expect(lowNotice!.tagName.toLowerCase()).toBe("summary");
     const usageDetails = container.querySelector<HTMLDetailsElement>(".context-usage details");
@@ -388,7 +652,7 @@ describe("context notice", () => {
     expect(
       container.querySelector(".context-usage__popover")?.textContent?.replace(/\s+/gu, " ").trim(),
     ).toBe(
-      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider openai Model gpt-5.5",
+      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider: openai Model: gpt-5.5",
     );
     expect(
       container.querySelectorAll(".context-usage__stats:not(.context-usage__stats--cost) > div"),

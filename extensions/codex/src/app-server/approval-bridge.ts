@@ -21,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   isTrustedCodexModelBackedOpenAIProvider,
@@ -330,8 +331,7 @@ function matchesCurrentTurn(
   if (!requestParams) {
     return false;
   }
-  const requestThreadId =
-    readString(requestParams, "threadId") ?? readString(requestParams, "conversationId");
+  const requestThreadId = readString(requestParams, "threadId");
   const requestTurnId = readString(requestParams, "turnId");
   return requestThreadId === threadId && requestTurnId === turnId;
 }
@@ -1585,12 +1585,12 @@ function readString(record: JsonObject | undefined, key: string): string | undef
 }
 
 function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
 }
 
 function previewSource(value: string): ApprovalPreviewSource {
   return {
-    value: value.slice(0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
+    value: sliceUtf16Safe(value, 0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
     clipped: value.length > APPROVAL_PREVIEW_SCAN_MAX_LENGTH,
   };
 }
@@ -1604,7 +1604,7 @@ function appendPreviewPart(
   const value = `${prefix}${part}`;
   const clipped = source?.clipped === true || value.length > APPROVAL_PREVIEW_SCAN_MAX_LENGTH;
   return {
-    value: value.slice(0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
+    value: sliceUtf16Safe(value, 0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
     clipped,
   };
 }

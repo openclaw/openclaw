@@ -23,7 +23,7 @@ import {
 } from "../../lib/provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 
-export type OverviewCardsProps = {
+type OverviewCardsProps = {
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
