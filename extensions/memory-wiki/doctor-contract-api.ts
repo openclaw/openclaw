@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveMemoryWikiConfig, type MemoryWikiPluginConfig } from "./src/config.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -49,36 +53,6 @@ function resolveConfiguredVaultRoots(params: {
   return [resolved.vault.path];
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${params.label} in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ${params.label} -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${params.label}: ${String(err)}`);
-  }
-}
-
 async function archiveLegacyImportRunRecords(params: {
   vaultRoot: string;
   changes: string[];
@@ -97,9 +71,9 @@ async function archiveLegacyImportRunRecords(params: {
     if (!entry.isFile() || !entry.name.endsWith(".json")) {
       continue;
     }
-    await archiveLegacySource({
+    await archiveLegacyStateSource({
       filePath: path.join(importRunsDir, entry.name),
-      label: "Memory Wiki import-run legacy record",
+      label: "Memory Wiki import-run",
       changes: params.changes,
       warnings: params.warnings,
     });
@@ -128,7 +102,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
         const state = await readLegacyMemoryWikiSourceSyncState(vaultRoot);
         const count = Object.keys(state.entries).length;
-        if (count === 0 || !(await fileExists(filePath))) {
+        if (count === 0 || !(await legacyStateFileExists(filePath))) {
           continue;
         }
         previews.push(
@@ -146,7 +120,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         env: params.env,
       })) {
         const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-        if (!(await fileExists(filePath))) {
+        if (!(await legacyStateFileExists(filePath))) {
           continue;
         }
         const state = await readLegacyMemoryWikiSourceSyncState(vaultRoot);
@@ -176,9 +150,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated Memory Wiki source sync -> plugin state (${importedCount} imported, ${existingCount} existing)`,
         );
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath,
-          label: "Memory Wiki source-sync legacy source",
+          label: "Memory Wiki source-sync",
           changes,
           warnings,
         });

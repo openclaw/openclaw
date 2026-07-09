@@ -13,6 +13,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 
@@ -173,13 +174,6 @@ function validateDeleteConfirmation(params: ChannelApiParams): string | null {
     return "Deleting all announcements requires bulkConfirmed=true after a separate bulk-delete confirmation.";
   }
   return null;
-}
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
 }
 
 /**

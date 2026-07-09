@@ -83,7 +83,7 @@ export function parsePackagedBundledPluginPath(
 }
 
 /** Builds the legacy extensions-root alias for a packaged bundled plugin path. */
-export function buildLegacyBundledPath(localPath: string): string | null {
+function buildLegacyBundledPath(localPath: string): string | null {
   const packaged = parsePackagedBundledPluginPath(localPath);
   if (!packaged) {
     return null;

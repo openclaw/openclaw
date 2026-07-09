@@ -24,8 +24,12 @@ enum GatewayProblemPrimaryAction {
     }
 
     @MainActor
-    static func openProtocolMismatchHelpIfNeeded(_ problem: GatewayConnectionProblem) -> Bool {
+    static func handleProtocolMismatchIfNeeded(_ problem: GatewayConnectionProblem) -> Bool {
         guard problem.kind == .protocolMismatch else { return false }
+        if let command = problem.actionCommand {
+            UIPasteboard.general.string = command
+            return true
+        }
         if let url = problem.docsURL {
             UIApplication.shared.open(url)
         }

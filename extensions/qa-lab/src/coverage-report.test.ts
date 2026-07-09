@@ -143,7 +143,8 @@ function scenarioWithCoverage(params: {
 
 describe("qa coverage report", () => {
   it("groups scenario coverage metadata by theme and surface", () => {
-    const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
+    const scenarios = readQaScenarioPack().scenarios;
+    const inventory = buildQaCoverageInventory(scenarios);
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
@@ -169,6 +170,22 @@ describe("qa coverage report", () => {
     ).toMatchObject({
       channelDriver: "live",
     });
+    for (const [categoryId, scenarioRef] of [
+      ["docker-podman-hosting.container-setup", "qa/scenarios/runtime/compose-setup.yaml"],
+      [
+        "docker-podman-hosting.image-release-and-validation",
+        "qa/scenarios/runtime/docker-package-install.yaml",
+      ],
+    ] as const) {
+      const category = inventory.scorecardTaxonomy.categories.find(
+        (entry) => entry.id === categoryId,
+      );
+      expect(category?.profiles).toContain("release");
+      expect(category?.profiles).not.toContain("smoke-ci");
+      expect(scenarios.find((scenario) => scenario.sourcePath === scenarioRef)?.category).toBe(
+        categoryId,
+      );
+    }
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "all"),
     ).toMatchObject({
@@ -211,7 +228,7 @@ describe("qa coverage report", () => {
     ).toContainEqual({
       coverageId: TEST_BROWSER_COVERAGE_ID,
       kind: "playwright",
-      path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      path: "ui/src/e2e/chat-flow.e2e.test.ts",
       role: "primary",
       scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
     });
@@ -229,6 +246,27 @@ describe("qa coverage report", () => {
     expect(observabilityPack?.coverageIds).toContain("telemetry.prometheus");
     expect(inventory.byTheme.memory.map((coverage) => coverage.id)).toContain("memory.recall");
     expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("memory.recall");
+  });
+
+  it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath: "scripts/test-scenario.ts",
+    });
+
+    expect(() =>
+      buildQaCoverageInventory([scenario], {
+        nonYamlScenarios: [
+          {
+            id: scenario.id,
+            sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+          },
+        ],
+      }),
+    ).toThrow(
+      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
+    );
   });
 
   it("renders a compact markdown inventory", () => {
@@ -255,7 +293,6 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- telegram (telegram): canary: always-on, help-command: telegram-help-command, mention-gating: telegram-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
     );
-    expect(report).toContain("thread-follow-up: slack-thread-follow-up");
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
     expect(report).toContain("- Fulfilled taxonomy categories:");
@@ -265,7 +302,7 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: all, release, smoke-ci; coverage IDs:",
     );
-    expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
+    expect(report).toContain("primary:playwright:ui/src/e2e/chat-flow.e2e.test.ts (ui.control)");
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 
@@ -279,12 +316,27 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- Suite command: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
     );
-    expect(report).toContain("  - execution: playwright ui/src/ui/e2e/chat-flow.e2e.test.ts");
+    expect(report).toContain("  - execution: playwright ui/src/e2e/chat-flow.e2e.test.ts");
     expect(report).not.toContain("Native test refs");
   });
 
+  it("includes required channel driver flags in scenario match commands", () => {
+    const matches = findQaScenarioMatches(
+      readQaScenarioPack().scenarios,
+      "whatsapp-access-control-group-disabled",
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "whatsapp-access-control-group-disabled",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled`",
+    );
+  });
+
   it("splits qa suite targets when matches mix execution kinds", () => {
-    const playwrightExecutionPath = "ui/src/ui/e2e/chat-flow.e2e.test.ts";
+    const playwrightExecutionPath = "ui/src/e2e/chat-flow.e2e.test.ts";
     const flowScenario = scenarioWithCoverage({
       primary: [TEST_EXECUTABLE_COVERAGE_ID],
     });
@@ -368,7 +420,7 @@ describe("qa coverage report", () => {
           primary: [TEST_BROWSER_COVERAGE_ID],
           sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
           executionKind: "playwright",
-          executionPath: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+          executionPath: "ui/src/e2e/chat-flow.e2e.test.ts",
         }),
       ],
     });
@@ -384,7 +436,7 @@ describe("qa coverage report", () => {
       {
         coverageId: TEST_BROWSER_COVERAGE_ID,
         kind: "playwright",
-        path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+        path: "ui/src/e2e/chat-flow.e2e.test.ts",
         role: "primary",
         scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
       },

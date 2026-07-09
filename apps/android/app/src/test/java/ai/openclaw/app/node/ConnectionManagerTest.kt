@@ -431,7 +431,13 @@ class ConnectionManagerTest {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
-      ConnectionManager.nativeClientOperatorScopes,
+      listOf(
+        "operator.admin",
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ),
       options.scopes,
     )
   }

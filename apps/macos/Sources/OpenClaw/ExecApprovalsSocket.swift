@@ -132,6 +132,24 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
+enum ExecHostOutputLimiter {
+    static let maxJsonlResponseBytes = 16 * 1024 * 1024
+    static let maxOutputFieldBytes = 1024 * 1024
+    private static let truncationMarker = "... (truncated) "
+
+    static func truncate(_ value: String) -> String {
+        let bytes = value.utf8
+        guard bytes.count > self.maxOutputFieldBytes else { return value }
+
+        let tailBudget = self.maxOutputFieldBytes - self.truncationMarker.utf8.count
+        var start = bytes.index(bytes.endIndex, offsetBy: -tailBudget)
+        while start < bytes.endIndex, (bytes[start] & 0xC0) == 0x80 {
+            start = bytes.index(after: start)
+        }
+        return self.truncationMarker + String(decoding: bytes[start...], as: UTF8.self)
+    }
+}
+
 struct ExecHostError: Codable, Error {
     var code: String
     var message: String
@@ -621,8 +639,8 @@ private enum ExecHostExecutor {
             exitCode: result.exitCode,
             timedOut: result.timedOut,
             success: result.success,
-            stdout: result.stdout,
-            stderr: result.stderr,
+            stdout: ExecHostOutputLimiter.truncate(result.stdout),
+            stderr: ExecHostOutputLimiter.truncate(result.stderr),
             error: result.errorMessage)
         return self.successResponse(payload)
     }

@@ -9,6 +9,7 @@ import {
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isLinkLocalIpAddress,
+  isLoopbackIpAddress,
   type Ipv4SpecialUseBlockOptions,
   type Ipv6SpecialUseBlockOptions,
   isIpv4Address,
@@ -410,11 +411,41 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  // Keep this stricter SSRF classifier local: locality/auth callers intentionally
+  // recognize only canonical loopback forms, while DNS answers need all encodings.
+  if (isLoopbackIpAddress(address)) {
+    return true;
+  }
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed || isIpv4Address(parsed)) {
+    return false;
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(parsed);
+  return embeddedIpv4?.range() === "loopback";
+}
+
+function isExplicitLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "localhost.localdomain" ||
+    hostname.endsWith(".localhost") ||
+    isLoopbackIpAddressIncludingEmbeddedIpv4(hostname)
+  );
+}
+
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
+  hostname: string,
 ): void {
+  const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+
   for (const entry of results) {
-    if (isLinkLocalIpAddress(entry.address) || isCloudMetadataIpAddress(entry.address)) {
+    if (
+      (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
+      isLinkLocalIpAddress(entry.address) ||
+      isCloudMetadataIpAddress(entry.address)
+    ) {
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
     }
   }
@@ -561,7 +592,7 @@ export async function resolvePinnedHostnameWithPolicy(
   } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
     // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
     // it must not turn metadata/link-local DNS rebinding into an implicit allow.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -617,7 +648,7 @@ function resolvePinnedDispatcherLookup(
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,

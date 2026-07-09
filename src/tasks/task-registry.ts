@@ -19,7 +19,9 @@ import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -124,7 +126,7 @@ export type ParentFlowLinkErrorCode =
   | "cancel_requested"
   | "terminal";
 
-export class ParentFlowLinkError extends Error {
+class ParentFlowLinkError extends Error {
   constructor(
     public readonly code: ParentFlowLinkErrorCode,
     message: string,
@@ -496,8 +498,25 @@ function normalizeTaskTerminalOutcome(
 
 function shouldApplyRunScopedStatusUpdate(params: {
   currentStatus: TaskStatus;
+  currentRuntime: TaskRuntime;
+  currentChildSessionKey?: string;
+  currentError?: string;
+  currentEndedAt?: number;
   nextStatus: TaskStatus;
+  nextError?: string;
+  nextEndedAt?: number;
 }): boolean {
+  if (
+    params.currentRuntime === "subagent" &&
+    params.nextStatus === "cancelled" &&
+    params.nextError === SUBAGENT_KILL_TASK_ERROR &&
+    isTerminalTaskStatus(params.currentStatus) &&
+    !(params.currentStatus === "cancelled" && params.currentError === SUBAGENT_KILL_TASK_ERROR)
+  ) {
+    // The kill marker is provisional. It may refresh only its own tombstone;
+    // canonical completion or operator cancellation already won this race.
+    return false;
+  }
   if (params.currentStatus === params.nextStatus) {
     return true;
   }
@@ -506,6 +525,26 @@ function shouldApplyRunScopedStatusUpdate(params: {
   }
   if (!isTerminalTaskStatus(params.nextStatus)) {
     return false;
+  }
+  // Direct subagent termination is provisional. An operator cancellation is
+  // sticky only against outcomes that completed at or after cancellation.
+  if (
+    params.currentStatus === "cancelled" &&
+    (params.nextStatus === "succeeded" ||
+      params.nextStatus === "failed" ||
+      params.nextStatus === "timed_out")
+  ) {
+    const canonicalOutcomePredatesCancellation =
+      params.currentRuntime === "subagent" &&
+      params.currentEndedAt !== undefined &&
+      params.nextEndedAt !== undefined &&
+      params.nextEndedAt < params.currentEndedAt;
+    return (
+      canonicalOutcomePredatesCancellation ||
+      (params.currentRuntime === "subagent" &&
+        Boolean(params.currentChildSessionKey?.trim()) &&
+        params.currentError === SUBAGENT_KILL_TASK_ERROR)
+    );
   }
   return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
 }
@@ -534,11 +573,24 @@ function mapAgentRunTerminalOutcomeToTaskStatus(
     case "aborted":
       return "cancelled";
     case "blocked":
+    case "abandoned":
     case "failed":
       return "failed";
     default:
       return outcome.reason satisfies never;
   }
+}
+
+function resolveTaskLifecycleTerminalError(params: {
+  runtime: TaskRuntime;
+  status: TaskStatus;
+  error?: string;
+}): string | undefined {
+  // A runner abort can race either an accepted task cancellation or a real
+  // completion. Keep it provisional until the task-control owner decides.
+  return params.runtime === "subagent" && params.status === "cancelled"
+    ? SUBAGENT_KILL_TASK_ERROR
+    : params.error;
 }
 
 function buildTaskLifecycleTerminalOutcome(params: {
@@ -1044,7 +1096,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   ) {
     return;
   }
-  if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+  if (listTasksForFlowId(flowId).some(isTaskFlowCancellationPending)) {
     return;
   }
   const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
@@ -1073,7 +1125,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
     ) {
       return;
     }
-    if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+    if (listTasksForFlowId(flowId).some(isTaskFlowCancellationPending)) {
       return;
     }
   }
@@ -1360,11 +1412,27 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
     }
-    const preferred = latest.runId
-      ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
-      : undefined;
+    const peers = latest.runId ? getPeerTasksForDelivery(latest) : [];
+    const isSubagentCancellation = latest.runtime === "subagent" && latest.status === "cancelled";
+    const preferred = pickPreferredRunIdTask(
+      isSubagentCancellation
+        ? peers.filter((candidate) => shouldAutoDeliverTaskTerminalUpdate(candidate))
+        : peers,
+    );
+    const peerDeliveryCovered =
+      isSubagentCancellation &&
+      peers.some(
+        (candidate) =>
+          candidate.taskId !== latest.taskId &&
+          (candidate.deliveryStatus === "delivered" ||
+            candidate.deliveryStatus === "session_queued"),
+      );
     if (
-      shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
+      shouldSuppressDuplicateTerminalDelivery({
+        task: latest,
+        preferredTaskId: preferred?.taskId,
+        peerDeliveryCovered,
+      })
     ) {
       return updateTask(taskId, {
         deliveryStatus: "not_applicable",
@@ -1413,6 +1481,10 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
+      const beforeSend = tasks.get(taskId);
+      if (!beforeSend || !shouldAutoDeliverTaskTerminalUpdate(beforeSend)) {
+        return beforeSend ? cloneTaskRecord(beforeSend) : null;
+      }
       const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
       const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
       await sendMessage({
@@ -1429,8 +1501,12 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
           idempotencyKey,
         },
       });
-      if (latest.terminalOutcome === "blocked") {
-        queueBlockedTaskFollowup(latest);
+      const afterSend = tasks.get(taskId);
+      if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
+        return afterSend ? cloneTaskRecord(afterSend) : null;
+      }
+      if (afterSend.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(afterSend);
       }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
@@ -1443,10 +1519,14 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         requesterOrigin: owner.requesterOrigin,
         error,
       });
+      const beforeFallback = tasks.get(taskId);
+      if (!beforeFallback || !shouldAutoDeliverTaskTerminalUpdate(beforeFallback)) {
+        return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
+      }
       try {
-        queueTaskSystemEvent(latest, sessionEventText);
-        if (latest.terminalOutcome === "blocked") {
-          queueBlockedTaskFollowup(latest);
+        queueTaskSystemEvent(beforeFallback, sessionEventText);
+        if (beforeFallback.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(beforeFallback);
         }
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
@@ -1661,8 +1741,13 @@ function ensureListener() {
           });
           patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
           patch.endedAt = terminal.endedAt ?? now;
-          if (terminal.error) {
-            patch.error = terminal.error;
+          const error = resolveTaskLifecycleTerminalError({
+            runtime: current.runtime,
+            status: patch.status,
+            error: terminal.error,
+          });
+          if (error) {
+            patch.error = error;
           }
         } else if (phase === "error") {
           const terminal = buildTaskLifecycleTerminalOutcome({
@@ -1673,7 +1758,12 @@ function ensureListener() {
           });
           patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
           patch.endedAt = terminal.endedAt ?? now;
-          patch.error = terminal.error ?? current.error;
+          patch.error =
+            resolveTaskLifecycleTerminalError({
+              runtime: current.runtime,
+              status: patch.status,
+              error: terminal.error,
+            }) ?? current.error;
         }
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
@@ -1861,6 +1951,7 @@ function updateTaskStateByRunId(params: {
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
   eventSummary?: string | null;
+  suppressDelivery?: boolean;
 }) {
   ensureTaskRegistryReady();
   const matches = getTasksByRunScope(params);
@@ -1875,7 +1966,13 @@ function updateTaskStateByRunId(params: {
       params.status &&
       !shouldApplyRunScopedStatusUpdate({
         currentStatus: current.status,
+        currentRuntime: current.runtime,
+        currentChildSessionKey: current.childSessionKey,
+        currentError: current.error,
+        currentEndedAt: current.endedAt,
         nextStatus,
+        nextError: params.error,
+        nextEndedAt: params.endedAt,
       })
     ) {
       continue;
@@ -1893,7 +1990,13 @@ function updateTaskStateByRunId(params: {
     if (params.lastEventAt != null) {
       patch.lastEventAt = params.lastEventAt;
     }
-    if (params.error !== undefined) {
+    if (
+      current.status === "cancelled" &&
+      nextStatus !== "cancelled" &&
+      params.error === undefined
+    ) {
+      patch.error = undefined;
+    } else if (params.error !== undefined) {
       patch.error = params.error;
     }
     if (params.progressSummary !== undefined) {
@@ -1907,6 +2010,11 @@ function updateTaskStateByRunId(params: {
         status: nextStatus,
         terminalOutcome: params.terminalOutcome,
       });
+    }
+    if (params.suppressDelivery) {
+      // Teardown suppression must survive redundant lifecycle finalizers that
+      // arrive after queues are cleared, or they can repopulate the stopped session.
+      patch.deliveryStatus = "not_applicable";
     }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
@@ -1931,8 +2039,10 @@ function updateTaskStateByRunId(params: {
     const task = updateTask(current.taskId, patch);
     if (task) {
       updated.push(task);
-      void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
-      void maybeDeliverTaskTerminalUpdate(task.taskId);
+      if (!params.suppressDelivery) {
+        void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
+        void maybeDeliverTaskTerminalUpdate(task.taskId);
+      }
     }
   }
   return updated;
@@ -2011,6 +2121,7 @@ export function finalizeTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  suppressDelivery?: boolean;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
@@ -2024,6 +2135,7 @@ export function finalizeTaskRunByRunId(params: {
     progressSummary: params.progressSummary,
     terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
+    suppressDelivery: params.suppressDelivery,
   });
 }
 
@@ -2081,12 +2193,22 @@ export async function cancelTaskById(params: {
   if (!task) {
     return { found: false, cancelled: false, reason: "Task not found." };
   }
+  const requestedReason = params.reason?.trim();
+  const cancellationError =
+    requestedReason && requestedReason !== SUBAGENT_KILL_TASK_ERROR
+      ? requestedReason
+      : "Cancelled by operator.";
+  let isProvisionalSubagentKill =
+    task.runtime === "subagent" &&
+    task.status === "cancelled" &&
+    task.error === SUBAGENT_KILL_TASK_ERROR;
   if (
-    task.status === "succeeded" ||
-    task.status === "failed" ||
-    task.status === "timed_out" ||
-    task.status === "lost" ||
-    task.status === "cancelled"
+    !isProvisionalSubagentKill &&
+    (task.status === "succeeded" ||
+      task.status === "failed" ||
+      task.status === "timed_out" ||
+      task.status === "lost" ||
+      task.status === "cancelled")
   ) {
     return {
       found: true,
@@ -2097,6 +2219,8 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
+    // A direct kill is only a provisional terminal projection. Re-read the
+    // owning subagent run before promotion so its canonical completion can win.
     if (task.runtime !== "cli") {
       if (task.runtime === "cron") {
         if (
@@ -2146,12 +2270,86 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
         });
-        if (!result.found || !result.killed) {
+        const current = tasks.get(task.taskId);
+        if (current?.status === "cancelled" && current.error === SUBAGENT_KILL_TASK_ERROR) {
+          isProvisionalSubagentKill = true;
+        }
+        if (current?.status === "succeeded") {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Subagent completed while cancellation was in progress.",
+            task: cloneTaskRecord(current),
+          };
+        }
+        if (current && isTerminalTaskStatus(current.status) && current.status !== "cancelled") {
+          return {
+            found: true,
+            cancelled: false,
+            reason: `Subagent became ${current.status} while cancellation was in progress.`,
+            task: cloneTaskRecord(current),
+          };
+        }
+        if (current?.status === "cancelled" && !isProvisionalSubagentKill) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Subagent was cancelled while cancellation was in progress.",
+            task: cloneTaskRecord(current),
+          };
+        }
+        if (result.found && result.targetState?.state === "terminal") {
+          // A subagent run becomes terminal before its task projection settles.
+          // Reconcile the original task scope: steer/orphan recovery may have
+          // replaced the registry run ID without remapping durable task rows.
+          const taskRunId = task.runId?.trim() || result.runId;
+          const reconciledTasks = finalizeTaskRunByRunId({
+            runId: taskRunId,
+            runtime: "subagent",
+            sessionKey: childSessionKey,
+            ...result.targetState.task,
+          });
+          const reconciled = reconciledTasks.find((candidate) => candidate.taskId === task.taskId);
+          if (!reconciled) {
+            return {
+              found: true,
+              cancelled: false,
+              reason: "Subagent became terminal, but task state reconciliation failed to persist.",
+              task: cloneTaskRecord(tasks.get(task.taskId) ?? task),
+            };
+          }
+          if (
+            result.targetState.task.status === "cancelled" &&
+            result.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+          ) {
+            isProvisionalSubagentKill = true;
+          } else {
+            const reason =
+              result.targetState.task.status === "succeeded"
+                ? "Subagent completed while cancellation was in progress."
+                : `Subagent became ${result.targetState.task.status} while cancellation was in progress.`;
+            return {
+              found: true,
+              cancelled: false,
+              reason,
+              task: cloneTaskRecord(reconciled),
+            };
+          }
+        }
+        if (result.found && result.targetState?.state === "finalizing") {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Subagent completion is still being finalized.",
+            task: cloneTaskRecord(current ?? task),
+          };
+        }
+        if ((!result.found || !result.killed) && !isProvisionalSubagentKill) {
           return {
             found: true,
             cancelled: false,
             reason: result.found ? "Subagent was not running." : "Subagent task not found.",
-            task: cloneTaskRecord(task),
+            task: cloneTaskRecord(current ?? task),
           };
         }
       } else {
@@ -2163,24 +2361,25 @@ export async function cancelTaskById(params: {
         };
       }
     }
-    const endedAt = Date.now();
-    const error = params.reason?.trim() || "Cancelled by operator.";
+    const eventAt = Date.now();
+    const current = tasks.get(task.taskId) ?? task;
+    const endedAt = isProvisionalSubagentKill ? (current.endedAt ?? eventAt) : eventAt;
     const updated =
-      task.runtime === "acp" && task.runId?.trim()
+      (task.runtime === "acp" || task.runtime === "subagent") && task.runId?.trim()
         ? (updateTaskStateByRunId({
             runId: task.runId,
-            runtime: "acp",
+            runtime: task.runtime,
             sessionKey: childSessionKey,
             status: "cancelled",
             endedAt,
-            lastEventAt: endedAt,
-            error,
+            lastEventAt: eventAt,
+            error: cancellationError,
           }).find((record) => record.taskId === task.taskId) ?? null)
         : updateTask(task.taskId, {
             status: "cancelled",
             endedAt,
-            lastEventAt: endedAt,
-            error,
+            lastEventAt: eventAt,
+            error: cancellationError,
           });
     if (!updated) {
       return {

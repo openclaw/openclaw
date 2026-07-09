@@ -350,7 +350,7 @@ describe("OpenAI embedding batch output", () => {
         ],
         wait: true,
         concurrency: 1,
-        pollIntervalMs: 1000,
+        pollIntervalMs: 1,
         timeoutMs: 60_000,
       }),
     ).rejects.toThrow(/openai\.batch-status/);
@@ -630,7 +630,7 @@ describe("OpenAI embedding batch output", () => {
         ],
         wait: true,
         concurrency: 1,
-        pollIntervalMs: 1000,
+        pollIntervalMs: 1,
         timeoutMs: 60_000,
       }),
     ).rejects.toThrow(/openai batch status failed: 400 batch status unavailable/);

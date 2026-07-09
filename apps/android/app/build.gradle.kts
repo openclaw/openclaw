@@ -56,11 +56,14 @@ plugins {
   alias(libs.plugins.ktlint)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 android {
   namespace = "ai.openclaw.app"
-  compileSdk = 36
+  // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
+  // targetSdk stays separate so runtime behavior changes remain an explicit migration.
+  compileSdk = 37
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -121,9 +124,46 @@ android {
     }
   }
 
+  bundle {
+    language {
+      // The in-app picker can select a locale outside the device language list.
+      // Without a Play Core download path, every translated resource must stay installed.
+      enableSplit = false
+    }
+  }
+
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+
+  androidResources {
+    generateLocaleConfig = true
+    localeFilters +=
+      listOf(
+        "ar",
+        "de",
+        "en",
+        "es",
+        "fa",
+        "fr",
+        "hi",
+        "in",
+        "it",
+        "ja",
+        "ko",
+        "nl",
+        "pl",
+        "pt-rBR",
+        "ru",
+        "sv",
+        "th",
+        "tr",
+        "uk",
+        "vi",
+        "zh-rCN",
+        "zh-rTW",
+      )
   }
 
   compileOptions {
@@ -197,6 +237,8 @@ dependencies {
   androidTestImplementation(composeBom)
 
   implementation(libs.androidx.core.ktx)
+  // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
+  implementation(libs.androidx.appcompat)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)
@@ -217,6 +259,9 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
+  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  implementation(libs.androidx.room.runtime)
+  ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)

@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -18,7 +19,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-rout
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
-  derivePromptTokens,
+  deriveContextPromptTokens,
   hasNonzeroUsage,
   normalizeUsage,
   type UsageLike,
@@ -34,9 +35,9 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -344,6 +345,14 @@ function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): Repl
   );
 }
 
+function buildVisibleMemoryFlushFailure(payloads: ReplyPayload[]): Error {
+  const message = payloads
+    .map((payload) => normalizeOptionalString(payload.text))
+    .filter((text): text is string => Boolean(text))
+    .join("\n");
+  return new Error(message || "Memory flush returned an error response");
+}
+
 function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
   if (isAbortError(err)) {
     return undefined;
@@ -356,7 +365,7 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
   return {
     text:
       visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
-        ? `${visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
+        ? `${truncateUtf16Safe(visibleText, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
         : visibleText,
     isError: true,
   };
@@ -365,7 +374,7 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
 function truncateMemoryFlushErrorMessage(err: unknown): string {
   const message = normalizeOptionalString(formatErrorMessage(err)) || String(err);
   return message.length > MAX_FLUSH_ERROR_LENGTH
-    ? `${message.slice(0, MAX_FLUSH_ERROR_LENGTH - 1)}…`
+    ? `${truncateUtf16Safe(message, MAX_FLUSH_ERROR_LENGTH - 1)}…`
     : message;
 }
 
@@ -447,7 +456,7 @@ function deriveTranscriptUsageSnapshot(
   if (!usage) {
     return undefined;
   }
-  const promptTokens = derivePromptTokens(usage);
+  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
   const outputRaw = usage.output;
   const outputTokens =
     typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
@@ -949,6 +958,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       sandboxSessionKey: params.runtimePolicySessionKey,
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
+      clientCaps: params.followupRun.run.clientCaps,
       groupId: entry.groupId ?? params.followupRun.run.groupId,
       groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
       groupSpace: entry.space ?? params.followupRun.run.groupSpace,
@@ -1047,7 +1057,14 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 }
 
-/** Runs post-turn memory flush when transcript state warrants it. */
+type MemoryFlushOutcome = "skipped" | "completed" | "failed" | "exhausted";
+
+type MemoryFlushResult = {
+  sessionEntry?: SessionEntry;
+  outcome: MemoryFlushOutcome;
+};
+
+/** Runs pre-compaction memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -1065,10 +1082,10 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
-}): Promise<SessionEntry | undefined> {
+}): Promise<MemoryFlushResult> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
-    return params.sessionEntry;
+    return { sessionEntry: params.sessionEntry, outcome: "skipped" };
   }
 
   const memoryFlushWritable = (() => {
@@ -1263,7 +1280,7 @@ export async function runMemoryFlushIfNeeded(params: {
       !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
-    return entry ?? params.sessionEntry;
+    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
 
   logVerbose(
@@ -1286,6 +1303,8 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  let outcome: MemoryFlushOutcome = "completed";
+  let visibleErrorPayloads: ReplyPayload[] = [];
   const memoryFlushNowMs = memoryDeps.now();
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
@@ -1373,10 +1392,7 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
-        const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
-        if (visibleErrorPayloads.length > 0) {
-          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
-        }
+        visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
@@ -1423,6 +1439,11 @@ export async function runMemoryFlushIfNeeded(params: {
         }
       }
     }
+    if (visibleErrorPayloads.length > 0) {
+      // Preserve any completed transcript rotation, then count the maintenance error.
+      // Do not stamp memory-flush success for a resolved run that returned an error.
+      throw buildVisibleMemoryFlushFailure(visibleErrorPayloads);
+    }
     if (params.storePath && params.sessionKey) {
       try {
         const updatedEntry = await memoryDeps.updateSessionEntry({
@@ -1451,6 +1472,7 @@ export async function runMemoryFlushIfNeeded(params: {
       }
     }
   } catch (err) {
+    outcome = "failed";
     const truncatedError = truncateMemoryFlushErrorMessage(err);
     if (!isAbortError(err) && params.storePath && params.sessionKey) {
       try {
@@ -1489,6 +1511,7 @@ export async function runMemoryFlushIfNeeded(params: {
           },
         });
         if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
+          outcome = "exhausted";
           logVerbose(
             `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
           );
@@ -1538,5 +1561,5 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
-  return activeSessionEntry;
+  return { sessionEntry: activeSessionEntry, outcome };
 }

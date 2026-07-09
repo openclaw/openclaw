@@ -11,6 +11,7 @@ import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
+  type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
@@ -337,6 +338,16 @@ function authProfileCooldownToHealthFinding(params: {
   };
 }
 
+function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
+  if (profile.type === "api_key") {
+    return profile.status === "missing";
+  }
+  return (
+    (profile.type === "oauth" || profile.type === "token") &&
+    (profile.status === "expired" || profile.status === "expiring" || profile.status === "missing")
+  );
+}
+
 async function collectAuthProfileHealthFindingsForTarget(params: {
   cfg: OpenClawConfig;
   allowKeychainPrompt: boolean;
@@ -382,17 +393,7 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
-  const issues = summary.profiles.filter((profile) => {
-    if (profile.type === "api_key") {
-      return profile.status === "missing";
-    }
-    return (
-      (profile.type === "oauth" || profile.type === "token") &&
-      (profile.status === "expired" ||
-        profile.status === "expiring" ||
-        profile.status === "missing")
-    );
-  });
+  const issues = summary.profiles.filter(isAuthProfileHealthIssue);
   for (const issue of issues) {
     const authIssue: AuthIssue = {
       profileId: issue.profileId,
@@ -495,18 +496,7 @@ async function noteAuthProfileHealthForTarget(params: {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
-  const findIssues = () =>
-    summary.profiles.filter((profile) => {
-      if (profile.type === "api_key") {
-        return profile.status === "missing";
-      }
-      return (
-        (profile.type === "oauth" || profile.type === "token") &&
-        (profile.status === "expired" ||
-          profile.status === "expiring" ||
-          profile.status === "missing")
-      );
-    });
+  const findIssues = () => summary.profiles.filter(isAuthProfileHealthIssue);
 
   let issues = findIssues();
   if (issues.length === 0) {

@@ -208,6 +208,26 @@ describe("zalouser send helpers", () => {
     expectResultFields(result, { ok: true, messageId: "mid-2c-2" });
   });
 
+  it("reports each completed internal chunk before a later chunk fails", async () => {
+    const firstResult = sendResult("mid-progress-1", "thread-progress");
+    mockSendText
+      .mockResolvedValueOnce(firstResult)
+      .mockResolvedValueOnce(sendFailure("second chunk failed", "thread-progress"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageZalouser("thread-progress", "a".repeat(2001), {
+        textChunkLimit: 2000,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(firstResult);
+    expect(requireSendTextOptions(0)).not.toHaveProperty("onDeliveryResult");
+  });
+
   it("preserves text styles when splitting long formatted markdown", async () => {
     const text = `**${"a".repeat(2501)}**`;
     mockSendText

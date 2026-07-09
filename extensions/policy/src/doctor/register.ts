@@ -92,6 +92,7 @@ const SUPPORTED_GATEWAY_POLICY_SECTIONS = [
   "controlUi",
   "exposure",
   "http",
+  "nodes",
   "remote",
 ] as const;
 const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
@@ -118,7 +119,7 @@ const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
 
-export type PolicyDoctorRegistrationHost = {
+type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
@@ -1879,7 +1880,7 @@ function gatewayPolicyShapeFinding(
     );
   }
 
-  for (const section of ["exposure", "auth", "controlUi", "remote", "http"] as const) {
+  for (const section of ["exposure", "auth", "controlUi", "remote", "http", "nodes"] as const) {
     if (value[section] !== undefined && !isRecord(value[section])) {
       return policyShapeFinding(
         params.policyPath,
@@ -1904,12 +1905,14 @@ function gatewayPolicyShapeFinding(
   const controlUi = isRecord(value.controlUi) ? value.controlUi : {};
   const remote = isRecord(value.remote) ? value.remote : {};
   const http = isRecord(value.http) ? value.http : {};
+  const nodes = isRecord(value.nodes) ? value.nodes : {};
   for (const [section, sectionValue, allowedKeys] of [
     ["exposure", exposure, ["allowNonLoopbackBind", "allowTailscaleFunnel"]],
     ["auth", auth, ["requireAuth", "requireExplicitRateLimit"]],
     ["controlUi", controlUi, ["allowInsecure"]],
     ["remote", remote, ["allow"]],
     ["http", http, ["denyEndpoints", "requireUrlAllowlists"]],
+    ["nodes", nodes, ["denyCommands"]],
   ] as const) {
     const unsupportedKey = unsupportedPolicyKey(sectionValue, allowedKeys);
     if (unsupportedKey !== undefined) {
@@ -1980,6 +1983,28 @@ function gatewayPolicyShapeFinding(
         `oc://${params.policyDocName}/gateway/http/denyEndpoints/#${invalidIndex}`,
         `${params.policyPath} gateway.http.denyEndpoints[${invalidIndex}] must be a supported endpoint id.`,
         `Use supported endpoint ids: ${SUPPORTED_GATEWAY_HTTP_ENDPOINTS.join(", ")}.`,
+      );
+    }
+  }
+  const denyCommands = nodes.denyCommands;
+  if (denyCommands !== undefined && !Array.isArray(denyCommands)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/gateway/nodes/denyCommands`,
+      `${params.policyPath} gateway.nodes.denyCommands must be an array.`,
+      'Use an array of node command ids such as ["system.run"] or remove gateway.nodes.denyCommands.',
+    );
+  }
+  if (Array.isArray(denyCommands)) {
+    const invalidIndex = denyCommands.findIndex(
+      (entry) => typeof entry !== "string" || entry.trim() === "",
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/gateway/nodes/denyCommands/#${invalidIndex}`,
+        `${params.policyPath} gateway.nodes.denyCommands[${invalidIndex}] must be a non-empty node command id.`,
+        "Use non-empty node command ids.",
       );
     }
   }
@@ -4491,7 +4516,9 @@ function policyHasGatewayRules(policy: unknown): boolean {
     (isRecord(gateway.controlUi) && gateway.controlUi.allowInsecure !== undefined) ||
     (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
     (isRecord(gateway.http) &&
-      (gateway.http.denyEndpoints !== undefined || gateway.http.requireUrlAllowlists !== undefined))
+      (gateway.http.denyEndpoints !== undefined ||
+        gateway.http.requireUrlAllowlists !== undefined)) ||
+    (isRecord(gateway.nodes) && gateway.nodes.denyCommands !== undefined)
   );
 }
 

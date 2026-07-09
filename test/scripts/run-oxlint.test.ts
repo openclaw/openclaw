@@ -310,7 +310,7 @@ describe("run-oxlint", () => {
             CHILD_PID_PATH: childPidPath,
             OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
             OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "1000",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
           },
           extraArgs: [],
           runner,

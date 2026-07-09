@@ -5,6 +5,7 @@ import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
+    case appleWatch
     case approvals
     case permissions
     case channels
@@ -19,6 +20,31 @@ enum SettingsRoute: Hashable {
 enum SettingsLayout {
     static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
     static let rowHeight: CGFloat = 58
+}
+
+/// Canonical label/value list row for Settings and Talk surfaces. Keep every
+/// detail row on this view so row typography cannot drift between sections;
+/// plain `LabeledContent(String, value:)` renders unbranded system fonts.
+struct SettingsDetailRow: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        LabeledContent {
+            Text(self.value)
+                .font(OpenClawType.subhead)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } label: {
+            Text(self.label)
+                .font(OpenClawType.body)
+        }
+    }
 }
 
 struct SettingsApprovalItem: Identifiable {
@@ -36,7 +62,7 @@ struct SettingsApprovalRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: self.item.icon)
-                .font(.caption.weight(.bold))
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
                 .background {
@@ -45,16 +71,16 @@ struct SettingsApprovalRow: View {
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.item.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.item.detail)
-                    .font(.caption2.weight(.medium))
+                    .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(self.item.priority)
-                .font(.caption.weight(.bold))
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(self.item.color)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
@@ -87,64 +113,68 @@ enum SettingsNotificationStatus: Equatable {
         }
     }
 
+    var allowsNotifications: Bool {
+        self == .allowed
+    }
+}
+
+enum SettingsNotificationPresentation: Equatable {
+    case checking
+    case enabled
+    case off
+    case setup
+    case denied
+    case notSet
+    case unknown
+
     var text: String {
         switch self {
         case .checking: "Checking"
-        case .allowed: "Enabled"
-        case .notAllowed: "Denied"
+        case .enabled: "Enabled"
+        case .off: "Off"
+        case .setup: "Setup"
+        case .denied: "Denied"
         case .notSet: "Not Enabled"
         case .unknown: "Unknown"
         }
     }
 
-    var actionTitle: String {
+    var detail: String {
         switch self {
-        case .notSet:
-            "Enable Notifications"
         case .checking:
-            "Checking"
-        case .allowed:
-            "Manage in iOS Settings"
-        case .notAllowed, .unknown:
-            "Open iOS Settings"
-        }
-    }
-
-    var actionIcon: String {
-        switch self {
-        case .allowed:
-            "gear"
-        case .notAllowed, .unknown:
-            "gear.badge"
-        case .checking:
-            "hourglass"
+            "Checking iOS notification permission."
+        case .enabled:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .off:
+            "OpenClaw notifications are off."
+        case .setup:
+            "Finish notification setup to receive alerts when the app is not active."
+        case .denied:
+            "Notifications have been denied. Enable them in iOS Settings."
         case .notSet:
-            "bell.badge"
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
         }
     }
 
     var color: Color {
         switch self {
-        case .allowed:
+        case .enabled:
             OpenClawBrand.ok
-        case .notAllowed, .unknown:
+        case .denied, .setup, .unknown:
             OpenClawBrand.warn
-        case .checking, .notSet:
+        case .checking, .notSet, .off:
             .secondary
         }
     }
 
-    var shouldOpenNotificationSettings: Bool {
-        switch self {
-        case .allowed, .notAllowed, .unknown:
-            true
-        case .checking, .notSet:
-            false
-        }
+    var isActive: Bool {
+        self == .enabled
     }
 
-    var allowsNotifications: Bool {
-        self == .allowed
+    var needsAttention: Bool {
+        self != .checking && self != .enabled
     }
 }
 
@@ -298,7 +328,7 @@ private struct SettingsGatewayStatesPreview: View {
     {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             content()
         }
@@ -344,11 +374,11 @@ private struct SettingsGatewayStatesPreview: View {
     private func factRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption.weight(.medium))
+                .font(OpenClawType.captionMedium)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -372,7 +402,7 @@ private struct SettingsGatewayStatesPreview: View {
                     self.previewButton("Connect", systemImage: "link", isBusy: false)
                 }
                 Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -385,8 +415,10 @@ private struct SettingsGatewayStatesPreview: View {
     {
         Button {} label: {
             Label(title, systemImage: systemImage)
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: .infinity)
         }
+        .font(OpenClawType.captionSemiBold)
         .buttonStyle(.bordered)
         .controlSize(.small)
         .disabled(isBusy)

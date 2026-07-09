@@ -2,6 +2,7 @@
  * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
  */
 import type { Server } from "node:http";
+import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
@@ -49,6 +50,14 @@ export async function stopBrowserRuntime(params: {
       getState: params.getState,
       onWarn: params.onWarn,
     });
+
+    if (params.current.extensionRelays?.size) {
+      const { stopExtensionRelays } = await getExtensionRelayModule();
+      await stopExtensionRelays(params.current);
+      const { disposeGatewayExtensionRelay } =
+        await import("./extension-relay/gateway-relay-route.js");
+      disposeGatewayExtensionRelay();
+    }
 
     if (params.closeServer && params.current.server) {
       await new Promise<void>((resolve) => {

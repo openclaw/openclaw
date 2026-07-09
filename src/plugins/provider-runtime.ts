@@ -18,6 +18,7 @@ import {
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -48,6 +49,7 @@ import {
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
+  resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
@@ -651,6 +653,44 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   context: ProviderFetchUsageSnapshotContext;
 }) {
   return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
+}
+
+export type ProviderUsagePluginDescriptor = {
+  provider: UsageProviderId;
+  displayName: string;
+};
+
+/** Lists provider plugins that own the complete usage auth + fetch lifecycle. */
+export function listProviderUsagePluginDescriptors(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderUsagePluginDescriptor[] {
+  const pluginContracts = resolveUsageHookProviderPluginContracts(params);
+  if (pluginContracts.length === 0) {
+    return [];
+  }
+  const descriptors = new Map<string, ProviderUsagePluginDescriptor>();
+  for (const contract of pluginContracts) {
+    const declaredProviderIds = new Set(contract.providerIds);
+    for (const plugin of resolveProviderPluginsForHooks({
+      ...params,
+      onlyPluginIds: [contract.pluginId],
+    })) {
+      if (!plugin.resolveUsageAuth || !plugin.fetchUsageSnapshot) {
+        continue;
+      }
+      const provider = normalizeProviderId(plugin.id);
+      if (!provider || !declaredProviderIds.has(provider) || descriptors.has(provider)) {
+        continue;
+      }
+      descriptors.set(provider, {
+        provider,
+        displayName: normalizeOptionalString(plugin.label) ?? provider,
+      });
+    }
+  }
+  return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
 export function matchesProviderContextOverflowWithPlugin(params: {
