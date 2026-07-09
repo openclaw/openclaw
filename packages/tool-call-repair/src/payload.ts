@@ -29,12 +29,25 @@ export type PlainTextToolCallBlock = {
 export type PlainTextToolCallParseOptions = {
   /** Optional allowlist of tool names that may be repaired. */
   allowedToolNames?: Iterable<string>;
-  /** Maximum JSON payload size accepted for one repaired call. */
+  /** Maximum serialized payload size accepted for one repaired call. */
   maxPayloadBytes?: number;
 };
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const utf8Encoder = new TextEncoder();
+
+function utf8ByteLengthWithinLimit(
+  text: string,
+  start: number,
+  end: number,
+  maxBytes: number,
+): number | null {
+  if (end - start > maxBytes) {
+    return null;
+  }
+  const byteLength = utf8Encoder.encode(text.slice(start, end)).byteLength;
+  return byteLength <= maxBytes ? byteLength : null;
+}
 
 type PlainTextToolCallOpening = {
   allowsOptionalXmlishClose?: boolean;
@@ -141,7 +154,7 @@ function consumeJsonObject(
     return null;
   }
   const end = findJsonObjectEnd(text, cursor, maxPayloadBytes);
-  if (end === null) {
+  if (end === null || utf8ByteLengthWithinLimit(text, cursor, end, maxPayloadBytes) === null) {
     return null;
   }
   const rawJson = text.slice(cursor, end);
@@ -222,15 +235,6 @@ type XmlishParameterBlockBounds = {
   start: number;
 };
 
-function utf8ByteLengthExceeds(
-  text: string,
-  start: number,
-  end: number,
-  maxBytes: number,
-): boolean {
-  return end - start > maxBytes || utf8Encoder.encode(text.slice(start, end)).byteLength > maxBytes;
-}
-
 function findXmlishParameterBlock(text: string, start: number): XmlishParameterBlockBounds | null {
   const cursor = skipWhitespace(text, start);
   const openMatch = /^<parameter=([A-Za-z0-9_.:-]{1,120})>/i.exec(text.slice(cursor));
@@ -257,15 +261,17 @@ function consumeXmlishParameterBlock(
   text: string,
   start: number,
   maxPayloadBytes: number,
-): { end: number; name: string; value: string } | null {
+): { byteLength: number; end: number; name: string; value: string } | null {
   const bounds = findXmlishParameterBlock(text, start);
   if (!bounds) {
     return null;
   }
-  if (utf8ByteLengthExceeds(text, bounds.start, bounds.end, maxPayloadBytes)) {
+  const byteLength = utf8ByteLengthWithinLimit(text, start, bounds.end, maxPayloadBytes);
+  if (byteLength === null) {
     return null;
   }
   return {
+    byteLength,
     end: bounds.end,
     name: bounds.name,
     value: extractXmlishParameterValue(text, bounds.payloadStart, bounds.closeStart),
@@ -349,12 +355,14 @@ function parseXmlishPlainTextToolCallBlockAt(
   const args: Record<string, unknown> = {};
   let cursor = opening.end;
   let parameterCount = 0;
+  let payloadBytes = 0;
   while (true) {
     const parameter = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
     if (!parameter) {
       break;
     }
-    if (utf8ByteLengthExceeds(text, opening.end, parameter.end, maxPayloadBytes)) {
+    payloadBytes += parameter.byteLength;
+    if (payloadBytes > maxPayloadBytes) {
       return null;
     }
     args[parameter.name] = parameter.value;
