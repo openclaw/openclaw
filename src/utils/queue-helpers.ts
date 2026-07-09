@@ -168,7 +168,7 @@ export function beginQueueDrain<T extends { draining: boolean }>(
 
 export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): void {
   for (const item of processed) {
-    const idx = items.indexOf(item);
+    const idx = items.findIndex((queued) => queued === item || Object.is(queued, item));
     if (idx !== -1) {
       items.splice(idx, 1);
     }
@@ -180,10 +180,10 @@ export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
 ): Promise<boolean> {
-  const next = items[0];
-  if (!next) {
+  if (items.length === 0) {
     return false;
   }
+  const next = items[0];
   await run(next);
   removeQueuedItemsByRef(items, [next]);
   return true;

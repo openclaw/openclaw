@@ -151,6 +151,33 @@ describe("drainCollectQueueStep", () => {
 });
 
 describe("drainNextQueueItem", () => {
+  it("drains falsy queued items instead of treating them as empty", async () => {
+    const items = [0, 1];
+    const delivered: number[] = [];
+
+    const drained = await drainNextQueueItem(items, async (item) => {
+      delivered.push(item);
+    });
+
+    expect(drained).toBe(true);
+    expect(delivered).toEqual([0]);
+    expect(items).toEqual([1]);
+  });
+
+  it("removes NaN after draining it", async () => {
+    const items = [Number.NaN, 1];
+    const delivered: number[] = [];
+
+    const drained = await drainNextQueueItem(items, async (item) => {
+      delivered.push(item);
+    });
+
+    expect(drained).toBe(true);
+    expect(delivered).toHaveLength(1);
+    expect(Number.isNaN(delivered[0])).toBe(true);
+    expect(items).toEqual([1]);
+  });
+
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
     const queue = {
