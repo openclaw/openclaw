@@ -178,4 +178,18 @@ describe("generateSlugViaLLM", () => {
       }),
     ).resolves.toBe("12345678901234567890123456789");
   });
+
+  it("does not pass lone surrogates to the LLM in the prompt when session content ends near the truncation boundary with an emoji", async () => {
+    // 1999 BMP chars + emoji (2 UTF-16 code units) = position 1999-2000 = slice boundary
+    const safePrefix = "x".repeat(1999);
+    await generateSlugViaLLM({
+      sessionContent: `${safePrefix}🚀yz`,
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const prompt = requireFirstRunOptions().prompt as string;
+    expect(prompt).toBeDefined();
+    expect(/[\uD800-\uDFFF]/.test(prompt)).toBe(false);
+  });
 });
