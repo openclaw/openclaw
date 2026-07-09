@@ -391,6 +391,8 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("Text(\"Gateway\")"))
         #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
         #expect(source.contains("private var chatTalkRow: some View"))
+        #expect(source.contains(
+            ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
         #expect(source.contains("self.prominentDestinationCard(\n                .chat,"))
         #expect(source.contains("self.prominentDestinationCard(\n                .talk,"))
         #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))

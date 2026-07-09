@@ -26,7 +26,7 @@ struct RootTabsPhoneControlHub: View {
 
                 Section {
                     self.chatTalkRow
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
