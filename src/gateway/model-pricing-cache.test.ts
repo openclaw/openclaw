@@ -1379,24 +1379,17 @@ describe("model-pricing-cache", () => {
   it("caps cache entries at MAX_PRICING_CACHE_ENTRIES and orders by access recency", () => {
     resetGatewayModelPricingCacheForTest();
 
-    // Build an over-limit payload where one entry sorts alphabetically last
-    // (zzz-...) and would be dropped by first-N or key-order truncation.
-    const overLimit = new Map<string, CachedModelPricing>();
-    for (let i = 0; i < MAX_PRICING_CACHE_ENTRIES + 100; i++) {
-      overLimit.set(`provider-${i}/model-${i}`, {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-      });
-    }
+    // Seed the cache so the access-recency lookup below hits a real entry
+    // and records a timestamp in pricingAccessTimestamps.
     const activeKey = "zzz-active/zzz-model";
-    overLimit.set(activeKey, {
+    const seed = new Map<string, CachedModelPricing>();
+    seed.set(activeKey, {
       input: 999,
       output: 888,
       cacheRead: 0,
       cacheWrite: 0,
     });
+    replaceGatewayModelPricingCache(seed, 1);
 
     // Simulate a runtime lookup on the alphabetically-last entry to record
     // a recent-access timestamp. Without this, key-order would drop it.
@@ -1406,6 +1399,24 @@ describe("model-pricing-cache", () => {
     });
     expect(lookedUp).toBeDefined();
 
+    // Build an over-limit refresh payload that also includes zzz-active.
+    // It sorts alphabetically last, so first-N or key-order truncation
+    // would drop it — but the access timestamp moves it to the front.
+    const overLimit = new Map<string, CachedModelPricing>();
+    for (let i = 0; i < MAX_PRICING_CACHE_ENTRIES + 100; i++) {
+      overLimit.set(`provider-${i}/model-${i}`, {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+    }
+    overLimit.set(activeKey, {
+      input: 999,
+      output: 888,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
     replaceGatewayModelPricingCache(overLimit, 2);
 
     // 1) Cache is capped.
