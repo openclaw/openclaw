@@ -21,6 +21,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -141,56 +142,8 @@ type ChromeLaunchStderrSignals = {
   missingDisplay: boolean;
 };
 
-function utf8BoundaryStart(buffer: Buffer): number {
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  return start;
-}
-
-function createBoundedBufferTail(maxBytes: number) {
-  let chunks: Buffer[] = [];
-  let totalBytes = 0;
-
-  const trim = () => {
-    while (totalBytes > maxBytes && chunks.length > 0) {
-      const overflowBytes = totalBytes - maxBytes;
-      const first = chunks[0]!;
-      if (overflowBytes >= first.length) {
-        chunks.shift();
-        totalBytes -= first.length;
-        continue;
-      }
-      chunks[0] = first.subarray(overflowBytes);
-      totalBytes -= overflowBytes;
-      break;
-    }
-  };
-
-  return {
-    append(chunk: Buffer | string) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (buffer.length === 0 || maxBytes <= 0) {
-        return;
-      }
-      chunks.push(buffer);
-      totalBytes += buffer.length;
-      trim();
-    },
-    toString() {
-      const buffer = Buffer.concat(chunks, totalBytes);
-      return buffer.subarray(utf8BoundaryStart(buffer)).toString("utf8");
-    },
-    clear() {
-      chunks = [];
-      totalBytes = 0;
-    },
-  };
-}
-
 function createChromeLaunchStderrDiagnostics(maxBytes: number) {
-  const tail = createBoundedBufferTail(maxBytes);
+  const tail = createBoundedUtf8Tail(maxBytes);
   const signals: ChromeLaunchStderrSignals = {
     singletonInUse: false,
     missingDisplay: false,
@@ -213,7 +166,7 @@ function createChromeLaunchStderrDiagnostics(maxBytes: number) {
       }
     },
     toString() {
-      return tail.toString();
+      return tail.text();
     },
     signals(): ChromeLaunchStderrSignals {
       return { ...signals };
