@@ -54,6 +54,7 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 
 vi.mock("./cli-runner/claude-live-session.js", () => ({
   closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
+  shouldUseClaudeLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({
