@@ -442,6 +442,11 @@ export const fa: TranslationMap = {
     noEvents: "هنوز رویدادی وجود ندارد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "بازدیدهای خرچنگ",
+      lobsterVisitsOn: "گاهی سر می‌زند",
+      lobsterVisitsOff: "هرگز سر نمی‌زند",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -603,7 +608,9 @@ export const fa: TranslationMap = {
   },
   tasksPage: {
     active: "فعال",
+    activeSub: "کارهای پس‌زمینه در صف و در حال اجرا.",
     recent: "اخیر",
+    recentSub: "آخرین وظایف تکمیل‌شده، ناموفق و لغوشده.",
     loading: "در حال بارگذاری وظایف…",
     empty: "هنوز هیچ وظیفهٔ پس‌زمینه‌ای وجود ندارد.",
     emptyActive: "هیچ وظیفه‌ای در صف یا در حال اجرا نیست.",
@@ -1740,10 +1747,6 @@ export const fa: TranslationMap = {
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
     },
-    modelPicker: {
-      faster: "سریع‌تر",
-      smarter: "هوشمندتر",
-    },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",
       reason: "برای ساخت کد راه‌اندازی جدید، دوباره /pair qr را اجرا کنید.",
@@ -1939,8 +1942,7 @@ export const fa: TranslationMap = {
     },
     summary: {
       enabled: "فعال",
-      yes: "بله",
-      no: "خیر",
+      scheduler: "زمان‌بند",
       jobs: "کارها",
       nextWake: "بیدارباش بعدی",
       refreshing: "در حال تازه‌سازی...",

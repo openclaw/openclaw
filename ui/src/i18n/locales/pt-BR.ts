@@ -441,6 +441,11 @@ export const pt_BR: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visitas da lagosta",
+      lobsterVisitsOn: "Aparece ocasionalmente",
+      lobsterVisitsOff: "Nunca aparece",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -602,7 +607,9 @@ export const pt_BR: TranslationMap = {
   },
   tasksPage: {
     active: "Ativas",
+    activeSub: "Trabalhos em segundo plano na fila e em execução.",
     recent: "Recentes",
+    recentSub: "Tarefas mais recentes concluídas, com falha e canceladas.",
     loading: "Carregando tarefas…",
     empty: "Ainda não há tarefas em segundo plano.",
     emptyActive: "Nenhuma tarefa na fila ou em execução.",
@@ -1742,10 +1749,6 @@ export const pt_BR: TranslationMap = {
       retrySend: "Tentar enviar novamente",
       retryQueuedMessage: "Tentar novamente mensagem na fila",
     },
-    modelPicker: {
-      faster: "Mais rápido",
-      smarter: "Mais inteligente",
-    },
     pairingQrExpired: {
       title: "QR de pareamento expirado",
       reason: "Execute /pair qr novamente para gerar um novo código de configuração.",
@@ -1946,8 +1949,7 @@ export const pt_BR: TranslationMap = {
     },
     summary: {
       enabled: "Ativado",
-      yes: "Sim",
-      no: "Não",
+      scheduler: "Agendador",
       jobs: "Tarefas",
       nextWake: "Próxima ativação",
       refreshing: "Atualizando...",

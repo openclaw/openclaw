@@ -445,6 +445,11 @@ export const de: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Hummerbesuche",
+      lobsterVisitsOn: "Schaut gelegentlich vorbei",
+      lobsterVisitsOff: "Besucht nie",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -607,7 +612,9 @@ export const de: TranslationMap = {
   },
   tasksPage: {
     active: "Aktiv",
+    activeSub: "In der Warteschlange befindliche und laufende Hintergrundaufgaben.",
     recent: "Zuletzt",
+    recentSub: "Zuletzt abgeschlossene, fehlgeschlagene und abgebrochene Aufgaben.",
     loading: "Aufgaben werden geladen…",
     empty: "Noch keine Hintergrundaufgaben.",
     emptyActive: "Keine Aufgaben in der Warteschlange oder in Ausführung.",
@@ -1753,10 +1760,6 @@ export const de: TranslationMap = {
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
     },
-    modelPicker: {
-      faster: "Schneller",
-      smarter: "Intelligenter",
-    },
     pairingQrExpired: {
       title: "Kopplungs-QR-Code abgelaufen",
       reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",
@@ -1956,8 +1959,7 @@ export const de: TranslationMap = {
     },
     summary: {
       enabled: "Aktiviert",
-      yes: "Ja",
-      no: "Nein",
+      scheduler: "Zeitplaner",
       jobs: "Jobs",
       nextWake: "Nächstes Aufwachen",
       refreshing: "Wird aktualisiert...",
