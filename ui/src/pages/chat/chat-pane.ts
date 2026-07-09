@@ -798,6 +798,7 @@ class ChatPane extends LitElement {
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "idle";
+      state.realtimeTalkInputLevel.set(0);
       state.resetToolStream();
       state.requestUpdate?.();
       return;
@@ -895,6 +896,7 @@ class ChatPane extends LitElement {
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
+      realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,

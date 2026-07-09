@@ -476,6 +476,11 @@ export const ru: TranslationMap = {
   nav: {
     chat: "Чат",
     settings: "Настройки",
+    settingsGeneral: "Общие",
+    settingsGroupConnections: "Подключения",
+    settingsGroupAgents: "Агенты и инструменты",
+    settingsGroupSystem: "Системная",
+    exitSettings: "Назад в приложение",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
     resize: "Изменить размер боковой панели",

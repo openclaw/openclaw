@@ -475,6 +475,11 @@ export const nl: TranslationMap = {
   nav: {
     chat: "Chat",
     settings: "Instellingen",
+    settingsGeneral: "Algemeen",
+    settingsGroupConnections: "Verbindingen",
+    settingsGroupAgents: "Agents en tools",
+    settingsGroupSystem: "Systeem",
+    exitSettings: "Terug naar app",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
     resize: "Zijbalkgrootte aanpassen",

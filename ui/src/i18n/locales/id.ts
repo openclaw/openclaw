@@ -472,6 +472,11 @@ export const id: TranslationMap = {
   nav: {
     chat: "Chat",
     settings: "Pengaturan",
+    settingsGeneral: "Umum",
+    settingsGroupConnections: "Koneksi",
+    settingsGroupAgents: "Agen & Alat",
+    settingsGroupSystem: "Sistem",
+    exitSettings: "Kembali ke aplikasi",
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
     resize: "Ubah ukuran bilah samping",

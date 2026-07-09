@@ -470,6 +470,11 @@ export const ko: TranslationMap = {
   nav: {
     chat: "채팅",
     settings: "설정",
+    settingsGeneral: "일반",
+    settingsGroupConnections: "연결",
+    settingsGroupAgents: "에이전트 및 도구",
+    settingsGroupSystem: "시스템",
+    exitSettings: "앱으로 돌아가기",
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
     resize: "사이드바 크기 조절",

@@ -468,6 +468,11 @@ export const zh_CN: TranslationMap = {
   nav: {
     chat: "聊天",
     settings: "设置",
+    settingsGeneral: "通用",
+    settingsGroupConnections: "连接",
+    settingsGroupAgents: "代理与工具",
+    settingsGroupSystem: "系统",
+    exitSettings: "返回应用",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
     resize: "调整侧边栏大小",
