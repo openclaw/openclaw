@@ -89,12 +89,14 @@ function getProcEnv(key: string): string | undefined {
   if (procEnvCache === null) {
     procEnvCache = new Map();
     try {
-      const { readFileSync } = require("node:fs") as typeof import("node:fs");
-      const data = readFileSync("/proc/self/environ", "utf-8");
-      for (const entry of data.split("\0")) {
-        const idx = entry.indexOf("=");
-        if (idx > 0) {
-          procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
+      const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
+      if (fsModule) {
+        const data = fsModule.readFileSync("/proc/self/environ", "utf-8");
+        for (const entry of data.split("\0")) {
+          const idx = entry.indexOf("=");
+          if (idx > 0) {
+            procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
+          }
         }
       }
     } catch {
