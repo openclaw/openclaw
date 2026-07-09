@@ -313,12 +313,15 @@ function buildTwilioVerificationUrl(
 function redactTwilioVerificationUrlForDiagnostics(url: string): string {
   try {
     const parsed = new URL(url);
+    parsed.username = parsed.username ? "***" : "";
+    parsed.password = parsed.password ? "***" : "";
+    parsed.hash = parsed.hash ? "#***" : "";
     for (const key of Array.from(parsed.searchParams.keys())) {
       parsed.searchParams.set(key, "***");
     }
     return parsed.toString();
   } catch {
-    return url.replace(/([?&])([^=&]+)=([^&]*)/g, "$1$2=***");
+    return "<invalid verification URL>";
   }
 }
 
@@ -363,7 +366,7 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 interface TwilioVerificationResult {
   ok: boolean;
   reason?: string;
-  /** The URL that was used for verification; redacted on failed verification diagnostics. */
+  /** The original URL that passed signature verification; never set on failures. */
   verificationUrl?: string;
   /** Whether we're running behind ngrok free tier */
   isNgrokFreeTier?: boolean;
@@ -636,7 +639,6 @@ export function verifyTwilioWebhook(
   return {
     ok: false,
     reason: `Invalid signature for URL: ${diagnosticVerificationUrl}`,
-    verificationUrl: diagnosticVerificationUrl,
     isNgrokFreeTier,
   };
 }

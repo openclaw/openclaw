@@ -625,6 +625,7 @@ describe("verifyTwilioWebhook", () => {
         query: { callId: "call-1", turnToken: "secret-turn-token" },
       },
       "test-auth-token",
+      { publicUrl: "https://user:pass@example.com/callback#fragment-secret" },
     );
 
     expect(result.ok).toBe(false);
@@ -632,8 +633,27 @@ describe("verifyTwilioWebhook", () => {
     expect(result.reason).toContain("turnToken=***");
     expect(result.reason).toContain("callId=***");
     expect(result.reason).not.toContain("secret-turn-token");
-    expect(result.verificationUrl).toContain("turnToken=***");
-    expect(result.verificationUrl).not.toContain("secret-turn-token");
+    expect(result.reason).not.toContain("user:pass");
+    expect(result.reason).not.toContain("fragment-secret");
+  });
+
+  it("does not echo malformed verification URLs in diagnostics", () => {
+    const result = verifyTwilioWebhook(
+      {
+        headers: { "x-twilio-signature": "invalid" },
+        rawBody: "CallSid=CS123",
+        url: "https://local/voice/webhook",
+        method: "POST",
+      },
+      "test-auth-token",
+      { publicUrl: "not a url?turnToken=secret-turn-token" },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "Invalid signature for URL: <invalid verification URL>",
+    });
+    expect(result.reason).not.toContain("secret-turn-token");
   });
 
   it("treats changed idempotency header as replay for identical signed requests", () => {
@@ -738,7 +758,8 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     // Attacker's host is ignored - uses Host header instead
-    expect(result.verificationUrl).toBe("https://legitimate.example.com/voice/webhook");
+    expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
+    expect(result.verificationUrl).toBeUndefined();
   });
 
   it("uses X-Forwarded-Host when allowedHosts whitelist is provided", () => {
@@ -820,7 +841,8 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     // Attacker's host not in whitelist, falls back to Host header
-    expect(result.verificationUrl).toBe("https://localhost/voice/webhook");
+    expect(result.reason).toContain("https://localhost/voice/webhook");
+    expect(result.verificationUrl).toBeUndefined();
   });
 
   it("trusts forwarding headers only from trusted proxy IPs", () => {
@@ -900,7 +922,8 @@ describe("verifyTwilioWebhook", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.verificationUrl).toBe("https://legitimate.example.com/voice/webhook");
+    expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
+    expect(result.verificationUrl).toBeUndefined();
   });
   it("succeeds when Twilio signs URL without port but server URL has port", () => {
     const authToken = "test-auth-token";

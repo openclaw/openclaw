@@ -149,6 +149,7 @@ describe("TwilioProvider", () => {
       expect(messages).toContain("turnToken=***");
       expect(messages).toContain("callId=***");
       expect(messages).not.toContain("secret-turn-token");
+      expect(warn).toHaveBeenCalledOnce();
     } finally {
       warn.mockRestore();
     }
