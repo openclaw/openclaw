@@ -1437,6 +1437,26 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui,
     openOverlay,
     closeOverlay,
+    getSessionScope: () => ({
+      sessionKey: state.currentSessionKey,
+      agentId: state.currentAgentId,
+    }),
+    injectBashExecution: async (result) => {
+      if (!client.injectBashExecution) {
+        return { ok: false, error: "backend does not support persisting local shell output" };
+      }
+      const response = await client.injectBashExecution({
+        sessionKey: state.currentSessionKey,
+        agentId: state.currentAgentId,
+        command: result.command,
+        output: result.output,
+        exitCode: result.exitCode,
+        cancelled: result.cancelled,
+        truncated: result.truncated,
+        excludeFromContext: result.excludeFromContext,
+      });
+      return { ok: response.ok, error: response.error };
+    },
   });
   updateAutocompleteProvider();
   const admitChatMessage = (message: string) =>

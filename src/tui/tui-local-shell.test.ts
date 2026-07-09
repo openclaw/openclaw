@@ -30,6 +30,15 @@ function createShellHarness(params?: {
   getCwd?: () => string | undefined;
   env?: Record<string, string>;
   maxOutputChars?: number;
+  getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
+  injectBashExecution?: (result: {
+    command: string;
+    output: string;
+    exitCode?: number;
+    cancelled?: boolean;
+    truncated?: boolean;
+    excludeFromContext: boolean;
+  }) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const messages: string[] = [];
   const chatLog = {
@@ -57,6 +66,8 @@ function createShellHarness(params?: {
     ...(params?.getCwd ? { getCwd: params.getCwd } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.maxOutputChars !== undefined ? { maxOutputChars: params.maxOutputChars } : {}),
+    ...(params?.getSessionScope ? { getSessionScope: params.getSessionScope } : {}),
+    ...(params?.injectBashExecution ? { injectBashExecution: params.injectBashExecution } : {}),
   });
   return {
     messages,
@@ -231,5 +242,109 @@ describe("createLocalShellRunner", () => {
 
     await expect(run).resolves.toBeUndefined();
     expect(harness.messages.some((message) => message.includes("exit 0"))).toBe(true);
+  });
+
+  function makeCompletingSpawn(stdoutText: string, exitCode: number) {
+    return vi.fn(() => {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      return {
+        stdout,
+        stderr,
+        on: (event: string, callback: (...args: unknown[]) => void) => {
+          if (event === "close") {
+            setImmediate(() => {
+              stdout.emit("data", Buffer.from(stdoutText));
+              callback(exitCode, null);
+            });
+          }
+        },
+      };
+    });
+  }
+
+  it("persists a `!` command as agent-visible (excludeFromContext: false)", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main", agentId: "work" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "echo hi",
+        output: "hi",
+        exitCode: 0,
+        excludeFromContext: false,
+      }),
+    );
+  });
+
+  it("persists a `!!` command as history-only (excludeFromContext: true)", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "secret",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!!cat secrets.env");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "cat secrets.env", excludeFromContext: true }),
+    );
+  });
+
+  it("does not persist when no session scope is available", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => undefined,
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(injectBashExecution).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a system message when persistence fails, without crashing", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: false, error: "disk full" }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(
+      harness.messages.some((m) => m.includes("not saved to session history: disk full")),
+    ).toBe(true);
   });
 });

@@ -72,8 +72,17 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
+    expect(methods).not.toContain("chat.injectBashExecution");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("wires a dispatchable handler for the hidden chat.injectBashExecution method", () => {
+    // Same failure mode as the terminal.* check above: a descriptor with no matching
+    // lazy-handler entry dispatches as "unknown method" even though it resolves fine
+    // in listCoreGatewayMethodNames().
+    expect(listCoreGatewayMethodNames()).toContain("chat.injectBashExecution");
+    expect(typeof coreGatewayHandlers["chat.injectBashExecution"]).toBe("function");
   });
 
   it("preserves the legacy advertised method order", () => {

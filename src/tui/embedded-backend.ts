@@ -48,6 +48,7 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
+  injectBashExecutionTranscriptMessage,
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
@@ -88,6 +89,8 @@ import type {
   TuiBackend,
   TuiChatSendResult,
   TuiEvent,
+  TuiInjectBashExecutionOptions,
+  TuiInjectBashExecutionResult,
   TuiModelChoice,
   TuiSessionList,
   TuiSessionCreateOptions,
@@ -445,6 +448,29 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
 
     return { runId };
+  }
+
+  async injectBashExecution(
+    opts: TuiInjectBashExecutionOptions,
+  ): Promise<TuiInjectBashExecutionResult> {
+    await this.ready;
+    // Same-process shortcut: call the shared transcript-append core directly instead of
+    // round-tripping a gateway RPC to ourselves, mirroring how sendChat/runTurn bypass RPC too.
+    const result = await injectBashExecutionTranscriptMessage({
+      sessionKey: opts.sessionKey,
+      agentId: opts.agentId,
+      command: opts.command,
+      output: opts.output,
+      exitCode: opts.exitCode,
+      cancelled: opts.cancelled,
+      truncated: opts.truncated,
+      fullOutputPath: opts.fullOutputPath,
+      excludeFromContext: opts.excludeFromContext,
+      getRuntimeConfig,
+    });
+    return result.ok
+      ? { ok: true, messageId: result.messageId }
+      : { ok: false, error: result.error };
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {

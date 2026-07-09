@@ -47,6 +47,8 @@ import type {
   TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
+  TuiInjectBashExecutionOptions,
+  TuiInjectBashExecutionResult,
 } from "./tui-backend.js";
 
 type GatewayConnectionOptions = {
@@ -234,6 +236,30 @@ export class GatewayChatClient implements TuiBackend {
     const acceptedRunId = nonEmptyString(response?.runId) ?? runId;
     const status = nonEmptyString(response?.status);
     return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
+  }
+
+  async injectBashExecution(
+    opts: TuiInjectBashExecutionOptions,
+  ): Promise<TuiInjectBashExecutionResult> {
+    try {
+      const response = await this.client.request<{ ok?: unknown; messageId?: unknown }>(
+        "chat.injectBashExecution",
+        {
+          sessionKey: opts.sessionKey,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          command: opts.command,
+          output: opts.output,
+          exitCode: opts.exitCode,
+          cancelled: opts.cancelled,
+          truncated: opts.truncated,
+          fullOutputPath: opts.fullOutputPath,
+          excludeFromContext: opts.excludeFromContext,
+        },
+      );
+      return { ok: response?.ok !== false, messageId: nonEmptyString(response?.messageId) };
+    } catch (err) {
+      return { ok: false, error: formatErrorMessage(err) };
+    }
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {

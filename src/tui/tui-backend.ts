@@ -29,6 +29,22 @@ export type TuiChatSendResult = {
   status?: string;
 };
 
+/** Options for persisting a TUI-local `!`/`!!` shell command result, no agent turn involved. */
+export type TuiInjectBashExecutionOptions = {
+  sessionKey: string;
+  agentId?: string;
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  fullOutputPath?: string;
+  /** true for `!!`: kept in session history but excluded from the model's context. */
+  excludeFromContext?: boolean;
+};
+
+export type TuiInjectBashExecutionResult = { ok: boolean; messageId?: string; error?: string };
+
 export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 type TuiTaskSuggestionActionCapabilities = {
@@ -185,6 +201,9 @@ export type TuiBackend = {
   stop: () => void | Promise<void>;
   subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
+  injectBashExecution?: (
+    opts: TuiInjectBashExecutionOptions,
+  ) => Promise<TuiInjectBashExecutionResult>;
   /** runId optional: omit for session-scoped abort (queued turns then active). */
   abortChat: (opts: {
     sessionKey: string;

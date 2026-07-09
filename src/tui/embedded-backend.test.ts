@@ -76,6 +76,12 @@ const loadSessionEntryMock = vi.fn(
     entry: {},
   }),
 );
+const injectBashExecutionTranscriptMessageMock = vi.fn(
+  async (): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> => ({
+    ok: true,
+    messageId: "msg-embedded-1",
+  }),
+);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
@@ -185,6 +191,8 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+  injectBashExecutionTranscriptMessage: (...args: unknown[]) =>
+    injectBashExecutionTranscriptMessageMock(...args),
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
@@ -349,6 +357,11 @@ describe("EmbeddedTuiBackend", () => {
     }));
     buildGatewaySessionInfoMock.mockClear();
     getSessionDefaultsMock.mockClear();
+    injectBashExecutionTranscriptMessageMock.mockReset();
+    injectBashExecutionTranscriptMessageMock.mockResolvedValue({
+      ok: true,
+      messageId: "msg-embedded-1",
+    });
     registeredListener = undefined;
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
@@ -406,6 +419,50 @@ describe("EmbeddedTuiBackend", () => {
       entry: {},
       resolved: { modelProvider: "openai", model: "gpt-5.4" },
     });
+  });
+
+  it("persists a `!`/`!!` local shell command directly, no gateway RPC round trip", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.injectBashExecution({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      command: "echo hi",
+      output: "hi",
+      exitCode: 0,
+      excludeFromContext: true,
+    });
+
+    expect(injectBashExecutionTranscriptMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        command: "echo hi",
+        output: "hi",
+        exitCode: 0,
+        excludeFromContext: true,
+        getRuntimeConfig: expect.any(Function),
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "msg-embedded-1" });
+  });
+
+  it("surfaces a failure from the shared transcript-inject core", async () => {
+    injectBashExecutionTranscriptMessageMock.mockResolvedValueOnce({
+      ok: false,
+      error: "session not found",
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.injectBashExecution({
+      sessionKey: "agent:main:missing",
+      command: "ls",
+      output: "",
+    });
+
+    expect(result).toEqual({ ok: false, error: "session not found" });
   });
 
   it("bridges assistant and lifecycle events into chat events", async () => {

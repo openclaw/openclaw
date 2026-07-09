@@ -96,6 +96,8 @@ import {
   ChatMessageGetResultSchema,
   ChatMessageGetParamsSchema,
   ChatInjectParamsSchema,
+  type ChatInjectBashExecutionParams,
+  ChatInjectBashExecutionParamsSchema,
   ChatSendParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
@@ -829,6 +831,9 @@ export const validateChatToolTitlesParams = lazyCompile(ChatToolTitlesParamsSche
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile(ChatInjectParamsSchema);
+export const validateChatInjectBashExecutionParams = lazyCompile(
+  ChatInjectBashExecutionParamsSchema,
+);
 export const validateChatEvent = lazyCompile(ChatEventSchema);
 export const validateChatMessageGetResult = lazyCompile(ChatMessageGetResultSchema);
 export const validateUpdateStatusParams = lazyCompile(UpdateStatusParamsSchema);
@@ -1248,6 +1253,7 @@ export {
   ChatInjectParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
+  ChatInjectBashExecutionParamsSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -1649,6 +1655,7 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+  ChatInjectBashExecutionParams,
   WorktreeRecord,
   WorktreesListParams,
   WorktreesListResult,

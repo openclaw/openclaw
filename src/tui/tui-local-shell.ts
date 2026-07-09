@@ -5,6 +5,15 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
+type LocalShellExecutionResult = {
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  excludeFromContext: boolean;
+};
+
 type LocalShellDeps = {
   chatLog: {
     addSystem: (line: string) => void;
@@ -25,6 +34,13 @@ type LocalShellDeps = {
   getCwd?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
+  /** Session scope to persist the command result under. Omit to skip persistence entirely. */
+  getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
+  /** Persists the command+output to session history. `!` sets excludeFromContext: false so the
+   * agent sees it on its next turn; `!!` sets it true so it stays in scrollback/history only. */
+  injectBashExecution?: (
+    result: LocalShellExecutionResult,
+  ) => Promise<{ ok: boolean; error?: string }>;
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
@@ -82,8 +98,11 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   };
 
   const runLocalShellLine = async (line: string) => {
-    const cmd = line.slice(1);
-    // NOTE: A lone '!' is handled by the submit handler as a normal message.
+    // '!!' means "history-only, keep it out of the agent's context" (excludeFromContext);
+    // plain '!' means "agent-visible next turn" (Claude Code's own `!` convention).
+    const isBangBang = line.startsWith("!!");
+    const cmd = isBangBang ? line.slice(2) : line.slice(1);
+    // NOTE: A lone '!' or '!!' is handled by the submit handler as a normal message.
     // Keep this guard anyway in case this is called directly.
     if (cmd === "") {
       return;
@@ -118,6 +137,26 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
     };
 
+    const persistResult = async (
+      result: Omit<LocalShellExecutionResult, "command" | "excludeFromContext">,
+    ) => {
+      const scope = deps.getSessionScope?.();
+      if (!scope || !deps.injectBashExecution) {
+        return;
+      }
+      const persisted = await deps.injectBashExecution({
+        ...result,
+        command: cmd,
+        excludeFromContext: isBangBang,
+      });
+      if (!persisted.ok) {
+        deps.chatLog.addSystem(
+          `[local] not saved to session history: ${persisted.error ?? "unknown error"}`,
+        );
+        deps.tui.requestRender();
+      }
+    };
+
     await new Promise<void>((resolve) => {
       const child = spawnCommand(cmd, {
         // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
@@ -140,14 +179,12 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
-      child.on("close", (code, signal) => {
+      child.on("close", async (code, signal) => {
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
-        const combined = sliceUtf16Safe(
-          stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
-          -maxChars,
-        ).trimEnd();
+        const uncapped = stdout + (stderr ? (stdout ? "\n" : "") + stderr : "");
+        const combined = sliceUtf16Safe(uncapped, -maxChars).trimEnd();
 
         if (combined) {
           for (const lineLocal of combined.split("\n")) {
@@ -156,12 +193,23 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         }
         deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
+        await persistResult({
+          output: combined,
+          exitCode: code ?? undefined,
+          cancelled: signal != null,
+          truncated: uncapped.length > maxChars,
+        });
         resolve();
       });
 
-      child.on("error", (err) => {
+      child.on("error", async (err) => {
         deps.chatLog.addSystem(`[local] error: ${String(err)}`);
         deps.tui.requestRender();
+        await persistResult({
+          output: `error: ${String(err)}`,
+          cancelled: false,
+          truncated: false,
+        });
         resolve();
       });
     });

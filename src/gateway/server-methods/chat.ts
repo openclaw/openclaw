@@ -12,6 +12,7 @@ import {
   formatValidationErrors,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatInjectBashExecutionParams,
   validateChatMetadataParams,
   validateChatMessageGetParams,
   validateChatToolTitlesParams,
@@ -133,6 +134,7 @@ import {
   type ChatSendServerTimingPhase,
 } from "./chat-server-timing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
+import { appendInjectedBashExecutionMessageToTranscript } from "./chat-transcript-inject.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import {
@@ -733,6 +735,114 @@ async function handleChatHistoryRequest({
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
+}
+
+/** Params for persisting a TUI-local `!`/`!!` shell command result, no agent turn involved. */
+export type InjectBashExecutionParams = {
+  sessionKey: string;
+  agentId?: string;
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  fullOutputPath?: string;
+  excludeFromContext?: boolean;
+  /** Resolves runtime config for agent-scoped ("global") session-key parsing. */
+  getRuntimeConfig?: () => OpenClawConfig;
+};
+
+export type InjectBashExecutionResult =
+  | { ok: true; messageId: string }
+  | { ok: false; error: string };
+
+/**
+ * Shared core for `chat.injectBashExecution`: session resolution, work admission, and
+ * transcript append. Exported so the embedded (in-process) TUI backend can call it
+ * directly without a gateway RPC round trip, mirroring how `chat.send` is split between
+ * the RPC handler and `EmbeddedTuiBackend.sendChat`.
+ */
+export async function injectBashExecutionTranscriptMessage(
+  params: InjectBashExecutionParams,
+): Promise<InjectBashExecutionResult> {
+  const rawSessionKey = params.sessionKey;
+  const requestedAgentId = resolveRequestedChatAgentId({
+    cfg: params.getRuntimeConfig?.(),
+    requestedSessionKey: rawSessionKey,
+    agentId: params.agentId,
+  });
+  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+  const {
+    cfg,
+    storePath,
+    entry,
+    canonicalKey: sessionKey,
+  } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+  const selectedAgent = validateChatSelectedAgent({
+    cfg,
+    requestedSessionKey: rawSessionKey,
+    agentId: requestedAgentId,
+  });
+  if (!selectedAgent.ok) {
+    return { ok: false, error: selectedAgent.error };
+  }
+  const sessionId = entry?.sessionId;
+  if (!sessionId || !storePath) {
+    return { ok: false, error: "session not found" };
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey,
+    config: cfg,
+    agentId: selectedAgent.agentId,
+  });
+
+  let appended: Awaited<ReturnType<typeof appendInjectedBashExecutionMessageToTranscript>>;
+  try {
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {
+        const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+        if (!latestEntry) {
+          throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
+        }
+        if (latestEntry.sessionId !== sessionId) {
+          throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+        }
+        const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+        if (archivedError) {
+          throw new Error(archivedError);
+        }
+      },
+    });
+    try {
+      appended = await admission.run(
+        async () =>
+          await appendInjectedBashExecutionMessageToTranscript({
+            sessionKey,
+            command: params.command,
+            output: params.output,
+            exitCode: params.exitCode,
+            cancelled: params.cancelled,
+            truncated: params.truncated,
+            fullOutputPath: params.fullOutputPath,
+            excludeFromContext: params.excludeFromContext,
+            sessionId,
+            storePath,
+            agentId,
+            config: cfg,
+          }),
+      );
+    } finally {
+      admission.release();
+    }
+  } catch (err) {
+    return { ok: false, error: formatForLog(err) };
+  }
+  if (!appended.ok || !appended.messageId) {
+    return { ok: false, error: appended.error ?? "unknown error" };
+  }
+  return { ok: true, messageId: appended.messageId };
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
@@ -1568,6 +1678,54 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
   },
+  "chat.injectBashExecution": async ({ params, respond, context }) => {
+    if (!validateChatInjectBashExecutionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.injectBashExecution params: ${formatValidationErrors(
+            validateChatInjectBashExecutionParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      sessionKey: string;
+      agentId?: string;
+      command: string;
+      output: string;
+      exitCode?: number;
+      cancelled?: boolean;
+      truncated?: boolean;
+      fullOutputPath?: string;
+      excludeFromContext?: boolean;
+    };
+    const result = await injectBashExecutionTranscriptMessage({
+      sessionKey: p.sessionKey,
+      agentId: p.agentId,
+      command: p.command,
+      output: p.output,
+      exitCode: p.exitCode,
+      cancelled: p.cancelled,
+      truncated: p.truncated,
+      fullOutputPath: p.fullOutputPath,
+      excludeFromContext: p.excludeFromContext,
+      getRuntimeConfig: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    // No live broadcast: the TUI already rendered its own local echo of the
+    // command/output as it ran, so re-broadcasting here would double-render
+    // it for the originating client (same "shared render path" bug family as
+    // #onresume/#result.out). Other connected clients pick this up on their
+    // next history reload.
+    respond(true, { ok: true, messageId: result.messageId });
+  },
   "chat.inject": async ({ params, respond, context }) => {
     if (!validateChatInjectParams(params)) {
       respond(
@@ -1696,5 +1854,53 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
 
     respond(true, { ok: true, messageId: appended.messageId });
+  },
+  "chat.injectBashExecution": async ({ params, respond, context }) => {
+    if (!validateChatInjectBashExecutionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.injectBashExecution params: ${formatValidationErrors(
+            validateChatInjectBashExecutionParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      sessionKey: string;
+      agentId?: string;
+      command: string;
+      output: string;
+      exitCode?: number;
+      cancelled?: boolean;
+      truncated?: boolean;
+      fullOutputPath?: string;
+      excludeFromContext?: boolean;
+    };
+    const result = await injectBashExecutionTranscriptMessage({
+      sessionKey: p.sessionKey,
+      agentId: p.agentId,
+      command: p.command,
+      output: p.output,
+      exitCode: p.exitCode,
+      cancelled: p.cancelled,
+      truncated: p.truncated,
+      fullOutputPath: p.fullOutputPath,
+      excludeFromContext: p.excludeFromContext,
+      getRuntimeConfig: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    // No live broadcast: the TUI already rendered its own local echo of the
+    // command/output as it ran, so re-broadcasting here would double-render
+    // it for the originating client (same "shared render path" bug family as
+    // #onresume/#result.out). Other connected clients pick this up on their
+    // next history reload.
+    respond(true, { ok: true, messageId: result.messageId });
   },
 };

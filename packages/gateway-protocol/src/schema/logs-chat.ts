@@ -122,6 +122,23 @@ export const ChatInjectParamsSchema = closedObject({
   label: Type.Optional(Type.String({ maxLength: 100 })),
 });
 
+/** Persists a TUI-local `!`/`!!` shell command result into a chat transcript without an agent turn. */
+export const ChatInjectBashExecutionParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    command: NonEmptyString,
+    output: Type.String(),
+    exitCode: Type.Optional(Type.Integer()),
+    cancelled: Type.Optional(Type.Boolean()),
+    truncated: Type.Optional(Type.Boolean()),
+    fullOutputPath: Type.Optional(Type.String()),
+    // false/omitted (`!`): included in the model's context. true (`!!`): history-only.
+    excludeFromContext: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 /** Shared event fields preserve stream ordering and route events to the right session. */
 const ChatEventBaseSchema = {
   runId: NonEmptyString,
@@ -195,4 +212,5 @@ export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
+export type ChatInjectBashExecutionParams = Static<typeof ChatInjectBashExecutionParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

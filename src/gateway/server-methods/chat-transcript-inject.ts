@@ -158,3 +158,68 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     return { ok: false, error: formatErrorMessage(err) };
   }
 }
+
+/** Append a TUI-local `!`/`!!` shell command result to a session transcript, no agent turn. */
+export async function appendInjectedBashExecutionMessageToTranscript(params: {
+  transcriptPath?: string;
+  storePath?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  fullOutputPath?: string;
+  excludeFromContext?: boolean;
+  now?: number;
+  config?: OpenClawConfig;
+}): Promise<GatewayInjectedTranscriptAppendResult> {
+  const now = params.now ?? Date.now();
+  const messageBody: AppendMessageArg & Record<string, unknown> = {
+    role: "bashExecution",
+    command: params.command,
+    output: params.output,
+    exitCode: params.exitCode,
+    cancelled: params.cancelled ?? false,
+    truncated: params.truncated ?? false,
+    ...(params.fullOutputPath ? { fullOutputPath: params.fullOutputPath } : {}),
+    timestamp: now,
+    ...(params.excludeFromContext ? { excludeFromContext: true } : {}),
+  };
+
+  try {
+    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
+      return { ok: false, error: "transcript identity not resolved" };
+    }
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionKey: params.sessionKey ?? "",
+        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        updateMode: "inline",
+        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
+        ...(params.config ? { config: params.config } : {}),
+        messages: [
+          { message: messageBody, idempotencyLookup: "scan", now, useRawWhenLinear: true },
+        ],
+      },
+    );
+    const appended = turn.messages[0];
+    if (!appended) {
+      return { ok: false, error: "bash execution message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: appended.message as Record<string, unknown>,
+    };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
+  }
+}
