@@ -120,6 +120,7 @@ async function runProcess(
   );
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
   const onStreamError = (error: Error) => {
+    if (managed.failure) return;
     managed.failure = error.message;
     emitProcessClosed(managed, null);
   };
