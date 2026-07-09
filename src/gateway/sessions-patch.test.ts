@@ -827,6 +827,17 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
+  test("does not re-validate thinkingLevel on patches without thinkingLevel or model", async () => {
+    const store = mainStoreEntry({ thinkingLevel: "low" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: "new label" },
+      }),
+    );
+    expect(entry.thinkingLevel).toBe("low");
+  });
+
   test("sets spawnedBy for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
