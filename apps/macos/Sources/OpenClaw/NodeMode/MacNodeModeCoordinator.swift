@@ -270,6 +270,7 @@ final class MacNodeModeCoordinator: NSObject {
     nonisolated static func resolvedCaps(
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
+        computerControlEnabled: Bool,
         locationMode: OpenClawLocationMode,
         connectionMode: AppState.ConnectionMode,
         codexThreadCatalogEnabled: Bool = false) -> [String]
@@ -283,6 +284,11 @@ final class MacNodeModeCoordinator: NSObject {
         }
         if cameraEnabled {
             caps.append(OpenClawCapability.camera.rawValue)
+        }
+        // Advertised only when the operator has enabled Computer Control; the
+        // command is dangerous and stays disarmed until allowlisted on the gateway.
+        if computerControlEnabled {
+            caps.append(OpenClawCapability.computer.rawValue)
         }
         if locationMode != .off {
             caps.append(OpenClawCapability.location.rawValue)
@@ -299,9 +305,12 @@ final class MacNodeModeCoordinator: NSObject {
         codexThreadCatalogEnabled: Bool) -> [String]
     {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        let computerControlEnabled =
+            UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
         return Self.resolvedCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
+            computerControlEnabled: computerControlEnabled,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
             connectionMode: AppStateStore.shared.connectionMode,
             codexThreadCatalogEnabled: codexThreadCatalogEnabled)
@@ -345,6 +354,9 @@ final class MacNodeModeCoordinator: NSObject {
         }
         if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
             commands.append(MacNodeCodexThreadCatalogContract.listCommand)
+        }
+        if capsSet.contains(OpenClawCapability.computer.rawValue) {
+            commands.append(OpenClawComputerCommand.act.rawValue)
         }
 
         return commands
