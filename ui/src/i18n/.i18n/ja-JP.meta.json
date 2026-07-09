@@ -1,19 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.taskSuggestions.adminRequired",
-    "chat.taskSuggestions.dismiss",
-    "chat.taskSuggestions.eyebrow",
-    "chat.taskSuggestions.instructions",
-    "chat.taskSuggestions.project",
-    "chat.taskSuggestions.start",
-    "chat.taskSuggestions.starting"
-  ],
+  "fallbackKeys": [],
   "generatedAt": "2026-07-09T02:23:54.400Z",
   "locale": "ja-JP",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "ef47733c644c36f1edaca392ff9cc2997ad9ae3ebb143371684bf16c204b7f9c",
   "totalKeys": 1676,
-  "translatedKeys": 1669,
+  "translatedKeys": 1676,
   "workflow": 1
 }
