@@ -3,11 +3,29 @@ import { describe, expect, it } from "vitest";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
   toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "./media.js";
 
 describe("channel inbound media facts", () => {
+  it("replaces optimistic media placeholders and preserves real captions", () => {
+    expect(
+      formatInboundMediaUnavailableText({
+        body: "<media:image>",
+        mediaPlaceholder: "<media:image>",
+        notice: "[test image attachment unavailable]",
+      }),
+    ).toBe("[test image attachment unavailable]");
+    expect(
+      formatInboundMediaUnavailableText({
+        body: "please inspect this",
+        mediaPlaceholder: "<media:image>",
+        notice: "[test image attachment unavailable]",
+      }),
+    ).toBe("please inspect this\n\n[test image attachment unavailable]");
+  });
+
   it("normalizes provider media into inbound media facts", () => {
     expect(
       toInboundMediaFacts(

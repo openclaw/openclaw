@@ -6,6 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
@@ -13,11 +14,14 @@ import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
 } from "../trajectory/paths.js";
 import {
   isRegularNonSymlinkFile,
@@ -89,18 +93,7 @@ function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
     return DEFAULT_TAIL_COUNT;
   }
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 0 ? value : null;
-  }
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  return Number.parseInt(trimmed, 10);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return parseStrictNonNegativeInteger(value) ?? null;
 }
 
 function toOptionalString(value: unknown): string | undefined {
@@ -288,8 +281,13 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
-    const stat = fs.statSync(filePath);
-    const text = fs.readFileSync(filePath, "utf8");
+    // Use the runtime trajectory limit so tail accepts any file the runtime
+    // would have written and rejects anything larger.
+    const { buffer, stat } = readRegularFileSync({
+      filePath,
+      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    });
+    const text = buffer.toString("utf8");
     return {
       events: parseTrajectoryEventLines(text.split(/\r?\n/u)),
       fileState: fileStateFromStat(stat),
@@ -370,7 +368,11 @@ async function readTrajectoryPointerSessionId(sessionFile: string): Promise<stri
     return undefined;
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as unknown;
+    const { buffer } = readRegularFileSync({
+      filePath: pointerPath,
+      maxBytes: 64 * 1024,
+    });
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
     if (!isRecord(parsed) || typeof parsed.sessionId !== "string") {
       return undefined;
     }
@@ -510,7 +512,13 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
 
   const fd = fs.openSync(state.selection.trajectoryPath, "r");
   try {
-    const buffer = Buffer.alloc(fileState.size - state.offset);
+    const deltaBytes = fileState.size - state.offset;
+    if (deltaBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
+      throw new Error(
+        `Trajectory delta exceeds ${TRAJECTORY_RUNTIME_FILE_MAX_BYTES} bytes: ${deltaBytes}`,
+      );
+    }
+    const buffer = Buffer.alloc(deltaBytes);
     fs.readSync(fd, buffer, 0, buffer.length, state.offset);
     state.offset = fileState.size;
     state.fileState = fileState;

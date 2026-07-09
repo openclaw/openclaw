@@ -4,13 +4,13 @@ import path from "node:path";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
 
-export const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
-export const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
+const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
+const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
 export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
-export type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
-export type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
+type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
+type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 

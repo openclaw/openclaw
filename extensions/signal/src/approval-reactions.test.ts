@@ -365,6 +365,98 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("registers alias-configured delivered prompts under the canonical target", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+          aliases: {
+            me: "+15551230000",
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "signal:me" }],
+        },
+      },
+    };
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin:abc",
+        request: {
+          title: "Sensitive plugin action",
+          description: "Needs approval",
+          allowedDecisions: ["allow-once", "deny"],
+          pluginId: "demo",
+          toolName: "dangerousTool",
+          agentId: "main",
+          sessionKey: "agent:main:signal:direct:+15551230000",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+    const deliveredPayload = addSignalApprovalReactionHintToStructuredPayload({
+      cfg,
+      accountId: "default",
+      to: "+15551230000",
+      payload,
+      targetAuthor: "+15550009999",
+    });
+
+    expect(deliveredPayload?.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      registerSignalApprovalReactionTargetForDeliveredPayload({
+        cfg,
+        target: {
+          channel: "signal",
+          to: "+15551230000",
+          accountId: "default",
+        },
+        payload: deliveredPayload!,
+        results: [
+          {
+            channel: "signal",
+            messageId: "1700000000010",
+          },
+        ],
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(true);
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000000010",
+        reactionKey: "👍",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toMatchObject({
+      approvalId: "plugin:abc",
+      approvalKind: "plugin",
+      decision: "allow-once",
+      route: {
+        deliveryMode: "target",
+        to: "+15551230000",
+        accountId: "default",
+      },
+    });
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "me",
+        messageId: "1700000000010",
+        reactionKey: "👍",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("does not register delivered structured approval payloads without explicit approvers", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "exec-no-approvers",

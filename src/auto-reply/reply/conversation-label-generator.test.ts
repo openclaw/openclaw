@@ -1,73 +1,43 @@
 /** Tests generated conversation labels for reply sessions. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const completeSimple = vi.hoisted(() => vi.fn());
-const getRuntimeAuthForModel = vi.hoisted(() => vi.fn());
+const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 const logVerbose = vi.hoisted(() => vi.fn());
-const requireApiKey = vi.hoisted(() => vi.fn());
-const resolveDefaultModelForAgent = vi.hoisted(() => vi.fn());
-const resolveModelAsync = vi.hoisted(() => vi.fn());
-const prepareModelForSimpleCompletion = vi.hoisted(() => vi.fn());
+const prepareSimpleCompletionModelForAgent = vi.hoisted(() => vi.fn());
 
-vi.mock("../../llm/stream.js", async () => {
-  const original =
-    await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return {
-    ...original,
-    completeSimple,
-  };
-});
-
-vi.mock("../../agents/model-auth.js", () => ({ requireApiKey }));
+vi.mock("../../agents/simple-completion-runtime.js", () => ({
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+}));
 
 vi.mock("../../globals.js", () => ({ logVerbose }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
-}));
-
-vi.mock("../../agents/embedded-agent-runner/model.js", () => ({
-  resolveModelAsync,
-}));
-
-vi.mock("../../agents/simple-completion-transport.js", () => ({
-  prepareModelForSimpleCompletion,
-}));
-
-vi.mock("../../plugins/runtime/runtime-model-auth.runtime.js", () => ({
-  getRuntimeAuthForModel,
-}));
-
 import { generateConversationLabel } from "./conversation-label-generator.js";
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls.at(0);
+function firstCompletionArgs() {
+  const call = completeWithPreparedSimpleCompletionModel.mock.calls.at(0);
   if (!call) {
-    throw new Error(`expected ${label} call`);
+    throw new Error("expected simple completion call");
   }
-  return call;
+  return call[0];
 }
 
 describe("generateConversationLabel", () => {
   beforeEach(() => {
-    completeSimple.mockReset();
-    getRuntimeAuthForModel.mockReset();
+    completeWithPreparedSimpleCompletionModel.mockReset();
     logVerbose.mockReset();
-    requireApiKey.mockReset();
-    resolveDefaultModelForAgent.mockReset();
-    resolveModelAsync.mockReset();
-    prepareModelForSimpleCompletion.mockReset();
+    prepareSimpleCompletionModelForAgent.mockReset();
 
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-test" });
-    resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai" },
-      authStorage: {},
-      modelRegistry: {},
+    prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      selection: {
+        provider: "openai",
+        modelId: "gpt-test",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: { provider: "openai", id: "gpt-test", maxTokens: 8192 },
+      auth: { apiKey: "resolved-key", mode: "api-key" },
     });
-    prepareModelForSimpleCompletion.mockImplementation(({ model }) => model);
-    getRuntimeAuthForModel.mockResolvedValue({ apiKey: "resolved-key", mode: "api-key" });
-    requireApiKey.mockReturnValue("resolved-key");
-    completeSimple.mockResolvedValue({
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "Topic label" }],
     });
   });
@@ -76,123 +46,126 @@ describe("generateConversationLabel", () => {
     vi.useRealTimers();
   });
 
-  it("uses routed agentDir for model and auth resolution", async () => {
+  it("prepares the configured utility model in the routed agent directory", async () => {
+    const cfg = { agents: { defaults: { utilityModel: "openai/gpt-test" } } };
+
     await generateConversationLabel({
       userMessage: "Need help with invoices",
       prompt: "prompt",
-      cfg: {},
+      cfg,
       agentId: "billing",
       agentDir: "/tmp/agents/billing/agent",
     });
 
-    expect(resolveDefaultModelForAgent).toHaveBeenCalledWith({
-      cfg: {},
+    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith({
+      cfg,
       agentId: "billing",
-    });
-    expect(resolveModelAsync).toHaveBeenCalledWith(
-      "openai",
-      "gpt-test",
-      "/tmp/agents/billing/agent",
-      {},
-    );
-    expect(getRuntimeAuthForModel).toHaveBeenCalledWith({
-      model: { provider: "openai" },
-      cfg: {},
-      workspaceDir: "/tmp/agents/billing/agent",
-    });
-    expect(prepareModelForSimpleCompletion).toHaveBeenCalledWith({
-      model: { provider: "openai" },
-      cfg: {},
+      agentDir: "/tmp/agents/billing/agent",
+      useUtilityModel: true,
+      useAsyncModelResolution: true,
+      allowMissingApiKeyModes: ["aws-sdk"],
     });
   });
 
-  it("passes the label prompt as systemPrompt and the user text as message content", async () => {
+  it("passes the label prompt and a reasoning-safe bounded completion budget", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_710_000_000_000);
+    const cfg = {};
 
     await generateConversationLabel({
       userMessage: "Need help with invoices",
       prompt: "Generate a label",
-      cfg: {},
+      cfg,
     });
 
-    expect(completeSimple).toHaveBeenCalledOnce();
-    const call = requireFirstMockCall(completeSimple, "simple completion");
-    expect(call[0]).toStrictEqual({ provider: "openai" });
-    expect(call[1]).toStrictEqual({
-      systemPrompt: "Generate a label",
-      messages: [
-        {
-          role: "user",
-          content: "Need help with invoices",
-          timestamp: 1_710_000_000_000,
-        },
-      ],
+    expect(firstCompletionArgs()).toMatchObject({
+      model: { provider: "openai", id: "gpt-test" },
+      auth: { apiKey: "resolved-key", mode: "api-key" },
+      cfg,
+      context: {
+        systemPrompt: "Generate a label",
+        messages: [
+          {
+            role: "user",
+            content: "Need help with invoices",
+            timestamp: 1_710_000_000_000,
+          },
+        ],
+      },
+      options: {
+        maxTokens: 4_096,
+        temperature: 0.3,
+      },
     });
-    expect(call[2].apiKey).toBe("resolved-key");
-    expect(call[2].maxTokens).toBe(100);
-    expect(call[2].temperature).toBe(0.3);
-    expect(call[2].signal).toBeInstanceOf(AbortSignal);
+    expect(firstCompletionArgs().options.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("applies prepared runtime auth to the completion model", async () => {
-    resolveDefaultModelForAgent.mockReturnValue({
-      provider: "microsoft-foundry",
-      model: "claude-fable-5",
-    });
-    resolveModelAsync.mockResolvedValue({
-      model: {
-        provider: "microsoft-foundry",
-        api: "anthropic-messages",
-        baseUrl: "https://example.services.ai.azure.com/anthropic",
-        headers: { "x-api-key": "stale-key" },
+  it("caps the completion budget at the model output limit", async () => {
+    prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      selection: {
+        provider: "openai",
+        modelId: "gpt-test",
+        agentDir: "/tmp/openclaw-agent",
       },
-      authStorage: {},
-      modelRegistry: {},
+      model: { provider: "openai", id: "gpt-test", maxTokens: 1_024 },
+      auth: { apiKey: "resolved-key", mode: "api-key" },
     });
-    getRuntimeAuthForModel.mockResolvedValue({
-      apiKey: "entra-token",
-      mode: "api-key",
-      request: { auth: { mode: "authorization-bearer", token: "entra-token" } },
-    });
-    requireApiKey.mockReturnValue("entra-token");
 
     await generateConversationLabel({
-      userMessage: "Need help with invoices",
+      userMessage: "test topic creation",
       prompt: "Generate a label",
       cfg: {},
     });
 
-    expect(requireFirstMockCall(completeSimple, "simple completion")[0]).toMatchObject({
-      provider: "microsoft-foundry",
-      headers: { Authorization: "Bearer entra-token" },
-    });
+    expect(firstCompletionArgs().options.maxTokens).toBe(1_024);
   });
 
   it("omits temperature for Codex Responses simple completions", async () => {
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
-    resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai", api: "openai-chatgpt-responses" },
-      authStorage: {},
-      modelRegistry: {},
+    prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      selection: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        maxTokens: 8192,
+      },
+      auth: { apiKey: "resolved-key", mode: "api-key" },
     });
 
     await generateConversationLabel({
-      userMessage: "тест создания топика-треда",
+      userMessage: "test topic creation",
       prompt: "Generate a label",
       cfg: {},
     });
 
-    expect(completeSimple).toHaveBeenCalledOnce();
-    const options = requireFirstMockCall(completeSimple, "simple completion")[2];
-    if (!options) {
-      throw new Error("expected simple completion options");
-    }
-    expect(Object.hasOwn(options, "temperature")).toBe(false);
+    expect(firstCompletionArgs().options).not.toHaveProperty("temperature");
+  });
+
+  it("returns null when utility model preparation fails", async () => {
+    prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      error: 'No API key resolved for provider "openai".',
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBeNull();
+
+    expect(logVerbose).toHaveBeenCalledWith(
+      'conversation-label-generator: No API key resolved for provider "openai".',
+    );
+    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("logs completion errors instead of treating them as empty labels", async () => {
-    completeSimple.mockResolvedValue({
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [],
       stopReason: "error",
       errorMessage: "Codex error: Instructions are required",
@@ -208,5 +181,50 @@ describe("generateConversationLabel", () => {
     expect(logVerbose).toHaveBeenCalledWith(
       "conversation-label-generator: completion failed: Codex error: Instructions are required",
     );
+  });
+
+  it("bounds the generated label length", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "A very long generated topic label" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 12,
+      }),
+    ).resolves.toBe("A very long ");
+  });
+
+  it("drops a split emoji instead of returning a lone surrogate", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: `${"a".repeat(11)}😀tail` }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 12,
+      }),
+    ).resolves.toBe("a".repeat(11));
+  });
+
+  it("returns null when the length cap cannot retain the first emoji", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "😀 label" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 1,
+      }),
+    ).resolves.toBeNull();
   });
 });

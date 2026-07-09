@@ -47,6 +47,7 @@ export type ModelCatalogCompatConfig = {
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
   requiresThinkingAsText?: boolean;
+  requiresReasoningContentOnAssistantMessages?: boolean;
   openRouterRouting?: ModelCatalogOpenRouterRouting;
   vercelGatewayRouting?: ModelCatalogVercelGatewayRouting;
   zaiToolStream?: boolean;

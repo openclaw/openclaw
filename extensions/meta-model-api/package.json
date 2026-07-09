@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/meta-model-api-provider",
+  "version": "2026.6.11",
+  "private": true,
+  "description": "OpenClaw Meta Model API provider plugin.",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

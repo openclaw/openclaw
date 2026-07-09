@@ -87,7 +87,10 @@ function isOwnerSender(
   if (!sender) {
     return false;
   }
-  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg, authDir).e164 ?? undefined);
+  const owners = resolveOwnerList(
+    baseMentionConfig,
+    getSelfIdentity(msg, authDir).e164 ?? undefined,
+  );
   return owners.includes(sender);
 }
 
@@ -184,7 +187,13 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const mentionMsg: AdmittedWebInboundMessage =
     params.mentionText !== undefined
       ? { ...params.msg, payload: { ...params.msg.payload, body: params.mentionText } }
-      : params.msg;
+      : {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: params.msg.payload.commandBody ?? params.msg.payload.body,
+          },
+        };
   const commandBody = stripMentionsForCommand(
     mentionMsg.payload.body,
     mentionConfig.mentionRegexes,
@@ -247,7 +256,9 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
-  params.msg.wasMentioned = effectiveWasMentioned;
+  // Carry the session activation and mention result together. Dispatch needs
+  // both facts to distinguish an always-on group from a blocked unmentioned turn.
+  params.msg.groupMention = { wasMentioned: effectiveWasMentioned, requireMention };
   if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
     if (params.deferMissingMention === true) {
       params.logVerbose(

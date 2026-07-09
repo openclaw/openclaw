@@ -227,7 +227,8 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
 
           ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused \
+          curl -fsSL --proto '=https' --tlsv1.2 \
+            --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
             "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
           echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
@@ -245,6 +246,23 @@ jobs:
           EOF
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure OCM local workspace dependencies
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"
+          workspace_dependency_dirs=""
+          if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then
+            workspace_dependency_dirs="${GITHUB_WORKSPACE}/packages/ai"
+          fi
+          chmod 0755 "$npm_wrapper"
+          {
+            echo "OCM_INTERNAL_NPM_BIN=$npm_wrapper"
+            echo "OPENCLAW_OCM_REAL_NPM_BIN=$(command -v npm)"
+            echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
+          } >> "$GITHUB_ENV"
 
       - name: Pin Kova OpenAI model to GPT 5.5
         if: steps.lane.outputs.run == 'true'
@@ -355,7 +373,7 @@ jobs:
             then
               effective_status=0
               {
-                echo "Kova returned a partial release-gate verdict for filtered performance coverage, but all selected scenarios passed and no baseline regression was reported."
+                echo "Kova returned a non-zero release-gate verdict, but the trusted report adapter found only filtered coverage or profiling-affected resource thresholds with no baseline regression."
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             fi

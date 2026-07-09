@@ -1,15 +1,25 @@
 // Ollama tests cover stream runtime plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, ollamaStreamWarnMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  ollamaStreamWarnMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({ warn: ollamaStreamWarnMock }),
+  };
+});
+
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -72,6 +82,7 @@ function expectIteratorEvent(
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+  ollamaStreamWarnMock.mockReset();
 });
 
 describe("buildOllamaChatRequest", () => {
@@ -1432,9 +1443,12 @@ describe("buildAssistantMessage", () => {
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines
-function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function mockNdjsonReader(
+  lines: string[],
+  options: { trailingNewline?: boolean } = {},
+): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
-  const payload = lines.join("\n") + "\n";
+  const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
   let consumed = false;
   return {
     read: async () => {
@@ -1464,7 +1478,37 @@ async function expectDoneEventContent(lines: string[], expectedContent: unknown)
   });
 }
 
+async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const chunks = [];
+  for await (const chunk of parseNdjsonStream(reader)) {
+    chunks.push(chunk);
+  }
+  expect(chunks).toEqual([]);
+}
+
 describe("parseNdjsonStream", () => {
+  it("does not log a dangling surrogate for a malformed complete line", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`]);
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed NDJSON line: ${prefix}`,
+    );
+  });
+
+  it("does not log a dangling surrogate for malformed trailing data", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`], { trailingNewline: false });
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed trailing data: ${prefix}`,
+    );
+  });
+
   it("parses text-only streaming chunks", async () => {
     const reader = mockNdjsonReader([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
@@ -1932,6 +1976,9 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toBe(OLLAMA_INCOMPLETE_STREAM_ERROR);
+        }
       },
     );
   });

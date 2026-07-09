@@ -457,8 +457,12 @@ describe("installSessionToolResultGuard", () => {
 
   it("blocks persistence when before_message_write returns block=true", () => {
     const sm = SessionManager.inMemory();
+    const blockedUserMessages: AgentMessage[] = [];
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessageBlocked: (message) => {
+        blockedUserMessages.push(message);
+      },
     });
 
     sm.appendMessage(
@@ -470,6 +474,8 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expect(getPersistedMessages(sm)).toHaveLength(0);
+    expect(blockedUserMessages).toHaveLength(1);
+    expect(blockedUserMessages[0]).toMatchObject({ role: "user", content: "hidden" });
   });
 
   it("applies before_message_write message mutations before persistence", () => {

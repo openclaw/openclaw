@@ -198,7 +198,7 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[0]?.value).toBe("a".repeat(2000));
     expect(buttonBlock.elements?.[1]).toEqual({
       type: "button",
-      action_id: "openclaw:reply_button:1:3",
+      action_id: "openclaw:reply_link:1:3",
       text: {
         type: "plain_text",
         text: "Docs",
@@ -273,7 +273,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(buttonBlock.elements?.[0]).toEqual({
       type: "button",
-      action_id: "openclaw:reply_button:1:1",
+      action_id: "openclaw:reply_link:1:1",
       text: {
         type: "plain_text",
         text: "Docs",
@@ -310,6 +310,29 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it("renders presentation blocks in authored order", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        { type: "text", text: "First" },
+        { type: "buttons", buttons: [{ label: "Approve", value: "approve" }] },
+        { type: "context", text: "After buttons" },
+        { type: "divider" },
+        {
+          type: "select",
+          options: [{ label: "One", value: "one" }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "section",
+      "actions",
+      "context",
+      "divider",
+      "actions",
+    ]);
+  });
+
   it("renders presentation controls without requiring legacy interactive payloads", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [

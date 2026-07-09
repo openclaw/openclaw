@@ -509,6 +509,7 @@ export function buildChannelInboundEventContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
+    GroupRequireMention: params.access?.mentions?.requireMention,
     ExplicitlyMentionedBot: params.access?.mentions?.explicitlyMentionedBot,
     MentionedUserIds: params.access?.mentions?.mentionedUserIds,
     MentionedSubteamIds: params.access?.mentions?.mentionedSubteamIds,

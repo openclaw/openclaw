@@ -14,7 +14,7 @@ export type GatewayRpcOpts = {
   url?: string;
   token?: string;
   password?: string;
-  timeout?: string;
+  timeout?: string | null;
   expectFinal?: boolean;
   json?: boolean;
   localPortOverride?: number;
@@ -32,9 +32,12 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--json", "Output JSON", false);
 
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) => {
-  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS, {
-    invalidType: "error",
-  });
+  const timeoutMs =
+    opts.timeout === null
+      ? null
+      : parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS, {
+          invalidType: "error",
+        });
   return await withProgress(
     {
       label: `Gateway ${method}`,

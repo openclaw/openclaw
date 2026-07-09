@@ -58,6 +58,8 @@ type PendingApprovalListEntry<TPayload> = {
   expiresAtMs: number;
 };
 
+type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
+
 type ApprovalResolveParams = {
   id: string;
   decision: string;
@@ -84,7 +86,7 @@ function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
 }
 
-export function isApprovalDecision(value: string): value is ExecApprovalDecision {
+function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
 
@@ -473,6 +475,13 @@ export async function handlePendingApprovalRequest<
       turnSourceAccountId: params.record.request.turnSourceAccountId,
       approvalKind: params.approvalKind ?? "exec",
     });
+  const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
+    ? "forwarder"
+    : hasApprovalClients
+      ? "approval-client"
+      : hasTurnSourceRoute
+        ? "turn-source"
+        : "none";
 
   if (
     params.requireDeliveryRoute !== false &&
@@ -501,6 +510,9 @@ export async function handlePendingApprovalRequest<
       {
         status: "accepted",
         id: params.record.id,
+        // Agent-side timeouts use this to distinguish delivered prompts from
+        // requests kept pending only because manual /approve routing may work.
+        deliveryRoute,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
       },

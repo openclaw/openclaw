@@ -464,6 +464,61 @@ describe("tool display details", () => {
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
   });
 
+  it("does not split heredoc body content into exec stages", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: [
+            "python3 <<'PY'",
+            "const slugify = () => 'court-mix';",
+            "if (true) console.log('a') && console.log('b');",
+            "cat <<YAML",
+            "- uses: subosito/flutter-action@v2",
+            "YAML",
+            "PY",
+          ].join("\n"),
+          workdir: "/Users/example/.openclaw/workspace",
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) (agent)");
+  });
+
+  it("keeps command stages after a heredoc terminator", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: ["python3 <<'PY'", "print('body && not a command')", "PY", "npm test"].join(
+            "\n",
+          ),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+  });
+
+  it("matches shell-quoted heredoc terminators before keeping later stages", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join(
+            "\n",
+          ),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+  });
+
   it("appends node name to exec detail when node is set", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

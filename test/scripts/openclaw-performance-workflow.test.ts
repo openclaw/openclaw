@@ -102,6 +102,24 @@ describe("OpenClaw performance workflow", () => {
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+    expect(runKova.run).toContain(
+      "profiling-affected resource thresholds with no baseline regression",
+    );
+  });
+
+  it("installs local workspace packages beside the OCM root tarball", () => {
+    const configure = findStep("Configure OCM local workspace dependencies");
+
+    expect(configure.run).toContain(
+      'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
+    );
+    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_wrapper");
+    expect(configure.run).toContain(
+      'if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then',
+    );
+    expect(configure.run).toContain(
+      "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs",
+    );
   });
 
   it("fails selected live Kova lanes when live auth is missing", () => {
