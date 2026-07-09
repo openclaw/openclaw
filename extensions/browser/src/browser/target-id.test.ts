@@ -32,6 +32,28 @@ describe("resolveTargetIdFromTabs", () => {
     });
   });
 
+  it.each(["suggestedTargetId", "tabId", "label"] as const)(
+    "rejects a %s collision with another tab's raw target id",
+    (field) => {
+      const collidingTabs = [
+        {
+          targetId: "ABCDEF123456",
+          [field]: "ABC999",
+        },
+        {
+          targetId: "ABC999",
+          suggestedTargetId: "t2",
+          tabId: "t2",
+        },
+      ];
+      expect(resolveTargetIdFromTabs("ABC999", collidingTabs)).toEqual({
+        ok: false,
+        reason: "ambiguous",
+        matches: ["ABCDEF123456", "ABC999"],
+      });
+    },
+  );
+
   it("keeps unique raw target-id prefixes as compatibility input", () => {
     expect(resolveTargetIdFromTabs("ABCDEF", tabs)).toEqual({
       ok: true,
