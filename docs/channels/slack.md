@@ -986,7 +986,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            C12345678: { allow: true, requireMention: true },
+            C12345678: { enabled: true, requireMention: true },
           },
         },
       },
@@ -1001,7 +1001,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            "#eng-my-channel": { allow: true, requireMention: true },
+            "#eng-my-channel": { enabled: true, requireMention: true },
           },
         },
       },
