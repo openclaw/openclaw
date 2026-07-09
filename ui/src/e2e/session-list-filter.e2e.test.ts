@@ -65,7 +65,8 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}overview`);
-    await currentPage.getByText(visibleLabel, { exact: true }).waitFor({ timeout: 10_000 });
+    const visibleOverviewRow = currentPage.getByRole("listitem").filter({ hasText: visibleLabel });
+    await visibleOverviewRow.waitFor({ timeout: 10_000 });
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
     expect(
       requestsBeforeEvent.some(
@@ -88,6 +89,6 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(requestsBeforeEvent.length);
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
-    await currentPage.getByText(visibleLabel, { exact: true }).waitFor();
+    await visibleOverviewRow.waitFor();
   });
 });
