@@ -126,6 +126,7 @@ type CodeModeRunState = {
 type CodeModeToolContext = ToolSearchToolContext;
 
 export type CodeModeFailureCode =
+  | "aborted"
   | "invalid_input"
   | "runtime_unavailable"
   | "timeout"
@@ -743,8 +744,8 @@ async function runCodeModeWorker(
         void worker.terminate();
         finish({
           status: "failed",
-          error: "code mode timeout exceeded",
-          code: "timeout",
+          error: "code mode execution aborted",
+          code: "aborted",
           output: [],
         });
       };

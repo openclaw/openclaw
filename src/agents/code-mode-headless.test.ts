@@ -240,7 +240,11 @@ describe("headless Code Mode", () => {
     );
     setTimeout(() => controller.abort(), 100);
 
-    await expect(resultPromise).resolves.toMatchObject({ status: "failed", code: "timeout" });
+    await expect(resultPromise).resolves.toMatchObject({
+      status: "failed",
+      code: "aborted",
+      error: "code mode execution aborted",
+    });
   });
 
   it.each([
