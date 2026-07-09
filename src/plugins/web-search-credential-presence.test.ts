@@ -4,14 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginWebSearchProviderEntry } from "./web-provider-types.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
+type ManifestSnapshot = {
+  plugins: Array<
+    Pick<PluginManifestRecord, "id" | "origin" | "contracts" | "setup" | "providerAuthEnvVars">
+  >;
+};
+
+type PublicWebSearchProvider = Pick<
+  PluginWebSearchProviderEntry,
+  "id" | "pluginId" | "requiresCredential"
+>;
+
 const manifestMocks = vi.hoisted(() => ({
-  loadManifestMetadataSnapshot: vi.fn(() => ({ plugins: [] })),
+  loadManifestMetadataSnapshot: vi.fn<() => ManifestSnapshot>(() => ({ plugins: [] })),
 }));
 const publicArtifactMocks = vi.hoisted(() => ({
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => []),
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn<
+    () => PublicWebSearchProvider[]
+  >(() => []),
 }));
 
 vi.mock("./manifest-contract-eligibility.js", () => ({
@@ -77,7 +92,7 @@ describe("hasConfiguredWebSearchCredential", () => {
               search: {
                 provider: "google",
                 maxResults: 5,
-                openaiCodex: true,
+                openaiCodex: { enabled: true },
                 google: {
                   baseUrl: "https://search.example.test",
                   mode: "serp",
@@ -321,9 +336,10 @@ describe("hasConfiguredWebSearchCredential", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
         {
+          id: "brave",
           origin: "bundled",
           contracts: { webSearchProviders: ["brave"] },
-          setup: { providers: [{ envVars: ["BRAVE_API_KEY"] }] },
+          setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
           providerAuthEnvVars: {},
         },
       ],
