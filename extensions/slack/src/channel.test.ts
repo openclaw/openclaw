@@ -342,6 +342,25 @@ describe("slackPlugin actions", () => {
     });
   });
 
+  it("rejects enterprise pairing notifications before resolving a send token", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enterpriseOrgInstall: true,
+        },
+      },
+    } as OpenClawConfig;
+    const notify = slackPlugin.pairing?.notifyApproval;
+    if (!notify) {
+      throw new Error("slack pairing notify unavailable");
+    }
+
+    await expect(notify({ cfg, id: "U12345678" })).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+    expect(sendMessageSlackMock).not.toHaveBeenCalled();
+  });
+
   it("exposes Slack-native message id and file id schema hints", () => {
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {
@@ -749,6 +768,22 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
+  });
+
+  it("rejects enterprise outbound before resolving the injected sender", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "should-not-send" });
+    const sendText = requireSlackSendText();
+
+    await expect(
+      sendText({
+        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+        to: "C123",
+        text: "hello",
+        accountId: "default",
+        deps: { sendSlack },
+      }),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+    expect(sendSlack).not.toHaveBeenCalled();
   });
 
   it("forwards agent identity through the registered text sender", async () => {

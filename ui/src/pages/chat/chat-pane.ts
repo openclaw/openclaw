@@ -19,8 +19,6 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
-import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -124,7 +122,6 @@ class ChatPane extends LitElement {
   // before route data resolves).
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
-  @property({ attribute: false }) chrome: "none" | "pane" = "none";
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
@@ -132,10 +129,6 @@ class ChatPane extends LitElement {
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => void;
-  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
-  @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
-  @property({ attribute: false }) onClosePane?: (paneId: string) => void;
-  @property({ attribute: false }) onOpenSplitView?: () => void;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
@@ -665,16 +658,6 @@ class ChatPane extends LitElement {
     }
   }
 
-  override updated() {
-    // The header <select> options arrive after the sessions list loads; a
-    // .value template binding committed before the options exist leaves the
-    // browser on the first option, so re-sync after every render.
-    const select = this.querySelector<HTMLSelectElement>(".chat-pane__session-select");
-    if (select && this.state && select.value !== this.state.sessionKey) {
-      select.value = this.state.sessionKey;
-    }
-  }
-
   override disconnectedCallback() {
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
@@ -861,88 +844,6 @@ class ChatPane extends LitElement {
     state.requestUpdate?.();
   }
 
-  private renderPaneHeader(state: ChatPageHost) {
-    if (this.chrome !== "pane") {
-      return null;
-    }
-    const sessions = state.sessionsResult?.sessions ?? [];
-    const currentSession = sessions.find((row) => row.key === state.sessionKey);
-    const options = currentSession ? sessions : [{ key: state.sessionKey }, ...sessions];
-    return html`
-      <div class="chat-pane__header ${this.active ? "chat-pane--active" : ""}">
-        <label class="chat-pane__session-label">
-          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
-          <select
-            class="chat-pane__session-select"
-            aria-label=${t("chat.splitView.sessionSelect")}
-            .value=${state.sessionKey}
-            @change=${(event: Event) => {
-              const nextSessionKey = (event.target as HTMLSelectElement).value;
-              if (nextSessionKey && nextSessionKey !== state.sessionKey) {
-                this.onPaneSessionChange?.(this.paneId, nextSessionKey);
-              }
-            }}
-          >
-            ${options.map(
-              (row) => html`
-                <option value=${row.key}>
-                  ${resolveSessionDisplayName(
-                    row.key,
-                    sessions.find((session) => session.key === row.key),
-                  )}
-                </option>
-              `,
-            )}
-          </select>
-        </label>
-        <div class="chat-pane__actions">
-          ${this.onSplitDown
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => this.onSplitDown?.(this.paneId)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
-          ${this.onSplitRight
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => this.onSplitRight?.(this.paneId)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
-          ${this.onClosePane
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.closePane")}
-                    @click=${() => this.onClosePane?.(this.paneId)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
-        </div>
-      </div>
-    `;
-  }
-
   override render() {
     const state = this.state;
     if (!state) {
@@ -1068,7 +969,6 @@ class ChatPane extends LitElement {
           state.sessionsHideCron = !state.sessionsHideCron;
           state.requestUpdate?.();
         },
-        onOpenSplitView: this.onOpenSplitView,
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
       taskSuggestions: this.taskSuggestions,
@@ -1181,7 +1081,7 @@ class ChatPane extends LitElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return html`${this.renderPaneHeader(state)}${renderChat(props)}`;
+    return renderChat(props);
   }
 }
 

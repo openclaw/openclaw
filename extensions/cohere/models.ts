@@ -9,6 +9,7 @@ const COHERE_MANIFEST_CATALOG = manifest.modelCatalog.providers.cohere;
 
 export const COHERE_BASE_URL = COHERE_MANIFEST_CATALOG.baseUrl;
 export const COHERE_MODEL_CATALOG = COHERE_MANIFEST_CATALOG.models;
+export const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 export function buildCohereCatalogModels(): ModelDefinitionConfig[] {
   return buildManifestModelProviderConfig({
