@@ -84,7 +84,7 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
       try {
         writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
       } catch {
-        writeStdout(JSON.stringify(String(value)));
+        writeStdout(JSON.stringify("[unserializable value]"));
       }
     },
   };
@@ -120,6 +120,6 @@ export function writeRuntimeJson(
   try {
     runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
   } catch {
-    runtime.log(JSON.stringify(String(value)));
+    runtime.log(JSON.stringify("[unserializable value]"));
   }
 }
