@@ -8,6 +8,7 @@ import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
 import { applySessionStoreEntryPatch } from "../config/sessions.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -132,6 +133,17 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
+  const quotaSuspension: QuotaSuspension = {
+    schemaVersion: 1,
+    suspendedAt: now,
+    reason: params.reason,
+    failedProvider: params.failedProvider,
+    failedModel: params.failedModel,
+    summary: params.summary,
+    laneId: params.laneId,
+    expectedResumeBy,
+    state: "suspended",
+  };
 
   try {
     await applySessionStoreEntryPatch({
@@ -140,17 +152,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
       skipMaintenance: true,
       takeCacheOwnership: true,
       patch: {
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now,
-          reason: params.reason,
-          failedProvider: params.failedProvider,
-          failedModel: params.failedModel,
-          summary: params.summary,
-          laneId: params.laneId,
-          expectedResumeBy,
-          state: "suspended",
-        },
+        quotaSuspension,
       },
     });
   } catch (err) {
