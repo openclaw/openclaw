@@ -7329,6 +7329,35 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces periodic usage-limit cooldown copy instead of silencing it in $label chats",
+    async (testCase) => {
+      // Regression for #102598: periodic (daily/weekly/monthly) usage-limit copy doesn't
+      // match isRateLimitErrorMessage's text patterns, so the typed FailoverError.reason
+      // must be consulted or this gets misclassified as a generic failure and silenced.
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError("You've hit your weekly limit \u00b7 resets 6pm (UTC)", {
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        }),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      }
+    },
+  );
+
   it("preserves neutral billing guidance after fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error("All models failed (1): openai/gpt-5.5: billing"), {

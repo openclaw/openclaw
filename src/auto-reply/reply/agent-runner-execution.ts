@@ -1150,7 +1150,13 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : isRateLimitErrorMessage(message) ||
+      // Typed FailoverError.reason catches periodic (daily/weekly/monthly) usage-limit
+      // copy that isRateLimitErrorMessage's text patterns don't match (issue #102598).
+      (isFailoverError(params.err) &&
+        (params.err.reason === "rate_limit" || params.err.reason === "overloaded"));
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(message)
@@ -3446,7 +3452,10 @@ async function runAgentTurnWithFallbackInternal(
         : false;
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : isRateLimitErrorMessage(message) ||
+          // Typed FailoverError.reason catches periodic (daily/weekly/monthly) usage-limit
+          // copy that isRateLimitErrorMessage's text patterns don't match (issue #102598).
+          (isFailoverError(err) && (err.reason === "rate_limit" || err.reason === "overloaded"));
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
           ? formatRateLimitOrOverloadedErrorCopy(message)
