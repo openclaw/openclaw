@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   emitDiagnosticEvent,
@@ -90,7 +91,7 @@ let cachedHostname: string | null = null;
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function sanitizeDiagnosticLogText(value: string, maxChars: number): string {
