@@ -442,6 +442,59 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 
+  it("submits completed consults without asynchronous scheduling", async () => {
+    const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
+    const client = {
+      addEventListener: vi.fn((listener: (event: { event: string; payload?: unknown }) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      request: vi.fn(async (method: string) => {
+        expect(method).toBe("talk.client.toolCall");
+        return { runId: "run-1" };
+      }),
+    } as unknown as RealtimeTalkTransportContext["client"];
+    const transport = createTransport({}, client);
+    await transport.start();
+    const ws = latestWebSocket();
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "check the session" },
+            },
+          ],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(listeners.size).toBe(1));
+    for (const listener of listeners) {
+      listener({
+        event: "chat",
+        payload: { runId: "run-1", state: "final", message: { text: "done" } },
+      });
+    }
+
+    await vi.waitFor(() =>
+      expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+        toolResponse: {
+          functionResponses: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              response: { result: "done" },
+            },
+          ],
+        },
+      }),
+    );
+    transport.stop();
+  });
+
   it("sends spoken active-control acknowledgements through Google Live", async () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
@@ -507,18 +560,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent).toContainEqual({
-      clientContent: {
-        turns: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
-              },
-            ],
-          },
-        ],
-        turnComplete: true,
+      realtimeInput: {
+        text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
       },
     });
     transport.stop();
@@ -590,18 +633,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent).toContainEqual({
-      clientContent: {
-        turns: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: expect.stringContaining('Status: "Got it. I steered the active run."'),
-              },
-            ],
-          },
-        ],
-        turnComplete: true,
+      realtimeInput: {
+        text: expect.stringContaining('Status: "Got it. I steered the active run."'),
       },
     });
     transport.stop();
