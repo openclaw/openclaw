@@ -11,7 +11,7 @@ import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
-export type SettingsSidebarProps = {
+type SettingsSidebarProps = {
   basePath: string;
   activeRouteId: RouteId;
   connected: boolean;
