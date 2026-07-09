@@ -7,11 +7,11 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../agents/agent-tools.policy.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../agents/subagent-capabilities.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
