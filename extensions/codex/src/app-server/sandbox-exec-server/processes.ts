@@ -118,7 +118,13 @@ async function runProcess(
   child.stdout.on("data", (chunk: Buffer) =>
     appendProcessChunk(managed, managed.tty ? "pty" : "stdout", chunk),
   );
+  child.stdout.on("error", (error) => {
+    embeddedAgentLog.warn("codex sandbox process stdout stream error", { error: String(error) });
+  });
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
+  child.stderr.on("error", (error) => {
+    embeddedAgentLog.warn("codex sandbox process stderr stream error", { error: String(error) });
+  });
   child.once("error", (error) => {
     managed.failure = error.message;
     emitProcessClosed(managed, null);

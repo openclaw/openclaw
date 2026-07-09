@@ -229,8 +229,18 @@ function readStreamingSandboxHttpResponse(params: {
         );
       }
     });
+    params.child.stdout.on("error", (error) => {
+      embeddedAgentLog.warn("codex sandbox http/request stdout stream error", {
+        error: String(error),
+      });
+    });
     params.child.stderr.on("data", (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+    });
+    params.child.stderr.on("error", (error) => {
+      embeddedAgentLog.warn("codex sandbox http/request stderr stream error", {
+        error: String(error),
+      });
     });
     params.child.once("error", (error) => fail(error.message, null));
     params.child.once("close", (code) => {

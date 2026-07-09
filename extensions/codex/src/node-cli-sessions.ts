@@ -292,7 +292,9 @@ async function runCodexExecResume(params: {
       forceKillTimeout.unref?.();
     }, params.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stdout.on("error", () => {});
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stderr.on("error", () => {});
     child.stdin.end(params.prompt);
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
