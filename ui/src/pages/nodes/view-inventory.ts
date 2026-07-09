@@ -122,15 +122,14 @@ function renderInventoryGroup(group: NodesInventoryGroup, props: NodesProps) {
 
 function entryStatusChips(entry: NodesInventoryEntry): TemplateResult[] {
   const chips: TemplateResult[] = [];
-  // Connectivity is only known for node-capable entries; operator-only clients
-  // (CLI, browsers) have no live link to report, so no status chip for them.
-  if (entry.node) {
-    chips.push(
-      html`<span class="chip ${entry.connected ? "chip-ok" : "chip-warn"}">
-        ${entry.connected ? "connected" : "offline"}
-      </span>`,
-    );
-  }
+  // Connectivity is known for node-catalog entries and for device records with
+  // server-computed connection state; legacy node-only rows without either
+  // still report offline, which matches their live-link reality.
+  chips.push(
+    html`<span class="chip ${entry.connected ? "chip-ok" : "chip-warn"}">
+      ${entry.connected ? "connected" : "offline"}
+    </span>`,
+  );
   for (const role of entry.roles) {
     chips.push(html`<span class="chip">${role}</span>`);
   }

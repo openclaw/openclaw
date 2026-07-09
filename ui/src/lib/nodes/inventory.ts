@@ -149,7 +149,9 @@ function buildEntry(id: string, device?: PairedDevice, node?: NodeListEntry): No
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
     scopes: stringList(device?.scopes),
-    connected: node?.connected === true,
+    // Node catalog rows and the server-computed device connection state both
+    // count: operator-only clients never appear in node.list.
+    connected: node?.connected === true || device?.connected === true,
     autoApproved: device?.approvedVia === "silent" || device?.approvedVia === "trusted-cidr",
     lastSeenAtMs: maxDefined(device?.lastSeenAtMs, node?.lastSeenAtMs, node?.connectedAtMs),
     approvedAtMs: maxDefined(device?.approvedAtMs, node?.approvedAtMs),

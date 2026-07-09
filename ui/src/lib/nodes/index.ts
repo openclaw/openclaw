@@ -54,7 +54,9 @@ export type PairedDevice = {
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "bootstrap";
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "bootstrap";
+  /** Server-computed: the device currently holds a live gateway connection. */
+  connected?: boolean;
   createdAtMs?: number;
   approvedAtMs?: number;
   lastSeenAtMs?: number;
@@ -366,7 +368,7 @@ export async function removeStaleInventoryEntries(
     return;
   }
   const confirmed = window.confirm(
-    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair on their next local connection.`,
+    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair silently on their next connection.`,
   );
   if (!confirmed) {
     return;

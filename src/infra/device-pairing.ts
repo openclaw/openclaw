@@ -1058,6 +1058,11 @@ export type PrunedSupersededPairedDevice = {
   roles: string[];
 };
 
+// A concurrently approved sibling may still be mid-handshake and not yet visible
+// to the connected-clients check; freshly approved records are never prune
+// candidates so parallel silent pairings cannot delete each other's rows.
+const PRUNE_RECENT_APPROVAL_GRACE_MS = 60_000;
+
 /**
  * Remove silent-approved sibling records superseded by a newly approved silent
  * pairing of the same client cluster. Only records whose latest approval was
@@ -1071,6 +1076,7 @@ export async function pruneSupersededSilentPairedDevices(params: {
   deviceId: string;
   baseDir?: string;
   isDeviceConnected?: (deviceId: string) => boolean;
+  nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
@@ -1082,6 +1088,7 @@ export async function pruneSupersededSilentPairedDevices(params: {
     if (!anchorKey) {
       return [];
     }
+    const nowMs = params.nowMs ?? Date.now();
     const removed: PrunedSupersededPairedDevice[] = [];
     for (const device of Object.values(state.pairedByDeviceId)) {
       if (device.deviceId === anchor.deviceId) {
@@ -1092,6 +1099,9 @@ export async function pruneSupersededSilentPairedDevices(params: {
         continue;
       }
       if (silentPairingClusterKey(device) !== anchorKey) {
+        continue;
+      }
+      if (nowMs - device.approvedAtMs < PRUNE_RECENT_APPROVAL_GRACE_MS) {
         continue;
       }
       if (params.isDeviceConnected?.(device.deviceId)) {

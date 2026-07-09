@@ -129,6 +129,39 @@ describe("buildNodesInventory", () => {
 });
 
 describe("listStaleInventoryEntries", () => {
+  it("treats server-reported device connectivity as live for operator-only entries", () => {
+    const groups = buildNodesInventory({
+      paired: [
+        device({
+          deviceId: "cli-new",
+          clientId: "cli",
+          approvedVia: "silent",
+          lastSeenAtMs: 3_000,
+        }),
+        device({
+          deviceId: "cli-live",
+          clientId: "cli",
+          approvedVia: "silent",
+          connected: true,
+          lastSeenAtMs: 1_000,
+        }),
+        device({
+          deviceId: "cli-stale",
+          clientId: "cli",
+          approvedVia: "silent",
+          lastSeenAtMs: 2_000,
+        }),
+      ],
+      nodes: [],
+    });
+
+    expect(groups[0].primary.id).toBe("cli-live");
+    expect(listStaleInventoryEntries(groups).map((entry) => entry.id)).toEqual([
+      "cli-new",
+      "cli-stale",
+    ]);
+  });
+
   it("lists offline auto-approved duplicates only", () => {
     const groups = buildNodesInventory({
       paired: [

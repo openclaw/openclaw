@@ -204,7 +204,9 @@ Boundaries:
   automatically. Records approved before provenance existed stay protected,
   even after a later silent re-approval of the same device id.
 - Currently connected devices are skipped, so concurrent local sessions with
-  separate state directories keep their tokens while live.
+  separate state directories keep their tokens while live. Records approved
+  within the last minute are also skipped, so simultaneous pairing handshakes
+  cannot retire each other before their connections register.
 - Affected clients are local by construction, so they re-pair silently on
   their next connection.
 

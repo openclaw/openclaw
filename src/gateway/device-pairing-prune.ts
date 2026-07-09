@@ -26,11 +26,13 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
   deviceId: string;
   context: PruneContext;
   baseDir?: string;
+  nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
   const { context } = params;
   const pruned = await pruneSupersededSilentPairedDevices({
     deviceId: params.deviceId,
     baseDir: params.baseDir,
+    nowMs: params.nowMs,
     isDeviceConnected: (deviceId) => context.hasConnectedClientsForDevice?.(deviceId) ?? false,
   });
   for (const entry of pruned) {

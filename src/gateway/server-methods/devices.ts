@@ -202,7 +202,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
-  "device.pair.list": async ({ params, respond, client }) => {
+  "device.pair.list": async ({ params, respond, context, client }) => {
     if (!validateDevicePairListParams(params)) {
       respond(
         false,
@@ -231,7 +231,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
       true,
       {
         pending: visibleList.pending,
-        paired: visibleList.paired.map((device) => redactPairedDevice(device)),
+        paired: visibleList.paired.map((device) => ({
+          ...redactPairedDevice(device),
+          // Live-connection state lets clients distinguish active pairings from
+          // stale ones; node-role links alone do not cover operator clients.
+          connected: context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
+        })),
       },
       undefined,
     );

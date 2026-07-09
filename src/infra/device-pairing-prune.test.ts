@@ -17,6 +17,11 @@ async function makeBaseDir(): Promise<string> {
   return await suiteRootTracker.make("case");
 }
 
+// Ages every just-approved record past the recent-approval grace window.
+function agedNowMs(): number {
+  return Date.now() + 120_000;
+}
+
 async function pairDevice(params: {
   baseDir: string;
   deviceId: string;
@@ -146,6 +151,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const removed = await pruneSupersededSilentPairedDevices({
       deviceId: anchor.deviceId,
       baseDir,
+      nowMs: agedNowMs(),
     });
 
     expect(removed.map((entry) => entry.deviceId).toSorted()).toEqual(["stale-1", "stale-2"]);
@@ -176,10 +182,27 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const removed = await pruneSupersededSilentPairedDevices({
       deviceId: anchor.deviceId,
       baseDir,
+      nowMs: agedNowMs(),
     });
 
     expect(removed).toEqual([]);
     expect(await getPairedDevice("cidr-stale", baseDir)).not.toBeNull();
+  });
+
+  test("skips freshly approved siblings still inside the grace window", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({ baseDir, deviceId: "in-flight", approvedVia: "silent" });
+    const anchor = await pairDevice({ baseDir, deviceId: "anchor", approvedVia: "silent" });
+
+    // Real now: the sibling was approved milliseconds ago, so a concurrent
+    // handshake that has not registered its connection yet must survive.
+    const removed = await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+    });
+
+    expect(removed).toEqual([]);
+    expect(await getPairedDevice("in-flight", baseDir)).not.toBeNull();
   });
 
   test("skips connected devices and drops pending requests for pruned ids", async () => {
@@ -203,6 +226,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const removed = await pruneSupersededSilentPairedDevices({
       deviceId: anchor.deviceId,
       baseDir,
+      nowMs: agedNowMs(),
       isDeviceConnected: (deviceId) => deviceId === "live",
     });
 
@@ -220,6 +244,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const removed = await pruneSupersededSilentPairedDevices({
       deviceId: anchor.deviceId,
       baseDir,
+      nowMs: agedNowMs(),
     });
 
     expect(removed).toEqual([]);
@@ -241,6 +266,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const removed = await pruneSupersededSilentPairedDevices({
       deviceId: anchor.deviceId,
       baseDir,
+      nowMs: agedNowMs(),
     });
 
     expect(removed).toEqual([]);

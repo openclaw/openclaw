@@ -108,6 +108,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       deviceId: anchor.deviceId,
       context: harness.context,
       baseDir,
+      nowMs: Date.now() + 120_000,
     });
 
     expect(pruned.map((entry) => entry.deviceId)).toEqual(["node-stale"]);
@@ -154,6 +155,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       deviceId: anchor.deviceId,
       context: harness.context,
       baseDir,
+      nowMs: Date.now() + 120_000,
     });
 
     expect(pruned.map((entry) => entry.deviceId)).toEqual(["cli-stale"]);
