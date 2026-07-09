@@ -16,6 +16,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
+import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
@@ -36,9 +37,15 @@ type ChatControlsProps = {
   sessionsResult: SessionsListResult | null;
   stream: string | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
+  realtimeTalkInputDeviceId?: string;
+  realtimeTalkInputLoading?: boolean;
+  realtimeTalkInputError?: string | null;
   canOpenRealtimeTalkSettings?: boolean;
   onOpenRealtimeTalkSettings?: () => void;
   onRefresh: () => Promise<void> | void;
+  onRealtimeTalkInputRefresh?: () => void;
+  onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
   onSettingsChange: (next: UiSettings) => void;
   onSettingsOpenChange: (
@@ -46,7 +53,6 @@ type ChatControlsProps = {
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
   onToggleCronSessions?: () => void;
-  onOpenSplitView?: () => void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -338,7 +344,13 @@ export function renderChatControls(props: ChatControlsProps) {
                 <span class="chat-settings-popover__label">${t("chat.voiceSettings")}</span>
                 ${renderRealtimeTalkOptions({
                   realtimeTalkOptions: props.realtimeTalkOptions,
+                  realtimeTalkInputDevices: props.realtimeTalkInputDevices,
+                  realtimeTalkInputDeviceId: props.realtimeTalkInputDeviceId,
+                  realtimeTalkInputLoading: props.realtimeTalkInputLoading,
+                  realtimeTalkInputError: props.realtimeTalkInputError,
                   onRealtimeTalkOptionsChange: props.onRealtimeTalkOptionsChange,
+                  onRealtimeTalkInputRefresh: props.onRealtimeTalkInputRefresh,
+                  onRealtimeTalkInputSelect: props.onRealtimeTalkInputSelect,
                   canOpenRealtimeTalkSettings: props.canOpenRealtimeTalkSettings,
                   onOpenRealtimeTalkSettings: props.onOpenRealtimeTalkSettings,
                   embedded: true,
@@ -358,19 +370,5 @@ export function renderChatControls(props: ChatControlsProps) {
     >
       ${renderChatModelControls(props.model)}
     </div>
-    ${props.onOpenSplitView
-      ? html`
-          <openclaw-tooltip .content=${t("chat.splitView.open")}>
-            <button
-              class="btn btn--sm btn--icon chat-open-split-view"
-              type="button"
-              aria-label=${t("chat.splitView.open")}
-              @click=${props.onOpenSplitView}
-            >
-              ${icons.panelRightOpen}
-            </button>
-          </openclaw-tooltip>
-        `
-      : ""}
   `;
 }

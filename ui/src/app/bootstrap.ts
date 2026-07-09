@@ -2,9 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
-  inferBasePathFromPathname,
   locationForRoute,
-  normalizeBasePath,
   pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
@@ -18,7 +16,7 @@ import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { createBrowserHistory } from "./browser.ts";
+import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -31,6 +29,7 @@ import type {
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
+import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -160,6 +159,7 @@ function createApplicationNavigationPreferences(
   let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
+    navWidth: settings.navWidth,
     sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
     sidebarMoreExpanded: settings.sidebarMoreExpanded,
   };
@@ -173,6 +173,7 @@ function createApplicationNavigationPreferences(
       const nextSnapshot = { ...snapshot, ...patch };
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
+        nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
         nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
       ) {
@@ -180,6 +181,7 @@ function createApplicationNavigationPreferences(
       }
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
+        navWidth: nextSnapshot.navWidth,
         sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
         sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
       });
@@ -235,8 +237,8 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (startup.changed) {
     saveSettings(startup.settings);
   }
-  const basePath = normalizeBasePath(
-    inferBasePathFromPathname(startup.location.pathname || globalThis.location?.pathname || "/"),
+  const basePath = resolveControlUiBasePath(
+    startup.location.pathname || globalThis.location?.pathname || "/",
   );
   const initialLocation = normalizeInitialApplicationLocation(
     startup.location,
@@ -272,6 +274,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
+  const nativeLinkRouting = startNativeLinkRouting();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -385,6 +388,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
+      nativeLinkRouting.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

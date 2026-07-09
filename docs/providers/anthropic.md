@@ -185,7 +185,7 @@ OpenClaw release:
   </Tab>
 </Tabs>
 
-## Thinking defaults (Claude Sonnet 5, Fable 5, 4.8, and 4.6)
+## Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 
 `anthropic/claude-sonnet-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
@@ -200,6 +200,12 @@ effort. Anthropic does not allow thinking to be disabled for this model, so
 `/think off` and `/think minimal` map to `low` effort instead. OpenClaw also
 omits custom temperature values for Fable 5 requests, since Anthropic rejects
 a temperature override on any thinking-enabled request.
+
+`anthropic/claude-mythos-5` is a limited-access model with the same always-on
+adaptive-thinking contract. OpenClaw defaults to `high`, maps `/think off` and
+`/think minimal` to `low`, and omits caller-selected sampling parameters.
+The catalog publishes its 1,000,000-token context window, 128,000-token output
+limit, image input, and `$10/$50` input/output pricing.
 
 Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly
 enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends
@@ -414,10 +420,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Sonnet 5 has an exact 1,000,000-token input window and supports up to
-    128,000 output tokens. Anthropic's 1M context window is also GA on Claude 4.x
-    models with adaptive thinking: Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6.
-    OpenClaw sizes these models automatically, no `params.context1m` needed:
+    Claude Sonnet 5, Mythos 5, and Fable 5 have an exact 1,000,000-token input
+    window and support up to 128,000 output tokens. Anthropic's 1M context
+    window is also GA on Claude 4.x models with adaptive thinking: Opus 4.8,
+    Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes these models
+    automatically, no `params.context1m` needed:
 
     ```json5
     {
@@ -425,6 +432,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         defaults: {
           models: {
             "anthropic/claude-sonnet-5": {},
+            "anthropic/claude-mythos-5": {},
             "anthropic/claude-opus-4-6": {},
           },
         },

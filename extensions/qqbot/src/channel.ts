@@ -1,5 +1,6 @@
 // Qqbot plugin module implements channel behavior.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
+import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -32,6 +33,7 @@ import type { OutboundMediaAccessContext } from "./engine/messaging/outbound-typ
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
+  parseTarget,
 } from "./engine/messaging/target-parser.js";
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -59,6 +61,28 @@ function createQQBotSendReceipt(params: {
       : [],
     threadId: params.target,
     kind: params.kind,
+  });
+}
+
+function resolveQQBotOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const target = parseTarget(params.target);
+  const chatType = target.type === "c2c" ? "direct" : "group";
+  const qualifiedTarget = `qqbot:${target.type}:${target.id}`;
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "qqbot",
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: { kind: chatType, id: target.id },
+    chatType,
+    from: qualifiedTarget,
+    to: qualifiedTarget,
   });
 }
 
@@ -269,6 +293,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
+    resolveOutboundSessionRoute: (params) => resolveQQBotOutboundSessionRoute(params),
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */
       looksLikeId: looksLikeQQBotTarget,

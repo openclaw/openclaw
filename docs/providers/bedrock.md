@@ -347,6 +347,20 @@ openclaw models list
 
   </Accordion>
 
+  <Accordion title="Claude Mythos 5">
+    Claude Mythos 5 is available through Bedrock only for accounts with the
+    required limited-access approval. OpenClaw recognizes the foundation model
+    `anthropic.claude-mythos-5` and regional or global inference profiles such
+    as `us.anthropic.claude-mythos-5`.
+
+    OpenClaw applies the 1,000,000-token context window, 128,000-token output
+    limit, image input, prompt caching, refusal-safe streaming, and native
+    effort levels. Adaptive thinking is always enabled: `/think off` and
+    `/think minimal` map to `low`, while `xhigh` and `max` remain available.
+    Custom sampling and forced tool choice values are omitted.
+
+  </Accordion>
+
   <Accordion title="Claude Sonnet 5">
     AWS documents Sonnet 5 for both the
     [`bedrock-runtime` and `bedrock-mantle` endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html).

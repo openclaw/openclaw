@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { startWhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -62,16 +63,15 @@ export async function createWhatsAppQaTransportAdapter(
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";
-  const directTargets = whatsappLive.resolveWhatsAppQaMessageTargets({
+  const dmTargets = whatsappLive.resolveWhatsAppQaMessageTargets({
     driverPhoneE164: runtimeEnv.driverPhoneE164,
     scenarioTarget: "dm",
     sutPhoneE164: runtimeEnv.sutPhoneE164,
   });
-  let targets = directTargets;
   let observedCount = driver.getObservedMessages().length;
   let stopped = false;
   let pollingError: Error | undefined;
-  let logicalConversationId = targets.gatewayTarget;
+  let logicalConversationId = dmTargets.gatewayTarget;
   let logicalConversationKind: "direct" | "group" = "direct";
   const nativeMessageIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
@@ -88,7 +88,10 @@ export async function createWhatsAppQaTransportAdapter(
         }
         await context.messages.addOutboundMessage({
           accountId,
-          to: `${logicalConversationKind === "direct" ? "dm" : "group"}:${logicalConversationId}`,
+          to: buildQaTarget({
+            chatType: logicalConversationKind,
+            conversationId: logicalConversationId,
+          }),
           senderId: message.fromPhoneE164,
           text: message.text,
           timestamp: Date.parse(message.observedAt),
@@ -122,11 +125,11 @@ export async function createWhatsAppQaTransportAdapter(
     async sendInbound(input) {
       heartbeat.throwIfFailed();
       logicalConversationId = input.conversation.id;
-      logicalConversationKind = input.conversation.kind === "group" ? "group" : "direct";
-      targets = whatsappLive.resolveWhatsAppQaMessageTargets({
+      logicalConversationKind = input.conversation.kind === "direct" ? "direct" : "group";
+      const targets = whatsappLive.resolveWhatsAppQaMessageTargets({
         driverPhoneE164: runtimeEnv.driverPhoneE164,
         groupJid: runtimeEnv.groupJid,
-        scenarioTarget: logicalConversationKind === "group" ? "group" : "dm",
+        scenarioTarget: logicalConversationKind === "direct" ? "dm" : "group",
         sutPhoneE164: runtimeEnv.sutPhoneE164,
       });
       const quotedMessageId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
@@ -155,8 +158,7 @@ export async function createWhatsAppQaTransportAdapter(
       return message;
     },
     resetTransport: () => {
-      targets = directTargets;
-      logicalConversationId = directTargets.gatewayTarget;
+      logicalConversationId = dmTargets.gatewayTarget;
       logicalConversationKind = "direct";
       nativeMessageIds.clear();
       busMessageIds.clear();
@@ -167,15 +169,16 @@ export async function createWhatsAppQaTransportAdapter(
         authDir: sutAuthDir,
         dmPolicy: "allowlist",
         groupJid: runtimeEnv.groupJid,
+        overrides: options.transportPolicy?.topLevelReplies ? { replyToMode: "off" } : undefined,
         sutAccountId: accountId,
       }),
     waitReady: async ({ gateway }) =>
       await whatsappLive.waitForWhatsAppChannelStable(gateway as never, accountId),
     buildAgentDelivery: () => ({
       channel: "whatsapp",
-      to: targets.gatewayTarget,
+      to: dmTargets.gatewayTarget,
       replyChannel: "whatsapp",
-      replyTo: targets.gatewayTarget,
+      replyTo: dmTargets.gatewayTarget,
     }),
     async handleAction() {
       throw new Error("WhatsApp live QA adapter does not implement transport actions");

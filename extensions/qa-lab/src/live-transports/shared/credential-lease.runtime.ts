@@ -74,7 +74,7 @@ type QaCredentialLeaseHeartbeat = {
   throwIfFailed(): void;
 };
 
-export type QaCredentialRole = "ci" | "maintainer";
+type QaCredentialRole = "ci" | "maintainer";
 
 type QaCredentialLeaseSource = "convex" | "env";
 

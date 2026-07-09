@@ -1,14 +1,19 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
+  requiresClaudeDefaultSampling,
+  requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Context, Model } from "../types.js";
 export {
+  requiresClaudeDefaultSampling,
+  requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
@@ -66,6 +71,7 @@ export function usesClaudeStreamingRefusalContract(model: {
   }
   return (
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
+    resolveClaudeMythos5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
@@ -78,11 +84,7 @@ export function requiresClaudeAdaptiveThinking(model: {
   if (normalizeApi(model.api) !== "anthropic-messages") {
     return false;
   }
-  const modelId = resolveClaudeModelIdentity(model);
-  return (
-    resolveClaudeFable5ModelIdentity(model) !== undefined ||
-    /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
-  );
+  return requiresClaudeMandatoryAdaptiveThinking(model);
 }
 
 /** Return whether omitted thinking should default to adaptive/high. */
@@ -120,14 +122,46 @@ export function prepareClaudeSonnet5RequestContext(model: Model, context: Contex
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
-function resolveReplayFableIdentity(ref: ReplayModelRef): string | undefined {
+export function applyClaudeRequestContract(
+  params: Record<string, unknown>,
+  model: {
+    id?: string;
+    params?: Record<string, unknown>;
+    api?: string;
+  },
+): void {
+  if (normalizeApi(model.api) !== "anthropic-messages") {
+    return;
+  }
+  const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+  if (!requiresClaudeDefaultSampling(model) && !sonnet5) {
+    return;
+  }
+  delete params.temperature;
+  delete params.top_p;
+  delete params.top_k;
+  if (sonnet5) {
+    delete params.service_tier;
+  }
+}
+
+function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefined {
   if (normalizeApi(ref.api) !== "anthropic-messages") {
     return undefined;
   }
-  if (hasConcreteResponseModel(ref)) {
-    return resolveClaudeFable5ModelIdentity({ id: ref.responseModelId });
+  const modelRef = hasConcreteResponseModel(ref)
+    ? { id: ref.responseModelId }
+    : { id: ref.modelId, params: ref.modelParams };
+  const fableIdentity = resolveClaudeFable5ModelIdentity(modelRef);
+  if (fableIdentity) {
+    return `fable:${fableIdentity}`;
   }
-  return resolveClaudeFable5ModelIdentity({ id: ref.modelId, params: ref.modelParams });
+  const mythosIdentity = resolveClaudeMythos5ModelIdentity(modelRef);
+  if (mythosIdentity) {
+    return `mythos:${mythosIdentity}`;
+  }
+  const sonnetIdentity = resolveClaudeSonnet5ModelIdentity(modelRef);
+  return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
 }
 
 export function resolveModelBoundThinkingReplayMode(params: {
@@ -136,8 +170,8 @@ export function resolveModelBoundThinkingReplayMode(params: {
 }): "default" | "preserve" | "drop" {
   const sourceApi = normalizeApi(params.source.api);
   const targetApi = normalizeApi(params.target.api);
-  const sourceIdentity = resolveReplayFableIdentity(params.source);
-  const targetIdentity = resolveReplayFableIdentity(params.target);
+  const sourceIdentity = resolveReplayModelBoundIdentity(params.source);
+  const targetIdentity = resolveReplayModelBoundIdentity(params.target);
   const sameRoute =
     normalizeLowercaseStringOrEmpty(params.source.provider) ===
       normalizeLowercaseStringOrEmpty(params.target.provider) &&

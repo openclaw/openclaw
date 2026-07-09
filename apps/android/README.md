@@ -18,6 +18,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
+- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Per-app language selection for translated resources follows Android system settings and persistence
 
 ## Open in Android Studio
 
@@ -61,6 +63,7 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 ```
 
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
 Generate raw Google Play screenshots:
 
@@ -68,16 +71,13 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
-To make screenshot capture own emulator startup, pass a named AVD:
-
-```bash
-ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
-```
-
-The screenshot script uses one connected ADB device when available. If none is
-connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
-headlessly, waits for Android to finish booting, disables animations, captures
-the screenshots, then shuts down the emulator it started.
+The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
+created from Android's no-cutout Pixel 2 profile. It creates the AVD when
+missing, boots it headlessly, waits for Android to finish booting, disables
+animations, captures the screenshots, then shuts down the emulator it started.
+The API 36 Google APIs system image must be installed in the local Android SDK.
+Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
+explicitly use a connected emulator.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
@@ -85,6 +85,10 @@ the screenshots, then shuts down the emulator it started.
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
+
+The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
 `pnpm android:release:archive` is for local archive validation only. It is not a
 fallback upload path after `pnpm android:release:upload` fails.

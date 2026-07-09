@@ -326,6 +326,8 @@ function runningTaskQueryOutput() {
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  // Keep generic lifecycle cases host-independent; Windows ownership cases opt in below.
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   inspectPortUsage.mockResolvedValue({

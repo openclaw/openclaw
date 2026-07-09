@@ -596,7 +596,13 @@ export async function finalizeSetupWizard(
       .access(bootstrapPath)
       .then(() => true)
       .catch(() => false);
-    const shouldSeedBootstrapHatch = hasBootstrap && options.hadExistingConfig !== true;
+    const agentDir = resolveDefaultAgentDir(nextConfig);
+    // Without model credentials the seeded first message is guaranteed to fail
+    // with a provider auth error, so hatch quietly and explain instead.
+    const { resolveDefaultModelAuthStatus } = await import("../commands/auth-choice.js");
+    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, { agentDir });
+    const shouldSeedBootstrapHatch =
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.hasAuth;
 
     await prompter.note(
       [
@@ -624,10 +630,21 @@ export async function finalizeSetupWizard(
         await prompter.note(
           [
             t("wizard.finalize.workspaceReady"),
-            t("wizard.finalize.firstTerminalChat"),
+            ...(shouldSeedBootstrapHatch ? [t("wizard.finalize.firstTerminalChat")] : []),
             t("wizard.finalize.editBootstrap"),
           ].join("\n"),
           t("wizard.finalize.hatchYourAgent"),
+        );
+      }
+      if (!modelAuthStatus.hasAuth) {
+        await prompter.note(
+          [
+            t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
+            t("wizard.finalize.noModelAuthNext", {
+              command: formatCliCommand("openclaw configure --section model"),
+            }),
+          ].join("\n"),
+          t("wizard.finalize.noModelAuthTitle"),
         );
       }
 
@@ -692,7 +709,6 @@ export async function finalizeSetupWizard(
       const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
       const envAvailable = entry ? hasKeyInEnv(entry) : false;
       const hasKey = keyConfigured || envAvailable;
-      const agentDir = resolveDefaultAgentDir(nextConfig);
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
       const providerAuthProfileAvailable = authProviderId

@@ -11,7 +11,7 @@ export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
+async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
     return await fsSafeRoot(rootDir, {
       hardlinks: "reject",

@@ -6,7 +6,6 @@ import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
   loadSettings,
-  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -59,10 +58,9 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
-    navWidth: 220,
+    navWidth: 258,
     sidebarPinnedRoutes: ["overview"],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
     ...overrides,
   };
 }
@@ -168,10 +166,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
         "wss://gateway.example:8443/openclaw": {
@@ -203,10 +200,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
     });
 
@@ -236,10 +232,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     saveSettings({
@@ -254,10 +249,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const settings = loadSettings();
@@ -284,10 +278,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -304,10 +297,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -339,15 +331,15 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["sessions", "cron"],
       sidebarMoreExpanded: true,
-      borderRadius: 50,
       textScale: 100,
     });
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["sessions", "cron"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(true);
+    expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -357,10 +349,12 @@ describe("loadSettings default gateway URL derivation", () => {
     >;
     persisted.sidebarPinnedRoutes = "sessions";
     persisted.sidebarMoreExpanded = "yes";
+    persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["overview"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(false);
+    expect(loadSettings().navWidth).toBe(258);
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {
@@ -476,10 +470,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -492,10 +485,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     expect(loadSettings().token).toBe("");
@@ -524,7 +516,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 320,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -593,10 +584,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       customTheme,
     });
 
@@ -624,10 +614,9 @@ describe("loadSettings default gateway URL derivation", () => {
         chatShowToolCalls: true,
         splitRatio: 0.6,
         navCollapsed: false,
-        navWidth: 220,
+        navWidth: 258,
         sidebarPinnedRoutes: ["overview"],
         sidebarMoreExpanded: false,
-        borderRadius: 50,
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -669,10 +658,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const settings = loadSettings();
@@ -713,10 +701,9 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
@@ -837,14 +824,16 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("persists local user identity separately from gateway settings", () => {
+  it("loads local user identity separately from gateway settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
-
-    saveLocalUserIdentity({ name: "Buns", avatar: "🦞" });
+    localStorage.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "🦞" }),
+    );
 
     expect(loadLocalUserIdentity()).toEqual({
       name: "Buns",
@@ -869,16 +858,5 @@ describe("loadSettings default gateway URL derivation", () => {
       name: null,
       avatar: null,
     });
-  });
-
-  it("removes the persisted local user identity when cleared", () => {
-    saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
-    saveLocalUserIdentity({ name: null, avatar: null });
-
-    expect(loadLocalUserIdentity()).toEqual({
-      name: null,
-      avatar: null,
-    });
-    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 });

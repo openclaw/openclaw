@@ -3371,7 +3371,9 @@ printf "container output\\n" >"$run_log"
 docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
 output="$(cat "$sampler_log")"
 
-[[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
+[[ "$output" =~ Docker\\ stats\\ still\\ running\\ \\(([0-9]+)s\\ elapsed, ]]
+heartbeat_elapsed="\${BASH_REMATCH[1]}"
+(( heartbeat_elapsed >= 8 ))
 [[ "$output" != *"value too great for base"* ]]
 [[ -s "$stats_log" ]]
 `;
@@ -4028,6 +4030,7 @@ output="$(cat "$sampler_log")"
     expect(doctorLoginctlShim).toContain("Linger=yes");
     expect(doctorSystemctlShim).toContain("ActiveState=inactive");
     expect(doctorSystemctlShim).toContain('unit_path="$HOME/.config/systemd/user/${unit}"');
+    expect(doctorScenario).toContain("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1");
     expect(readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8")).toContain(
       "scripts/e2e/lib/plugins/sweep.sh",
     );

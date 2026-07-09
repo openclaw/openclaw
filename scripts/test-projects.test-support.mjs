@@ -501,6 +501,13 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ],
   ],
   [
+    ".github/workflows/mantis-web-ui-chat-proof.yml",
+    [
+      "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
+  ],
+  [
     ".github/workflows/mantis-discord-smoke.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
@@ -527,6 +534,7 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/npm-telegram-beta-e2e.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
+  [".github/workflows/android-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [
     ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
     [
@@ -998,6 +1006,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
+  [
+    "apps/android/scripts/build-release-artifacts.ts",
+    ["test/scripts/android-release-artifacts.test.ts"],
+  ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
@@ -1326,6 +1338,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/mantis/build-telegram-desktop-proof-evidence.mjs",
     ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
   ],
+  [
+    "scripts/mantis/build-web-ui-chat-evidence.mjs",
+    ["test/scripts/mantis-web-ui-chat-evidence.test.ts"],
+  ],
   ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   ["scripts/qa-e2e.ts", ["test/scripts/qa-e2e.test.ts"]],
   ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
@@ -1402,6 +1418,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
+  ["scripts/ocm-npm-workspace-deps.mjs", ["test/scripts/ocm-npm-workspace-deps.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/openclaw-npm-postpublish-verify.ts", ["test/openclaw-npm-postpublish-verify.test.ts"]],
   ["scripts/openclaw-npm-release-check.ts", ["test/openclaw-npm-release-check.test.ts"]],
@@ -2008,6 +2025,10 @@ const TOOLING_TEST_TARGETS = new Map([
   [
     "test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts",
     ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-web-ui-chat-evidence.test.ts",
+    ["test/scripts/mantis-web-ui-chat-evidence.test.ts"],
   ],
   [
     "test/scripts/plugin-prerelease-test-plan.test.ts",

@@ -14,6 +14,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 type GatewayAttachment = {
   type: string;
@@ -309,7 +310,7 @@ export function formatToolTitle(
   }
   const parts = Object.entries(args).map(([key, value]) => {
     const raw = typeof value === "string" ? value : JSON.stringify(value);
-    const safe = raw.length > 100 ? `${raw.slice(0, 100)}...` : raw;
+    const safe = raw.length > 100 ? `${truncateUtf16Safe(raw, 100)}...` : raw;
     return `${key}: ${safe}`;
   });
   // Sanitize at the source so session updates and permission requests never

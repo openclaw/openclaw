@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Połączenie z bramą</string>
-    <string name="connect_gateway">Połącz z bramą</string>
-    <string name="disconnect">Rozłącz</string>
     <string name="trust_this_gateway">Ufać tej bramie?</string>
     <string name="trust_and_continue">Zaufaj i kontynuuj</string>
     <string name="cancel">Anuluj</string>
     <string name="new_chat_in_worktree">Nowy czat w worktree</string>
-    <string name="endpoint">Punkt końcowy</string>
-    <string name="status">Status</string>
-    <string name="connected_gateway_ready">Twoja brama jest aktywna i gotowa.</string>
-    <string name="connect_gateway_get_started">Połącz się ze swoją bramą, aby rozpocząć.</string>
-    <string name="copy_report_for_claw">Kopiuj raport dla Claw</string>
-    <string name="advanced_controls">Zaawansowane ustawienia</string>
-    <string name="connection_method">Metoda połączenia</string>
-    <string name="setup_code">Kod konfiguracji</string>
-    <string name="manual">Ręcznie</string>
-    <string name="paste_setup_code">Wklej kod konfiguracji</string>
-    <string name="host">Host</string>
-    <string name="use_tls">Użyj TLS</string>
-    <string name="token_optional">Token (opcjonalnie)</string>
-    <string name="password">Hasło</string>
-    <string name="custom_headers_optional">Niestandardowe nagłówki (opcjonalnie)</string>
-    <string name="custom_headers_explainer">Wysyłane przy każdym połączeniu z tym gateway, na przykład nagłówki tokena usługi Cloudflare Access. Przechowywane w postaci zaszyfrowanej i stosowane przy następnym ponownym połączeniu.</string>
-    <string name="custom_header_value">Wartość nagłówka</string>
-    <string name="custom_header_reserved">Ten nagłówek jest zarządzany przez połączenie i nie można go zastąpić.</string>
-    <string name="add_custom_header">Dodaj nagłówek</string>
-    <string name="remove_custom_header">Usuń %1$s</string>
-    <string name="run_onboarding_again">Uruchom ponownie wdrażanie</string>
-    <string name="resolved_endpoint">Rozpoznany punkt końcowy</string>
     <string name="gateway_trust_first_seen">Sprawdź odcisk certyfikatu, zanim zaufasz tej bramie.\n\n%1$s</string>
     <string name="gateway_trust_changed">Certyfikat bramy uległ zmianie. Kontynuuj tylko wtedy, gdy oczekujesz tej zmiany.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Przełącz Gateway</string>
-    <string name="select_gateway">Wybierz Gateway</string>
-    <string name="active_gateway">Aktywne Gateway</string>
 </resources>

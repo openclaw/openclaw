@@ -80,6 +80,7 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.headers).toEqual({ "x-test-header": "1" });
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
+      "claude-mythos-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
@@ -90,9 +91,15 @@ describe("anthropic-vertex provider plugin", () => {
       xhigh: "xhigh",
       max: "max",
     });
-    expect(result.provider.models[1]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
-    expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[1]?.thinkingLevelMap).toEqual({
+      off: "low",
+      minimal: "low",
+      xhigh: "xhigh",
+      max: "max",
+    });
+    expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
     expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
   it.each(["global", "us", "eu"])("publishes Sonnet 5 for the %s endpoint", (region) => {
@@ -289,6 +296,39 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
+  it("restores Mythos 5 metadata for explicit Vertex catalog rows", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-mythos-5",
+      model: {
+        id: "claude-mythos-5",
+        name: "Claude Mythos 5",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
+        baseUrl: "https://aiplatform.googleapis.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+
+    expect(normalized).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: {
+        off: "low",
+        minimal: "low",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
+  });
   it("resolves synthetic auth when ADC is available", async () => {
     hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);

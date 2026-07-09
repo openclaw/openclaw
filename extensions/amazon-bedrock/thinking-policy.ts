@@ -9,6 +9,7 @@ import type {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
@@ -33,7 +34,7 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
 }
 
 /** Return whether a Bedrock model ref names Claude Opus 4.7. */
-export function isOpus47BedrockModelRef(modelRef: string): boolean {
+function isOpus47BedrockModelRef(modelRef: string): boolean {
   return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]7(?:$|[-.:/])/i.test(
     modelRef,
   );
@@ -59,6 +60,7 @@ export function isLatestAdaptiveBedrockModelRef(
   const canonicalModelId = resolveClaudeModelIdentity(modelRef);
   return (
     resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
+    resolveClaudeMythos5ModelIdentity(modelRef) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined ||
     [modelId, canonicalModelId].some(
       (candidate) =>
@@ -74,6 +76,7 @@ export function supportsBedrockNativeMaxEffort(
 ): boolean {
   if (
     resolveClaudeFable5ModelIdentity({ id: modelId, params }) ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params }) ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId, params })
   ) {
     return true;
@@ -90,7 +93,7 @@ export function resolveBedrockNativeThinkingLevelMap(
   params?: Record<string, unknown>,
 ): ProviderRuntimeModel["thinkingLevelMap"] | undefined {
   const modelRef = { id: modelId, params };
-  if (resolveClaudeFable5ModelIdentity(modelRef)) {
+  if (resolveClaudeFable5ModelIdentity(modelRef) || resolveClaudeMythos5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
   }
   if (resolveClaudeSonnet5ModelIdentity(modelRef)) {
@@ -116,6 +119,7 @@ export function resolveBedrockClaudeThinkingProfile(
   const modelRefs = [trimmed, canonicalModelId];
   if (
     resolveClaudeFable5ModelIdentity({ id: trimmed, params }) ||
+    resolveClaudeMythos5ModelIdentity({ id: trimmed, params }) ||
     resolveClaudeSonnet5ModelIdentity({ id: trimmed, params })
   ) {
     return {

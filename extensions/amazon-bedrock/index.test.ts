@@ -377,13 +377,16 @@ describe("amazon-bedrock provider plugin", () => {
     }
   });
 
-  it("keeps Claude Fable 5 always adaptive with high default effort", async () => {
+  it("keeps mandatory-adaptive Claude 5 models at high default effort", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
     for (const modelId of [
       "anthropic.claude-fable-5",
       "us.anthropic.claude-fable-5",
       "global.anthropic.claude-fable-5",
+      "anthropic.claude-mythos-5",
+      "us.anthropic.claude-mythos-5",
+      "global.anthropic.claude-mythos-5",
     ]) {
       expectThinkingProfile(
         provider.resolveThinkingProfile?.({
@@ -414,8 +417,9 @@ describe("amazon-bedrock provider plugin", () => {
     );
   });
 
-  it("recognizes direct Fable model refs as prompt-cache eligible", () => {
+  it("recognizes direct Claude 5 model refs as prompt-cache eligible", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
+    expect(supportsBedrockPromptCaching("us.anthropic.claude-mythos-5")).toBe(true);
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 

@@ -696,6 +696,58 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("resolves Claude Mythos 5 with its direct-only mandatory-adaptive contract", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-mythos-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-mythos-5",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: {
+        off: "low",
+        minimal: "low",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
+    expect(requireRecord(resolved, "Mythos model").mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "anthropic",
+        modelId: "claude-mythos-5",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "claude-cli",
+        modelId: "claude-mythos-5",
+        modelRegistry: createModelRegistry([]),
+      } as ProviderResolveDynamicModelContext),
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "claude-cli",
+        modelId: "claude-mythos-5",
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
   it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.UTC(2026, 8, 1));

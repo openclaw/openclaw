@@ -55,7 +55,9 @@ import {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -81,7 +83,11 @@ function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream"
 function usesClaudeStreamingRefusalBedrockContract(
   model: Model<"bedrock-converse-stream">,
 ): boolean {
-  return usesClaudeFable5BedrockContract(model) || usesClaudeSonnet5BedrockContract(model);
+  return (
+    usesClaudeFable5BedrockContract(model) ||
+    resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    usesClaudeSonnet5BedrockContract(model)
+  );
 }
 
 function readBedrockStopDetails(fields: DocumentType | undefined): unknown {
@@ -387,7 +393,7 @@ function resolveSimpleBedrockOptions(
   options?: SimpleStreamOptions,
 ): BedrockOptions {
   const base = buildBaseOptions(model, options, undefined);
-  if (usesClaudeFable5BedrockContract(model) || usesClaudeSonnet5BedrockContract(model)) {
+  if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
       maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
@@ -431,6 +437,14 @@ function resolveSimpleBedrockOptions(
       options.reasoning,
       options.thinkingBudgets,
     );
+
+    if (adjusted.thinkingBudget < 1024) {
+      return {
+        ...base,
+        maxTokens: adjusted.maxTokens,
+        reasoning: "off",
+      } satisfies BedrockOptions;
+    }
 
     return {
       ...base,
@@ -600,7 +614,7 @@ function resolveClaudeProfileNameModelId(modelName?: string): string | undefined
   if (!normalized.includes("claude")) {
     return undefined;
   }
-  const family = /(?:fable-5|mythos-preview|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?:$|-)/.exec(
+  const family = /(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?:$|-)/.exec(
     normalized,
   )?.[0];
   return family ? `claude-${family.replace(/-$/, "")}` : undefined;
@@ -631,6 +645,8 @@ function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): bool
 function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
   const profileModelId = resolveClaudeProfileNameModelId(model.name);
   return (
+    requiresClaudeMandatoryAdaptiveThinking(model) ||
+    requiresClaudeMandatoryAdaptiveThinking({ id: profileModelId }) ||
     isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
     isClaudeMythosPreviewModelId(profileModelId) ||
     usesClaudeSonnet5BedrockContract(model) ||
@@ -1060,17 +1076,14 @@ function buildAdditionalModelRequestFields(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
 ): DocumentType | undefined {
-  // Bedrock keeps Fable/Sonnet 5 adaptive. Preserve the public `off` control by
+  // Mandatory-adaptive Claude routes preserve the public `off` control by
   // lowering effort instead of silently falling back to the route's high default.
-  const mandatoryAdaptiveThinking =
-    usesClaudeFable5BedrockContract(model) || requiresMandatoryAdaptiveThinking(model);
+  const mandatoryAdaptiveThinking = requiresMandatoryAdaptiveThinking(model);
   const reasoning =
     options.reasoning === "off"
-      ? usesClaudeFable5BedrockContract(model) || usesClaudeSonnet5BedrockContract(model)
+      ? mandatoryAdaptiveThinking
         ? "low"
-        : mandatoryAdaptiveThinking
-          ? "high"
-          : "off"
+        : "off"
       : (options.reasoning ?? (mandatoryAdaptiveThinking ? "high" : undefined));
   if (reasoning === "off") {
     return undefined;

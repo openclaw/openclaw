@@ -1,11 +1,33 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawChatUI
+
+@MainActor
+private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+    private(set) var cancelCallCount = 0
+    private(set) var permissionRequestCount = 0
+
+    func requestPermission() async -> Bool {
+        self.permissionRequestCount += 1
+        return true
+    }
+
+    func start(url _: URL) throws {}
+    func stop() -> TimeInterval {
+        1
+    }
+
+    func cancel() {
+        self.cancelCallCount += 1
+    }
+
+    func setFailureHandler(_: @escaping @MainActor () -> Void) {}
+}
 
 private func makeAgentDeepLinkURL(
     message: String,
@@ -80,21 +102,6 @@ private func makeProjectedWatchChatRawMessage(
 }
 
 @MainActor
-private final class VoiceNoteCaptureStub: VoiceNoteAudioCapture {
-    func requestPermission() async -> Bool {
-        true
-    }
-
-    func start(url _: URL) throws {}
-
-    func stop() -> TimeInterval {
-        1
-    }
-
-    func cancel() {}
-}
-
-@MainActor
 private func waitForMainActorWork(_ condition: () -> Bool) async {
     for _ in 0..<100 {
         if condition() { return }
@@ -124,6 +131,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         transport: "sendMessage")
     var sendError: Error?
     var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
+    var lastDirectNodeSetupCode: String?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
     var lastSentExecApprovalResolved: OpenClawWatchExecApprovalResolvedMessage?
     var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
@@ -146,6 +154,11 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
 
     func setStatusHandler(_ handler: (@Sendable (WatchMessagingStatus) -> Void)?) {
         self.statusHandler = handler
+    }
+
+    func emitStatus(_ status: WatchMessagingStatus) {
+        self.currentStatus = status
+        self.statusHandler?(status)
     }
 
     func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
@@ -176,6 +189,14 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         gatewayStableID: String?) async throws -> WatchNotificationSendResult
     {
         self.lastSent = (id: id, params: params, gatewayStableID: gatewayStableID)
+        if let sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func sendDirectNodeSetup(setupCode: String) async throws -> WatchNotificationSendResult {
+        self.lastDirectNodeSetupCode = setupCode
         if let sendError {
             throw sendError
         }
@@ -338,6 +359,19 @@ private actor WatchSnapshotSendGate {
     func resume() {
         self.continuation?.resume()
         self.continuation = nil
+    }
+}
+
+private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Void {
+    let defaults = UserDefaults.standard
+    let previous = defaults.object(forKey: NotificationServingPreference.storageKey)
+    defaults.set(enabled, forKey: NotificationServingPreference.storageKey)
+    return {
+        if let previous {
+            defaults.set(previous, forKey: NotificationServingPreference.storageKey)
+        } else {
+            defaults.removeObject(forKey: NotificationServingPreference.storageKey)
+        }
     }
 }
 
@@ -739,21 +773,24 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.stop()
     }
 
-    @Test @MainActor func `PTT start is refused while a voice note owns the microphone`() async {
-        let voiceNoteRecorder = OpenClawVoiceNoteRecorder(capture: VoiceNoteCaptureStub())
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
-        let appModel = NodeAppModel(talkMode: talkMode, voiceNoteRecorder: voiceNoteRecorder)
-        #expect(await voiceNoteRecorder.start())
-        defer { voiceNoteRecorder.cancel() }
+    @Test @MainActor func `PTT start preserves an active voice note`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        #expect(await recorder.start())
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
 
         let request = BridgeInvokeRequest(
-            id: "ptt-start-during-voice-note",
+            id: "ptt-start-with-voice-note",
             command: OpenClawTalkCommand.pttStart.rawValue)
         let response = await appModel._test_handleInvoke(request)
 
         #expect(response.ok == false)
-        #expect(response.error?.message.contains("Voice note recording is active") == true)
-        #expect(talkMode.isPushToTalkActive == false)
+        #expect(response.error?.message.contains("active voice note") == true)
+        #expect(recorder.isRecording)
+        #expect(capture.cancelCallCount == 0)
+        recorder.cancel()
     }
 
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
@@ -763,6 +800,7 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.statusText = "Listening"
 
         appModel._test_acquirePttVoiceWakeLease()
+        #expect(appModel.isTalkCaptureActive == true)
         appModel._test_acquirePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
 
@@ -771,7 +809,23 @@ private actor WatchSnapshotSendGate {
 
         appModel._test_releasePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+        appModel._test_acquirePttVoiceWakeLease()
+
+        #expect(await recorder.start() == false)
+        #expect(recorder.isRecording == false)
+        #expect(capture.permissionRequestCount == 0)
+
+        appModel._test_releasePttVoiceWakeLease()
     }
 
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {
@@ -902,7 +956,7 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `watch exec approval snapshot request publishes cached approvals in background`() async throws {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60000
+        let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -930,7 +984,7 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `watch exec approval snapshot request skips foreground recovery`() async throws {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60000
+        let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -1724,7 +1778,7 @@ private actor WatchSnapshotSendGate {
                 sessionKey: "main",
                 gatewayStableID: nil,
                 text: "Message \(index)",
-                sentAtMs: index,
+                sentAtMs: Int64(index),
                 transport: "sendMessage")
             if case .forward = coordinator.ingest(
                 event,
@@ -1790,7 +1844,7 @@ private actor WatchSnapshotSendGate {
                 sessionKey: "main",
                 gatewayStableID: nil,
                 text: "Queued \(index)",
-                sentAtMs: index,
+                sentAtMs: Int64(index),
                 transport: "transferUserInfo")
             if case .queue = coordinator.ingest(
                 event,
@@ -1880,7 +1934,7 @@ private actor WatchSnapshotSendGate {
                     host: "gateway",
                     nodeId: nil,
                     agentId: nil,
-                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60000)))
+                    expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-watch-clear"])
     }
@@ -1956,7 +2010,7 @@ private actor WatchSnapshotSendGate {
                     host: "gateway",
                     nodeId: nil,
                     agentId: nil,
-                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60000)))
+                    expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
         await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
@@ -2202,6 +2256,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `system notify schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2218,7 +2274,30 @@ private actor WatchSnapshotSendGate {
         #expect(center.addCalls == 1)
     }
 
-    @Test @MainActor func `apns registration requires disclosure and notification authorization`() async {
+    @Test @MainActor func `system notify respects app notification opt out`() async throws {
+        let restorePreference = overrideNotificationServingPreference(false)
+        defer { restorePreference() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-disabled",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.addCalls == 0)
+    }
+
+    @Test @MainActor func `apns registration requires notification authorization and relay disclosure`() async {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2226,7 +2305,7 @@ private actor WatchSnapshotSendGate {
         defer { PushEnrollmentConsent.reset() }
 
         #expect(await appModel._test_canPublishAPNsRegistration() == false)
-        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false) == false)
+        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false))
 
         PushEnrollmentConsent.markDisclosureAccepted()
         center.status = .notDetermined
@@ -2234,6 +2313,9 @@ private actor WatchSnapshotSendGate {
 
         center.status = .authorized
         #expect(await appModel._test_canPublishAPNsRegistration())
+
+        UserDefaults.standard.set(false, forKey: NotificationServingPreference.storageKey)
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
     }
 
     @Test @MainActor func `chat push without speech returns unavailable when notifications off`() async throws {
@@ -2256,6 +2338,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `chat push schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2414,6 +2498,38 @@ private actor WatchSnapshotSendGate {
         #expect(payload.activationState == "inactive")
     }
 
+    @Test @MainActor func `watch status refresh publishes service snapshot`() async {
+        let watchService = MockWatchMessagingService()
+        let status = WatchMessagingStatus(
+            supported: true,
+            paired: true,
+            appInstalled: true,
+            reachable: false,
+            activationState: "activated")
+        watchService.currentStatus = status
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+
+        await appModel.refreshWatchMessagingStatus()
+
+        #expect(appModel.watchMessagingStatus == status)
+    }
+
+    @Test @MainActor func `watch status callback publishes reachability changes`() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let status = WatchMessagingStatus(
+            supported: true,
+            paired: true,
+            appInstalled: true,
+            reachable: true,
+            activationState: "activated")
+
+        watchService.emitStatus(status)
+        await waitForMainActorWork { appModel.watchMessagingStatus == status }
+
+        #expect(appModel.watchMessagingStatus == status)
+    }
+
     @Test @MainActor func `handle invoke watch notify routes to watch service`() async throws {
         let watchService = MockWatchMessagingService()
         watchService.nextSendResult = WatchNotificationSendResult(
@@ -2501,6 +2617,54 @@ private actor WatchSnapshotSendGate {
                 reason: .notFound))
         #expect(resolved["gatewayStableID"] as? String == "gateway-a")
         #expect(expired["gatewayStableID"] as? String == "gateway-a")
+    }
+
+    @Test @MainActor func `watch direct node setup codec carries opaque setup code`() {
+        let payload = WatchMessagingPayloadCodec.encodeDirectNodeSetupPayload(
+            setupCode: "opaque-bootstrap-code")
+
+        #expect(payload["type"] as? String == OpenClawWatchPayloadType.directNodeSetup.rawValue)
+        #expect(payload["setupCode"] as? String == "opaque-bootstrap-code")
+        #expect(payload["sentAtMs"] is Int64)
+        #expect(payload["token"] == nil)
+        #expect(payload["password"] == nil)
+    }
+
+    @Test @MainActor func `watch payload codec preserves 64 bit epoch milliseconds`() throws {
+        let sentAtMs: Int64 = 1_725_000_000_123
+        let encodedTimestamp = NSNumber(value: sentAtMs)
+
+        let reply = try #require(WatchMessagingPayloadCodec.parseQuickReplyPayload([
+            "type": OpenClawWatchPayloadType.reply.rawValue,
+            "actionId": "approve",
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let resolution = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+            "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
+            "approvalId": "approval-a",
+            "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let approvalSnapshotRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "sentAtMs": encodedTimestamp,
+            ], transport: "sendMessage"))
+        let appSnapshotRequest = try #require(WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload([
+            "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let appCommand = try #require(WatchMessagingPayloadCodec.parseAppCommandPayload([
+            "type": OpenClawWatchPayloadType.appCommand.rawValue,
+            "command": OpenClawWatchAppCommand.refresh.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+
+        #expect(reply.sentAtMs == sentAtMs)
+        #expect(resolution.sentAtMs == sentAtMs)
+        #expect(approvalSnapshotRequest.sentAtMs == sentAtMs)
+        #expect(appSnapshotRequest.sentAtMs == sentAtMs)
+        #expect(appCommand.sentAtMs == sentAtMs)
     }
 
     @Test @MainActor func `watch application context retains app and approval snapshots`() throws {
@@ -2768,7 +2932,7 @@ private actor WatchSnapshotSendGate {
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
                 text: "Pending \(index)",
-                sentAtMs: index + 2,
+                sentAtMs: Int64(index + 2),
                 transport: "transferUserInfo")
             _ = firstOutbox.ingest(pending, isAvailable: false, gatewayStableID: "gateway-a")
         }

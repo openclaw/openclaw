@@ -1,24 +1,36 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/resizable-divider.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "./chat-pane.ts";
 import {
+  resolveSplitDropZone,
+  splitDropIndicatorRect,
+  type SplitDropRect,
+  type SplitDropZone,
+} from "./split-drop-zone.ts";
+import {
   closePane,
+  createSinglePaneLayout,
   createSplitLayout,
   findPane,
+  insertPane,
   panesOf,
   resizeColumns,
   resizePanes,
   setActivePane,
   setPaneSession,
-  splitPaneDown,
-  splitPaneRight,
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
@@ -30,18 +42,30 @@ type ChatRouteData = {
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 
-export class ChatPage extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
+type ChatPaneElement = HTMLElement & { paneId?: string };
+
+export class ChatPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: ChatRouteData;
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
+  @state() private dropIndicator: DropIndicator | null = null;
+  // Horizontal scroll offset of .chat-split-view when its columns overflow;
+  // the fixed toolbar track mirrors it so segments stay over their panes.
+  @state() private splitScrollLeft = 0;
 
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.sessions,
+    (sessions, notify) => sessions.subscribe(notify),
+  );
   private mediaQuery: MediaQueryList | null = null;
-
-  override createRenderRoot() {
-    return this;
-  }
+  // Light-DOM enter/leave events bubble from every nested child, so only clear
+  // the shared preview after the whole balanced drag has left the page.
+  private dragDepth = 0;
+  private dragFrame = 0;
+  private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -49,12 +73,24 @@ export class ChatPage extends LitElement {
     this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
+    this.addEventListener("dragenter", this.handleDragEnter);
+    this.addEventListener("dragover", this.handleDragOver);
+    this.addEventListener("dragleave", this.handleDragLeave);
+    this.addEventListener("drop", this.handleDrop);
+    window.addEventListener("dragend", this.handleWindowDragEnd);
     this.syncRouteToActivePane();
   }
 
   override disconnectedCallback() {
+    this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
+    this.removeEventListener("dragenter", this.handleDragEnter);
+    this.removeEventListener("dragover", this.handleDragOver);
+    this.removeEventListener("dragleave", this.handleDragLeave);
+    this.removeEventListener("drop", this.handleDrop);
+    window.removeEventListener("dragend", this.handleWindowDragEnd);
+    this.clearDropIndicator();
     super.disconnectedCallback();
   }
 
@@ -62,11 +98,143 @@ export class ChatPage extends LitElement {
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
     }
+    for (const select of this.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")) {
+      const sessionKey = select.dataset.sessionKey;
+      if (sessionKey && select.value !== sessionKey) {
+        select.value = sessionKey;
+      }
+    }
   }
 
   private readonly handleViewportChange = (event: MediaQueryListEvent) => {
     this.narrow = event.matches;
+    // Mode flips remount .chat-split-view with scrollLeft 0 and no scroll
+    // event; drop the mirrored offset so the toolbar track is not left shifted.
+    this.splitScrollLeft = 0;
+    if (event.matches) {
+      this.clearDropIndicator();
+    }
   };
+
+  private readonly handleDragEnter = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    this.dragDepth += 1;
+  };
+
+  private readonly handleDragOver = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    if (!pane || !this.contains(pane)) {
+      // Dividers and pane gaps sit between drop targets; keep the last preview
+      // instead of flickering it away while the pointer crosses them.
+      return;
+    }
+    this.pendingDragOver = { pane, x: event.clientX, y: event.clientY };
+    if (this.dragFrame) {
+      return;
+    }
+    this.dragFrame = window.requestAnimationFrame(() => {
+      this.dragFrame = 0;
+      const pending = this.pendingDragOver;
+      this.pendingDragOver = null;
+      if (!pending || this.narrow || !this.isConnected) {
+        return;
+      }
+      const indicator = this.resolveDropIndicator(pending.pane, pending.x, pending.y);
+      if (!indicator) {
+        return;
+      }
+      const current = this.dropIndicator;
+      if (
+        current?.paneId === indicator.paneId &&
+        current.zone.kind === indicator.zone.kind &&
+        (indicator.zone.kind === "center" ||
+          (current.zone.kind === "edge" && current.zone.edge === indicator.zone.edge))
+      ) {
+        return;
+      }
+      this.dropIndicator = indicator;
+    });
+  };
+
+  private readonly handleDragLeave = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+    if (this.dragDepth === 0) {
+      this.clearDropIndicator();
+    }
+  };
+
+  private readonly handleDrop = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    // Fall back to the retained preview when the drop lands on a divider or
+    // gap, so the drop always matches what the indicator promised.
+    const indicator =
+      (pane && this.contains(pane)
+        ? this.resolveDropIndicator(pane, event.clientX, event.clientY)
+        : null) ?? this.dropIndicator;
+    this.clearDropIndicator();
+    if (sessionKey && indicator) {
+      this.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
+    }
+  };
+
+  private readonly handleWindowDragEnd = () => {
+    this.clearDropIndicator();
+  };
+
+  private clearDropIndicator() {
+    this.dragDepth = 0;
+    this.clearDropPreview();
+  }
+
+  private clearDropPreview() {
+    this.pendingDragOver = null;
+    if (this.dragFrame) {
+      window.cancelAnimationFrame(this.dragFrame);
+      this.dragFrame = 0;
+    }
+    this.dropIndicator = null;
+  }
+
+  private resolveDropIndicator(pane: ChatPaneElement, x: number, y: number): DropIndicator | null {
+    const paneId = pane.paneId;
+    const container = this.querySelector<HTMLElement>(".chat-split-view__drop-container");
+    if (!paneId || !container) {
+      return null;
+    }
+    const paneRect = pane.getBoundingClientRect();
+    const zone = resolveSplitDropZone(paneRect, x, y);
+    const indicatorRect = splitDropIndicatorRect(paneRect, zone);
+    const containerRect = container.getBoundingClientRect();
+    return {
+      paneId,
+      zone,
+      rect: {
+        left: indicatorRect.left - containerRect.left,
+        top: indicatorRect.top - containerRect.top,
+        width: indicatorRect.width,
+        height: indicatorRect.height,
+      },
+    };
+  }
 
   // Route and active pane mirror each other: route changes land in the active
   // pane here, and pane-side changes call updateRoute. The equality guards on
@@ -99,6 +267,43 @@ export class ChatPage extends LitElement {
     } else {
       this.context.navigate("chat", options);
     }
+  }
+
+  private applySessionDrop(sessionKey: string, paneId: string, zone: SplitDropZone): void {
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return;
+    }
+    const layout = this.layout;
+    if (!layout) {
+      if (zone.kind === "center") {
+        this.updateRoute(trimmed);
+        return;
+      }
+      const currentSessionKey = this.data?.sessionKey?.trim();
+      if (!currentSessionKey) {
+        return;
+      }
+      const next = insertPane(createSinglePaneLayout(currentSessionKey), "p1", trimmed, zone.edge);
+      this.persistLayout(next);
+      this.updateRoute(trimmed, true);
+      return;
+    }
+    const pane = findPane(layout, paneId)?.pane;
+    if (!pane) {
+      return;
+    }
+    if (zone.kind === "center") {
+      if (pane.sessionKey === trimmed) {
+        return;
+      }
+      const active = setActivePane(layout, paneId);
+      this.persistLayout(setPaneSession(active, paneId, trimmed));
+      this.updateRoute(trimmed, true);
+      return;
+    }
+    this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
+    this.updateRoute(trimmed, true);
   }
 
   private readonly handleFocusPane = (paneId: string) => {
@@ -141,8 +346,27 @@ export class ChatPage extends LitElement {
   private readonly openSplitView = () => {
     const sessionKey = this.data?.sessionKey?.trim();
     if (sessionKey) {
+      this.splitScrollLeft = 0;
       this.persistLayout(createSplitLayout(sessionKey));
     }
+  };
+
+  private readonly handleSplitViewScroll = (event: Event) => {
+    const left = (event.currentTarget as HTMLElement).scrollLeft;
+    if (left !== this.splitScrollLeft) {
+      this.splitScrollLeft = left;
+    }
+  };
+
+  private readonly handleToolbarPaneFocus = (paneId: string) => {
+    this.handleFocusPane(paneId);
+    // Tabbing can land on a toolbar segment the clipped track has translated
+    // off-screen; scroll its pane into view so the scroll sync follows and the
+    // focused control becomes visible (no-op when already in view).
+    const pane = Array.from(this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")).find(
+      (element) => element.paneId === paneId,
+    );
+    pane?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
 
   private readonly handleSplitRight = (paneId: string) => {
@@ -151,7 +375,7 @@ export class ChatPage extends LitElement {
     if (!layout || !pane) {
       return;
     }
-    this.persistLayout(splitPaneRight(layout, paneId, pane.sessionKey));
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "right"));
   };
 
   private readonly handleSplitDown = (paneId: string) => {
@@ -160,7 +384,7 @@ export class ChatPage extends LitElement {
     if (!layout || !pane) {
       return;
     }
-    this.persistLayout(splitPaneDown(layout, paneId, pane.sessionKey));
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "down"));
   };
 
   private readonly handleClosePane = (paneId: string) => {
@@ -184,24 +408,129 @@ export class ChatPage extends LitElement {
   };
 
   private renderPane(pane: ChatSplitPane, active: boolean, weight: number) {
-    // Narrow viewports render only the active pane, so splitting there would
-    // create invisible panes; keep session switching and close available.
-    const canSplit = !this.narrow;
     return html`
       <openclaw-chat-pane
-        class="chat-split-view__pane"
+        class="chat-split-view__pane ${active ? "chat-split-view__pane--active" : ""}"
         style="flex: ${weight} 1 0"
         .paneId=${pane.id}
         .sessionKey=${pane.sessionKey}
         .active=${active}
-        .chrome=${"pane"}
         .draft=${active ? this.data?.draft : undefined}
         .onFocusPane=${this.handleFocusPane}
         .onPaneSessionChange=${this.handlePaneSessionChange}
-        .onSplitRight=${canSplit ? this.handleSplitRight : undefined}
-        .onSplitDown=${canSplit ? this.handleSplitDown : undefined}
-        .onClosePane=${this.handleClosePane}
       ></openclaw-chat-pane>
+    `;
+  }
+
+  private renderSplitToolbarPane(layout: ChatSplitLayout, pane: ChatSplitPane) {
+    const sessions = this.context?.sessions?.state.result?.sessions ?? [];
+    const active = pane.id === layout.activePaneId;
+    const currentSession = sessions.find((row) => row.key === pane.sessionKey);
+    const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
+    return html`
+      <div
+        class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
+        @pointerdown=${() => this.handleFocusPane(pane.id)}
+        @focusin=${() => this.handleToolbarPaneFocus(pane.id)}
+      >
+        <label class="chat-pane__session-label">
+          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
+          <select
+            class="chat-pane__session-select"
+            data-session-key=${pane.sessionKey}
+            aria-label=${t("chat.splitView.sessionSelect")}
+            .value=${pane.sessionKey}
+            @change=${(event: Event) => {
+              const nextSessionKey = (event.target as HTMLSelectElement).value;
+              if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
+                this.handlePaneSessionChange(pane.id, nextSessionKey);
+              }
+            }}
+          >
+            ${options.map(
+              (row) => html`
+                <option value=${row.key}>
+                  ${resolveSessionDisplayName(
+                    row.key,
+                    sessions.find((session) => session.key === row.key),
+                  )}
+                </option>
+              `,
+            )}
+          </select>
+        </label>
+        <div class="chat-pane__actions">
+          ${!this.narrow
+            ? html`
+                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitDown")}
+                    @click=${() => this.handleSplitDown(pane.id)}
+                  >
+                    ${icons.panelBottomOpen}
+                  </button>
+                </openclaw-tooltip>
+                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitRight")}
+                    @click=${() => this.handleSplitRight(pane.id)}
+                  >
+                    ${icons.panelRightOpen}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label=${t("chat.splitView.closePane")}
+              @click=${() => this.handleClosePane(pane.id)}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderSplitToolbar(layout: ChatSplitLayout) {
+    if (this.narrow) {
+      const activePane = findPane(layout, layout.activePaneId)?.pane;
+      return html`
+        <div class="chat-split-toolbar">
+          ${activePane ? this.renderSplitToolbarPane(layout, activePane) : nothing}
+        </div>
+      `;
+    }
+    // Mirror the split view's flex geometry (same column weights, 4px gaps at
+    // divider positions, same container bounds) so header segment edges land
+    // exactly on the pane edges below; the track follows the split view's
+    // horizontal scroll when columns overflow. See split-view.css.
+    return html`
+      <div class="chat-split-toolbar">
+        <div
+          class="chat-split-toolbar__track"
+          style=${this.splitScrollLeft ? `transform: translateX(${-this.splitScrollLeft}px)` : ""}
+        >
+          ${layout.columns.map(
+            (column, columnIndex) => html`
+              ${columnIndex > 0 ? html`<div class="chat-split-toolbar__gap"></div>` : nothing}
+              <div
+                class="chat-split-toolbar__column"
+                style="flex: ${layout.columnWeights[columnIndex]} 1 0"
+              >
+                ${column.panes.map((pane) => this.renderSplitToolbarPane(layout, pane))}
+              </div>
+            `,
+          )}
+        </div>
+      </div>
     `;
   }
 
@@ -215,7 +544,7 @@ export class ChatPage extends LitElement {
         : nothing;
     }
     return html`
-      <div class="chat-split-view">
+      <div class="chat-split-view" @scroll=${this.handleSplitViewScroll}>
         ${repeat(
           layout.columns,
           (column) => column.id,
@@ -282,20 +611,51 @@ export class ChatPage extends LitElement {
   }
 
   override render() {
-    if (this.layout) {
-      return this.renderSplitLayout(this.layout);
-    }
+    const indicator = this.dropIndicator;
     return html`
-      <openclaw-chat-pane
-        .paneId=${"single"}
-        .sessionKey=${this.data?.sessionKey ?? ""}
-        .active=${true}
-        .chrome=${"none"}
-        .draft=${this.data?.draft}
-        .onFocusPane=${this.handleFocusPane}
-        .onPaneSessionChange=${this.handlePaneSessionChange}
-        .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
-      ></openclaw-chat-pane>
+      <div class="chat-split-view__drop-container">
+        ${this.layout ? this.renderSplitToolbar(this.layout) : nothing}
+        ${this.layout
+          ? this.renderSplitLayout(this.layout)
+          : html`
+              <openclaw-chat-pane
+                .paneId=${"single"}
+                .sessionKey=${this.data?.sessionKey ?? ""}
+                .active=${true}
+                .draft=${this.data?.draft}
+                .onFocusPane=${this.handleFocusPane}
+                .onPaneSessionChange=${this.handlePaneSessionChange}
+              ></openclaw-chat-pane>
+            `}
+        ${!this.layout && !this.narrow
+          ? html`
+              <openclaw-tooltip .content=${t("chat.splitView.open")}>
+                <button
+                  class="btn btn--sm btn--icon chat-open-split-view"
+                  type="button"
+                  aria-label=${t("chat.splitView.open")}
+                  @click=${this.openSplitView}
+                >
+                  ${icons.panelRightOpen}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
+        ${indicator
+          ? html`<div
+              class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"
+                ? "chat-split-view__drop-indicator--center"
+                : ""}"
+              style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
+            >
+              <span class="chat-split-view__drop-indicator-label"
+                >${indicator.zone.kind === "center"
+                  ? t("chat.splitView.dropOpenHere")
+                  : t("chat.splitView.dropSplit")}</span
+              >
+            </div>`
+          : nothing}
+      </div>
     `;
   }
 }

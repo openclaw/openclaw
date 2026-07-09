@@ -46,6 +46,11 @@ data class ChatDraft(
   val placement: ChatDraftPlacement,
 )
 
+internal fun shouldStartRuntimeOnForeground(
+  foreground: Boolean,
+  onboardingCompleted: Boolean,
+): Boolean = foreground && onboardingCompleted
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -64,6 +69,7 @@ class MainViewModel(
   @Volatile private var foreground = false
 
   @Volatile private var runtimeStartupQueued = false
+  private val initialIntentGate = MainActivityInitialIntentGate()
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
@@ -85,6 +91,30 @@ class MainViewModel(
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
     return runtime
+  }
+
+  internal fun claimInitialIntentRouting(): Boolean = initialIntentGate.claim()
+
+  internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
+    check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    runtimeRef.value?.let { runtime ->
+      // The ViewModel survives locale recreation; keep the fixture runtime instead of
+      // treating the restored Activity as a second fixture startup.
+      check(runtime.mode == NodeRuntimeMode.ScreenshotFixture) {
+        "Screenshot fixture mode must be selected before live runtime startup"
+      }
+      runtime.setForeground(foreground)
+      _requestedHomeDestination.value = scene.homeDestination
+      return
+    }
+    prefs.setOnboardingCompleted(true)
+    prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
+    prefs.setDisplayName("Pixel")
+    prefs.setSpeakerEnabled(true)
+    val runtime = nodeApp.ensureScreenshotFixtureRuntime()
+    runtime.setForeground(foreground)
+    runtimeRef.value = runtime
+    _requestedHomeDestination.value = scene.homeDestination
   }
 
   /**
@@ -145,6 +175,7 @@ class MainViewModel(
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
+  val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -155,6 +186,7 @@ class MainViewModel(
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
+  val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -170,6 +202,13 @@ class MainViewModel(
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
+    runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
+  val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
+  val skillWorkshopErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopErrorText }
+  val skillWorkshopNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopNoticeText }
+  val skillWorkshopInspectingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopInspectingProposalId }
+  val skillWorkshopMutatingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopMutatingProposalId }
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
@@ -223,6 +262,9 @@ class MainViewModel(
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.talkInputLevel }
+  val talkOutputLevel: StateFlow<Float?> = runtimeState(initial = null) { it.talkOutputLevel }
+  val talkSpeechActive: StateFlow<Boolean> = runtimeState(initial = false) { it.talkSpeechActive }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>> =
     runtimeState(initial = emptyList()) { it.talkModeConversation }
@@ -275,8 +317,16 @@ class MainViewModel(
    * Starts runtime on foreground entry only after onboarding has completed.
    */
   fun setForeground(value: Boolean) {
+    // The ViewModel survives configuration recreation. Ignore the replacement
+    // Activity's duplicate true edge so it cannot restart gateway work.
+    if (foreground == value) return
     foreground = value
-    if (value && prefs.onboardingCompleted.value) {
+    if (
+      shouldStartRuntimeOnForeground(
+        foreground = value,
+        onboardingCompleted = prefs.onboardingCompleted.value,
+      )
+    ) {
       queueRuntimeStartup()
     }
     runtimeRef.value?.setForeground(value)
@@ -697,6 +747,46 @@ class MainViewModel(
     ensureRuntime().refreshSkills()
   }
 
+  fun refreshSkillWorkshopProposals(agentId: String? = null) {
+    ensureRuntime().refreshSkillWorkshopProposals(agentId = agentId)
+  }
+
+  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
+    ensureRuntime().resetSkillWorkshopAgentScope(agentId = agentId)
+  }
+
+  fun inspectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().inspectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun applySkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().applySkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun rejectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().rejectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun quarantineSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().quarantineSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun clearSkillWorkshopMessage() {
+    ensureRuntime().clearSkillWorkshopMessage()
+  }
+
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
   }
@@ -765,6 +855,28 @@ class MainViewModel(
     ensureRuntime().deleteChatSession(key)
   }
 
+  /** Remembers a custom session group locally so it renders as an empty section. */
+  fun addChatSessionGroup(name: String) {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value + trimmed)
+  }
+
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val stored = prefs.sessionCustomGroups.value
+    // Web semantics: replace a stored name in place, otherwise remember the new name.
+    prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
+    ensureRuntime().renameChatSessionGroup(from = from, to = to)
+  }
+
+  suspend fun deleteChatSessionGroup(group: String) {
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
+    ensureRuntime().dissolveChatSessionGroup(group)
+  }
+
   suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
 
   suspend fun listWorkspaceFiles(
@@ -802,6 +914,10 @@ class MainViewModel(
 
   fun switchChatSession(sessionKey: String) {
     ensureRuntime().switchChatSession(sessionKey)
+  }
+
+  fun selectChatAgent(agentId: String) {
+    ensureRuntime().selectChatAgent(agentId)
   }
 
   suspend fun fetchChatSessionList(

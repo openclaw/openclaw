@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -106,6 +107,8 @@ data class GatewayHelloSummary(
   val serverVersion: String?,
   val mainSessionKey: String?,
   val updateAvailable: GatewayUpdateAvailableSummary?,
+  val authRole: String? = null,
+  val authScopes: List<String> = emptyList(),
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -611,6 +614,7 @@ class GatewaySession(
       }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
       method: String,
       params: JsonElement?,
@@ -625,7 +629,12 @@ class GatewaySession(
         pending.remove(id)
         throw err
       }
-      connectionScope.launch(Dispatchers.IO) {
+      // ATOMIC start: joinOwnedWork() cancels connectionJob right after failPending(); a
+      // DEFAULT-start watcher still queued for dispatch would be cancelled without ever running
+      // and silently drop the terminal onError owed to fire-and-forget callers. ATOMIC
+      // guarantees this block runs; await() on the already-failed deferred then surfaces the
+      // disconnect outcome without suspending.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
         try {
           val response =
             try {
@@ -880,6 +889,10 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
+        // Setup-code bootstrap handoff is deliberately least-privilege. It never
+        // persists operator.admin, so Skill Workshop lifecycle actions remain
+        // disabled until shared token/password auth or an owner-approved scope
+        // upgrade issues an admin-scoped operator device token.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
@@ -986,6 +999,8 @@ class GatewaySession(
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
             updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            authRole = authRole,
+            authScopes = authScopes,
           ),
       )
     }

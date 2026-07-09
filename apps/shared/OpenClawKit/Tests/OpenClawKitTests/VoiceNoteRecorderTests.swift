@@ -11,6 +11,7 @@ private final class FakeVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     var cancelCount = 0
     var activeURL: URL?
     var onStart: (() -> Void)?
+    var failureHandler: (@MainActor () -> Void)?
 
     func requestPermission() async -> Bool {
         self.permissionGranted
@@ -30,6 +31,20 @@ private final class FakeVoiceNoteAudioCapture: VoiceNoteAudioCapture {
 
     func cancel() {
         self.cancelCount += 1
+    }
+
+    func setFailureHandler(_ handler: @escaping @MainActor () -> Void) {
+        self.failureHandler = handler
+    }
+
+    var meterLevel: Double?
+
+    func currentLevel() -> Double? {
+        self.meterLevel
+    }
+
+    func failCapture() {
+        self.failureHandler?()
     }
 }
 
@@ -58,6 +73,26 @@ final class VoiceNoteRecorderTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedRecordingHasOneStagingOwner() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+
+        let started = await recorder.start()
+        XCTAssertTrue(started)
+        let recording = try XCTUnwrap(recorder.finish())
+
+        XCTAssertEqual(recorder.claimCompletedRecording(), recording)
+        XCTAssertNil(recorder.claimCompletedRecording())
+        XCTAssertTrue(recorder.ownsPendingChatAttachment)
+
+        recorder.completeStaging(recording)
+
+        XCTAssertEqual(recorder.state, .idle)
+        XCTAssertFalse(recorder.ownsPendingChatAttachment)
+        try FileManager.default.removeItem(at: recording.fileURL)
+    }
+
+    @MainActor
     func testCancelReturnsToIdleAndDeletesTemporaryFile() async throws {
         let capture = FakeVoiceNoteAudioCapture()
         let recorder = OpenClawVoiceNoteRecorder(capture: capture)
@@ -72,6 +107,25 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertEqual(recorder.state, .idle)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
         XCTAssertEqual(capture.cancelCount, 1)
+    }
+
+    @MainActor
+    func testSuccessiveRecordingsUseUniqueTemporaryFiles() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(
+            capture: capture,
+            now: { Date(timeIntervalSince1970: 0) })
+
+        let firstStarted = await recorder.start()
+        XCTAssertTrue(firstStarted)
+        let firstURL = try XCTUnwrap(capture.activeURL)
+        recorder.cancel()
+
+        let secondStarted = await recorder.start()
+        XCTAssertTrue(secondStarted)
+        let secondURL = try XCTUnwrap(capture.activeURL)
+        XCTAssertNotEqual(firstURL, secondURL)
+        recorder.cancel()
     }
 
     @MainActor
@@ -128,6 +182,28 @@ final class VoiceNoteRecorderTests: XCTestCase {
     }
 
     @MainActor
+    func testCaptureInterruptionFailsAndDeletesTemporaryFile() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        var activeChanges: [Bool] = []
+        recorder.onRecordingActiveChanged = { activeChanges.append($0) }
+
+        let started = await recorder.start()
+        XCTAssertTrue(started)
+        let fileURL = try XCTUnwrap(capture.activeURL)
+
+        capture.failCapture()
+
+        XCTAssertEqual(activeChanges, [true, false])
+        XCTAssertEqual(capture.cancelCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        guard case let .failed(message) = recorder.state else {
+            return XCTFail("Expected failure state")
+        }
+        XCTAssertTrue(message.contains("interrupted"))
+    }
+
+    @MainActor
     func testStartIsRefusedWhileAlreadyRecording() async {
         let capture = FakeVoiceNoteAudioCapture()
         let recorder = OpenClawVoiceNoteRecorder(capture: capture)
@@ -145,6 +221,27 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertEqual(openClawVoiceNoteDurationLabel(.nan), "0:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(1e100), "3:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(-1), "0:00")
+    }
+
+    @MainActor
+    func testRecordingPublishesCaptureLevelsAndResetsOnFinish() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        capture.meterLevel = 0.8
+        let recorder = OpenClawVoiceNoteRecorder(
+            capture: capture,
+            timerIntervalNanoseconds: 2_000_000)
+
+        let started = await recorder.start()
+        XCTAssertTrue(started)
+        XCTAssertEqual(recorder.level, 0)
+
+        for _ in 0..<200 where recorder.level == 0 {
+            try await Task.sleep(nanoseconds: 3_000_000)
+        }
+        XCTAssertGreaterThan(recorder.level, 0)
+
+        _ = try XCTUnwrap(recorder.finish())
+        XCTAssertEqual(recorder.level, 0)
     }
 
     @MainActor

@@ -1,6 +1,7 @@
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -16,6 +17,7 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
@@ -557,20 +559,7 @@ export async function runGatewayLoop(params: {
                 if (blockers.length === 0) {
                   return null;
                 }
-                const shown = blockers
-                  .slice(0, 8)
-                  .map((task) =>
-                    [
-                      `taskId=${task.taskId}`,
-                      task.runId ? `runId=${task.runId}` : null,
-                      `status=${task.status}`,
-                      `runtime=${task.runtime}`,
-                      task.label ? `label=${task.label}` : null,
-                      task.title ? `title=${task.title.slice(0, 80)}` : null,
-                    ]
-                      .filter((value): value is string => Boolean(value))
-                      .join(" "),
-                  );
+                const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
                 const omitted = blockers.length - shown.length;
                 return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
               };
@@ -930,7 +919,7 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         params.completeBoot?.({
           outcome: "startup_failed",
-          reason: formatErrorMessage(err).slice(0, 500),
+          reason: truncateUtf16Safe(formatErrorMessage(err), 500),
         });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only

@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
+  isPrivateNetworkAllowedByPolicy,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
@@ -74,11 +75,53 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   /* c8 ignore stop */
 }
 
+/** Restricts discovered CDP endpoints to the configured control-plane host. */
+export function scopeCdpPolicyToConfiguredEndpoint(
+  cdpUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): SsrFPolicy | undefined {
+  if (!ssrfPolicy) {
+    return undefined;
+  }
+  return withExactHostnamePolicy(ssrfPolicy, new URL(cdpUrl).hostname);
+}
+
+type CdpEndpointSource =
+  | { source?: "configured" }
+  | { source: "discovered"; configuredUrl: string };
+
+function cdpEndpointAuthority(url: string): string {
+  const parsed = new URL(url);
+  const usesTls = parsed.protocol === "https:" || parsed.protocol === "wss:";
+  const port = parsed.port || (usesTls ? "443" : "80");
+  return `${usesTls ? "tls" : "plain"}://${parsed.hostname}:${port}`;
+}
+
+function assertDiscoveredCdpEndpointMatchesConfigured(
+  discoveredUrl: string,
+  configuredUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): void {
+  if (
+    !ssrfPolicy ||
+    isPrivateNetworkAllowedByPolicy(ssrfPolicy) ||
+    cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl)
+  ) {
+    return;
+  }
+  throw new BrowserCdpEndpointBlockedError({
+    cause: new SsrFBlockedError("discovered CDP endpoint changed configured authority"),
+  });
+}
+
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
-  options?: { source?: "configured" | "discovered" },
+  options?: CdpEndpointSource,
 ): Promise<void> {
+  if (options?.source === "discovered") {
+    assertDiscoveredCdpEndpointMatchesConfigured(cdpUrl, options.configuredUrl, ssrfPolicy);
+  }
   if (!ssrfPolicy) {
     return;
   }

@@ -3,7 +3,12 @@
  */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import {
+  addTimerTimeoutGraceMs,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -18,6 +23,7 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { resolveCompactionSuccessorTranscript } from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -140,6 +146,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -356,18 +363,24 @@ function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
   return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
 }
 
-function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
+function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
+  const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+  // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.
+  // Lane ownership still caps at the default agent deadline in that case.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+    return defaultLaneTimeoutMs;
   }
-  return Math.floor(timeoutMs) + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+  return (
+    addTimerTimeoutGraceMs(Math.floor(timeoutMs), EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS) ??
+    defaultLaneTimeoutMs
+  );
 }
 
 function withEmbeddedRunLaneTimeout(
   opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number | undefined,
+  laneTaskTimeoutMs: number,
 ): CommandQueueEnqueueOptions | undefined {
-  if (laneTaskTimeoutMs === undefined || opts?.taskTimeoutMs !== undefined) {
+  if (opts?.taskTimeoutMs !== undefined) {
     return opts;
   }
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
@@ -1860,13 +1873,16 @@ async function runEmbeddedAgentInternal(
         });
         const adoptCompactionTranscript = (
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
-        ) => {
-          const nextSessionId = compactResult.result?.sessionId;
-          const nextSessionFile = compactResult.result?.sessionFile;
-          adoptActiveSessionId(nextSessionId);
-          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
-            activeSessionFile = nextSessionFile;
+        ): string | undefined => {
+          const previousSessionId = activeSessionId;
+          const successor = resolveCompactionSuccessorTranscript(compactResult);
+          adoptActiveSessionId(successor.sessionId);
+          if (successor.sessionFile && successor.sessionFile !== activeSessionFile) {
+            activeSessionFile = successor.sessionFile;
           }
+          return successor.sessionId && successor.sessionId !== previousSessionId
+            ? previousSessionId
+            : undefined;
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1908,6 +1924,7 @@ async function runEmbeddedAgentInternal(
         const runOwnsCompactionAfterHook = async (
           reason: string,
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          previousSessionId?: string,
         ) => {
           if (
             contextEngine.info.ownsCompaction !== true ||
@@ -1923,7 +1940,10 @@ async function runEmbeddedAgentInternal(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                sessionFile:
+                  resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+                  activeSessionFile,
+                ...(previousSessionId ? { previousSessionId } : {}),
               },
               resolveActiveHookContext(),
             );
@@ -2109,6 +2129,7 @@ async function runEmbeddedAgentInternal(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            clientCaps: params.clientCaps,
             chatType: params.chatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
@@ -2253,6 +2274,7 @@ async function runEmbeddedAgentInternal(
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             modelRun: params.modelRun,
@@ -2538,6 +2560,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    clientCaps: params.clientCaps,
                     chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
@@ -2614,10 +2637,14 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              if (timeoutCompactResult.compacted) {
-                adoptCompactionTranscript(timeoutCompactResult);
-              }
-              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              const previousSessionId = timeoutCompactResult.compacted
+                ? adoptCompactionTranscript(timeoutCompactResult)
+                : undefined;
+              await runOwnsCompactionAfterHook(
+                "timeout recovery",
+                timeoutCompactResult,
+                previousSessionId,
+              );
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
                 if (
@@ -2696,7 +2723,7 @@ async function runEmbeddedAgentInternal(
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
-                `error=${errorText.slice(0, 200)}`,
+                `error=${truncateUtf16Safe(errorText, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
@@ -2735,6 +2762,7 @@ async function runEmbeddedAgentInternal(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              let previousSessionId: string | undefined;
               await runOwnsCompactionBeforeHook("overflow recovery");
               try {
                 const overflowCompactionRuntimeContext = {
@@ -2742,6 +2770,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    clientCaps: params.clientCaps,
                     chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
@@ -2818,7 +2847,7 @@ async function runEmbeddedAgentInternal(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  adoptCompactionTranscript(compactResult);
+                  previousSessionId = adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
@@ -2841,7 +2870,11 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              await runOwnsCompactionAfterHook(
+                "overflow recovery",
+                compactResult,
+                previousSessionId,
+              );
               if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
                 lastCompactionTokensAfter = undefined;
                 lastContextBudgetStatus = undefined;
@@ -4300,3 +4333,9 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
+
+export const testing = {
+  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+  resolveEmbeddedRunLaneTimeoutMs,
+};
+export { testing as __testing };

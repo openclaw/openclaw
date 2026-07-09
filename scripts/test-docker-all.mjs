@@ -54,7 +54,7 @@ const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
-export function dockerAllUsage() {
+function dockerAllUsage() {
   return [
     "Usage: node scripts/test-docker-all.mjs [--plan-json]",
     "",

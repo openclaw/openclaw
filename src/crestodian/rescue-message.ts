@@ -152,6 +152,12 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
       "Run `openclaw crestodian` locally and say `connect " + operation.channel + "` instead.",
     ].join(" ");
   }
+  if (operation.kind === "model-setup") {
+    return [
+      "Crestodian rescue cannot host model-provider credential setup from a message channel.",
+      "Run `openclaw crestodian` locally and say `configure model provider` instead.",
+    ].join(" ");
+  }
   if (operation.kind === "plugin-install") {
     return [
       "Crestodian rescue cannot install plugins from a message channel by default because plugin install downloads executable code.",

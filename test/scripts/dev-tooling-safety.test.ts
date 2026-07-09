@@ -594,10 +594,18 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("formats OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
+      help: true,
+      openAIOnly: false,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
+      help: false,
+      openAIOnly: true,
+    });
     expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
   });
 
   it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {

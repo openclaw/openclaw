@@ -1,6 +1,7 @@
 import AVFAudio
 import Foundation
 import Observation
+import OpenClawKit
 
 private let voiceNoteMaximumDurationSeconds: TimeInterval = 180
 
@@ -18,6 +19,17 @@ public protocol VoiceNoteAudioCapture: AnyObject {
 
     /// Stops and discards the active capture.
     func cancel()
+
+    /// Reports capture loss after a recording has started.
+    func setFailureHandler(_ handler: @escaping @MainActor () -> Void)
+
+    /// Latest capture level in 0...1 for the live waveform, when supported.
+    func currentLevel() -> Double?
+}
+
+extension VoiceNoteAudioCapture {
+    /// Metering is a UI nicety; test captures may skip it.
+    public func currentLevel() -> Double? { nil }
 }
 
 /// A completed voice-note recording ready to stage as a chat attachment.
@@ -40,6 +52,7 @@ public final class OpenClawVoiceNoteRecorder {
         case requestingPermission
         case recording(startedAt: Date, fileURL: URL)
         case finished(recording: OpenClawVoiceNoteRecording)
+        case staging(recording: OpenClawVoiceNoteRecording)
         case failed(message: String)
     }
 
@@ -47,6 +60,8 @@ public final class OpenClawVoiceNoteRecorder {
 
     public private(set) var state: State = .idle
     public private(set) var elapsedSeconds: TimeInterval = 0
+    /// Live capture level in 0...1 while recording; drives the recording waveform.
+    public private(set) var level: Double = 0
 
     @ObservationIgnored public var onRecordingActiveChanged: (@MainActor (Bool) -> Void)?
 
@@ -55,6 +70,7 @@ public final class OpenClawVoiceNoteRecorder {
     @ObservationIgnored private let timerIntervalNanoseconds: UInt64
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var timerTask: Task<Void, Never>?
+    @ObservationIgnored private var captureAdmissionHandler: @MainActor () -> Bool = { true }
 
     /// Creates a recorder backed by the system audio recorder.
     public convenience init() {
@@ -72,6 +88,9 @@ public final class OpenClawVoiceNoteRecorder {
         self.durationLimit = durationLimit
         self.timerIntervalNanoseconds = timerIntervalNanoseconds
         self.now = now
+        self.capture.setFailureHandler { [weak self] in
+            self?.captureFailed()
+        }
     }
 
     deinit {
@@ -87,6 +106,22 @@ public final class OpenClawVoiceNoteRecorder {
         self.state == .requestingPermission
     }
 
+    /// True from permission request until the completed recording is staged.
+    public var ownsPendingChatAttachment: Bool {
+        switch self.state {
+        case .requestingPermission, .recording, .finished, .staging:
+            true
+        case .idle, .failed:
+            false
+        }
+    }
+
+    /// Installs the app's synchronous microphone-ownership gate. The check and
+    /// transition to requesting permission run in one MainActor turn.
+    public func setCaptureAdmissionHandler(_ handler: @escaping @MainActor () -> Bool) {
+        self.captureAdmissionHandler = handler
+    }
+
     public var errorMessage: String? {
         guard case let .failed(message) = self.state else { return nil }
         return message
@@ -97,10 +132,28 @@ public final class OpenClawVoiceNoteRecorder {
         return recording
     }
 
+    /// Claims a finished recording exactly once while its captured chat stages it.
+    func claimCompletedRecording() -> OpenClawVoiceNoteRecording? {
+        guard case let .finished(recording) = self.state else { return nil }
+        self.state = .staging(recording: recording)
+        return recording
+    }
+
+    /// Releases chat ownership after the claimed recording was consumed.
+    func completeStaging(_ recording: OpenClawVoiceNoteRecording) {
+        guard self.state == .staging(recording: recording) else { return }
+        self.state = .idle
+        self.elapsedSeconds = 0
+    }
+
     /// Requests permission if needed and starts a new recording.
     @discardableResult
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
+        guard self.captureAdmissionHandler() else {
+            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            return false
+        }
 
         self.elapsedSeconds = 0
         self.state = .requestingPermission
@@ -137,6 +190,7 @@ public final class OpenClawVoiceNoteRecorder {
         let duration = max(0, self.capture.stop())
         let recording = OpenClawVoiceNoteRecording(fileURL: fileURL, durationSeconds: duration)
         self.elapsedSeconds = duration
+        self.level = 0
         self.state = .finished(recording: recording)
         self.onRecordingActiveChanged?(false)
         return recording
@@ -144,6 +198,8 @@ public final class OpenClawVoiceNoteRecorder {
 
     /// Cancels permission or capture and removes any temporary audio file.
     public func cancel() {
+        // The chat view model owns the file after claiming the handoff.
+        if case .staging = self.state { return }
         let fileURL: URL? = switch self.state {
         case let .recording(_, fileURL):
             fileURL
@@ -161,17 +217,11 @@ public final class OpenClawVoiceNoteRecorder {
         }
         let wasRecording = self.isRecording
         self.elapsedSeconds = 0
+        self.level = 0
         self.state = .idle
         if wasRecording {
             self.onRecordingActiveChanged?(false)
         }
-    }
-
-    /// Clears a completed handoff after the composer has staged it.
-    public func clearCompletedRecording() {
-        guard case .finished = self.state else { return }
-        self.state = .idle
-        self.elapsedSeconds = 0
     }
 
     private func startTimer() {
@@ -183,6 +233,10 @@ public final class OpenClawVoiceNoteRecorder {
                 guard !Task.isCancelled else { return }
                 guard case let .recording(startedAt, _) = self.state else { return }
                 self.elapsedSeconds = max(0, self.now().timeIntervalSince(startedAt))
+                if let captureLevel = self.capture.currentLevel() {
+                    // Light smoothing keeps the 10 Hz meter poll from stepping visibly.
+                    self.level = (self.level * 0.55) + (captureLevel * 0.45)
+                }
                 if self.elapsedSeconds >= self.durationLimit {
                     self.finish()
                     return
@@ -196,29 +250,51 @@ public final class OpenClawVoiceNoteRecorder {
         self.timerTask = nil
         let wasRecording = self.isRecording
         self.elapsedSeconds = 0
+        self.level = 0
         self.state = .failed(message: message)
         if wasRecording {
             self.onRecordingActiveChanged?(false)
         }
     }
 
+    private func captureFailed() {
+        guard case let .recording(_, fileURL) = self.state else { return }
+        self.capture.cancel()
+        try? FileManager.default.removeItem(at: fileURL)
+        self.fail(message: String(localized: "Recording was interrupted. Try again."))
+    }
+
     private func makeTemporaryFileURL() -> URL {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let timestamp = formatter.string(from: self.now())
-        return FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-note-\(timestamp).m4a")
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
     }
 }
 
 /// AVAudioRecorder-backed AAC voice-note capture.
 @MainActor
-public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCapture, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
     private var ownsAudioSession = false
+    private var failureHandler: (@MainActor () -> Void)?
 
-    public init() {}
+    override public init() {
+        super.init()
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.audioSessionInterrupted(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance())
+        #endif
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    public func setFailureHandler(_ handler: @escaping @MainActor () -> Void) {
+        self.failureHandler = handler
+    }
 
     public func requestPermission() async -> Bool {
         #if os(iOS)
@@ -258,6 +334,8 @@ public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
                 AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
             ]
             let recorder = try AVAudioRecorder(url: url, settings: settings)
+            recorder.delegate = self
+            recorder.isMeteringEnabled = true
             guard recorder.record() else {
                 throw NSError(
                     domain: "OpenClawVoiceNoteAudioCapture",
@@ -284,6 +362,38 @@ public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
         self.recorder?.stop()
         self.recorder = nil
         self.deactivateAudioSession()
+    }
+
+    public func currentLevel() -> Double? {
+        guard let recorder, recorder.isRecording else { return nil }
+        recorder.updateMeters()
+        return TalkAudioLevel.normalized(decibels: Double(recorder.averagePower(forChannel: 0)))
+    }
+
+    public nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) {
+        Task { @MainActor [weak self] in
+            self?.captureDidFail()
+        }
+    }
+
+    #if os(iOS)
+    @objc private nonisolated func audioSessionInterrupted(_ notification: Notification) {
+        guard
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            rawType == AVAudioSession.InterruptionType.began.rawValue
+        else { return }
+        Task { @MainActor [weak self] in
+            self?.captureDidFail()
+        }
+    }
+    #endif
+
+    private func captureDidFail() {
+        guard self.recorder != nil else { return }
+        self.recorder?.stop()
+        self.recorder = nil
+        self.deactivateAudioSession()
+        self.failureHandler?()
     }
 
     private func deactivateAudioSession() {

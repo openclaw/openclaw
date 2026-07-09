@@ -85,6 +85,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
     expect(defaultHeaders["X-Test"]).toBe("model-header");
     expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+    expect(clientOptions.fetch).toEqual(expect.any(Function));
 
     expectFirstStreamCall(deps, model, context);
     const streamOptions = firstStreamOptions(deps);
@@ -211,6 +212,60 @@ describe("createMantleAnthropicStreamFn", () => {
     const streamOptions = firstStreamOptions(deps);
     expect(streamOptions.thinkingEnabled).toBe(true);
     expect(streamOptions.effort).toBe("low");
+  });
+
+  it("disables legacy thinking when the adjusted budget is below 1024", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(
+      model,
+      { messages: [] },
+      { apiKey: "bedrock-bearer-token", reasoning: "low" },
+    );
+
+    expect(firstStreamOptions(deps)).toMatchObject({ maxTokens: 1500, thinkingEnabled: false });
+    expect(firstStreamOptions(deps)).not.toHaveProperty("thinkingBudgetTokens");
+  });
+
+  it.each([
+    { reasoning: undefined, effort: "high" },
+    { reasoning: "off" as const, effort: "low" },
+    { reasoning: "max" as const, effort: "max" },
+  ])("maps Mythos 5 $reasoning reasoning to adaptive $effort", ({ reasoning, effort }) => {
+    const model = createTestModel({
+      id: "anthropic.claude-mythos-5",
+      name: "Claude Mythos 5",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-5" },
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(
+      model,
+      { messages: [] },
+      {
+        apiKey: "bedrock-bearer-token",
+        maxTokens: 1_000,
+        temperature: 0.2,
+        ...(reasoning ? { reasoning } : {}),
+      },
+    );
+
+    const streamOptions = firstStreamOptions(deps);
+    expect(streamOptions.thinkingEnabled).toBe(true);
+    expect(streamOptions.effort).toBe(effort);
+    expect(streamOptions.maxTokens).toBe(1_000);
+    expect(streamOptions).not.toHaveProperty("thinkingBudgetTokens");
+    expect(streamOptions.temperature).toBeUndefined();
   });
 
   it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {

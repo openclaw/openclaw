@@ -45,7 +45,8 @@ extension OpenClawChatViewModel {
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
-            guard entry.key == sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
+            guard entry.key == sessionKey || !ChatSessionSidebarModel.isHiddenInternalSession(entry.key)
+            else { continue }
             // Pinned sessions stay reachable regardless of recency.
             guard (entry.updatedAt ?? 0) >= cutoff || entry.isPinned else { continue }
             result.append(entry)
@@ -61,12 +62,6 @@ extension OpenClawChatViewModel {
         }
 
         return result
-    }
-
-    private static func isHiddenInternalSession(_ key: String) -> Bool {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {

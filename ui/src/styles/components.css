@@ -1,4 +1,48 @@
 /* ===========================================
+   Connect Splash (first connect with stored credentials)
+   =========================================== */
+
+.connect-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100%;
+  background: var(--bg);
+  /* Stay invisible past fast handshakes so a quick connect paints nothing. */
+  opacity: 0;
+  animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__logo {
+  width: 44px;
+  height: 44px;
+  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
+}
+
+@keyframes connect-splash-wiggle {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-splash {
+    opacity: 1;
+    animation: none;
+  }
+
+  .connect-splash__logo {
+    animation: none;
+  }
+}
+
+/* ===========================================
    Login Gate
    =========================================== */
 
@@ -312,60 +356,128 @@
    Connection Banner (gateway offline / reconnecting)
    =========================================== */
 
+/* Fixed overlay lane under the topbar: connection flaps must not reflow the
+   page the way the old in-flow banner did, so the pill floats over content. */
 .connection-banner {
-  position: sticky;
-  top: 0;
-  z-index: 11;
+  position: fixed;
+  top: calc(var(--shell-topbar-height, 44px) + 10px);
+  left: var(--shell-nav-width, 0px);
+  right: 0;
+  /* Above content, below the mobile nav drawer/backdrop (65+). */
+  z-index: 50;
   display: flex;
-  align-items: center;
   justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 0 calc(-1 * var(--shell-pad)) 0;
-  border-radius: 0;
-  border-left: none;
-  border-right: none;
-  font-weight: 500;
-  padding: 10px 16px;
+  padding: 0 16px;
+  pointer-events: none;
 }
 
-.connection-banner__spinner {
+/* Neutral elevated surface; the amber status dot is the only color accent so
+   the pill reads as quiet system status, not a warning callout. */
+.connection-banner__pill {
+  pointer-events: auto;
   display: inline-flex;
-  align-items: center;
+  align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  line-height: 1;
+  animation: connection-banner-enter 0.25s var(--ease-out);
 }
 
-.connection-banner__spinner svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  animation: connection-banner-spin 1s linear infinite;
-}
-
-@keyframes connection-banner-spin {
+@keyframes connection-banner-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-.connection-banner__hint {
-  margin-left: 6px;
-  font-weight: 400;
-  opacity: 0.75;
+@media (prefers-reduced-motion: reduce) {
+  .connection-banner__pill {
+    animation: none;
+  }
 }
 
-.connection-banner .connection-banner__retry {
-  border-color: currentColor;
-  color: currentColor;
-  font-size: 12px;
-  padding: 4px 12px;
+.connection-banner__dot {
+  width: 7px;
+  height: 7px;
+  align-self: center;
+  margin-left: 14px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
-.connection-banner .connection-banner__retry:hover:not(:disabled) {
-  border-color: currentColor;
-  background: color-mix(in srgb, currentColor 14%, transparent);
+.connection-banner__title {
+  align-self: center;
+  margin-left: 9px;
+  padding: 10px 0;
+  color: var(--text-strong);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.connection-banner__state {
+  align-self: center;
+  margin-left: 7px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Announced by the role="status" region and mirrored in the pill tooltip;
+   too long to keep visible in the compact pill. */
+.connection-banner__sr-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Text action behind a hairline divider so the pill stays a single surface
+   instead of a capsule-inside-a-capsule. */
+.connection-banner__retry {
+  margin-left: 12px;
+  padding: 0 14px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.connection-banner__retry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.connection-banner__retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 640px) {
+  .connection-banner__state {
+    display: none;
+  }
 }
 
 /* ===========================================
@@ -563,118 +675,6 @@
   border-color: var(--danger-subtle);
   background: var(--danger-subtle);
   color: var(--danger);
-}
-
-/* ===========================================
-   Theme Orb
-   =========================================== */
-
-.theme-orb {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.theme-orb__trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--card);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.theme-orb__trigger:hover {
-  border-color: var(--border-strong);
-  transform: scale(1.08);
-}
-
-.theme-orb__trigger:focus-visible {
-  outline: none;
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
-}
-
-.theme-orb__menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  display: flex;
-  gap: 2px;
-  padding: 4px;
-  border-radius: var(--radius-full);
-  background: var(--card);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  visibility: hidden;
-  transform: scale(0.4) translateY(-8px);
-  transform-origin: top right;
-  pointer-events: none;
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.theme-orb--open .theme-orb__menu {
-  opacity: 1;
-  visibility: visible;
-  transform: scale(1) translateY(0);
-  pointer-events: auto;
-}
-
-.theme-orb__option {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-  border: 1.5px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.theme-orb__option:hover {
-  background: var(--bg-hover);
-  transform: scale(1.12);
-}
-
-.theme-orb__option--active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.theme-orb__option:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.theme-icon {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* ===========================================
@@ -3792,33 +3792,155 @@ td.data-table-key-col {
   max-width: 280px;
 }
 
-.agents-select {
+.agent-select {
+  position: relative;
   width: 100%;
-  padding: 7px 32px 7px 10px;
+}
+
+.agent-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background-color: var(--bg-accent);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
+  background: var(--bg-accent);
+  color: var(--text);
+  font: inherit;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   outline: none;
-  appearance: none;
+  text-align: left;
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
 }
 
-:root[data-theme-mode="light"] .agents-select {
-  background-color: white;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+:root[data-theme-mode="light"] .agent-select__trigger {
+  background: white;
 }
 
-.agents-select:focus-visible {
+.agent-select__trigger:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+}
+
+.agent-select__trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-select__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-select__chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.agent-select__chevron svg,
+.agent-select__check svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-select__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  object-fit: cover;
+}
+
+.agent-select__avatar--text {
+  background: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-select__badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-select__list {
+  position: absolute;
+  z-index: 121;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.agent-select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-select__option:hover,
+.agent-select__option:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  outline: none;
+}
+
+.agent-select__option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-select__option .agent-select__avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.agent-select__check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 
 .agents-toolbar-actions {

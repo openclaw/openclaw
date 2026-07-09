@@ -89,6 +89,9 @@ internal fun SessionsScreen(
   var searchText by rememberSaveable { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
   val searchQuery = searchText.trim()
+  var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
   val visibleSessions =
     (if (searchQuery.isEmpty()) sessions else searchResults)
       .let { rows ->
@@ -106,10 +109,11 @@ internal fun SessionsScreen(
           rows.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
         }
       }
-  val sections = groupSessionEntries(visibleSessions)
+  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
+  val sections = groupSessionEntries(visibleSessions, knownGroups = storedGroups)
+  // Stored group names stay offered as move targets even while they have no members.
   val categories =
-    sessions
-      .mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) }
+    (sessions.mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
       .distinctBy { it.lowercase() }
       .sortedWith(String.CASE_INSENSITIVE_ORDER)
 
@@ -214,12 +218,21 @@ internal fun SessionsScreen(
         sections.forEachIndexed { index, section ->
           section.title?.let { title ->
             item(key = "section:$index:$title") {
-              Text(
-                text = title,
-                style = ClawTheme.type.label,
-                color = ClawTheme.colors.textMuted,
-                modifier = Modifier.padding(top = 6.dp),
-              )
+              if (section.isCategory) {
+                SessionGroupHeader(
+                  title = title,
+                  onRename = { renameGroupName = title },
+                  onNewGroup = { newGroupDialogVisible = true },
+                  onDelete = { deleteGroupName = title },
+                )
+              } else {
+                Text(
+                  text = title,
+                  style = ClawTheme.type.label,
+                  color = ClawTheme.colors.textMuted,
+                  modifier = Modifier.padding(top = 6.dp),
+                )
+              }
             }
           }
           items(section.entries, key = { it.key }) { session ->
@@ -302,7 +315,66 @@ internal fun SessionsScreen(
       onDismiss = { groupSessionKey = null },
       onConfirm = { value ->
         groupSessionKey = null
+        // Remember the name so the group survives locally even if the patch later empties it.
+        viewModel.addChatSessionGroup(value)
         coroutineScope.launch { viewModel.patchChatSession(key = session.key, category = value.trim()) }
+      },
+    )
+  }
+
+  renameGroupName?.let { group ->
+    SessionTextDialog(
+      title = "Rename group",
+      stateKey = "group-rename:$group",
+      initialValue = group,
+      confirmLabel = "Rename",
+      allowEmpty = false,
+      onDismiss = { renameGroupName = null },
+      onConfirm = { value ->
+        renameGroupName = null
+        val next = value.trim()
+        if (next.isNotEmpty() && next != group) {
+          coroutineScope.launch { viewModel.renameChatSessionGroup(from = group, to = next) }
+        }
+      },
+    )
+  }
+
+  if (newGroupDialogVisible) {
+    SessionTextDialog(
+      title = "New group",
+      stateKey = "group-new",
+      initialValue = "",
+      confirmLabel = "Create",
+      allowEmpty = false,
+      onDismiss = { newGroupDialogVisible = false },
+      onConfirm = { value ->
+        newGroupDialogVisible = false
+        viewModel.addChatSessionGroup(value)
+      },
+    )
+  }
+
+  deleteGroupName?.let { group ->
+    AlertDialog(
+      onDismissRequest = { deleteGroupName = null },
+      containerColor = ClawTheme.colors.surfaceRaised,
+      title = { Text("Delete group?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text("Sessions in \"$group\" are kept and move back to Ungrouped.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            deleteGroupName = null
+            coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
+          },
+        ) {
+          Text("Delete", color = ClawTheme.colors.danger)
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { deleteGroupName = null }) {
+          Text("Cancel")
+        }
       },
     )
   }
@@ -519,11 +591,47 @@ private fun SessionRow(
             menuExpanded = false
             onSetArchived(true)
           }
-          SessionMenuItem("Delete…") {
-            menuExpanded = false
-            onDelete()
-          }
+          // Delete is archive-gated: the bounded operator session lacks
+          // operator.admin, and the gateway only grants write-scope deletes
+          // for archived sessions. Archived rows keep the Delete item.
         }
+      }
+    }
+  }
+}
+
+/** Category section header; long-press opens the group management menu. */
+@Composable
+private fun SessionGroupHeader(
+  title: String,
+  onRename: () -> Unit,
+  onNewGroup: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  var menuExpanded by remember { mutableStateOf(false) }
+  Box(modifier = Modifier.padding(top = 6.dp)) {
+    Text(
+      text = title,
+      style = ClawTheme.type.label,
+      color = ClawTheme.colors.textMuted,
+      modifier =
+        Modifier.combinedClickable(
+          onClick = {},
+          onLongClick = { menuExpanded = true },
+        ),
+    )
+    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+      SessionMenuItem("Rename group…") {
+        menuExpanded = false
+        onRename()
+      }
+      SessionMenuItem("New group…") {
+        menuExpanded = false
+        onNewGroup()
+      }
+      SessionMenuItem("Delete group…") {
+        menuExpanded = false
+        onDelete()
       }
     }
   }
@@ -618,23 +726,32 @@ private enum class SessionFilter {
 internal data class SessionSection(
   val title: String?,
   val entries: List<ChatSessionEntry>,
+  // Only custom category sections expose group actions; "Pinned"/"Ungrouped" are structural.
+  val isCategory: Boolean = false,
 )
 
 /** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
-internal fun groupSessionEntries(entries: List<ChatSessionEntry>): List<SessionSection> {
+internal fun groupSessionEntries(
+  entries: List<ChatSessionEntry>,
+  knownGroups: List<String> = emptyList(),
+): List<SessionSection> {
   if (entries.isEmpty()) return emptyList()
   val pinned = entries.filter { it.pinned == true }
   val remaining = entries.filterNot { it.pinned == true }
-  val categorized = remaining.filter { !it.category.isNullOrBlank() }
+  val populated = remaining.filter { !it.category.isNullOrBlank() }.groupBy { it.category.orEmpty().trim() }
+  // Stored-but-empty groups still render so they stay visible as move targets.
+  val emptyKnown =
+    knownGroups
+      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+      .distinctBy { it.lowercase() }
+      .filterNot { name -> populated.keys.any { it.equals(name, ignoreCase = true) } }
   val categories =
-    categorized
-      .groupBy { it.category.orEmpty().trim() }
-      .toList()
+    (populated.toList() + emptyKnown.map { it to emptyList<ChatSessionEntry>() })
       .sortedBy { it.first.lowercase() }
   val ungrouped = remaining.filter { it.category.isNullOrBlank() }
   return buildList {
     if (pinned.isNotEmpty()) add(SessionSection(title = "Pinned", entries = pinned))
-    categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions)) }
+    categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
       add(SessionSection(title = "Ungrouped".takeIf { categories.isNotEmpty() }, entries = ungrouped))
     }

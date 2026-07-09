@@ -16,6 +16,7 @@ const iosSourceRoots = [
 const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatCodeHighlighter.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineMath.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatLinkPreview.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockSegmenter.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",

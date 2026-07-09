@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -231,8 +234,10 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+            isComposerEnabled: self.isComposerEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
             talkControl: self.talkControl,
             voiceNoteControl: self.voiceNoteControl)
@@ -365,7 +370,7 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
@@ -384,9 +389,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
+        if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
             ChatStreamingAssistantBubble(
                 text: text,
                 markdownVariant: self.markdownVariant,
@@ -426,6 +429,7 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
+                self.copyMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -488,7 +492,14 @@ public struct OpenClawChatView: View {
                 }
             }
         } else {
+            #if os(macOS)
             bubble
+                .contextMenu {
+                    self.copyMessageButton(for: msg)
+                }
+            #else
+            bubble
+            #endif
         }
     }
 
@@ -509,6 +520,32 @@ public struct OpenClawChatView: View {
         default:
             nil
         }
+    }
+
+    @ViewBuilder
+    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let text = self.primaryText(in: message)
+        if !text.isEmpty {
+            Button {
+                Self.copyToClipboard(text)
+            } label: {
+                Label {
+                    Text("Copy Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
     }
 
     private var visibleMessages: [OpenClawChatMessage] {
@@ -617,12 +654,15 @@ public struct OpenClawChatView: View {
         return self.hasVisibleTransientContent
     }
 
+    private var hasVisibleStreamingAssistantText: Bool {
+        guard let text = self.viewModel.streamingAssistantText else { return false }
+        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+    }
+
     private var hasVisibleTransientContent: Bool {
-        self.viewModel.pendingRunCount > 0 ||
+        self.viewModel.hasBlockingRunActivity ||
             !self.viewModel.pendingToolCalls.isEmpty ||
-            (self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false)
+            self.hasVisibleStreamingAssistantText
     }
 
     @ViewBuilder
@@ -674,16 +714,14 @@ public struct OpenClawChatView: View {
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
-            !(self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false) &&
-            self.viewModel.pendingRunCount == 0 &&
+            !self.hasVisibleStreamingAssistantText &&
+            !self.viewModel.hasBlockingRunActivity &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
     private var emptyStateTitle: String {
         #if os(macOS)
-        "Web Chat"
+        "Start a Conversation"
         #else
         "Chat"
         #endif
@@ -691,7 +729,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateMessage: String {
         #if os(macOS)
-        "Type a message below to start.\nReturn sends • Shift-Return adds a line break."
+        "Message your agent to get started.\nReturn sends • Shift-Return adds a line break • / shows commands."
         #else
         "Type a message below to start."
         #endif
@@ -729,7 +767,7 @@ public struct OpenClawChatView: View {
     private func handleTimelineChange() {
         guard self.hasPerformedInitialScroll else { return }
         if self.viewModel.messages.isEmpty,
-           self.viewModel.pendingRunCount == 0,
+           !self.viewModel.hasBlockingRunActivity,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {

@@ -31,6 +31,7 @@ import {
   getHeadersWithAuth,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
@@ -84,7 +85,7 @@ export type BrowserNetworkRequest = {
 };
 
 /** Observed browser dialog record tracked for agent-visible state. */
-export type BrowserObservedDialogRecord = {
+type BrowserObservedDialogRecord = {
   id: string;
   type: string;
   message: string;
@@ -95,13 +96,13 @@ export type BrowserObservedDialogRecord = {
 };
 
 /** Pending and recent dialog state for a page. */
-export type BrowserObservedDialogState = {
+type BrowserObservedDialogState = {
   pending: BrowserObservedDialogRecord[];
   recent: BrowserObservedDialogRecord[];
 };
 
 /** Browser state currently observable by agent responses. */
-export type BrowserObservedState = {
+type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
 };
 
@@ -1200,13 +1201,14 @@ async function findPageByTargetIdViaTargetList(
 ): Promise<Page | null> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   const targets = await fetchJson<
     Array<{
       id: string;
       url: string;
       title?: string;
     }>
-  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
+  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000, undefined, cdpControlPolicy);
   return matchPageByTargetList(pages, targets, targetId);
 }
 
@@ -1649,6 +1651,7 @@ async function tryTerminateExecutionViaCdp(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
   const listUrl = appendCdpPath(cdpHttpBase, "/json/list");
 
@@ -1657,7 +1660,7 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000, undefined, opts.ssrfPolicy).catch(() => null);
+  >(listUrl, 2000, undefined, cdpControlPolicy).catch(() => null);
   if (!pages || pages.length === 0) {
     return;
   }
@@ -1669,7 +1672,10 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
-  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy, { source: "discovered" });
+  await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+    source: "discovered",
+    configuredUrl: opts.cdpUrl,
+  });
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {

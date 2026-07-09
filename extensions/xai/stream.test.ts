@@ -1,6 +1,12 @@
 // Xai tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple, type Api, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  streamSimple,
+  type Api,
+  type Context,
+  type Model,
+  type ModelThinkingLevel,
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
@@ -95,16 +101,18 @@ function runXaiToolPayloadWrapper(params: {
   );
 }
 
-async function captureXaiResponsesPayloadWithThinking(): Promise<Record<string, unknown>> {
+async function captureXaiResponsesPayloadWithThinking(
+  reasoning: ModelThinkingLevel = "low",
+): Promise<Record<string, unknown>> {
   const model = applyXaiRuntimeModelCompat({
     api: "openai-responses",
     provider: "xai",
-    id: "grok-4.3",
+    id: "grok-4.5",
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000_000,
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    contextWindow: 500_000,
     maxTokens: 64_000,
   } as Model<"openai-responses">);
 
@@ -119,7 +127,7 @@ async function captureXaiResponsesPayloadWithThinking(): Promise<Record<string, 
       {
         apiKey: "test-api-key",
         cacheRetention: "none",
-        reasoning: "low",
+        reasoning,
         onPayload: (payload) => {
           clearTimeout(timeout);
           resolve(structuredClone(payload as Record<string, unknown>));
@@ -359,7 +367,7 @@ describe("xai stream wrappers", () => {
       reasoningEffort: "high",
       reasoning_effort: "high",
     };
-    runXaiToolPayloadWrapper({ payload, modelId: "grok-4.3" });
+    runXaiToolPayloadWrapper({ payload, modelId: "grok-4.5" });
 
     expect(payload.reasoning).toEqual({ effort: "high" });
     expect(payload.reasoningEffort).toBe("high");
@@ -449,6 +457,12 @@ describe("xai stream wrappers", () => {
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
     expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  it("clamps unsupported Grok 4.5 off reasoning to low", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking("off");
+
+    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {
