@@ -7,6 +7,7 @@ export {
   revokeDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
 export {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
