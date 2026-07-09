@@ -81,7 +81,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { compareAndSwapCronJobRunningAtMs, ensureLoaded, persist } from "./store.js";
 import {
   resolveMainSessionCronRunSessionKey,
   tryCreateCronTaskRun,
@@ -1200,14 +1200,20 @@ async function persistClaimedCronRunStart(
     if (job?.state.runningAtMs !== params.reservedAtMs) {
       return false;
     }
-    if (params.reservedAtMs === params.startedAt) {
-      return true;
-    }
     // Task maintenance recovers interrupted cron task rows by matching the run
     // id timestamp to this durable marker; persist the claimed start before
     // creating the task row so a later restart has one stable key.
+    const claimed = await compareAndSwapCronJobRunningAtMs({
+      storePath: state.deps.storePath,
+      jobId: params.jobId,
+      expectedMs: params.reservedAtMs,
+      nextMs: params.startedAt,
+    });
+    if (!claimed) {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      return false;
+    }
     job.state.runningAtMs = params.startedAt;
-    await persist(state);
     return true;
   });
 }
@@ -1222,8 +1228,16 @@ async function releaseClaimedCronRunStart(
     if (job?.state.runningAtMs !== params.startedAt) {
       return;
     }
+    const released = await compareAndSwapCronJobRunningAtMs({
+      storePath: state.deps.storePath,
+      jobId: params.jobId,
+      expectedMs: params.startedAt,
+    });
+    if (!released) {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      return;
+    }
     delete job.state.runningAtMs;
-    await persist(state);
   });
 }
 
@@ -1357,6 +1371,7 @@ export async function onTimer(state: CronServiceState) {
   armRunningRecheckTimer(state);
   try {
     const dueJobs = await locked(state, async () => {
+      const activeJobGeneration = getCronActiveJobGeneration();
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       if (state.stopped || state.restartRecoveryPending) {
         state.deps.log.warn(
@@ -1400,6 +1415,7 @@ export async function onTimer(state: CronServiceState) {
         id: j.id,
         job: j,
         reservedAtMs: now,
+        activeJobGeneration,
       }));
     });
 
@@ -1408,8 +1424,9 @@ export async function onTimer(state: CronServiceState) {
       id: string;
       job: CronJob;
       reservedAtMs: number;
+      activeJobGeneration: number;
     }): Promise<TimedCronRunOutcome | undefined> => {
-      const { id, job, reservedAtMs } = params;
+      const { id, job, reservedAtMs, activeJobGeneration } = params;
       const startedAt = state.deps.nowMs();
       const activeJobMarker = markCronJobActive(job.id, {
         preserveAcrossGenerationAdvance: job.sessionTarget === "main",
@@ -1428,6 +1445,7 @@ export async function onTimer(state: CronServiceState) {
           stopAdmittingDueJobs ||
           state.stopped ||
           state.restartRecoveryPending ||
+          getCronActiveJobGeneration() !== activeJobGeneration ||
           !isCronActiveJobMarkerCurrent(activeJobMarker)
         ) {
           clearCronJobActive(job.id, activeJobMarker);
@@ -1937,7 +1955,7 @@ async function executeStartupCatchupPlan(
     ) {
       break;
     }
-    const outcome = await runStartupCatchupCandidate(state, candidate);
+    const outcome = await runStartupCatchupCandidate(state, candidate, plan.activeJobGeneration);
     if (outcome) {
       outcomes.push(outcome);
     }
@@ -1948,6 +1966,7 @@ async function executeStartupCatchupPlan(
 async function runStartupCatchupCandidate(
   state: CronServiceState,
   candidate: StartupCatchupCandidate,
+  activeJobGeneration: number,
 ): Promise<TimedCronRunOutcome | undefined> {
   const startedAt = state.deps.nowMs();
   const activeJobMarker = markCronJobActive(candidate.job.id, {
@@ -1964,6 +1983,7 @@ async function runStartupCatchupCandidate(
       !claimed ||
       state.stopped ||
       state.restartRecoveryPending ||
+      getCronActiveJobGeneration() !== activeJobGeneration ||
       !isCronActiveJobMarkerCurrent(activeJobMarker)
     ) {
       clearCronJobActive(candidate.job.id, activeJobMarker);
@@ -2067,7 +2087,10 @@ async function applyStartupCatchupOutcomes(
         outcomes,
       );
       const deferredJobs =
-        getCronActiveJobGeneration() === plan.activeJobGeneration ? plan.deferredJobs : [];
+        !state.restartRecoveryPending &&
+        getCronActiveJobGeneration() === plan.activeJobGeneration
+          ? plan.deferredJobs
+          : [];
       for (const result of finalizedOutcomes) {
         applyOutcomeToStoredJob(state, result);
       }

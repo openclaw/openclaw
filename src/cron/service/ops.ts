@@ -503,7 +503,7 @@ async function persistOrRestore(
   postPersistAutoDisableNotifications: Array<() => void> = [],
 ) {
   try {
-    await persist(state);
+    await persist(state, { baseStore: snapshot.store });
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;

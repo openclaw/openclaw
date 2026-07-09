@@ -6,7 +6,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import type { CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
+import type { CronDelivery, CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
@@ -297,13 +297,64 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
-/** Replaces all persisted cron rows for one store key from the config store snapshot. */
-export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+function mergeConcurrentDeliveryTargets(params: {
+  store: CronStoreFile;
+  baseStore?: CronStoreFile;
+  currentRows: CronJobRow[];
+}): CronStoreFile {
+  if (!params.baseStore) {
+    return params.store;
+  }
+  const baseJobsById = new Map(params.baseStore.jobs.map((job) => [job.id, job]));
+  const currentJobsById = new Map<string, CronJob>();
+  for (const row of params.currentRows) {
+    const job = rowToCronJob(row);
+    if (job) {
+      currentJobsById.set(job.id, job);
+    }
+  }
+  return {
+    ...params.store,
+    jobs: params.store.jobs.map((job) => {
+      const baseJob = baseJobsById.get(job.id);
+      const currentJob = currentJobsById.get(job.id);
+      if (
+        !baseJob?.delivery ||
+        !job.delivery ||
+        !currentJob?.delivery ||
+        job.delivery.to !== baseJob.delivery.to ||
+        currentJob.delivery.to === job.delivery.to
+      ) {
+        return job;
+      }
+      const mergedJob = structuredClone(job);
+      if (currentJob.delivery.to === undefined) {
+        delete mergedJob.delivery?.to;
+      } else if (mergedJob.delivery) {
+        mergedJob.delivery.to = currentJob.delivery.to;
+      }
+      return mergedJob;
+    }),
+  };
+}
+
+/** Replaces all persisted cron rows, preserving concurrent delivery-target writebacks. */
+export function replaceCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  store: CronStoreFile,
+  baseStore?: CronStoreFile,
+): void {
+  const mergedStore = mergeConcurrentDeliveryTargets({
+    store,
+    baseStore,
+    currentRows: baseStore ? loadCronRows(db, storeKey) : [],
+  });
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db).deleteFrom("cron_jobs").where("store_key", "=", storeKey),
   );
-  for (const [index, job] of store.jobs.entries()) {
+  for (const [index, job] of mergedStore.jobs.entries()) {
     const normalized = normalizeCronJobForSqlite(job);
     if (!normalized) {
       continue;
@@ -338,6 +389,88 @@ export function updateCronRuntimeRows(
         .where("job_id", "=", job.id),
     );
   }
+}
+
+/** Atomically updates one run marker without rewriting concurrent job state or config. */
+export function compareAndSwapCronJobRunningAtMs(
+  db: DatabaseSync,
+  storeKey: string,
+  params: { jobId: string; expectedMs: number; nextMs?: number },
+): boolean {
+  const row = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["running_at_ms", "state_json"])
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", params.jobId),
+  ).rows[0];
+  if (!row || normalizeNumber(row.running_at_ms) !== params.expectedMs) {
+    return false;
+  }
+  const state = parseJsonObject<CronJobState>(row.state_json, {});
+  if (params.nextMs === undefined) {
+    delete state.runningAtMs;
+  } else {
+    state.runningAtMs = params.nextMs;
+  }
+  const result = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .updateTable("cron_jobs")
+      .set({
+        running_at_ms: params.nextMs ?? null,
+        state_json: JSON.stringify(state),
+      })
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", params.jobId)
+      .where("running_at_ms", "=", params.expectedMs),
+  );
+  return result.numAffectedRows === 1n;
+}
+
+/** Updates only matching delivery targets while preserving every runtime-state column. */
+export function updateCronJobDeliveryTargets(
+  db: DatabaseSync,
+  storeKey: string,
+  updateTarget: (delivery: CronDelivery, jobId: string) => string | undefined,
+): number {
+  const rows = loadCronRows(db, storeKey);
+  let updatedJobs = 0;
+  for (const row of rows) {
+    const projectedJob = rowToCronJob(row);
+    const delivery = projectedJob?.delivery;
+    if (!projectedJob || !delivery) {
+      continue;
+    }
+    const nextTarget = updateTarget(structuredClone(delivery), row.job_id);
+    if (!nextTarget || nextTarget === delivery.to) {
+      continue;
+    }
+    const configJob = parseJsonObject<Record<string, unknown>>(
+      row.job_json,
+      stripJobRuntimeFields(projectedJob),
+    );
+    const configDelivery =
+      isRecord(configJob.delivery) && !Array.isArray(configJob.delivery)
+        ? { ...configJob.delivery }
+        : { ...delivery };
+    configDelivery.to = nextTarget;
+    configJob.delivery = configDelivery;
+    const result = executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({
+          delivery_to: nextTarget,
+          job_json: JSON.stringify(configJob),
+        })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", row.job_id),
+    );
+    updatedJobs += Number(result.numAffectedRows ?? 0);
+  }
+  return updatedJobs;
 }
 
 /** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */

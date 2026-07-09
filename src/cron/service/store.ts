@@ -5,12 +5,13 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
+  compareAndSwapCronJobRunningAtMs,
   loadCronJobsStoreWithConfigJobs,
   saveCronQuarantineFile,
   saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
@@ -212,7 +213,10 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
 }
 
 /** Persists the in-memory cron store, flushing pending quarantine records first. */
-export async function persist(state: CronServiceState, opts?: { stateOnly?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: { stateOnly?: boolean; baseStore?: CronStoreFile | null },
+) {
   if (!state.store) {
     return;
   }
@@ -224,9 +228,12 @@ export async function persist(state: CronServiceState, opts?: { stateOnly?: bool
     }
     flushedPendingQuarantine = true;
   }
-  await saveCronJobsStore(
-    state.deps.storePath,
-    state.store,
-    flushedPendingQuarantine ? undefined : opts,
-  );
+  const saveOpts = flushedPendingQuarantine
+    ? opts?.baseStore
+      ? { baseStore: opts.baseStore }
+      : undefined
+    : opts;
+  await saveCronJobsStore(state.deps.storePath, state.store, saveOpts);
 }
+
+export { compareAndSwapCronJobRunningAtMs };

@@ -17,9 +17,11 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
+  compareAndSwapCronJobRunningAtMs as compareAndSwapCronJobRunningAtMsRow,
   loadedCronStoreFromRows,
   loadCronRows,
   replaceCronRows,
+  updateCronJobDeliveryTargets as updateCronJobDeliveryTargetsRow,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
 import type {
@@ -33,7 +35,7 @@ export type {
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
-import type { CronStoreFile } from "./types.js";
+import type { CronDelivery, CronStoreFile } from "./types.js";
 
 function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
@@ -146,6 +148,10 @@ type SaveCronStoreOptions = {
   stateOnly?: boolean;
 };
 
+type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
+  baseStore?: CronStoreFile | null;
+};
+
 async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
   await replaceFileAtomic({
     filePath,
@@ -162,7 +168,7 @@ async function atomicWrite(filePath: string, content: string, dirMode = 0o700): 
 export async function saveCronJobsStore(
   storePath: string,
   store: CronStoreFile,
-  opts?: SaveCronStoreOptions,
+  opts?: SaveCronJobsStoreOptions,
 ) {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
@@ -176,8 +182,33 @@ export async function saveCronJobsStore(
   }
   assertCronStoreCanPersist(store);
   runOpenClawStateWriteTransaction(({ db }) => {
-    replaceCronRows(db, storeKey, store);
+    replaceCronRows(db, storeKey, store, opts?.baseStore ?? undefined);
   });
+}
+
+/** Atomically replaces one persisted cron run marker when the expected owner still holds it. */
+export async function compareAndSwapCronJobRunningAtMs(params: {
+  storePath: string;
+  jobId: string;
+  expectedMs: number;
+  nextMs?: number;
+}): Promise<boolean> {
+  const storeKey = cronStoreKey(path.resolve(params.storePath));
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    compareAndSwapCronJobRunningAtMsRow(db, storeKey, params),
+  );
+}
+
+/** Transactionally rewrites matching delivery targets without touching cron runtime state. */
+export async function updateCronJobDeliveryTargets(
+  storePath: string,
+  updateTarget: (delivery: CronDelivery, jobId: string) => string | undefined,
+): Promise<{ updatedJobs: number }> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const updatedJobs = runOpenClawStateWriteTransaction(({ db }) =>
+    updateCronJobDeliveryTargetsRow(db, storeKey, updateTarget),
+  );
+  return { updatedJobs };
 }
 
 /** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
