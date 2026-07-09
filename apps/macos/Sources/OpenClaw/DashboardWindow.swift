@@ -19,6 +19,12 @@ enum DashboardLinkTarget: String, Equatable {
     case external
 }
 
+enum DashboardTargetlessNavigationAction: Equatable {
+    case allow
+    case openExternal
+    case cancel
+}
+
 struct DashboardLinkRequest: Equatable {
     let url: URL
     let target: DashboardLinkTarget

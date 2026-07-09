@@ -85,6 +85,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testLinkBrowserNavigationObservationCount == 3)
         #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
 
         let report = try #require(URL(string: "http://127.0.0.1:1/report"))
@@ -130,6 +131,22 @@ struct DashboardWindowSmokeTests {
             navigationType: .other,
             buttonNumber: 1
         ))
+
+        #expect(DashboardWindowController.targetlessNavigationAction(
+            for: webURL,
+            navigationType: .linkActivated,
+            buttonNumber: 1
+        ) == .allow)
+        #expect(DashboardWindowController.targetlessNavigationAction(
+            for: mailURL,
+            navigationType: .linkActivated,
+            buttonNumber: 1
+        ) == .openExternal)
+        #expect(DashboardWindowController.targetlessNavigationAction(
+            for: mailURL,
+            navigationType: .linkActivated,
+            buttonNumber: 0
+        ) == .cancel)
     }
 
     @Test func `dashboard origin brackets ipv6 literals`() throws {

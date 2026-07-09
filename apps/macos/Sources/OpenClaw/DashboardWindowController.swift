@@ -490,7 +490,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 return
             }
             if navigationAction.targetFrame == nil {
-                decisionHandler(Self.isHTTPURL(url) ? .allow : .cancel)
+                decideTargetlessNavigation(
+                    url,
+                    navigationType: navigationAction.navigationType,
+                    buttonNumber: navigationAction.buttonNumber,
+                    decisionHandler: decisionHandler
+                )
                 return
             }
             if Self.shouldAllowBrowserNavigation(to: url) {
@@ -502,7 +507,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         if navigationAction.targetFrame == nil {
-            decisionHandler(Self.isHTTPURL(url) ? .allow : .cancel)
+            decideTargetlessNavigation(
+                url,
+                navigationType: navigationAction.navigationType,
+                buttonNumber: navigationAction.buttonNumber,
+                decisionHandler: decisionHandler
+            )
             return
         }
         if Self.shouldAllowNavigation(to: url, dashboardURL: currentURL) {
@@ -575,6 +585,45 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // WebKit also labels synthetic anchor.click() as linkActivated. Its
         // action reports button 0; a physical primary click reports 1 here.
         navigationType == .linkActivated && buttonNumber > 0 && isExternalURL(url)
+    }
+
+    static func targetlessNavigationAction(
+        for url: URL,
+        navigationType: WKNavigationType,
+        buttonNumber: Int
+    ) -> DashboardTargetlessNavigationAction {
+        if isHTTPURL(url) {
+            return .allow
+        }
+        if shouldOpenExternalDashboardNavigation(
+            url,
+            navigationType: navigationType,
+            buttonNumber: buttonNumber
+        ) {
+            return .openExternal
+        }
+        return .cancel
+    }
+
+    private func decideTargetlessNavigation(
+        _ url: URL,
+        navigationType: WKNavigationType,
+        buttonNumber: Int,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+    ) {
+        switch Self.targetlessNavigationAction(
+            for: url,
+            navigationType: navigationType,
+            buttonNumber: buttonNumber
+        ) {
+        case .allow:
+            decisionHandler(.allow)
+        case .openExternal:
+            openExternal(url)
+            decisionHandler(.cancel)
+        case .cancel:
+            decisionHandler(.cancel)
+        }
     }
 
     func windowWillClose(_: Notification) {
@@ -724,6 +773,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         var _testLinkBrowserRepresentedURL: URL? {
             linkBrowser._testRepresentedURL
+        }
+
+        var _testLinkBrowserNavigationObservationCount: Int {
+            linkBrowser._testNavigationObservationCount
         }
 
         var _testDashboardDataStore: WKWebsiteDataStore {

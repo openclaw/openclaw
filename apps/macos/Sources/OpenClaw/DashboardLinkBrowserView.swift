@@ -16,7 +16,7 @@ final class DashboardLinkBrowserView: NSView {
         label: "Open in Default Browser"
     )
     private let closeButton = DashboardLinkBrowserView.makeButton(symbol: "xmark", label: "Close Sidebar")
-    private var historyObservations: [NSKeyValueObservation] = []
+    private var navigationObservations: [NSKeyValueObservation] = []
     private var representedURL: URL?
     private let addressLabel: NSTextField = {
         let label = NSTextField(labelWithString: "")
@@ -41,7 +41,7 @@ final class DashboardLinkBrowserView: NSView {
         webView.setValue(true, forKey: "drawsBackground")
         configureActions()
         buildView()
-        observeHistory()
+        observeNavigationState()
         updateChrome()
     }
 
@@ -95,16 +95,26 @@ final class DashboardLinkBrowserView: NSView {
         closeButton.action = #selector(close)
     }
 
-    private func observeHistory() {
+    private func observeNavigationState() {
         // WebKit updates these properties after some navigation delegate callbacks.
-        // KVO keeps Back/Forward state accurate for history traversals and redirects.
-        historyObservations = [\.canGoBack, \.canGoForward].map { keyPath in
-            webView.observe(keyPath, options: [.new]) { [weak self] _, _ in
+        // KVO also catches same-document SPA URL changes that skip didFinish.
+        navigationObservations = [
+            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     self?.updateChrome()
                 }
-            }
-        }
+            },
+            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.updateChrome()
+                }
+            },
+            webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.navigationDidFinish()
+                }
+            },
+        ]
     }
 
     private func buildView() {
@@ -211,6 +221,10 @@ final class DashboardLinkBrowserView: NSView {
     extension DashboardLinkBrowserView {
         var _testRepresentedURL: URL? {
             representedURL
+        }
+
+        var _testNavigationObservationCount: Int {
+            navigationObservations.count
         }
     }
 #endif
