@@ -2225,10 +2225,14 @@ function isToolNonceProbeMiss(error: string): boolean {
 
 function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
   const msg = error.toLowerCase();
+  const isTransientProviderFailure =
+    msg.includes("unknown error occurred") ||
+    (msg.includes("ai service returned an internal error") &&
+      msg.includes("try again in a moment"));
   return (
     msg.includes("tool-read: agent-wait") &&
     msg.includes("failovererror") &&
-    msg.includes("unknown error occurred")
+    isTransientProviderFailure
   );
 }
 
@@ -2296,7 +2300,17 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
     ).toBe(true);
     expect(
       isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: tool-read: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
         "[all-models] 1/1 google/gemini-3.1-pro-preview: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(false);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
       ),
     ).toBe(false);
   });
