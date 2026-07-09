@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getRealtimeTranscriptionProvider,
@@ -380,7 +381,7 @@ function readLogString(value: unknown): string | undefined {
 }
 
 function formatLogValue(value: string | undefined): string {
-  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
   return normalized || "unknown";
 }
 
