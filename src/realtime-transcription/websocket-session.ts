@@ -50,10 +50,9 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
 const DEFAULT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
-// Bound inbound frames before ws buffers them for JSON parsing. Transcript
-// provider frames are small text/JSON; 16 MiB matches the realtime voice ws cap
-// and caps ws's 100 MiB default. ws emits an error + 1009 close on overflow, so
-// an oversized frame never reaches onMessage/parseMessage.
+// Bound inbound messages before ws buffers them for JSON parsing. The 16 MiB cap
+// matches realtime voice; ws rejects larger messages with close 1009 before
+// they reach onMessage, replacing its 100 MiB client default.
 export const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 function rawWsDataToBuffer(data: RawData): Buffer {

@@ -407,8 +407,8 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(closeError.message).toBe("test realtime transcription connection closed before ready");
   });
 
-  it("delivers a legitimate large inbound frame below the payload cap", async () => {
-    // Well above any real transcript frame yet far under the 16 MiB cap: proves
+  it("delivers a legitimate large inbound message below the payload cap", async () => {
+    // Well above any real transcript message yet far under the 16 MiB cap: proves
     // the bound does not reject legitimate large provider traffic.
     const largeText = "x".repeat(2 * 1024 * 1024);
     const server = await createRealtimeServer({
@@ -430,14 +430,14 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await vi.waitFor(() => {
       expect(onMessage).toHaveBeenCalledTimes(1);
     });
-    const event = requireFirstMockArg(onMessage, "large inbound frame");
+    const event = requireFirstMockArg(onMessage, "large inbound message");
     expect(event).toEqual({ type: "transcript", text: largeText });
     session.close();
   });
 
-  it("drops an oversized inbound frame before it reaches the provider parser", async () => {
-    // ws rejects a frame above maxPayload with an error + 1009 close, so an
-    // oversized upstream frame never reaches onMessage/JSON parse.
+  it("drops an oversized inbound message before it reaches the provider parser", async () => {
+    // ws rejects a message above maxPayload with an error + 1009 close, so an
+    // oversized upstream message never reaches onMessage/JSON parse.
     const oversized = "x".repeat(REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES + 1);
     const server = await createRealtimeServer({ initialText: oversized });
     const onError = vi.fn();
@@ -460,8 +460,9 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       expect(onError).toHaveBeenCalledTimes(1);
     });
     expect(onMessage).not.toHaveBeenCalled();
-    const overflowError = requireFirstMockArg(onError, "oversized inbound frame error");
+    const overflowError = requireFirstMockArg(onError, "oversized inbound message error");
     expect(overflowError).toBeInstanceOf(Error);
+    expect(overflowError).toHaveProperty("code", "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
     expect(overflowError.message).toMatch(/max payload/i);
     session.close();
   });
