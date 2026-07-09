@@ -1006,11 +1006,10 @@
   transform: rotate(-90deg);
 }
 
-/* "More" holds every nav route the user has not pinned. */
+/* "More" holds every nav route the user has not pinned; the uppercase label
+   is the section separator, so no divider line above it. */
 .nav-section--more {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  margin-top: 12px;
 }
 
 /* Button variant of .nav-item (e.g. "Customize sidebar"). */
