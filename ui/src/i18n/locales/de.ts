@@ -475,6 +475,11 @@ export const de: TranslationMap = {
   nav: {
     chat: "Chat",
     settings: "Einstellungen",
+    settingsGeneral: "Allgemein",
+    settingsGroupConnections: "Verbindungen",
+    settingsGroupAgents: "Agents & Tools",
+    settingsGroupSystem: "System",
+    exitSettings: "Zurück zur App",
     expand: "Seitenleiste ausklappen",
     collapse: "Seitenleiste einklappen",
     resize: "Seitenleiste in der Größe ändern",
