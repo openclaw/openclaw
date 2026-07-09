@@ -861,6 +861,7 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
+  buildUsageMosaicStats,
   formatIsoDate,
   formatTokens,
   renderUsageMosaic,
