@@ -14,13 +14,10 @@ import {
 } from "../shared/operator-scope-compat.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
-  createAsyncLock,
-  pruneExpiredPending,
-  readJsonIfExists,
-  coercePairingStateRecord,
-  resolvePairingPaths,
-  writeJson,
-} from "./pairing-files.js";
+  loadDevicePairingStoreState,
+  persistDevicePairingStoreState as persistState,
+} from "./device-pairing-store.js";
+import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Pending device pairing request awaiting owner approval. */
@@ -46,7 +43,9 @@ export type DevicePairingPendingRequest = {
 // actively retrying device keeps one pending request (and requestId) alive instead of
 // minting a new request every TTL window and flooding operator approval UIs. It never
 // crosses the protocol boundary, and ordering/--latest still use ts.
-type DevicePairingPendingRecord = DevicePairingPendingRequest & { refreshedAtMs?: number };
+export type DevicePairingPendingRecord = DevicePairingPendingRequest & {
+  refreshedAtMs?: number;
+};
 
 /** Pending request summary returned when a replacement supersedes older requests. */
 export type DevicePairingSupersededRequest = Pick<
@@ -267,15 +266,7 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 }
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const [pending, paired] = await Promise.all([
-    readJsonIfExists<unknown>(pendingPath),
-    readJsonIfExists<unknown>(pairedPath),
-  ]);
-  const state: DevicePairingStateFile = {
-    pendingById: coercePairingStateRecord<DevicePairingPendingRecord>(pending),
-    pairedByDeviceId: coercePairingStateRecord<PairedDevice>(paired),
-  };
+  const state: DevicePairingStateFile = loadDevicePairingStoreState(baseDir);
   const now = Date.now();
   pruneExpiredPending(state.pendingById, now, PENDING_TTL_MS);
   // Pending node-surface requests share the pairing TTL; requests refresh
@@ -286,28 +277,6 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
     }
   }
   return state;
-}
-
-type DevicePairingPersistTarget = "pending" | "paired" | "both";
-
-async function persistState(
-  state: DevicePairingStateFile,
-  baseDir: string | undefined,
-  target: DevicePairingPersistTarget,
-) {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  if (target === "pending") {
-    await writeJson(pendingPath, state.pendingById);
-    return;
-  }
-  if (target === "paired") {
-    await writeJson(pairedPath, state.pairedByDeviceId);
-    return;
-  }
-  await Promise.all([
-    writeJson(pendingPath, state.pendingById),
-    writeJson(pairedPath, state.pairedByDeviceId),
-  ]);
 }
 
 /**
