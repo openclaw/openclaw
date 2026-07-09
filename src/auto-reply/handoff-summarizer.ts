@@ -21,20 +21,26 @@ export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): A
     .map((s) => `- Subagent ${s.sessionId} (${s.role ?? "leaf"}): ${s.lastStatus ?? "running"}`)
     .join("\n");
 
+  const hasSubagents = snapshot.activeSubagents.length > 0;
+
   const content = [
     "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
-    "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
-    "",
-    "ACTIVE SUBORDINATE UNITS:",
-    subagentReport || "None active.",
+    ...(hasSubagents ? [
+      "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
+      "",
+      "ACTIVE SUBORDINATE UNITS:",
+      subagentReport,
+      "",
+      "INSTRUCTIONS:",
+      "1. Review the state and subordinate reports.",
+      "2. Provide strategic guidance and commands to subordinates.",
+      "3. Do not repeat work already performed by subordinates.",
+    ] : [
+      "Review the current state below and continue the conversation from where the previous model left off.",
+    ]),
     "",
     "CURRENT STATE SUMMARY:",
     snapshot.summary,
-    "",
-    "INSTRUCTIONS:",
-    "1. Review the state and subordinate reports.",
-    "2. Provide strategic guidance and commands to subordinates.",
-    "3. Do not repeat work already performed by subordinates.",
   ].join("\n");
 
   return {
