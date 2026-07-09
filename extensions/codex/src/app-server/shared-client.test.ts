@@ -792,7 +792,7 @@ describe("shared Codex app-server client", () => {
     await expect(pendingLease).rejects.toThrow("codex app-server client is closed");
 
     const freshLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await expect(freshLease).resolves.toBe(second.client);
     expect(second.process.stdin.destroyed).toBe(false);
   });
@@ -802,7 +802,7 @@ describe("shared Codex app-server client", () => {
     vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
 
     const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await expect(lease).resolves.toBe(first.client);
 
     // Routine cleanup detaches gracefully; a later terminal-idle kill must
@@ -828,7 +828,7 @@ describe("shared Codex app-server client", () => {
     vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
 
     const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await expect(lease).resolves.toBe(first.client);
 
     // Routine cleanup (e.g. one-shot bundle-MCP) must not yank a healthy
