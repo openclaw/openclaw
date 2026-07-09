@@ -427,6 +427,8 @@ export const streamOpenAICompletions: StreamFunction<
             choice.delta.content.length > 0
           ) {
             appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+          } else if ((choice.delta as { refusal?: string }).refusal) {
+            appendPartitionedContent((choice.delta as { refusal?: string }).refusal!, false);
           }
 
           if (choice?.delta?.tool_calls) {

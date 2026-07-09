@@ -3148,6 +3148,9 @@ async function processOpenAICompletionsStream(
           appendRoutedContentDelta(contentDelta);
         }
       }
+    } else if ((choiceDelta as { refusal?: string }).refusal) {
+      // Safety or structured-output refusal surfaced as assistant visible text.
+      appendTextDelta((choiceDelta as { refusal?: string }).refusal!);
     }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {

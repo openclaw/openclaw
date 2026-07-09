@@ -10958,6 +10958,94 @@ describe("openai transport stream", () => {
       testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
+
+  it("surfaces refusal from streaming chat-completions delta as visible text", async () => {
+    const model = {
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const stream = { push: vi.fn() };
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-stream",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, refusal: "I can't help with that." },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      stream,
+    );
+
+    expect(output.content).toHaveLength(1);
+    expect(output.content[0]).toEqual({ type: "text", text: "I can't help with that." });
+  });
+
+  it("surfaces refusal from aggregated chat-completions message as visible text", async () => {
+    const model = {
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const stream = { push: vi.fn() };
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-msg",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant" as const,
+                content: null,
+                refusal: "I can't help with that.",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      stream,
+    );
+
+    expect(output.content).toHaveLength(1);
+    expect(output.content[0]).toEqual({ type: "text", text: "I can't help with that." });
+  });
 });
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
