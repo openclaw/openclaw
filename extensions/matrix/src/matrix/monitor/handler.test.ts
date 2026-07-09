@@ -3184,6 +3184,31 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, maxLineChars: 500 },
+        },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+    const progressPrefix = "x".repeat(298);
+
+    const progressText = `${progressPrefix}🎉tail`;
+    await opts.onItemEvent?.({ progressText });
+    await opts.onItemEvent?.({ progressText });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
+    await finish();
+  });
+
   it("replaces recovered Matrix command progress instead of leaving stale failed text", async () => {
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
