@@ -262,26 +262,25 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(steps).toBe(977);
   });
 
-  it("bounded at 604k iterations for 1ms interval with never-active window", () => {
+  it("bounds a 1ms never-active scan at 20,160 forward probes", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
-    const t0 = performance.now();
+    let predicateCalls = 0;
     const result = seekNextActivePhaseDueMs({
       startMs,
       intervalMs: 1,
       phaseMs: 0,
-      isActive: () => false,
+      isActive: () => {
+        predicateCalls += 1;
+        return false;
+      },
     });
-    const elapsedMs = performance.now() - t0;
 
     expect(result).toBe(startMs);
-    // Batched at 1s steps → 604,800 iterations. Trivial predicate: ~3ms.
-    expect(elapsedMs).toBeLessThan(50);
+    expect(predicateCalls).toBe(20_160);
   });
 
   it("returns startMs directly when already active for sub-second intervals", () => {
-    // 500ms interval, batched at 1s (multiplier=2). startMs at 16:59:59.500
-    // is within the 09-17 active window — function returns it without
-    // backward walk because the first candidate is already active.
+    // startMs at 16:59:59.500 is already active, so no batch recovery is needed.
     const startMs = Date.parse("2026-01-01T16:59:59.500Z");
     const intervalMs = 500;
     const isActive = (ms: number) => {
@@ -302,13 +301,14 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(Number.isInteger(steps)).toBe(true);
   });
 
-  it("backward walk returns earliest active slot for sub-second batch transition", () => {
-    // 500ms interval, batched at 1s. Start at 08:59:59.500 (inactive).
-    // Next batch candidate at 09:00:00.500 is active — backward walk
-    // over the gap finds the true first active slot at 09:00:00.000.
+  it("finds the earliest sub-second slot with bounded transition probes", () => {
+    // 500ms interval batches at 30s. Start at 08:59:59.500 (inactive), then
+    // binary-search the sampled transition to the first active phase slot.
     const startMs = Date.parse("2026-01-01T08:59:59.500Z");
     const intervalMs = 500;
+    let predicateCalls = 0;
     const isActive = (ms: number) => {
+      predicateCalls += 1;
       const hour = new Date(ms).getUTCHours();
       return hour >= 9 && hour < 17;
     };
@@ -326,23 +326,24 @@ describe("seekNextActivePhaseDueMs", () => {
     const steps = (result - startMs) / intervalMs;
     expect(Number.isInteger(steps)).toBe(true);
     expect(steps).toBe(1);
+    expect(predicateCalls).toBeLessThanOrEqual(8);
   });
 
   it("falls back to startMs after 7-day horizon for intervals without active slot", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
-    const t0 = performance.now();
+    let predicateCalls = 0;
     const result = seekNextActivePhaseDueMs({
       startMs,
       intervalMs: HOUR, // 1h interval — only 168 checks in the 7-day horizon
       phaseMs: 0,
-      isActive: () => false,
+      isActive: () => {
+        predicateCalls += 1;
+        return false;
+      },
     });
-    const elapsedMs = performance.now() - t0;
 
-    // No active slot within 7 days → fallback to startMs
     expect(result).toBe(startMs);
-    // With only 168 iterations, this is near-instant
-    expect(elapsedMs).toBeLessThan(100);
+    expect(predicateCalls).toBe(168);
   });
 
   it("handles intervalMs larger than the seek horizon", () => {
