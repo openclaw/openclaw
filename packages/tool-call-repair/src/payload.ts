@@ -323,9 +323,6 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
     parameterCount += 1;
     cursor = parameter.end;
   }
-  if (parameterCount === 0) {
-    return null;
-  }
   return opening.allowsOptionalXmlishClose
     ? consumeOptionalXmlishFunctionClose(text, cursor)
     : consumeXmlishFunctionClose(text, cursor);
@@ -368,9 +365,6 @@ function parseXmlishPlainTextToolCallBlockAt(
     args[parameter.name] = parameter.value;
     parameterCount += 1;
     cursor = parameter.end;
-  }
-  if (parameterCount === 0) {
-    return null;
   }
 
   const end = opening.allowsOptionalXmlishClose
