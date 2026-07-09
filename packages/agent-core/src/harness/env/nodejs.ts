@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   type ExecutionEnv,
@@ -69,12 +69,6 @@ function fileKindFromStats(stats: {
   return undefined;
 }
 
-function basenameFromPath(path: string): string {
-  const isWindows = process.platform === "win32";
-  const normalized = path.replace(isWindows ? /[\\/]+$/ : /\/+$/, "");
-  return normalized.split(isWindows ? /[\\/]/ : /\//).pop() ?? path;
-}
-
 function fileInfoFromStats(
   path: string,
   stats: {
@@ -90,7 +84,7 @@ function fileInfoFromStats(
     return err(new FileError("invalid", "Unsupported file type", path));
   }
   return ok({
-    name: basenameFromPath(path),
+    name: basename(path),
     path,
     kind,
     size: stats.size,

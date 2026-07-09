@@ -1,25 +1,15 @@
 // Agent Core tests cover nodejs behavior.
 import { EventEmitter } from "node:events";
+import { parse } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeExecutionEnv } from "./nodejs.js";
 
-const { lstatMock, spawnMock } = vi.hoisted(() => ({
-  lstatMock: vi.fn(),
-  spawnMock: vi.fn(),
-}));
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
 }));
-
-vi.mock("node:fs/promises", async (importActual) => {
-  const actual = await importActual<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    lstat: lstatMock,
-  };
-});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,16 +32,6 @@ function mockSpawnChild() {
   };
 }
 
-function mockFileStats() {
-  lstatMock.mockResolvedValue({
-    isFile: () => true,
-    isDirectory: () => false,
-    isSymbolicLink: () => false,
-    size: 12,
-    mtimeMs: 34,
-  });
-}
-
 function createMockExecEnv(): NodeExecutionEnv {
   return new NodeExecutionEnv({ cwd: process.cwd(), shellPath: process.execPath });
 }
@@ -70,26 +50,65 @@ async function waitForSpawnCall(): Promise<void> {
 }
 
 describe("NodeExecutionEnv file metadata", () => {
-  it("reports the basename for Windows-style addressed paths", async () => {
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    mockFileStats();
-    try {
-      const env = new NodeExecutionEnv({ cwd: process.cwd() });
+  let env: NodeExecutionEnv;
+  let tempDir: string;
 
-      const result = await env.fileInfo("C:\\workspace\\notes\\todo.txt");
+  beforeEach(async () => {
+    const rootEnv = new NodeExecutionEnv({ cwd: process.cwd() });
+    const created = await rootEnv.createTempDir("agent-core-nodejs-");
+    if (!created.ok) {
+      throw created.error;
+    }
+    tempDir = created.value;
+    env = new NodeExecutionEnv({ cwd: tempDir });
+  });
 
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.name).toBe("todo.txt");
-        expect(result.value.path).toContain("C:\\workspace\\notes\\todo.txt");
-      }
-    } finally {
-      if (platformDescriptor) {
-        Object.defineProperty(process, "platform", platformDescriptor);
-      }
+  afterEach(async () => {
+    const removed = await env.remove(tempDir, { recursive: true, force: true });
+    if (!removed.ok) {
+      throw removed.error;
     }
   });
+
+  it("reports basenames consistently from fileInfo and listDir", async () => {
+    const written = await env.writeFile("notes/todo.txt", "hello");
+    expect(written.ok).toBe(true);
+
+    const info = await env.fileInfo("notes/todo.txt");
+    expect(info.ok).toBe(true);
+    if (info.ok) {
+      expect(info.value.name).toBe("todo.txt");
+    }
+
+    const entries = await env.listDir("notes");
+    expect(entries.ok).toBe(true);
+    if (entries.ok) {
+      expect(entries.value.map((entry) => entry.name)).toEqual(["todo.txt"]);
+    }
+  });
+
+  it("reports an empty basename for the filesystem root", async () => {
+    const info = await env.fileInfo(parse(tempDir).root);
+    expect(info.ok).toBe(true);
+    if (info.ok) {
+      expect(info.value.name).toBe("");
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves backslashes in POSIX filenames",
+    async () => {
+      const fileName = "notes\\todo.txt";
+      const written = await env.writeFile(fileName, "hello");
+      expect(written.ok).toBe(true);
+
+      const info = await env.fileInfo(fileName);
+      expect(info.ok).toBe(true);
+      if (info.ok) {
+        expect(info.value.name).toBe(fileName);
+      }
+    },
+  );
 });
 
 describe("NodeExecutionEnv timeout handling", () => {
