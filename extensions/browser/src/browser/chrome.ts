@@ -21,6 +21,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -42,6 +43,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
@@ -88,6 +90,8 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
+const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
+const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -131,6 +135,49 @@ function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | nu
     return true;
   }
   return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
+}
+
+type ChromeLaunchStderrSignals = {
+  singletonInUse: boolean;
+  missingDisplay: boolean;
+};
+
+function createChromeLaunchStderrDiagnostics(maxBytes: number) {
+  const tail = createBoundedUtf8Tail(maxBytes);
+  const signals: ChromeLaunchStderrSignals = {
+    singletonInUse: false,
+    missingDisplay: false,
+  };
+  let markerScanTail = "";
+
+  const updateSignals = (chunkText: string) => {
+    const scanText = `${markerScanTail}${chunkText}`;
+    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
+  };
+
+  return {
+    append(chunk: Buffer | string) {
+      tail.append(chunk);
+      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (chunkText.length > 0) {
+        updateSignals(chunkText);
+      }
+    },
+    toString() {
+      return tail.text();
+    },
+    signals(): ChromeLaunchStderrSignals {
+      return { ...signals };
+    },
+    clear() {
+      tail.clear();
+      signals.singletonInUse = false;
+      signals.missingDisplay = false;
+      markerScanTail = "";
+    },
+  };
 }
 
 function processExists(pid: number): boolean {
@@ -664,6 +711,7 @@ async function ensureManagedChromePortAvailable(
 
 function chromeLaunchHints(params: {
   stderrOutput: string;
+  stderrSignals?: ChromeLaunchStderrSignals;
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   launchOptions?: ManagedBrowserHeadlessOptions;
@@ -677,12 +725,18 @@ function chromeLaunchHints(params: {
     params.profile,
     params.launchOptions,
   );
-  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
+  const missingDisplay =
+    params.stderrSignals?.missingDisplay ??
+    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
+  if (missingDisplay && !headlessMode.headless) {
     hints.push(
       "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
     );
   }
-  if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
+  const singletonInUse =
+    params.stderrSignals?.singletonInUse ??
+    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
+  if (singletonInUse) {
     hints.push(
       `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
     );
@@ -856,6 +910,7 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
     // the WebSocket URL.
@@ -867,7 +922,7 @@ export async function getChromeWebSocketUrl(
   const discoveryUrl = isWebSocketUrl(cdpUrl)
     ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
     : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     // /json/version unavailable or returned no WebSocket URL. For bare
@@ -881,7 +936,10 @@ export async function getChromeWebSocketUrl(
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy, { source: "discovered" });
+  await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+    source: "discovered",
+    configuredUrl: cdpUrl,
+  });
   return normalizedWsUrl;
 }
 
@@ -1047,12 +1105,14 @@ export async function launchOpenClawChrome(
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
     const proc = spawnOnce();
 
-    // Collect stderr for diagnostics in case Chrome fails to start.
-    // The listener is removed on success to avoid unbounded memory growth
-    // from a long-lived Chrome process that emits periodic warnings.
-    const stderrChunks: Buffer[] = [];
-    const onStderr = (chunk: Buffer) => {
-      stderrChunks.push(chunk);
+    // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
+    // The listener is removed on success to avoid retaining output from a
+    // long-lived Chrome process that emits periodic warnings.
+    const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
+      CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
+    );
+    const onStderr = (chunk: Buffer | string) => {
+      stderrDiagnostics.append(chunk);
     };
     proc.stderr?.on("data", onStderr);
 
@@ -1093,12 +1153,12 @@ export async function launchOpenClawChrome(
         if (launchHttpReachable) {
           log.debug(diagnosticText);
         } else {
-          const stderrOutput =
-            normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+          const stderrOutput = normalizeOptionalString(stderrDiagnostics.toString()) ?? "";
+          const stderrSignals = stderrDiagnostics.signals();
           const redactedStderrOutput = redactToolPayloadText(stderrOutput);
           if (
             allowSingletonRecovery &&
-            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            stderrSignals.singletonInUse &&
             clearStaleChromeSingletonLocks(userDataDir)
           ) {
             log.warn(
@@ -1108,9 +1168,15 @@ export async function launchOpenClawChrome(
             return await launchOnceAndWait(false);
           }
           const stderrHint = redactedStderrOutput
-            ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+            ? `\nChrome stderr:\n${redactedStderrOutput.slice(-CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
-          const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+          const launchHints = chromeLaunchHints({
+            stderrOutput,
+            stderrSignals,
+            resolved,
+            profile,
+            launchOptions,
+          });
           try {
             proc.kill("SIGKILL");
           } catch {
@@ -1139,9 +1205,9 @@ export async function launchOpenClawChrome(
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
-      // and release the buffer.
+      // and release the bounded tail buffer.
       proc.stderr?.off("data", onStderr);
-      stderrChunks.length = 0;
+      stderrDiagnostics.clear();
     }
   };
 

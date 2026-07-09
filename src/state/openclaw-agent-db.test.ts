@@ -409,4 +409,48 @@ describe("openclaw agent database", () => {
       }),
     ).toThrow(/newer schema version 2/);
   });
+
+  it("closes cached handles on normal process exit so no stale WAL remains", () => {
+    const stateDir = createTempStateDir();
+    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl)};
+
+          const database = openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_AGENT_DB_EXIT_TEST_DIR },
+          });
+          const walPath = database.path + "-wal";
+          console.log(JSON.stringify({
+            agentDatabasePath: database.path,
+            agentWalBytesBeforeExit: fs.existsSync(walPath) ? fs.statSync(walPath).size : 0,
+          }));
+        `,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_AGENT_DB_EXIT_TEST_DIR: stateDir },
+      },
+    );
+    const result = JSON.parse(output) as {
+      agentDatabasePath: string;
+      agentWalBytesBeforeExit: number;
+    };
+    if (result.agentWalBytesBeforeExit === 0) {
+      // Rollback-journal filesystems (NFS/SMB tmp dirs) never produce a WAL.
+      return;
+    }
+    // The child never closes explicitly; only the exit hook can retire the WAL.
+    const walPath = `${result.agentDatabasePath}-wal`;
+    const walBytesAfterExit = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+    expect(walBytesAfterExit).toBe(0);
+  });
 });

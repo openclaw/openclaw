@@ -5,6 +5,7 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { COHERE_NORTH_MINI_CODE_MODEL_ID } from "./models.js";
 import { buildCohereProvider } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
 
@@ -15,23 +16,32 @@ function readManifest() {
   };
 }
 
-function requireCohereModel(): Model<"openai-completions"> {
-  const model = buildCohereProvider().models?.[0];
+function requireCohereModel(modelId = "command-a-03-2025"): Model<"openai-completions"> {
+  const provider = buildCohereProvider();
+  const model = provider.models?.find((candidate) => candidate.id === modelId);
   if (!model) {
     throw new Error("Cohere catalog did not provide a model");
   }
-  return model as Model<"openai-completions">;
+  return {
+    ...model,
+    provider: "cohere",
+    api: "openai-completions",
+    baseUrl: provider.baseUrl,
+  } as Model<"openai-completions">;
 }
 
-function captureCoherePayload(context: Context): Record<string, unknown> {
+function captureCoherePayload(
+  context: Context,
+  settings?: { modelId?: string; reasoning?: string },
+): Record<string, unknown> {
   let captured: Record<string, unknown> | undefined;
-  const baseStreamFn: StreamFn = (model, streamContext, options) => {
+  const baseStreamFn: StreamFn = (model, streamContext, streamOptions) => {
     const payload = buildOpenAICompletionsParams(
       model as Model<"openai-completions">,
       streamContext,
-      { maxTokens: 2048 } as never,
+      { maxTokens: 2048, reasoning: settings?.reasoning } as never,
     );
-    options?.onPayload?.(payload, model);
+    streamOptions?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
 
@@ -39,7 +49,7 @@ function captureCoherePayload(context: Context): Record<string, unknown> {
   if (!wrappedStreamFn) {
     throw new Error("Cohere wrapper did not return a stream function");
   }
-  void wrappedStreamFn(requireCohereModel(), context, {
+  void wrappedStreamFn(requireCohereModel(settings?.modelId), context, {
     onPayload: (payload) => {
       captured = payload as Record<string, unknown>;
     },
@@ -89,6 +99,32 @@ describe("Cohere provider plugin", () => {
             maxTokensField: "max_tokens",
           },
         }),
+        expect.objectContaining({
+          id: "north-mini-code-1-0",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 256000,
+          maxTokens: 64000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          compat: {
+            supportsStore: false,
+            supportsUsageInStreaming: false,
+            supportsReasoningEffort: true,
+            supportedReasoningEfforts: ["none", "high"],
+            reasoningEffortMap: {
+              off: "none",
+              none: "none",
+              minimal: "high",
+              low: "high",
+              medium: "high",
+              high: "high",
+              xhigh: "high",
+              adaptive: "high",
+              max: "high",
+            },
+            maxTokensField: "max_tokens",
+          },
+        }),
       ],
     });
   });
@@ -117,5 +153,22 @@ describe("Cohere provider plugin", () => {
     expect(params.messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "system", content: "system" })]),
     );
+  });
+
+  it("maps North Mini Code thinking levels to Cohere's supported reasoning efforts", () => {
+    const context = { messages: [] } as Context;
+
+    expect(
+      captureCoherePayload(context, {
+        modelId: COHERE_NORTH_MINI_CODE_MODEL_ID,
+        reasoning: "off",
+      }).reasoning_effort,
+    ).toBe("none");
+    expect(
+      captureCoherePayload(context, {
+        modelId: COHERE_NORTH_MINI_CODE_MODEL_ID,
+        reasoning: "high",
+      }).reasoning_effort,
+    ).toBe("high");
   });
 });

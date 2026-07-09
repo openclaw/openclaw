@@ -186,22 +186,6 @@ function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   );
 }
 
-function canForwardFailedFollowupProgressEvent(
-  evt: FollowupAgentEvent,
-  opts?: GetReplyOptions,
-): boolean {
-  if (evt.stream === "command_output" || buildCommandOutputFromToolResultEvent(evt)) {
-    return typeof opts?.onCommandOutput === "function";
-  }
-  if (evt.stream !== "item") {
-    return false;
-  }
-  if (evt.data.suppressChannelProgress === true && Boolean(opts?.onToolStart)) {
-    return false;
-  }
-  return typeof opts?.onItemEvent === "function";
-}
-
 async function forwardFollowupProgressEvent(params: {
   evt: FollowupAgentEvent;
   opts?: GetReplyOptions;
@@ -211,13 +195,14 @@ async function forwardFollowupProgressEvent(params: {
   notifyUserAboutCompaction?: boolean;
   currentMessageId?: string;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-}) {
+}): Promise<boolean> {
   const { evt, opts } = params;
+  let visible = false;
   const emitChannelProgress = params.emitChannelProgress !== false;
   const allowQuietToolLifecycle =
     evt.stream === "tool" && opts?.allowToolLifecycleWhenProgressHidden === true;
   if (!emitChannelProgress && evt.stream !== "compaction" && !allowQuietToolLifecycle) {
-    return;
+    return false;
   }
 
   if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
@@ -237,8 +222,8 @@ async function forwardFollowupProgressEvent(params: {
       });
     }
     const commandOutput = buildCommandOutputFromToolResultEvent(evt);
-    if (commandOutput) {
-      await opts?.onCommandOutput?.(commandOutput);
+    if (commandOutput && opts?.onCommandOutput) {
+      visible = (await opts.onCommandOutput(commandOutput)) !== false;
     }
   }
 
@@ -249,20 +234,23 @@ async function forwardFollowupProgressEvent(params: {
   const hideItemFromChannelProgress =
     evt.stream === "item" && evt.data.hideFromChannelProgress === true;
   if (evt.stream === "item" && !suppressItemChannelProgress && !hideItemFromChannelProgress) {
-    await opts?.onItemEvent?.({
-      itemId: readStringValue(evt.data.itemId),
-      toolCallId: readStringValue(evt.data.toolCallId),
-      kind: readStringValue(evt.data.kind),
-      title: readStringValue(evt.data.title),
-      name: readStringValue(evt.data.name),
-      phase: readStringValue(evt.data.phase),
-      status: readStringValue(evt.data.status),
-      summary: readStringValue(evt.data.summary),
-      progressText: readStringValue(evt.data.progressText),
-      meta: readStringValue(evt.data.meta),
-      approvalId: readStringValue(evt.data.approvalId),
-      approvalSlug: readStringValue(evt.data.approvalSlug),
-    });
+    if (opts?.onItemEvent) {
+      visible =
+        (await opts.onItemEvent({
+          itemId: readStringValue(evt.data.itemId),
+          toolCallId: readStringValue(evt.data.toolCallId),
+          kind: readStringValue(evt.data.kind),
+          title: readStringValue(evt.data.title),
+          name: readStringValue(evt.data.name),
+          phase: readStringValue(evt.data.phase),
+          status: readStringValue(evt.data.status),
+          summary: readStringValue(evt.data.summary),
+          progressText: readStringValue(evt.data.progressText),
+          meta: readStringValue(evt.data.meta),
+          approvalId: readStringValue(evt.data.approvalId),
+          approvalSlug: readStringValue(evt.data.approvalSlug),
+        })) !== false;
+    }
   }
 
   if (evt.stream === "plan") {
@@ -293,22 +281,23 @@ async function forwardFollowupProgressEvent(params: {
     });
   }
 
-  if (evt.stream === "command_output") {
-    await opts?.onCommandOutput?.({
-      itemId: readStringValue(evt.data.itemId),
-      phase: readStringValue(evt.data.phase),
-      title: readStringValue(evt.data.title),
-      toolCallId: readStringValue(evt.data.toolCallId),
-      name: readStringValue(evt.data.name),
-      output: readStringValue(evt.data.output),
-      status: readStringValue(evt.data.status),
-      exitCode:
-        typeof evt.data.exitCode === "number" || evt.data.exitCode === null
-          ? evt.data.exitCode
-          : undefined,
-      durationMs: typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
-      cwd: readStringValue(evt.data.cwd),
-    });
+  if (evt.stream === "command_output" && opts?.onCommandOutput) {
+    visible =
+      (await opts.onCommandOutput({
+        itemId: readStringValue(evt.data.itemId),
+        phase: readStringValue(evt.data.phase),
+        title: readStringValue(evt.data.title),
+        toolCallId: readStringValue(evt.data.toolCallId),
+        name: readStringValue(evt.data.name),
+        output: readStringValue(evt.data.output),
+        status: readStringValue(evt.data.status),
+        exitCode:
+          typeof evt.data.exitCode === "number" || evt.data.exitCode === null
+            ? evt.data.exitCode
+            : undefined,
+        durationMs: typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
+        cwd: readStringValue(evt.data.cwd),
+      })) !== false;
   }
 
   if (evt.stream === "patch") {
@@ -357,13 +346,14 @@ async function forwardFollowupProgressEvent(params: {
         await opts?.onCompactionEnd?.();
       }
       if (evt.data?.willRetry === true) {
-        return;
+        return visible;
       }
       await sendCompactionUserNotices("end");
     } else if (phase === "end") {
       await sendCompactionUserNotices("incomplete");
     }
   }
+  return visible;
 }
 
 /** Creates the function that drains one queued follow-up run. */
@@ -1104,6 +1094,7 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onActivity: () => replyOperation?.recordActivity(),
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
@@ -1356,9 +1347,10 @@ export function createFollowupRunner(params: {
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
+                  replyOperation?.recordActivity();
                   lifecycleBackstop.note(evt);
                   return enqueueProgressDelivery(async () => {
-                    await forwardFollowupProgressEvent({
+                    const visible = await forwardFollowupProgressEvent({
                       evt,
                       opts: progressOpts,
                       detailMode: toolProgressDetail,
@@ -1371,10 +1363,7 @@ export function createFollowupRunner(params: {
                       onCompactionNoticePayload: (payload) =>
                         sendCompactionNoticePayload(payload, { provider, modelId: model }),
                     });
-                    if (
-                      hasFailedFollowupProgressEvent(evt) &&
-                      canForwardFailedFollowupProgressEvent(evt, progressOpts)
-                    ) {
+                    if (visible && hasFailedFollowupProgressEvent(evt)) {
                       markVisibleToolErrorProgress();
                     }
                   });
