@@ -6,30 +6,12 @@ import {
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
-  formatProviderErrorPayload,
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   readProviderTextResponse,
   readResponseTextLimited,
 } from "./provider-http-errors.js";
-
-function hasLoneSurrogate(s: string): boolean {
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff) {
-      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) {
-        return true;
-      }
-    }
-    if (c >= 0xdc00 && c <= 0xdfff) {
-      if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 function createStreamingBinaryResponse(params: {
   chunkCount: number;
@@ -155,7 +137,8 @@ describe("provider error utils", () => {
   });
 
   it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
-    const message = "a".repeat(218) + "😀" + "suffix";
+    const safePrefix = "a".repeat(218);
+    const message = `${safePrefix}😀suffix`;
     const response = new Response(
       JSON.stringify({
         error: { message, code: "utf16_test" },
@@ -163,10 +146,9 @@ describe("provider error utils", () => {
       { status: 400 },
     );
 
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow();
-    const detail = formatProviderErrorPayload({ error: { message, code: "utf16_test" } });
-    expect(detail).toContain("utf16_test");
-    expect(hasLoneSurrogate(detail ?? "")).toBe(false);
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
+      `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
+    );
   });
 
   it("keeps HTTP status metadata when error body reads fail", async () => {
