@@ -282,6 +282,10 @@ export function setupGatewaySessionsTestHarness() {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    testState.agentConfig = undefined;
+    testState.agentsConfig = undefined;
+    testState.sessionConfig = undefined;
+    testState.sessionStorePath = undefined;
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
