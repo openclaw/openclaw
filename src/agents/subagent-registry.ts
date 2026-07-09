@@ -1049,6 +1049,11 @@ async function sweepSubagentRuns() {
     // deferred retirement is retried on the next sweep instead.
     const sweepEntries = [...subagentRuns.entries()];
     for (const [runId, entry] of sweepEntries) {
+      // Earlier entries can yield to cleanup. Never act on a run that was
+      // removed or replaced while this sweep was suspended.
+      if (subagentRuns.get(runId) !== entry) {
+        continue;
+      }
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
