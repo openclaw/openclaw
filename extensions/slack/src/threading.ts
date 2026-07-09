@@ -31,10 +31,17 @@ export function resolveSlackThreadContext(params: {
   // downstream tool threading treats MessageThreadId as an explicit thread
   // target and overrides replyToMode to "all".
   const isAssistantDmThreadRoot = hasThreadTs && !isThreadReply && params.isDirectMessage === true;
+  // ponytail: extend messageThreadId to first/batched modes so
+  // buildSlackThreadingToolContext keeps currentThreadTs via messageThreadTs.
+  // replyToId alone can't serve as thread anchor after the isThreadReply gate.
+  const shouldAnchorTopLevelThread =
+    params.replyToMode === "all" ||
+    params.replyToMode === "first" ||
+    params.replyToMode === "batched";
   const messageThreadId =
     isThreadReply || isAssistantDmThreadRoot
       ? incomingThreadTs
-      : params.replyToMode === "all"
+      : shouldAnchorTopLevelThread
         ? messageTs
         : undefined;
   return {

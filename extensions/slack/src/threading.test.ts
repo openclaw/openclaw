@@ -134,8 +134,29 @@ describe("resolveSlackThreadTargets", () => {
     }
   });
 
-  it("does not set messageThreadId for channel thread-root messages with non-all replyToMode", () => {
-    for (const replyToMode of ["off", "first", "batched"] as const) {
+  it("does not set messageThreadId for channel thread-root messages with replyToMode off", () => {
+    const context = resolveSlackThreadContext({
+      replyToMode: "off",
+      isDirectMessage: false,
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        ts: "123",
+        thread_ts: "123",
+      },
+    });
+
+    expect(context.isThreadReply).toBe(false);
+    // thread_ts == ts in a channel: auto-created top-level thread_ts should
+    // NOT force threaded mode — only DM assistant threads get the override.
+    expect(context.messageThreadId).toBeUndefined();
+    // Non-reply messages should not set replyToId
+    expect(context.replyToId).toBeUndefined();
+  });
+
+  it("sets messageThreadId for channel thread-root messages with first/batched replyToMode", () => {
+    for (const replyToMode of ["first", "batched"] as const) {
       const context = resolveSlackThreadContext({
         replyToMode,
         isDirectMessage: false,
@@ -149,10 +170,10 @@ describe("resolveSlackThreadTargets", () => {
       });
 
       expect(context.isThreadReply).toBe(false);
-      // thread_ts == ts in a channel: auto-created top-level thread_ts should
-      // NOT force threaded mode — only DM assistant threads get the override.
-      expect(context.messageThreadId).toBeUndefined();
-      // Non-reply messages should not set replyToId; thread context is via messageThreadId alone
+      // first/batched preserve messageThreadId as thread anchor for
+      // buildSlackThreadingToolContext's currentThreadTs derivation
+      expect(context.messageThreadId).toBe("123");
+      // replyToId stays undefined for non-reply messages (the bugfix)
       expect(context.replyToId).toBeUndefined();
     }
   });
