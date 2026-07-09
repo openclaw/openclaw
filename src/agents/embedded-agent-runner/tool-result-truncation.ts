@@ -516,7 +516,7 @@ function formatAggregateElisionText(
   if (spillMarkers?.compact && spillMarkers.compact.length <= remainingTextBudget) {
     return spillMarkers.compact;
   }
-  return truncateUtf16Safe(AGGREGATE_ELISION_MARKER, remainingTextBudget);
+  return AGGREGATE_ELISION_MARKER.slice(0, remainingTextBudget);
 }
 
 /**

@@ -167,41 +167,32 @@ describe("truncateToolResultText", () => {
     expect(result.length).toBeGreaterThan(250);
   });
 
-  it("does not split surrogate pairs when truncating at a char boundary", () => {
-    // Emoji 😀 is U+1F600, a surrogate pair (2 UTF-16 code units).
-    const text = "a".repeat(100) + "😀".repeat(10) + "b".repeat(100);
-    const result = truncateToolResultText(text, 50);
-    expect(result.length).toBeLessThan(text.length);
-    expect(hasLoneSurrogate(result)).toBe(false);
+  it("keeps direct and suffix-only cuts on complete code points", () => {
+    expect(
+      truncateToolResultText("aaa😀z", 5, {
+        suffix: "!",
+        minKeepChars: 0,
+      }),
+    ).toBe("aaa!");
+    expect(
+      truncateToolResultText("abcdef", 1, {
+        suffix: "😀",
+        minKeepChars: 0,
+      }),
+    ).toBe("");
   });
 
-  it("does not split surrogate pairs in head+tail error-preserving truncation", () => {
-    const head = "line\n".repeat(500);
-    const middle = "x".repeat(10_000);
-    // Place an emoji so it sits right at the tail budget boundary.
-    const tail = "\nError: process failed 😀\n";
-    const text = head + middle + tail;
-    const result = truncateToolResultText(text, 5_000);
-    expect(result).toContain("Error: process failed");
-    expect(hasLoneSurrogate(result)).toBe(false);
+  it("keeps both head and tail cuts on complete code points", () => {
+    const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+    const text = `${"a".repeat(6)}😀${"m".repeat(100)}😀${"x".repeat(22)} Error`;
+    expect(
+      truncateToolResultText(text, 100, {
+        suffix: "!",
+        minKeepChars: 1,
+      }),
+    ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
   });
 });
-
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index++;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
 
 describe("getToolResultTextLength", () => {
   it("sums all text blocks in tool results", () => {
