@@ -218,7 +218,7 @@ async function callTabsFocus(params: {
 async function callTabsDelete(params: {
   profileCtx: ProfileContext;
   targetId: string;
-  body?: Record<string, unknown>;
+  query?: Record<string, unknown>;
 }) {
   const { app, deleteHandlers } = createBrowserRouteApp();
   registerBrowserTabRoutes(app, createRouteContext(params.profileCtx) as never);
@@ -229,8 +229,8 @@ async function callTabsDelete(params: {
   await handler?.(
     {
       params: { targetId: params.targetId },
-      query: {},
-      body: params.body ?? {},
+      query: params.query ?? {},
+      body: {},
     },
     response.res,
   );
@@ -261,12 +261,27 @@ describe("browser tab routes", () => {
     const response = await callTabsDelete({
       profileCtx,
       targetId: "T1",
-      body: { exactTargetId: true },
+      query: { targetIdMode: "raw" },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true });
     expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
+  });
+
+  it("rejects unknown target id modes before mutating a tab", async () => {
+    const profileCtx = createProfileContext();
+
+    const response = await callTabsDelete({
+      profileCtx,
+      targetId: "T1",
+      query: { targetIdMode: "friendly" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: 'targetIdMode must be "raw"' });
+    expect(profileCtx.isReachable).not.toHaveBeenCalled();
+    expect(profileCtx.closeTab).not.toHaveBeenCalled();
   });
 
   it("retries a transient reachability miss before mutating a tab", async () => {
@@ -486,6 +501,7 @@ describe("browser tab routes", () => {
     const response = await callTabsFocus({
       profileCtx,
       body: { targetId: "T2_RAW" },
+      ssrfPolicy: { allowPrivateNetwork: false },
     });
 
     expect(response.statusCode).toBe(409);

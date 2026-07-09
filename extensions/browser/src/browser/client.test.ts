@@ -11,7 +11,7 @@ import {
   browserScreenshotAction,
 } from "./client-actions.js";
 import {
-  browserCloseTabByTargetId,
+  browserCloseTabByRawTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
@@ -395,16 +395,16 @@ describe("browser client", () => {
     const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await browserCloseTabByTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
+    await browserCloseTabByRawTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
       profile: "openclaw",
     });
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("http://127.0.0.1:18791/tabs/RAW_TARGET?profile=openclaw");
+    expect(url).toBe("http://127.0.0.1:18791/tabs/RAW_TARGET?targetIdMode=raw&profile=openclaw");
     expect(init).toMatchObject({
       method: "DELETE",
-      body: JSON.stringify({ exactTargetId: true }),
     });
+    expect(init?.body).toBeUndefined();
   });
 
   it("gives browser act requests enough client timeout for long waits", async () => {

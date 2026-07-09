@@ -54,6 +54,55 @@ describe("resolveTargetIdFromTabs", () => {
     },
   );
 
+  it("rejects a raw-id and label collision regardless of tab order", () => {
+    const collidingTabs = [
+      {
+        targetId: "ABC999",
+        suggestedTargetId: "t2",
+        tabId: "t2",
+      },
+      {
+        targetId: "OTHER",
+        label: "ABC999",
+      },
+    ];
+
+    for (const orderedTabs of [collidingTabs, collidingTabs.toReversed()]) {
+      const expectedMatches = orderedTabs.map((tab) => tab.targetId);
+      expect(resolveTargetIdFromTabs("ABC999", orderedTabs)).toEqual({
+        ok: false,
+        reason: "ambiguous",
+        matches: expectedMatches,
+      });
+    }
+  });
+
+  it("rejects friendly references shared by different tabs", () => {
+    expect(
+      resolveTargetIdFromTabs("shared", [
+        { targetId: "FIRST", label: "shared" },
+        { targetId: "SECOND", tabId: "shared" },
+      ]),
+    ).toEqual({
+      ok: false,
+      reason: "ambiguous",
+      matches: ["FIRST", "SECOND"],
+    });
+  });
+
+  it("deduplicates matching namespaces on the same tab", () => {
+    expect(
+      resolveTargetIdFromTabs("SAME", [
+        {
+          targetId: "SAME",
+          suggestedTargetId: "SAME",
+          tabId: "SAME",
+          label: "SAME",
+        },
+      ]),
+    ).toEqual({ ok: true, targetId: "SAME" });
+  });
+
   it("keeps unique raw target-id prefixes as compatibility input", () => {
     expect(resolveTargetIdFromTabs("ABCDEF", tabs)).toEqual({
       ok: true,

@@ -44,7 +44,12 @@ function resolveBrowserClientTimeoutMs(
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
-  return withBaseUrl(baseUrl, `${path}${buildProfileQuery(profile)}`);
+  const profileQuery = buildProfileQuery(profile);
+  if (!profileQuery) {
+    return withBaseUrl(baseUrl, path);
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return withBaseUrl(baseUrl, `${path}${separator}${profileQuery.slice(1)}`);
 }
 
 async function sendProfilePost(
@@ -321,19 +326,13 @@ export async function browserCloseTab(
 }
 
 /** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
-export async function browserCloseTabByTargetId(
+export async function browserCloseTabByRawTargetId(
   baseUrl: string | undefined,
   targetId: string,
   opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
-  const path = `/tabs/${encodeURIComponent(targetId)}`;
-  await sendTabTargetRequest({
-    baseUrl,
-    path,
-    method: "DELETE",
-    opts,
-    body: { exactTargetId: true },
-  });
+  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
+  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 
 /** Execute legacy index-based tab actions. */

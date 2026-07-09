@@ -305,15 +305,20 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       if (!targetId) {
         return;
       }
+      const targetIdMode = toStringOrEmpty(req.query.targetIdMode);
+      if (targetIdMode && targetIdMode !== "raw") {
+        return jsonError(res, 400, 'targetIdMode must be "raw"');
+      }
       await runTabTargetMutation({
         req,
         res,
         ctx,
         targetId,
         mutate: async (profileCtx, id) => {
-          const exactTargetId =
-            (req.body as { exactTargetId?: unknown } | undefined)?.exactTargetId === true;
-          await profileCtx.closeTab(id, exactTargetId ? { exactTargetId: true } : undefined);
+          await profileCtx.closeTab(
+            id,
+            targetIdMode === "raw" ? { exactTargetId: true } : undefined,
+          );
         },
       });
     }),
