@@ -1082,6 +1082,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron context until overlapping invocations finish", async () => {
+    // This test owns process-local run-context reference counting, not the
+    // persistent session admission that serializes real turns on one key.
+    process.env.OPENCLAW_TEST_FAST = "1";
     mockRunCronFallbackPassthrough();
     resolveCronSessionMock.mockImplementation(() => makeCronSession());
     const { claimAgentRunContext, getAgentEventLifecycleGeneration, getAgentRunContext } =

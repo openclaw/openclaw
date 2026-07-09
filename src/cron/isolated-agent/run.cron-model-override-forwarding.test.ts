@@ -128,8 +128,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    updateSessionStoreMock.mockResolvedValue(undefined);
-
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
