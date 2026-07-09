@@ -1,6 +1,10 @@
 // Model list row tests cover rendered row construction for model listing output.
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveConfiguredProviderCandidates } from "./list.configured.js";
+import type { RowBuilderContext } from "./list.rows.js";
 import type { ModelRow } from "./list.types.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 const mocks = vi.hoisted(() => ({
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
@@ -26,6 +30,29 @@ const authIndex = {
   allowsProviderAuthAvailabilityFallback: () => false,
 };
 
+function createRowContext(
+  cfg: OpenClawConfig,
+  overrides: Partial<RowBuilderContext> = {},
+): RowBuilderContext {
+  const metadataSnapshot = { manifestRegistry: { plugins: [], diagnostics: [] } };
+  const rowIdentity = createModelCatalogProviderAliasCanonicalizer({ cfg, metadataSnapshot });
+  return {
+    cfg,
+    agentDir: "/tmp/openclaw-agent",
+    authIndex,
+    configuredByKey: new Map(),
+    configuredProviderCandidates: resolveConfiguredProviderCandidates(
+      cfg,
+      rowIdentity,
+      metadataSnapshot,
+    ),
+    discoveredKeys: new Set(),
+    filter: {},
+    rowIdentity,
+    ...overrides,
+  };
+}
+
 function requireOnlyRow(rows: ModelRow[]): ModelRow {
   expect(rows).toHaveLength(1);
   const row = rows[0];
@@ -38,6 +65,10 @@ function requireOnlyRow(rows: ModelRow[]): ModelRow {
 describe("appendProviderCatalogRows", () => {
   it("can skip runtime model-suppression hooks for provider-catalog fast paths", async () => {
     const rows: ModelRow[] = [];
+    const cfg = {
+      agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
+      models: { providers: {} },
+    };
 
     await appendProviderCatalogRows({
       rows,
@@ -56,18 +87,10 @@ describe("appendProviderCatalogRows", () => {
           maxTokens: 4096,
         },
       ],
-      context: {
-        cfg: {
-          agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
-          models: { providers: {} },
-        },
-        agentDir: "/tmp/openclaw-agent",
-        authIndex,
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
+      context: createRowContext(cfg, {
         filter: { provider: "codex", local: false },
         skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
@@ -90,6 +113,10 @@ describe("appendProviderCatalogRows", () => {
   it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
     mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      models: { providers: {} },
+    };
 
     await appendProviderCatalogRows({
       rows,
@@ -108,21 +135,14 @@ describe("appendProviderCatalogRows", () => {
           maxTokens: 4096,
         },
       ],
-      context: {
-        cfg: {
-          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-          models: { providers: {} },
-        },
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext(cfg, {
         authIndex: {
           hasProviderAuth: () => false,
           allowsProviderAuthAvailabilityFallback: () => false,
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
         skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
@@ -140,6 +160,10 @@ describe("appendProviderCatalogRows", () => {
 
   it("uses Codex auth availability for configured canonical OpenAI rows", async () => {
     const rows: ModelRow[] = [];
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      models: { providers: {} },
+    };
 
     await appendProviderCatalogRows({
       rows,
@@ -158,12 +182,7 @@ describe("appendProviderCatalogRows", () => {
           maxTokens: 4096,
         },
       ],
-      context: {
-        cfg: {
-          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-          models: { providers: {} },
-        },
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext(cfg, {
         authIndex: {
           hasProviderAuth: (provider: string) => provider === "openai",
           allowsProviderAuthAvailabilityFallback: (provider: string) => provider === "openai",
@@ -183,7 +202,7 @@ describe("appendProviderCatalogRows", () => {
         availableKeys: new Set(),
         filter: { provider: "openai", local: false },
         skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     const row = requireOnlyRow(rows);
@@ -196,49 +215,48 @@ describe("appendProviderCatalogRows", () => {
 describe("appendConfiguredProviderRows", () => {
   it("keeps provider normalization for configured provider models", async () => {
     mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
+      provider: "anthropic-runtime",
+      id: "claude-sonnet-4-6-latest",
       name: "Claude Sonnet 4.6",
       input: ["text", "image"],
       contextWindow: 200_000,
     } as never);
     const rows: ModelRow[] = [];
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages" as const,
+            baseUrl: "https://api.anthropic.com",
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    };
 
     await appendConfiguredProviderRows({
       rows,
       seenKeys: new Set(),
-      context: {
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                api: "anthropic-messages",
-                baseUrl: "https://api.anthropic.com",
-                models: [
-                  {
-                    id: "claude-sonnet-4-6",
-                    name: "Claude Sonnet 4.6",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 200_000,
-                    maxTokens: 8192,
-                  },
-                ],
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/openclaw-agent",
-        authIndex,
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
+      context: createRowContext(cfg, {
         filter: { provider: "anthropic", local: false },
         skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
-    expect(requireOnlyRow(rows).input).toBe("text+image");
+    expect(requireOnlyRow(rows)).toMatchObject({
+      key: "anthropic/claude-sonnet-4-6",
+      input: "text+image",
+    });
   });
 });

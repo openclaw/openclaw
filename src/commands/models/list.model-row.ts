@@ -1,5 +1,4 @@
 /** Converts registry/catalog models into printable model-list rows. */
-import { modelKey } from "../../agents/model-ref-shared.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -50,8 +49,7 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl ?? "");
-  const modelIsAvailable =
-    local || (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+  const modelIsAvailable = local || (availableKeys?.has(key) ?? false);
   // Local provider rows use their baseUrl as the auth marker.
   // Otherwise prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,

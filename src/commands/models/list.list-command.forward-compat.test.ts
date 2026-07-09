@@ -1,5 +1,7 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai",
@@ -205,6 +207,14 @@ let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand
 let listRowsModule: typeof import("./list.rows.js");
 let listRegistryModule: typeof import("./list.registry.js");
 
+function createTestRowIdentity() {
+  const cfg = mocks.resolvedConfig as unknown as OpenClawConfig;
+  return createModelCatalogProviderAliasCanonicalizer({
+    cfg,
+    metadataSnapshot: mocks.emptyPluginMetadataSnapshot,
+  });
+}
+
 function installModelsListCommandForwardCompatMocks() {
   const suppressOpenAiSpark = ({
     provider,
@@ -228,7 +238,8 @@ function installModelsListCommandForwardCompatMocks() {
     loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
   }));
 
-  vi.doMock("./list.configured.js", () => ({
+  vi.doMock("./list.configured.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./list.configured.js")>()),
     resolveConfiguredEntries: mocks.resolveConfiguredEntries,
   }));
 
@@ -350,12 +361,14 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
     },
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
+    configuredProviderCandidates: new Map(),
     discoveredKeys: new Set(
       loaded.models.map(
         (model: { provider: string; id: string }) => `${model.provider}/${model.id}`,
       ),
     ),
     filter: { provider: "openai" },
+    rowIdentity: createTestRowIdentity(),
   };
   const seenKeys = await listRowsModule.appendDiscoveredRows({
     rows: rows as never,
@@ -622,7 +635,12 @@ describe("modelsListCommand forward-compat", () => {
 
     function configureAuthenticatedCatalogScenario(mode: "merge" | "replace") {
       const config = {
-        agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: { "xiaomi/mimo-v2.5-pro": {} },
+          },
+        },
         models: {
           mode,
           providers: {
@@ -658,9 +676,15 @@ describe("modelsListCommand forward-compat", () => {
       mocks.resolveConfiguredEntries.mockReturnValue({
         entries: [
           {
+            key: "openai/gpt-5.5",
+            ref: { provider: "openai", model: "gpt-5.5" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+          {
             key: "xiaomi/mimo-v2.5-pro",
             ref: { provider: "xiaomi", model: "mimo-v2.5-pro" },
-            tags: new Set(["default"]),
+            tags: new Set(["configured"]),
             aliases: [],
           },
         ],
@@ -680,6 +704,7 @@ describe("modelsListCommand forward-compat", () => {
       {
         mode: "merge",
         expectedKeys: [
+          "openai/gpt-5.5",
           "xiaomi/mimo-v2.5-pro",
           "xiaomi/mimo-v2.5",
           "google/gemini-3.1-flash-lite",
@@ -714,6 +739,159 @@ describe("modelsListCommand forward-compat", () => {
       },
     );
 
+    it.each([
+      {
+        rawProvider: "XIAOMI",
+        configuredProvider: "xiaomi",
+        canonicalKey: "xiaomi/mimo-v2.5-pro",
+        rawModelId: "mimo-v2.5-pro",
+        alias: undefined,
+      },
+      {
+        rawProvider: "z.ai",
+        configuredProvider: "z.ai",
+        canonicalKey: "zai/glm-4.7",
+        rawModelId: "z.ai/glm-4.7",
+        alias: { provider: "z.ai", target: "zai" },
+      },
+    ])(
+      "deduplicates $rawProvider registry rows against canonical configured rows",
+      async ({ rawProvider, configuredProvider, canonicalKey, rawModelId, alias }) => {
+        const modelId = canonicalKey.slice(canonicalKey.indexOf("/") + 1);
+        const config = {
+          models: {
+            providers: {
+              [configuredProvider]: {
+                api: "openai-completions" as const,
+                baseUrl: "https://configured.example/v1",
+                models: [{ id: modelId, name: "Configured", input: ["text"] }],
+              },
+            },
+          },
+        };
+        const registryModel = {
+          provider: rawProvider,
+          id: rawModelId,
+          name: "Registry metadata",
+          api: "openai-completions",
+          baseUrl: "https://registry.example/v1",
+          input: ["text", "image"],
+          contextWindow: 321_000,
+          maxTokens: 8192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        };
+        mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+          sourceConfig: config,
+          resolvedConfig: config,
+          diagnostics: [],
+        });
+        mocks.resolveConfiguredEntries.mockReturnValueOnce({
+          entries: [
+            {
+              key: canonicalKey,
+              ref: {
+                provider: canonicalKey.slice(0, canonicalKey.indexOf("/")),
+                model: modelId,
+              },
+              tags: new Set(["configured"]),
+              aliases: ["Primary"],
+            },
+          ],
+        });
+        mocks.loadModelRegistry.mockResolvedValueOnce({
+          models: [registryModel],
+          availableKeys: new Set([`${rawProvider}/${rawModelId}`]),
+          registry: { getAll: () => [registryModel] },
+        });
+        if (alias) {
+          mocks.loadManifestMetadataSnapshot.mockReturnValueOnce({
+            ...mocks.emptyPluginMetadataSnapshot,
+            manifestRegistry: {
+              diagnostics: [],
+              plugins: [
+                {
+                  id: alias.target,
+                  origin: "bundled",
+                  modelCatalog: {
+                    aliases: { [alias.provider]: { provider: alias.target } },
+                  },
+                },
+              ],
+            },
+          });
+        }
+        const runtime = createRuntime();
+
+        await modelsListCommand({ all: true, json: true }, runtime as never);
+
+        const rows = lastPrintedRows<{
+          key: string;
+          name: string;
+          input: string;
+          contextWindow: number;
+          available: boolean;
+          tags: string[];
+        }>();
+        expectRowKeys(rows, [canonicalKey]);
+        expectRowFields(rows, canonicalKey, {
+          name: "Registry metadata",
+          input: "text+image",
+          contextWindow: 321_000,
+          available: true,
+          tags: ["configured", "alias:Primary"],
+        });
+      },
+    );
+
+    it("keeps normalized configured-provider metadata in replace mode", async () => {
+      const canonicalKey = "kilocode/google/gemini-3.1-pro-preview";
+      const config = {
+        models: {
+          mode: "replace" as const,
+          providers: {
+            kilocode: {
+              baseUrl: "https://kilocode.example/v1",
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                  input: ["text", "image"],
+                  contextWindow: 1_048_576,
+                },
+              ],
+            },
+          },
+        },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: canonicalKey,
+            ref: { provider: "kilocode", model: "google/gemini-3.1-pro-preview" },
+            tags: new Set(["default", "configured"]),
+            aliases: [],
+          },
+        ],
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true }, runtime as never);
+
+      const rows = lastPrintedRows<{ key: string } & Record<string, unknown>>();
+      expectRowKeys(rows, [canonicalKey]);
+      expectRowFields(rows, canonicalKey, {
+        name: "Gemini 3 Pro",
+        input: "text+image",
+        contextWindow: 1_048_576,
+        tags: ["default", "configured"],
+      });
+    });
+
     it("preserves explicit all and provider browsing in replace mode", async () => {
       configureAuthenticatedCatalogScenario("replace");
       const googleModelKey = "google/gemini-3.1-flash-lite";
@@ -737,11 +915,9 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expectRowFields(
-        lastPrintedRows<{ key: string; available: boolean }>(),
-        googleModelKey,
-        { available: true },
-      );
+      const allRows = lastPrintedRows<{ key: string; available: boolean }>();
+      expectRowKeys(allRows, [googleModelKey]);
+      expectRowFields(allRows, googleModelKey, { available: true });
       expect(mocks.loadModelRegistry).toHaveBeenCalledOnce();
 
       mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
@@ -1385,8 +1561,10 @@ describe("modelsListCommand forward-compat", () => {
           },
           availableKeys: new Set(["openai/gpt-5.4"]),
           configuredByKey: new Map(),
+          configuredProviderCandidates: new Map(),
           discoveredKeys: new Set(),
           filter: {},
+          rowIdentity: createTestRowIdentity(),
         } as never,
       });
 

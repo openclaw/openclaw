@@ -8,12 +8,15 @@ import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-el
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
+import {
+  resolveConfiguredEntries,
+  resolveConfiguredProviderCandidates,
+} from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
@@ -100,11 +103,9 @@ export async function modelsListCommand(
     workspaceDir,
     env: process.env,
   });
+  const rowIdentity = createModelCatalogProviderAliasCanonicalizer({ cfg, metadataSnapshot });
   const providerFilter = parsedProviderFilter
-    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
-        cfg,
-        metadataSnapshot,
-      })
+    ? rowIdentity.provider(parsedProviderFilter)
     : undefined;
   const authIndex = createModelListAuthIndex({
     cfg,
@@ -118,7 +119,12 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, rowIdentity);
+  const configuredProviderCandidates = resolveConfiguredProviderCandidates(
+    cfg,
+    rowIdentity,
+    metadataSnapshot,
+  );
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   // Full/provider-filtered lists may need runtime, manifest, and registry rows.
@@ -147,8 +153,10 @@ export async function modelsListCommand(
     });
     modelRegistry = loaded.registry;
     registryModels = loaded.models;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
+    discoveredKeys = new Set([...loaded.discoveredKeys].map(rowIdentity.keyFromString));
+    availableKeys = loaded.availableKeys
+      ? new Set([...loaded.availableKeys].map(rowIdentity.keyFromString))
+      : undefined;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
   };
   try {
@@ -161,8 +169,8 @@ export async function modelsListCommand(
         workspaceDir,
       });
       modelRegistry = loaded.registry;
-      discoveredKeys = loaded.discoveredKeys;
-      availableKeys = loaded.availableKeys;
+      discoveredKeys = new Set([...loaded.discoveredKeys].map(rowIdentity.keyFromString));
+      availableKeys = new Set([...loaded.availableKeys].map(rowIdentity.keyFromString));
     }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
@@ -175,6 +183,7 @@ export async function modelsListCommand(
     authIndex,
     availableKeys,
     configuredByKey,
+    configuredProviderCandidates,
     discoveredKeys,
     filter: {
       provider: providerFilter,
@@ -182,6 +191,7 @@ export async function modelsListCommand(
     },
     skipRuntimeModelSuppression,
     metadataSnapshot,
+    rowIdentity,
     workspaceDir,
   });
   const rows: ModelRow[] = [];

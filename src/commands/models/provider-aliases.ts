@@ -9,6 +9,7 @@ import {
 } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest, type PluginManifestModelCatalog } from "../../plugins/manifest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { modelKey } from "../../shared/model-key.js";
 
 type ProviderAliasSource = {
   cfg: OpenClawConfig;
@@ -105,18 +106,39 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
   return aliases;
 }
 
-/** Builds provider/ref canonicalizers from manifest model-catalog aliases. */
-export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
+export type ModelCatalogProviderAliasCanonicalizer = {
   provider: (provider: string) => string;
+  key: (provider: string, model: string) => string;
+  keyFromString: (key: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
-} {
+};
+
+/** Builds provider/ref/key canonicalizers from manifest model-catalog aliases. */
+export function createModelCatalogProviderAliasCanonicalizer(
+  params: ProviderAliasSource,
+): ModelCatalogProviderAliasCanonicalizer {
   const aliases = buildProviderAliasMap(params);
   const provider = (providerId: string) => {
     const normalizedProvider = normalizeProviderId(providerId);
     return aliases.get(normalizedProvider) ?? normalizedProvider;
   };
+  const keyFromString = (rawKey: string) => {
+    const slash = rawKey.indexOf("/");
+    if (slash === -1) {
+      return provider(rawKey);
+    }
+    const normalizedRawKey = modelKey(rawKey.slice(0, slash), rawKey.slice(slash + 1));
+    const normalizedSlash = normalizedRawKey.indexOf("/");
+    return modelKey(
+      provider(normalizedRawKey.slice(0, normalizedSlash)),
+      normalizedRawKey.slice(normalizedSlash + 1),
+    );
+  };
+  const key = (providerId: string, model: string) => keyFromString(modelKey(providerId, model));
   return {
     provider,
+    key,
+    keyFromString,
     ref: (ref) => {
       const canonicalProvider = provider(ref.provider);
       return canonicalProvider === ref.provider ? ref : { ...ref, provider: canonicalProvider };
