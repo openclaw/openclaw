@@ -8,6 +8,7 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -629,13 +630,22 @@ describe("activateSetupInference", () => {
       ...initialConfig,
       gateway: { port: 19000 },
     };
-    const updateConfig = vi.fn(async (updater: (config: OpenClawConfig) => OpenClawConfig) => {
-      events.push("persist-plugin");
-      persistedConfig = updater(persistedConfig);
-      return persistedConfig;
+    let pendingCodexInstall: unknown;
+    const transformConfig = vi.fn(
+      async (params: { transform: (config: OpenClawConfig) => { nextConfig: OpenClawConfig } }) => {
+        events.push("persist-plugin");
+        const transformed = params.transform(persistedConfig).nextConfig;
+        pendingCodexInstall = transformed.plugins?.installs?.codex;
+        persistedConfig = withoutPluginInstallRecords(transformed);
+        return { nextConfig: persistedConfig };
+      },
+    );
+    const refreshPluginRegistry = vi.fn(async () => {
+      events.push("refresh-plugin-registry");
     });
     const result = await activateSetupInference({
       kind: "codex-cli",
+      workspace: "/tmp/openclaw-workspace",
       surface: "gateway",
       runtime,
       deps: {
@@ -650,7 +660,8 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         applySetup: applySetup as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
-        updateConfig: updateConfig as never,
+        transformConfigWithPendingPluginInstalls: transformConfig as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         createTempDir: makeTempDir,
       },
     });
@@ -673,7 +684,19 @@ describe("activateSetupInference", () => {
         model: "openai/gpt-5.5",
       }),
     );
-    expect(events).toEqual(["install-plugin", "live-test", "persist-plugin", "persist-setup"]);
+    expect(events).toEqual([
+      "install-plugin",
+      "live-test",
+      "persist-plugin",
+      "refresh-plugin-registry",
+      "persist-setup",
+    ]);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: persistedConfig,
+      reason: "source-changed",
+      workspaceDir: "/tmp/openclaw-workspace",
+      logger: { warn: expect.any(Function) },
+    });
     // Harness selection: codex tests run embedded with the codex harness.
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessId: "codex",
@@ -719,21 +742,21 @@ describe("activateSetupInference", () => {
             config: { appServer: { command: "codex", mode: "yolo" } },
           },
         },
-        installs: {
-          codex: {
-            source: "npm",
-            spec: "@openclaw/codex",
-            installPath: "/tmp/plugins/codex",
-          },
-        },
       },
+    });
+    expect(persistedConfig.plugins?.installs).toBeUndefined();
+    expect(pendingCodexInstall).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/plugins/codex",
     });
   });
 
   it("does not run or persist when the codex runtime install fails", async () => {
     const runEmbeddedAgent = vi.fn();
     const applySetup = vi.fn();
-    const updateConfig = vi.fn();
+    const transformConfig = vi.fn();
+    const refreshPluginRegistry = vi.fn();
     const result = await activateSetupInference({
       kind: "codex-cli",
       surface: "gateway",
@@ -747,20 +770,23 @@ describe("activateSetupInference", () => {
         })) as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         applySetup: applySetup as never,
-        updateConfig: updateConfig as never,
+        transformConfigWithPendingPluginInstalls: transformConfig as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         createTempDir: makeTempDir,
       },
     });
 
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(updateConfig).not.toHaveBeenCalled();
+    expect(transformConfig).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(applySetup).not.toHaveBeenCalled();
   });
 
   it("does not persist codex setup when the live test fails", async () => {
     const applySetup = vi.fn();
-    const updateConfig = vi.fn();
+    const transformConfig = vi.fn();
+    const refreshPluginRegistry = vi.fn();
     const result = await activateSetupInference({
       kind: "codex-cli",
       surface: "gateway",
@@ -776,13 +802,15 @@ describe("activateSetupInference", () => {
           throw new Error("401 invalid_api_key");
         }) as never,
         applySetup: applySetup as never,
-        updateConfig: updateConfig as never,
+        transformConfigWithPendingPluginInstalls: transformConfig as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         createTempDir: makeTempDir,
       },
     });
 
     expect(result).toMatchObject({ ok: false, status: "auth" });
-    expect(updateConfig).not.toHaveBeenCalled();
+    expect(transformConfig).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(applySetup).not.toHaveBeenCalled();
   });
 });

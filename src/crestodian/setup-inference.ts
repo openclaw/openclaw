@@ -121,7 +121,9 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  transformConfigWithPendingPluginInstalls?: typeof import("../cli/plugins-install-record-commit.js").transformConfigWithPendingPluginInstalls;
   updateConfig?: typeof import("../commands/models/shared.js").updateConfig;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../cli/plugins-registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -685,9 +687,27 @@ async function activateSetupInferenceUnredacted(
     }
 
     if (codexPluginPatch !== undefined) {
-      const updateConfig =
-        deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-      await updateConfig((current) => applyMergePatch(current, codexPluginPatch) as OpenClawConfig);
+      // The installer returns a transient plugins.installs record. Commit through its owner so
+      // the managed package remains discoverable after config strips that legacy-shaped field.
+      const transformConfig =
+        deps.transformConfigWithPendingPluginInstalls ??
+        (await import("../cli/plugins-install-record-commit.js"))
+          .transformConfigWithPendingPluginInstalls;
+      const committed = await transformConfig({
+        transform: (current) => ({
+          nextConfig: applyMergePatch(current, codexPluginPatch) as OpenClawConfig,
+        }),
+      });
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../cli/plugins-registry-refresh.js"))
+          .refreshPluginRegistryAfterConfigMutation;
+      await refreshPluginRegistry({
+        config: committed.nextConfig,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        logger: { warn: (message) => params.runtime.log?.(message) },
+      });
     }
     if (plan.manualAuth) {
       const manualAuth = plan.manualAuth;
