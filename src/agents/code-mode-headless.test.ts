@@ -247,6 +247,37 @@ describe("headless Code Mode", () => {
     });
   });
 
+  it("keeps worker-leg wall-clock expiry classified as timeout", async () => {
+    const ctx = createHeadlessHarness();
+    const config = testing.resolveCodeModeHeadlessConfig(ctx);
+    const timeoutController = new AbortController();
+    setTimeout(() => timeoutController.abort(new Error("caller timeout")), 5_000);
+    const headlessScope = testing.createHeadlessAbortScope(timeoutController.signal, 100);
+    try {
+      const result = await testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: "while (true) {}",
+          config,
+          catalog: [],
+          apiFiles: [],
+          namespaces: [],
+        },
+        5_000,
+        undefined,
+        headlessScope.signal,
+      );
+
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "timeout",
+        error: "code mode timeout exceeded",
+      });
+    } finally {
+      headlessScope.cleanup();
+    }
+  });
+
   it.each([
     {
       name: "syntax errors",

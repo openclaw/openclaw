@@ -742,10 +742,14 @@ async function runCodeModeWorker(
       }, timeoutMs);
       onAbort = () => {
         void worker.terminate();
+        const abortReason = signal?.reason;
         finish({
           status: "failed",
-          error: "code mode execution aborted",
-          code: "aborted",
+          error:
+            abortReason instanceof CodeModeHeadlessTimeoutError
+              ? "code mode timeout exceeded"
+              : "code mode execution aborted",
+          code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
           output: [],
         });
       };
@@ -1642,6 +1646,7 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
