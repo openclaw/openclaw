@@ -17,13 +17,11 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveSlackAccount } from "../accounts.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
 import type { SlackEventScope } from "./event-scope.js";
-import { sendImmediateEnterpriseSlackReply } from "./immediate-enterprise-reply.js";
 import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
@@ -80,31 +78,12 @@ export async function deliverReplies(params: {
   eventScope?: SlackEventScope;
 }) {
   let latestResult: SlackSendResult | undefined;
-  const enterpriseUnfurlMedia = params.eventScope
-    ? resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId }).config.unfurlMedia
-    : undefined;
   const sendReply = async (input: {
     text: string;
     threadTs?: string | undefined;
     mediaUrl?: string | undefined;
     blocks?: (Block | KnownBlock)[] | undefined;
   }): Promise<SlackSendResult> => {
-    if (params.eventScope) {
-      return await sendImmediateEnterpriseSlackReply(params.eventScope, {
-        target: params.target,
-        text: input.text,
-        threadTs: input.threadTs,
-        mediaUrl: input.mediaUrl,
-        blocks: input.blocks,
-        metadata: params.metadata,
-        identity: params.identity,
-        cfg: params.cfg,
-        accountId: params.accountId,
-        textLimit: params.textLimit,
-        mediaMaxBytes: params.mediaMaxBytes,
-        unfurlMedia: enterpriseUnfurlMedia,
-      });
-    }
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
       token: params.token,
@@ -112,6 +91,14 @@ export async function deliverReplies(params: {
       accountId: params.accountId,
       mediaUrl: input.mediaUrl,
       blocks: input.blocks,
+      ...(params.eventScope
+        ? {
+            client: params.eventScope.client,
+            enterpriseEventScope: params.eventScope,
+            textLimit: params.textLimit,
+            ...(params.mediaMaxBytes !== undefined ? { mediaMaxBytes: params.mediaMaxBytes } : {}),
+          }
+        : {}),
       ...(params.identity ? { identity: params.identity } : {}),
       ...(params.metadata ? { metadata: params.metadata } : {}),
     });

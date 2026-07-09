@@ -247,8 +247,15 @@ action tools, Slack-native approvals, bindings, queued or scheduled delivery,
 and proactive sends are unavailable for an enterprise account. Outbound
 acknowledgment, typing, and status reactions are supported through the
 listener-owned Slack client and require `reactions:write`; inbound reaction
-notifications and reaction action tools remain unavailable. Channel policy
-keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
+notifications and reaction action tools remain unavailable.
+
+Immediate replies reuse the standard Slack delivery behavior for chunks,
+media, metadata, identity fallback, unfurls, and receipts, but only while the
+validated listener-owned client remains in the active event turn. The
+in-memory send queue and thread-participation records are partitioned by that
+event's workspace; the client itself is never serialized or persisted.
+
+Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
 `channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
 runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
 User policy entries must use stable Slack user IDs; names, slugs, display names,

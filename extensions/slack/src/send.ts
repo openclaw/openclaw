@@ -12,8 +12,15 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  isSilentReplyText,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -30,9 +37,9 @@ import {
 } from "./client-delivery.js";
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
+import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
-import { resolveSlackTextChunks } from "./slack-text-chunks.js";
 import { parseSlackTarget } from "./targets.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
@@ -47,6 +54,7 @@ const SLACK_RECONCILE_LOOKBACK_MS = 30_000;
 const SLACK_RECONCILE_CLOCK_SKEW_MS = 5 * 60_000;
 const SLACK_RECONCILE_LIMIT = 100;
 const SLACK_RECONCILE_MAX_PAGES = 10;
+const SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL = "listener-scoped-enterprise";
 const slackDmChannelCache = new Map<string, string>();
 const slackSendQueue = new KeyedAsyncQueue();
 
@@ -66,6 +74,19 @@ export type SlackSendIdentity = {
   iconEmoji?: string;
 };
 
+type SlackEnterpriseEventScope = Readonly<{
+  apiAppId: string;
+  enterpriseId: string;
+  teamId: string;
+  isEnterpriseInstall: true;
+  client: WebClient;
+}>;
+
+type SlackEnterpriseDelivery = Readonly<{
+  client: WebClient;
+  teamId: string;
+}>;
+
 const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
 
 type SlackSendOpts = {
@@ -82,6 +103,11 @@ type SlackSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
+  /** Monitor-private proof that `client` belongs to the validated Enterprise event turn. */
+  enterpriseEventScope?: SlackEnterpriseEventScope;
+  /** Monitor-private delivery limits already resolved for the active listener. */
+  textLimit?: number;
+  mediaMaxBytes?: number;
   threadTs?: string;
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
@@ -299,15 +325,77 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
+  const match = /^(?:channel:)?([CDG][A-Z0-9]+)$/i.exec(raw.trim());
+  if (!match?.[1]) {
+    throw new Error("unsupported_enterprise_slack_delivery_target");
+  }
+  return { kind: "channel", id: match[1] };
+}
+
+function resolveEnterpriseEventScope(params: {
+  account: ReturnType<typeof resolveSlackAccount>;
+  opts: SlackSendOpts;
+}): SlackEnterpriseEventScope | undefined {
+  const scope = params.opts.enterpriseEventScope;
+  if (!scope) {
+    assertSlackDirectSendAllowed(params.account);
+    return undefined;
+  }
+  if (params.account.config.enterpriseOrgInstall !== true) {
+    throw new Error("unexpected_enterprise_slack_listener_scope");
+  }
+  if (
+    scope.isEnterpriseInstall !== true ||
+    !normalizeOptionalString(scope.apiAppId) ||
+    !normalizeOptionalString(scope.enterpriseId) ||
+    !/^T[A-Z0-9]+$/i.test(scope.teamId) ||
+    !scope.client ||
+    params.opts.client !== scope.client
+  ) {
+    throw new Error("invalid_enterprise_slack_listener_scope");
+  }
+  return scope;
+}
+
+function resolveSlackTextChunks(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  text: string;
+  textLimit?: number;
+}): string[] {
+  const text = params.text.trim();
+  const configuredLimit =
+    params.textLimit ??
+    resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
+      fallbackLimit: SLACK_TEXT_LIMIT,
+    });
+  const chunkLimit = Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "slack",
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+  });
+  const chunkMode = resolveChunkMode(params.cfg, "slack", params.accountId);
+  const markdownChunks =
+    chunkMode === "newline" ? chunkMarkdownTextWithMode(text, chunkLimit, chunkMode) : [text];
+  const chunks = markdownChunks.flatMap((markdown) =>
+    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
+  );
+  return resolveTextChunksWithFallback(text, chunks);
+}
+
 function createSlackSendQueueKey(params: {
   accountId: string;
   token: string;
   recipient: SlackRecipient;
   threadTs?: string;
+  teamId?: string;
 }): string {
   const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
   const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
-  return `${params.accountId}:${createSlackTokenCacheKey(params.token)}:${recipientKey}:${
+  const workspaceScope = params.teamId ? `:${params.teamId}` : "";
+  return `${params.accountId}:${createSlackTokenCacheKey(params.token)}${workspaceScope}:${recipientKey}:${
     params.threadTs ?? ""
   }`;
 }
@@ -844,7 +932,13 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  assertSlackDirectSendAllowed(account);
+  const enterpriseEventScope = resolveEnterpriseEventScope({ account, opts });
+  const enterpriseDelivery = enterpriseEventScope
+    ? Object.freeze({
+        client: enterpriseEventScope.client,
+        teamId: enterpriseEventScope.teamId,
+      })
+    : undefined;
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return {
@@ -857,33 +951,46 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const token = resolveToken({
-    explicit: opts.token,
-    accountId: account.accountId,
-    fallbackToken: account.botToken,
-    fallbackSource: account.botTokenSource,
-  });
-  const recipient = parseRecipient(to);
+  const token = enterpriseDelivery
+    ? SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL
+    : resolveToken({
+        explicit: opts.token,
+        accountId: account.accountId,
+        fallbackToken: account.botToken,
+        fallbackSource: account.botTokenSource,
+      });
+  const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   const queueKey = createSlackSendQueueKey({
     accountId: account.accountId,
     token,
     recipient,
     threadTs: opts.threadTs,
+    ...(enterpriseDelivery ? { teamId: enterpriseDelivery.teamId } : {}),
   });
+  const queuedOpts = enterpriseDelivery
+    ? Object.freeze({ ...opts, client: enterpriseDelivery.client })
+    : opts;
   const result = await runQueuedSlackSend(queueKey, () =>
     sendMessageSlackQueued({
       trimmedMessage,
-      opts,
+      opts: queuedOpts,
       cfg,
       account,
       token,
       recipient,
       blocks,
+      ...(enterpriseDelivery ? { enterpriseDelivery } : {}),
     }),
   );
-  const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
+  const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
   if (threadTs && result.channelId && account.accountId) {
-    recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+    if (enterpriseDelivery) {
+      recordSlackThreadParticipation(account.accountId, result.channelId, threadTs, {
+        teamId: enterpriseDelivery.teamId,
+      });
+    } else {
+      recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+    }
   }
   return result;
 }
@@ -896,6 +1003,7 @@ async function sendMessageSlackQueued(params: {
   token: string;
   recipient: SlackRecipient;
   blocks?: (Block | KnownBlock)[];
+  enterpriseDelivery?: SlackEnterpriseDelivery;
 }): Promise<SlackSendResult> {
   try {
     return await sendMessageSlackQueuedInner(params);
@@ -912,20 +1020,26 @@ async function sendMessageSlackQueuedInner(params: {
   token: string;
   recipient: SlackRecipient;
   blocks?: (Block | KnownBlock)[];
+  enterpriseDelivery?: SlackEnterpriseDelivery;
 }): Promise<SlackSendResult> {
-  const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
-  const client = opts.client ?? getSlackWriteClient(token);
-  const identity = resolveSlackSendIdentity({
-    accountId: account.accountId,
-    explicit: opts.identity,
-  });
+  const { opts, cfg, account, token, recipient, blocks, trimmedMessage, enterpriseDelivery } =
+    params;
+  const client = enterpriseDelivery?.client ?? opts.client ?? getSlackWriteClient(token);
+  const identity = enterpriseDelivery
+    ? normalizeSlackSendIdentity(opts.identity)
+    : resolveSlackSendIdentity({
+        accountId: account.accountId,
+        explicit: opts.identity,
+      });
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
-  const unfurl = {
-    unfurlLinks: account.config.unfurlLinks,
-    unfurlMedia: account.config.unfurlMedia,
-  };
+  const unfurl = enterpriseDelivery
+    ? { unfurlMedia: account.config.unfurlMedia }
+    : {
+        unfurlLinks: account.config.unfurlLinks,
+        unfurlMedia: account.config.unfurlMedia,
+      };
   // Durable signatures bind the concrete provider channel, so user-targeted
   // sends must resolve U... to the resulting D... conversation first.
   const directUserPostChannelId = opts.deliveryQueueId
@@ -965,6 +1079,13 @@ async function sendMessageSlackQueuedInner(params: {
       metadata: opts.metadata,
       unfurl,
     });
+    if (enterpriseDelivery && (!response.ok || !response.ts)) {
+      throw new Error(
+        response.ok
+          ? "Slack chat.postMessage returned no message timestamp"
+          : `Slack chat.postMessage failed: ${response.error ?? "unknown error"}`,
+      );
+    }
     const messageId = response.ts ?? "unknown";
     const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
     const deliveredThreadTs =
@@ -985,11 +1106,13 @@ async function sendMessageSlackQueuedInner(params: {
     cfg,
     accountId: account.accountId,
     text: trimmedMessage,
+    ...(opts.textLimit !== undefined ? { textLimit: opts.textLimit } : {}),
   });
   const mediaMaxBytes =
-    typeof account.config.mediaMaxMb === "number"
+    opts.mediaMaxBytes ??
+    (typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024
-      : undefined;
+      : undefined);
 
   const sentMessageIds: string[] = [];
   let lastMessageId = "";
@@ -1011,6 +1134,7 @@ async function sendMessageSlackQueuedInner(params: {
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
       onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      ...(enterpriseDelivery ? { auditContext: "slack-enterprise-immediate-upload" } : {}),
     });
     sentMessageIds.push(lastMessageId);
     await reportDelivery({
@@ -1057,6 +1181,13 @@ async function sendMessageSlackQueuedInner(params: {
       unfurl,
     });
     const response = posted.response;
+    if (enterpriseDelivery && (!response.ok || !response.ts)) {
+      throw new Error(
+        response.ok
+          ? "Slack chat.postMessage returned no message timestamp"
+          : `Slack chat.postMessage failed: ${response.error ?? "unknown error"}`,
+      );
+    }
     sendIdentity = posted.identity;
     lastMessageId = response.ts ?? lastMessageId;
     deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
