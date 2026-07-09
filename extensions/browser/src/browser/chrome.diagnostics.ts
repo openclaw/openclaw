@@ -100,11 +100,12 @@ export async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
+  versionPath = "/json/version",
 ): Promise<ChromeVersion> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const versionUrl = appendCdpPath(cdpUrl, versionPath);
     const { response, release } = await fetchCdpChecked(
       versionUrl,
       timeoutMs,
