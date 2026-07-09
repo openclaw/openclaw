@@ -163,8 +163,8 @@ function resolvePendingSystemRunEvent(params: {
   };
 }
 
-/** Ensure system.run requests have a runId before they are sent to a node. */
-function withSystemRunEventRunId(params: { command: string; params?: unknown }): unknown {
+/** Keep node execution and Gateway authorization on the same canonical system.run fields. */
+function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
   if (
     params.command !== "system.run" ||
     !params.params ||
@@ -174,10 +174,17 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
     return params.params;
   }
   const obj = params.params as Record<string, unknown>;
-  if (normalizeString(obj.runId)) {
-    return params.params;
+  const normalized = {
+    ...obj,
+    runId: normalizeString(obj.runId) || randomUUID(),
+  };
+  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
+  if (timeoutMs === undefined) {
+    delete normalized.timeoutMs;
+  } else {
+    normalized.timeoutMs = timeoutMs;
   }
-  return { ...obj, runId: randomUUID() };
+  return normalized;
 }
 
 /** Registry of currently connected Gateway nodes. */
@@ -488,7 +495,7 @@ export class NodeRegistry {
       };
     }
     const requestId = randomUUID();
-    const invokeParams = withSystemRunEventRunId({
+    const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
       params: params.params,
     });
