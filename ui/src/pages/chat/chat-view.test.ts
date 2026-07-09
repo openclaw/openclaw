@@ -1189,9 +1189,11 @@ describe("chat composer workbench", () => {
     );
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Collapse session workspace"]')
-      ?.click();
+    const collapseToggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse session workspace"]',
+    );
+    expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
+    collapseToggle?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md", "session");
     expect(onOpenFile).toHaveBeenCalledWith("package.json", "workspace");
@@ -1227,6 +1229,7 @@ describe("chat composer workbench", () => {
       'button[aria-label="Expand session workspace"]',
     );
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
 
     toggle?.click();
 
