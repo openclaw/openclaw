@@ -81,6 +81,12 @@ export const hi: TranslationMap = {
     waitForScan: "स्कैन की प्रतीक्षा करें",
     logout: "लॉग आउट",
   },
+  nativeLinkMenu: {
+    label: "लिंक कार्रवाइयाँ",
+    openInline: "Sidebar में खोलें",
+    openExternal: "Default Browser में खोलें",
+    copy: "लिंक कॉपी करें",
+  },
   channels: {
     health: {
       title: "चैनल स्वास्थ्य",

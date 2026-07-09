@@ -81,6 +81,12 @@ export const de: TranslationMap = {
     waitForScan: "Auf Scan warten",
     logout: "Abmelden",
   },
+  nativeLinkMenu: {
+    label: "Link-Aktionen",
+    openInline: "In der Seitenleiste öffnen",
+    openExternal: "Im Standardbrowser öffnen",
+    copy: "Link kopieren",
+  },
   channels: {
     health: {
       title: "Channel-Zustand",

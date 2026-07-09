@@ -1,4 +1,4 @@
-export type RealtimeTalkLevelListener = (level: number) => void;
+type RealtimeTalkLevelListener = (level: number) => void;
 
 export class RealtimeTalkLevelSignal {
   private listeners = new Set<RealtimeTalkLevelListener>();

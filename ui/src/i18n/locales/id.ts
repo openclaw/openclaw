@@ -81,6 +81,12 @@ export const id: TranslationMap = {
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
   },
+  nativeLinkMenu: {
+    label: "Tindakan tautan",
+    openInline: "Buka di Bilah Sisi",
+    openExternal: "Buka di Peramban Default",
+    copy: "Salin Tautan",
+  },
   channels: {
     health: {
       title: "Kesehatan saluran",

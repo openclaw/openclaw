@@ -85,19 +85,28 @@ async function waitForChatScrollIdle(page: Page): Promise<void> {
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as
-            | (Element & {
-                chatIsProgrammaticScroll?: boolean;
-                chatScrollFrame?: number | null;
-                chatScrollTimeout?: number | null;
-              })
-            | null;
-          return Boolean(
-            app &&
-            app.chatScrollFrame == null &&
-            app.chatScrollTimeout == null &&
-            !app.chatIsProgrammaticScroll,
+        page.locator(".chat-thread").evaluate(async (element) => {
+          const thread = element as HTMLElement;
+          const readGeometry = () => ({
+            clientHeight: thread.clientHeight,
+            scrollHeight: thread.scrollHeight,
+            scrollTop: Math.round(thread.scrollTop),
+          });
+          const before = readGeometry();
+          // The chat scroll owner may do one bounded 120/150ms late-size retry.
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(resolve, 180);
+          });
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve());
+            });
+          });
+          const after = readGeometry();
+          return (
+            before.clientHeight === after.clientHeight &&
+            before.scrollHeight === after.scrollHeight &&
+            before.scrollTop === after.scrollTop
           );
         }),
       { timeout: 10_000 },

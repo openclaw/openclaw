@@ -81,6 +81,12 @@ export const zh_TW: TranslationMap = {
     waitForScan: "等待掃描",
     logout: "登出",
   },
+  nativeLinkMenu: {
+    label: "連結動作",
+    openInline: "在側邊欄開啟",
+    openExternal: "在預設瀏覽器中開啟",
+    copy: "複製連結",
+  },
   channels: {
     health: {
       title: "頻道健康狀態",
