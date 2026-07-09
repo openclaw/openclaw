@@ -4299,6 +4299,36 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
+  it("stops before the platform send when a reply hook aborts delivery", async () => {
+    const abortController = new AbortController();
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementationOnce(async (event) => {
+      abortController.abort();
+      return { payload: (event as { payload: unknown }).payload };
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }],
+        deps: { matrix: sendMatrix },
+        abortSignal: abortController.signal,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();

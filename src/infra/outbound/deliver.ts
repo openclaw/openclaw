@@ -210,6 +210,7 @@ type ChannelHandlerParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
+  abortSignal?: AbortSignal;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   deliveryQueueId?: string;
@@ -508,6 +509,7 @@ function createPluginHandler(
             if (messagePayload) {
               const messagePayloadCtx = {
                 ...payloadCtx,
+                signal: params.abortSignal,
                 onDeliveryResult: onMessageDeliveryResult,
               };
               const sent = await runChannelMessageSendWithLifecycle({
@@ -558,7 +560,11 @@ function createPluginHandler(
       };
       assertUnknownSendReconciliationKind("text");
       if (messageText) {
-        const messageTextCtx = { ...textCtx, onDeliveryResult: onMessageDeliveryResult };
+        const messageTextCtx = {
+          ...textCtx,
+          signal: params.abortSignal,
+          onDeliveryResult: onMessageDeliveryResult,
+        };
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
           ctx: messageTextCtx,
@@ -585,7 +591,11 @@ function createPluginHandler(
       };
       assertUnknownSendReconciliationKind("media");
       if (messageMedia) {
-        const messageMediaCtx = { ...mediaCtx, onDeliveryResult: onMessageDeliveryResult };
+        const messageMediaCtx = {
+          ...mediaCtx,
+          signal: params.abortSignal,
+          onDeliveryResult: onMessageDeliveryResult,
+        };
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
           ctx: messageMediaCtx,
@@ -642,6 +652,7 @@ function createChannelOutboundContextBase(
     forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
+    abortSignal: params.abortSignal,
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
@@ -1854,6 +1865,7 @@ async function deliverOutboundPayloadsCore(
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
       silent: params.silent,
+      abortSignal,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       deliveryQueueId: params.deliveryQueueId,
@@ -2028,6 +2040,7 @@ async function deliverOutboundPayloadsCore(
         hook: params.replyPayloadSendingHook,
         payload,
       });
+      throwIfAborted(abortSignal);
       if (replyHookResult.cancelled) {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -2053,6 +2066,7 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId,
         sessionKey: sessionKeyForInternalHooks,
       });
+      throwIfAborted(abortSignal);
       if (hookResult.cancelled) {
         const hookEffect =
           hookResult.cancelReason || hookResult.hookMetadata
@@ -2077,6 +2091,7 @@ async function deliverOutboundPayloadsCore(
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
         await renderPresentationForDelivery(presentationHandler, deliveryPayload),
       );
+      throwIfAborted(abortSignal);
       const renderedHandler = await getDeliveryHandler(
         buildPayloadSummary(renderedPayload).mediaUrls,
       );
@@ -2103,6 +2118,7 @@ async function deliverOutboundPayloadsCore(
       }
       payloadSummary = buildPayloadSummary(effectivePayload);
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
+      throwIfAborted(abortSignal);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
       params.onPayload?.(payloadSummary);
@@ -2133,6 +2149,7 @@ async function deliverOutboundPayloadsCore(
           effectivePayload.audioAsVoice === true)
       ) {
         const beforeCount = results.length;
+        throwIfAborted(abortSignal);
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
           applySendReplyToConsumption(sendOverrides),
@@ -2174,6 +2191,7 @@ async function deliverOutboundPayloadsCore(
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
+        throwIfAborted(abortSignal);
         if (deliveryHandler.sendFormattedText) {
           await recordIdentifiedDeliveryResults(
             await deliveryHandler.sendFormattedText(
@@ -2240,6 +2258,7 @@ async function deliverOutboundPayloadsCore(
           );
         }
         const beforeCount = results.length;
+        throwIfAborted(abortSignal);
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {
