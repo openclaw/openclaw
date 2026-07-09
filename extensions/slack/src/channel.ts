@@ -661,9 +661,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const child = conversationId.trim();
         return parent && parent !== child
           ? { to: `channel:${parent}`, threadId: child }
-          : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
+          : { to: `channel:${child}` };
       },
-      resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
+      resolveSessionTarget: ({ id }) => `channel:${id}`,
       inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
       transformReplyPayload: ({ payload, cfg, accountId }) =>
