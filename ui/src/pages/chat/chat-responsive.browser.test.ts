@@ -251,8 +251,8 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
-            <button class="topbar-search"><span class="topbar-search__label">Search</span><kbd class="topbar-search__kbd">K</kbd></button>
-            <div class="topbar-status">${chatControlsHtml({ agent: !opts.singleAgent })}</div>
+            <button class="topbar-search">${iconSvg()}</button>
+            <div>${chatControlsHtml({ agent: !opts.singleAgent })}</div>
           </div>
         </div>
       </header>
