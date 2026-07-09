@@ -240,6 +240,9 @@ async function startVaultJwtErrorFixture() {
 
 describe("plugin manifest", () => {
   it("declares the Vault resolver as a managed Node SecretRef preset", () => {
+    const resolverSource = readFileSync(resolverPath, "utf8");
+    const childTimeoutMatch = /const VAULT_FETCH_TIMEOUT_MS = (\d+);/u.exec(resolverSource);
+    const childTimeoutMs = Number(childTimeoutMatch?.[1]);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
       secretProviderIntegrations?: Record<string, Record<string, unknown>>;
     };
@@ -266,13 +269,20 @@ describe("plugin manifest", () => {
         "OPENCLAW_VAULT_JWT_FILE",
       ]),
     });
+    expect(childTimeoutMs).toBeGreaterThan(0);
+    expect(manifest.secretProviderIntegrations?.vault?.timeoutMs).toBeGreaterThan(
+      childTimeoutMs * 2,
+    );
+    expect(manifest.secretProviderIntegrations?.vault?.noOutputTimeoutMs).toBeGreaterThan(
+      childTimeoutMs * 2,
+    );
     expect(manifest.secretProviderIntegrations?.vault?.passEnv).not.toContain(
       "OPENCLAW_VAULT_VALUES_JSON",
     );
     expect(manifest.secretProviderIntegrations?.vault?.allowInsecurePath).toBeUndefined();
-    expect(readFileSync(resolverPath, "utf8")).toContain("#!/usr/bin/env node");
+    expect(resolverSource).toContain("#!/usr/bin/env node");
     const pluginSdkRootImport = ["openclaw", "plugin-sdk"].join("/");
-    expect(readFileSync(resolverPath, "utf8")).not.toContain(pluginSdkRootImport);
+    expect(resolverSource).not.toContain(pluginSdkRootImport);
     expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
       source: "./vault-secret-ref-resolver.js",
       output: "vault-secret-ref-resolver.js",

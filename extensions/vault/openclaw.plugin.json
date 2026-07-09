@@ -20,8 +20,8 @@
       "source": "exec",
       "command": "${node}",
       "args": ["./vault-secret-ref-resolver.js"],
-      "timeoutMs": 5000,
-      "noOutputTimeoutMs": 5000,
+      "timeoutMs": 15000,
+      "noOutputTimeoutMs": 15000,
       "maxOutputBytes": 1048576,
       "passEnv": [
         "VAULT_ADDR",
