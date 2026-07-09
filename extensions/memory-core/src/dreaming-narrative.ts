@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   extractErrorCode,
@@ -16,6 +15,7 @@ import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
