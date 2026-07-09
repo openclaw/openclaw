@@ -195,6 +195,8 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       this.stderrTail.splice(0, Math.max(0, this.stderrTail.length - 40));
     });
     this.proc.stdin.once("error", (error) => this.fail(error));
+    this.proc.stdout.on("error", (error) => this.fail(error));
+    this.proc.stderr.on("error", (error) => this.fail(error));
     this.proc.once("error", (error) => this.fail(error));
     this.proc.once("close", () =>
       this.fail(
