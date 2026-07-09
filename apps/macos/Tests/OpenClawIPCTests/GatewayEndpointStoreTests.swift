@@ -101,7 +101,10 @@ struct GatewayEndpointStoreTests {
 
     @Test func `resolve gateway token resolves env template from app environment`() {
         let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
+            env: [
+                "CUSTOM_GATEWAY_TOKEN": "service-token",
+                "OPENCLAW_GATEWAY_TOKEN": "launchd-token",
+            ],
             token: "launchd-token",
             password: nil)
         let root: [String: Any] = [
@@ -118,6 +121,27 @@ struct GatewayEndpointStoreTests {
             env: ["CUSTOM_GATEWAY_TOKEN": "  custom-token  "],
             launchdSnapshot: snapshot)
         #expect(token == "custom-token")
+    }
+
+    @Test func `resolve gateway token resolves env template from gateway service environment`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["CUSTOM_GATEWAY_TOKEN": "  service-token  "],
+            token: nil,
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": "${CUSTOM_GATEWAY_TOKEN}",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: ["CUSTOM_GATEWAY_TOKEN": "  "],
+            launchdSnapshot: snapshot)
+        #expect(token == "service-token")
     }
 
     @Test func `resolve gateway token keeps invalid env template as plaintext`() {
@@ -263,6 +287,27 @@ struct GatewayEndpointStoreTests {
             env: [:],
             launchdSnapshot: snapshot)
         #expect(password == "launchd-pass")
+    }
+
+    @Test func `resolve gateway password resolves env template from gateway service environment`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["CUSTOM_GATEWAY_PASSWORD": "  service-pass  "],
+            token: nil,
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "password": "${CUSTOM_GATEWAY_PASSWORD}",
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(password == "service-pass")
     }
 
     @Test func `connection mode resolver prefers config mode over defaults`() {

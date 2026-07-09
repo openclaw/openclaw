@@ -84,11 +84,16 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root, env: env),
-               !configPassword.isEmpty
+            if let configPassword = self.resolveConfigPassword(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configPassword.isEmpty
             {
                 self.warnEnvOverrideOnce(
                     kind: .password,
@@ -113,7 +118,11 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            if let pw = self.resolveLocalConfigAuthString(password, env: env) {
+            if let pw = self.resolveLocalConfigAuthString(
+                password,
+                env: env,
+                serviceEnv: serviceEnv)
+            {
                 return pw
             }
         }
@@ -128,7 +137,8 @@ actor GatewayEndpointStore {
     private static func resolveConfigPassword(
         isRemote: Bool,
         root: [String: Any],
-        env: [String: String] = [:]) -> String?
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
     {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
@@ -144,7 +154,7 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            return self.resolveLocalConfigAuthString(password, env: env)
+            return self.resolveLocalConfigAuthString(password, env: env, serviceEnv: serviceEnv)
         }
         return nil
     }
@@ -155,12 +165,17 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root, env: env),
-               !configToken.isEmpty,
-               configToken != trimmed
+            if let configToken = self.resolveConfigToken(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configToken.isEmpty,
+                configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -170,8 +185,12 @@ actor GatewayEndpointStore {
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root, env: env),
-           !configToken.isEmpty
+        if let configToken = self.resolveConfigToken(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            serviceEnv: serviceEnv),
+            !configToken.isEmpty
         {
             return configToken
         }
@@ -192,7 +211,8 @@ actor GatewayEndpointStore {
     private static func resolveConfigToken(
         isRemote: Bool,
         root: [String: Any],
-        env: [String: String] = [:]) -> String?
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
     {
         if isRemote {
             return GatewayRemoteConfig.resolveTokenString(root: root)
@@ -202,22 +222,30 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let token = auth["token"] as? String
         {
-            return self.resolveLocalConfigAuthString(token, env: env)
+            return self.resolveLocalConfigAuthString(token, env: env, serviceEnv: serviceEnv)
         }
         return nil
     }
 
     private static func resolveLocalConfigAuthString(
         _ raw: String,
-        env: [String: String]) -> String?
+        env: [String: String],
+        serviceEnv: [String: String]) -> String?
     {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard let envName = self.envSecretRefName(trimmed) else {
             return trimmed
         }
-        let value = env[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
+        // Finder-launched apps cannot see gateway-service-only env values. Resolve
+        // local refs from app env first, then the gateway LaunchAgent snapshot.
+        for source in [env, serviceEnv] {
+            let value = source[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func envSecretRefName(_ value: String) -> String? {
