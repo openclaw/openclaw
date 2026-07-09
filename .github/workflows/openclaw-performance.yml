@@ -246,6 +246,23 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Configure OCM local workspace dependencies
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"
+          workspace_dependency_dirs=""
+          if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then
+            workspace_dependency_dirs="${GITHUB_WORKSPACE}/packages/ai"
+          fi
+          chmod 0755 "$npm_wrapper"
+          {
+            echo "OCM_INTERNAL_NPM_BIN=$npm_wrapper"
+            echo "OPENCLAW_OCM_REAL_NPM_BIN=$(command -v npm)"
+            echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
+          } >> "$GITHUB_ENV"
+
       - name: Pin Kova OpenAI model to GPT 5.5
         if: steps.lane.outputs.run == 'true'
         shell: bash

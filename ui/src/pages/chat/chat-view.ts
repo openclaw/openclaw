@@ -2,6 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -24,12 +25,13 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import "./components/chat-sidebar.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import "./components/chat-sidebar.ts";
+import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   isChatThreadSearchOpen,
   renderChatPinnedMessages,
@@ -143,6 +145,12 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  taskSuggestions?: TaskSuggestion[];
+  taskSuggestionBusyIds?: ReadonlySet<string>;
+  canAcceptTaskSuggestions?: boolean;
+  canDismissTaskSuggestions?: boolean;
+  onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
 };
 
 export function resetChatViewState(paneId?: string) {
@@ -343,7 +351,16 @@ export function renderChat(props: ChatProps) {
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
-              ${thread} ${chatColumnFooter}
+              ${thread}
+              ${renderChatTaskSuggestions({
+                suggestions: props.taskSuggestions ?? [],
+                busyIds: props.taskSuggestionBusyIds ?? new Set(),
+                canAccept: props.canAcceptTaskSuggestions === true,
+                canDismiss: props.canDismissTaskSuggestions === true,
+                onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
+                onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+              })}
+              ${chatColumnFooter}
             </div>
 
             ${sidebarOpen

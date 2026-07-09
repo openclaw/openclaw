@@ -12,6 +12,8 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+  DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
@@ -202,6 +204,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "spawn_task",
+    label: "spawn_task",
+    description: SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "dismiss_task",
+    label: "dismiss_task",
+    description: DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {

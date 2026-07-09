@@ -1566,6 +1566,16 @@ export const es: TranslationMap = {
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
     archivedSessionDisabled: "Restaura esta sesión para enviar mensajes.",
+    taskSuggestions: {
+      eyebrow: "Tarea de seguimiento sugerida",
+      start: "Iniciar en un worktree",
+      starting: "Iniciando…",
+      dismiss: "Descartar {title}",
+      project: "Proyecto",
+      instructions: "Instrucciones",
+      adminRequired:
+        "Se requiere acceso de administrador para crear un worktree para este proyecto.",
+    },
     refreshTitle: "Actualizar datos del chat",
     settings: "Configuración del chat",
     usageRemaining: "Uso restante",

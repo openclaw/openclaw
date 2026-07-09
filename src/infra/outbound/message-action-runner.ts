@@ -47,6 +47,8 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
   type GatewayClientMode,
   type GatewayClientName,
@@ -202,9 +204,9 @@ async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGateway, callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  const callParams = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -213,6 +215,26 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
+  };
+  const isTrustedBackendBridge =
+    gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const requesterAccountId = normalizeOptionalString(params.actionParams.requesterAccountId);
+  const requesterSenderId = normalizeOptionalString(params.actionParams.requesterSenderId);
+  const carriesTrustedRequester =
+    isTrustedBackendBridge &&
+    (requesterAccountId !== undefined ||
+      requesterSenderId !== undefined ||
+      params.actionParams.senderIsOwner !== undefined);
+  if (!carriesTrustedRequester) {
+    return await callGatewayLeastPrivilege<T>(callParams);
+  }
+  // Trusted requester fields come from inbound server context. The RPC needs
+  // admin scope to prove provenance; the Gateway recognizes this backend bridge
+  // and keeps channel-handler authorization at message.action least privilege.
+  return await callGateway<T>({
+    ...callParams,
+    scopes: ["operator.admin"],
   });
 }
 

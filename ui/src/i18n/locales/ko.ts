@@ -1546,6 +1546,15 @@ export const ko: TranslationMap = {
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
     archivedSessionDisabled: "메시지를 보내려면 이 세션을 복원하세요.",
+    taskSuggestions: {
+      eyebrow: "제안된 후속 작업",
+      start: "워크트리에서 시작",
+      starting: "시작 중…",
+      dismiss: "{title} 닫기",
+      project: "프로젝트",
+      instructions: "지침",
+      adminRequired: "이 프로젝트에서 워크트리를 만들려면 관리자 권한이 필요합니다.",
+    },
     refreshTitle: "채팅 데이터 새로고침",
     settings: "채팅 설정",
     usageRemaining: "남은 사용량",
