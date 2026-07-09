@@ -55,6 +55,14 @@ function createOutput(): AssistantMessage {
 }
 
 describe("buildGoogleSimpleThinking", () => {
+  it("keeps thinking disabled when a non-reasoning model clamps low to off", () => {
+    const nonReasoningModel = { ...model, reasoning: false };
+
+    expect(buildGoogleSimpleThinking(nonReasoningModel, { reasoning: "low" })).toEqual({
+      enabled: false,
+    });
+  });
+
   it.each(["xhigh", "max"] as const)(
     "keeps thinking disabled when reasoning=%s clamps to off",
     (reasoning) => {
