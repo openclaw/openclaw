@@ -27,7 +27,10 @@ function managedCommandPath(root: string, platform: NodeJS.Platform): string {
   return pathApi.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
 }
 
-const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+const MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND =
+  "/Applications/ChatGPT.app/Contents/Resources/codex";
+const MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND =
+  "/Applications/Codex.app/Contents/Resources/codex";
 
 describe("managed Codex app-server binary", () => {
   it("leaves explicit command overrides unchanged", async () => {
@@ -43,13 +46,15 @@ describe("managed Codex app-server binary", () => {
     expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("prefers the macOS desktop app bundle when it exists", async () => {
+  it("prefers the current ChatGPT.app bundle when both macOS desktop app bundles exist", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(
       async (filePath: string) =>
-        filePath === MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND || filePath === pluginLocalCommand,
+        filePath === MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND ||
+        filePath === MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND ||
+        filePath === pluginLocalCommand,
     );
 
     await expect(
@@ -60,12 +65,48 @@ describe("managed Codex app-server binary", () => {
       }),
     ).resolves.toEqual({
       ...startOptions("managed"),
-      command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      command: MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [
+        MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND,
+        pluginLocalCommand,
+      ],
+    });
+    expect(paths.commandPath).toBe(MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND);
+    expect(paths.candidateCommandPaths).toEqual(
+      expect.arrayContaining([
+        MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND,
+        MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND,
+        pluginLocalCommand,
+      ]),
+    );
+  });
+
+  it("falls back to the legacy Codex.app bundle when ChatGPT.app is absent", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(
+      async (filePath: string) =>
+        filePath === MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND ||
+        filePath === pluginLocalCommand,
+    );
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
     });
-    expect(paths.commandPath).toBe(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND);
-    expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);
+    expect(pathExists).toHaveBeenCalledWith(
+      MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      "darwin",
+    );
   });
 
   it("falls back to the plugin-local bundled Codex binary on macOS", async () => {
@@ -84,7 +125,14 @@ describe("managed Codex app-server binary", () => {
       command: pluginLocalCommand,
       commandSource: "resolved-managed",
     });
-    expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, "darwin");
+    expect(pathExists).toHaveBeenCalledWith(
+      MACOS_CHATGPT_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      "darwin",
+    );
+    expect(pathExists).toHaveBeenCalledWith(
+      MACOS_LEGACY_CODEX_DESKTOP_APP_SERVER_COMMAND,
+      "darwin",
+    );
   });
 
   it("resolves Windows Codex command shims", () => {

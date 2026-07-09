@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
+  resolveMacOSDesktopCodexBundledMarketplaceCandidates,
+} from "./desktop-app-paths.js";
 
 export type CodexComputerUsePluginCacheRepairResult =
   | {
@@ -23,7 +27,7 @@ export type CodexComputerUsePluginCacheRepairResult =
     };
 
 export const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
-  "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
+  resolveMacOSDesktopCodexBundledMarketplaceCandidates("darwin")[0] ?? "";
 
 const DEFAULT_BUNDLED_MARKETPLACE_NAME = "openai-bundled";
 
@@ -31,6 +35,7 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   codexHome: string;
   config: ResolvedCodexComputerUseConfig;
   bundledMarketplacePath?: string;
+  bundledMarketplacePathCandidates?: readonly string[];
 }): Promise<CodexComputerUsePluginCacheRepairResult> {
   if (!params.config.enabled) {
     return skippedCacheResult(
@@ -51,8 +56,7 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     );
   }
 
-  const bundledMarketplacePath =
-    params.bundledMarketplacePath ?? DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH;
+  const bundledMarketplacePath = resolveComputerUseBundledMarketplacePath(params);
   const sourcePluginRoot = path.join(bundledMarketplacePath, "plugins", params.config.pluginName);
   const version = await readBundledPluginVersion(sourcePluginRoot);
   if (!version) {
@@ -83,6 +87,20 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     warnings: [],
     message: `Computer Use plugin cache ${cachePath} contains bundled plugin ${sourcePluginRoot}.`,
   };
+}
+
+function resolveComputerUseBundledMarketplacePath(params: {
+  bundledMarketplacePath?: string;
+  bundledMarketplacePathCandidates?: readonly string[];
+}): string {
+  return (
+    params.bundledMarketplacePath ??
+    resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
+      candidates: params.bundledMarketplacePathCandidates,
+    }) ??
+    params.bundledMarketplacePathCandidates?.[0] ??
+    DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH
+  );
 }
 
 async function readBundledPluginVersion(sourcePluginRoot: string): Promise<string | undefined> {

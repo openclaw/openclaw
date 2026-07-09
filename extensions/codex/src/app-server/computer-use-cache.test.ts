@@ -15,6 +15,79 @@ describe("Codex Computer Use shared plugin cache", () => {
     }
   });
 
+  it("prefers the current ChatGPT.app bundled marketplace when both desktop app candidates exist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const chatGptMarketplacePath = path.join(
+      root,
+      "Applications",
+      "ChatGPT.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    const legacyCodexMarketplacePath = path.join(
+      root,
+      "Applications",
+      "Codex.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
+    await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome: path.join(root, "agent", "codex-home"),
+      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+      config: computerUseConfig(),
+    });
+
+    expect(result).toMatchObject({
+      status: "shared",
+      version: "2.0.0",
+      targetPath: path.join(chatGptMarketplacePath, "plugins", "computer-use"),
+    });
+  });
+
+  it("falls back to the legacy Codex.app bundled marketplace when ChatGPT.app is absent", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const chatGptMarketplacePath = path.join(
+      root,
+      "Applications",
+      "ChatGPT.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    const legacyCodexMarketplacePath = path.join(
+      root,
+      "Applications",
+      "Codex.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome: path.join(root, "agent", "codex-home"),
+      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+      config: computerUseConfig(),
+    });
+
+    expect(result).toMatchObject({
+      status: "shared",
+      version: "1.0.0",
+      targetPath: path.join(legacyCodexMarketplacePath, "plugins", "computer-use"),
+    });
+  });
+
   it("copies agent cache entries from the local bundled plugin and removes stale versions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
     cleanupPaths.push(root);
@@ -223,6 +296,18 @@ describe("Codex Computer Use shared plugin cache", () => {
     await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
   });
 });
+
+async function writeBundledComputerUsePlugin(
+  bundledMarketplacePath: string,
+  version: string,
+): Promise<void> {
+  const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+  await fs.mkdir(path.join(bundledPluginRoot, ".codex-plugin"), { recursive: true });
+  await fs.writeFile(
+    path.join(bundledPluginRoot, ".codex-plugin", "plugin.json"),
+    JSON.stringify({ name: "computer-use", version }),
+  );
+}
 
 function computerUseConfig(
   overrides: Partial<ResolvedCodexComputerUseConfig> = {},

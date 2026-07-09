@@ -2290,6 +2290,38 @@ describe("codex command", () => {
     });
   });
 
+  it("formats failed Codex Computer Use live probes as not ready", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => ({
+      ...computerUseReadyStatus(),
+      ready: false,
+      reason: "live_test_failed" as const,
+      liveTest: {
+        status: "failed" as const,
+        ok: false,
+        attempted: true,
+        attempts: 2,
+        timeoutMs: 60_000,
+        retried: true,
+        repaired: false,
+        message: "Computer Use live test failed after 2 attempts: list_apps timed out",
+        error: "list_apps timed out",
+      },
+      warnings: [
+        "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+      ],
+      message:
+        "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
+    }));
+
+    const result = await handleCodexCommand(createContext("computer-use status"), {
+      deps: createDeps({ readCodexComputerUseStatus }),
+    });
+
+    expectResultTextContains(result, "Computer Use: not ready");
+    expectResultTextContains(result, "Live test: failed (2 attempts, 60000ms)");
+    expectResultTextContains(result, "Warning: Computer Use live test failed");
+  });
+
   it("escapes Codex Computer Use status fields before chat display", async () => {
     const readCodexComputerUseStatus = vi.fn(async () => ({
       ...computerUseReadyStatus(),

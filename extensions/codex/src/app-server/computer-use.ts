@@ -14,6 +14,7 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
+import { resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath } from "./desktop-app-paths.js";
 import type {
   CodexListMcpServerStatusResponse,
   CodexMcpServerStatus,
@@ -138,6 +139,7 @@ export type CodexComputerUseSetupParams = {
   signal?: AbortSignal;
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 };
 
@@ -170,8 +172,6 @@ type PluginInspection =
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
-const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
-  "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 const execFileAsync = promisify(execFile);
@@ -236,6 +236,9 @@ export async function ensureCodexComputerUse(
   if (status.ready) {
     return status;
   }
+  if (isNonStrictLiveTestStartupAllowed(status, config)) {
+    return status;
+  }
   if (config.autoInstall) {
     const blockedAutoInstallStatus = blockUnsafeAutoInstallStatus(config);
     if (blockedAutoInstallStatus) {
@@ -246,6 +249,9 @@ export async function ensureCodexComputerUse(
       config,
       installPlugin: true,
     });
+    if (isNonStrictLiveTestStartupAllowed(installedStatus, config)) {
+      return installedStatus;
+    }
     if (!installedStatus.ready) {
       throw new CodexComputerUseSetupError(installedStatus);
     }
@@ -286,6 +292,7 @@ async function inspectCodexComputerUse(params: {
   config: ResolvedCodexComputerUseConfig;
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
@@ -306,6 +313,7 @@ async function inspectCodexComputerUse(params: {
     allowAdd: params.installPlugin,
     signal: params.signal,
     defaultBundledMarketplacePath: params.defaultBundledMarketplacePath,
+    defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -434,7 +442,7 @@ async function readComputerUseTools(params: {
   const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
     ...status,
-    ready: liveTest.ok || compatibilityStartupAllowed,
+    ready: liveTest.ok,
     reason: liveTest.ok ? "ready" : "live_test_failed",
     liveTest,
     ...(repair ? { repair } : {}),
@@ -453,6 +461,21 @@ async function readComputerUseTools(params: {
         ? `${liveTest.message} Startup is allowed because computerUse.strictReadiness is false.`
         : liveTest.message,
   };
+}
+
+function isNonStrictLiveTestStartupAllowed(
+  status: CodexComputerUseStatus,
+  config: ResolvedCodexComputerUseConfig,
+): boolean {
+  return (
+    !config.strictReadiness &&
+    status.reason === "live_test_failed" &&
+    status.installed &&
+    status.pluginEnabled &&
+    status.mcpServerAvailable &&
+    status.installation.ok &&
+    status.exposure.ok
+  );
 }
 
 export async function runCodexComputerUseLiveTest(params: {
@@ -584,6 +607,7 @@ async function resolveMarketplaceRef(params: {
   allowAdd: boolean;
   signal?: AbortSignal;
   defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -601,9 +625,12 @@ async function resolveMarketplaceRef(params: {
   }
 
   let candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
-  if (candidates.length === 0 && shouldAddBundledComputerUseMarketplace(params)) {
-    const bundledMarketplacePath =
-      params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
+  const bundledMarketplacePath = resolveBundledComputerUseMarketplacePath(params);
+  if (
+    candidates.length === 0 &&
+    bundledMarketplacePath &&
+    shouldAddBundledComputerUseMarketplace(params)
+  ) {
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: bundledMarketplacePath,
     } satisfies CodexRequestObject);
@@ -678,16 +705,29 @@ function shouldAddBundledComputerUseMarketplace(params: {
   config: ResolvedCodexComputerUseConfig;
   allowAdd: boolean;
   defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
 }): boolean {
-  const bundledMarketplacePath =
-    params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
   return (
     params.allowAdd &&
     !params.config.marketplaceSource &&
     !params.config.marketplacePath &&
     !params.config.marketplaceName &&
-    existsSync(bundledMarketplacePath)
+    Boolean(resolveBundledComputerUseMarketplacePath(params))
   );
+}
+
+function resolveBundledComputerUseMarketplacePath(params: {
+  defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
+}): string | undefined {
+  if (params.defaultBundledMarketplacePath) {
+    return existsSync(params.defaultBundledMarketplacePath)
+      ? params.defaultBundledMarketplacePath
+      : undefined;
+  }
+  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
+    candidates: params.defaultBundledMarketplacePathCandidates,
+  });
 }
 
 function findComputerUseMarketplaces(

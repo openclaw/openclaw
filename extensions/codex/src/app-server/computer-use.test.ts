@@ -217,6 +217,19 @@ describe("Codex Computer Use setup", () => {
       retried: true,
       repaired: false,
     });
+    expectStatusFields(status, {
+      ready: false,
+      reason: "live_test_failed",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: true,
+    });
+    expect(status.warnings).toContain(
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+    );
+    expect(status.message).toContain(
+      "Startup is allowed because computerUse.strictReadiness is false.",
+    );
     expect(status.repair).toBeUndefined();
     expect(repairComputerUseMcpChildren).not.toHaveBeenCalled();
   });
@@ -286,7 +299,7 @@ describe("Codex Computer Use setup", () => {
     });
 
     expectStatusFields(status, {
-      ready: true,
+      ready: false,
       reason: "live_test_failed",
       installed: true,
       pluginEnabled: true,
@@ -299,6 +312,39 @@ describe("Codex Computer Use setup", () => {
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",
     );
+  });
+
+  it("keeps auto-install startup compatible when installation succeeds but the live test fails", async () => {
+    const request = createComputerUseRequest({ installed: false, liveTestFailures: 2 });
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+          marketplaceName: "desktop-tools",
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "live_test_failed",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: true,
+    });
+    expect(status.warnings).toContain(
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+    );
+    expect(status.message).toContain(
+      "Startup is allowed because computerUse.strictReadiness is false.",
+    );
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
   });
 
   it("fails startup closed when strictReadiness is enabled", async () => {
@@ -434,6 +480,24 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined);
   });
 
+  it("requires explicit install commands to finish with a passing live test", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "live_test_failed",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: true,
+      },
+    );
+  });
+
   it("re-enables an installed but disabled Computer Use plugin during install", async () => {
     const request = createComputerUseRequest({ installed: true, enabled: false });
 
@@ -522,7 +586,100 @@ describe("Codex Computer Use setup", () => {
     });
   });
 
-  it("auto-registers the bundled Codex app marketplace during auto-install", async () => {
+  it("auto-registers the current ChatGPT.app bundled marketplace before legacy Codex.app", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"));
+    cleanupPaths.push(root);
+    const chatGptMarketplacePath = path.join(
+      root,
+      "Applications",
+      "ChatGPT.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    const legacyCodexMarketplacePath = path.join(
+      root,
+      "Applications",
+      "Codex.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    fs.mkdirSync(chatGptMarketplacePath, { recursive: true });
+    fs.mkdirSync(legacyCodexMarketplacePath, { recursive: true });
+    const request = createBundledMarketplaceComputerUseRequest(chatGptMarketplacePath);
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+        },
+      },
+      request,
+      defaultBundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+      message: "Computer Use is ready.",
+    });
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: chatGptMarketplacePath,
+    });
+  });
+
+  it("auto-registers the legacy Codex.app bundled marketplace when ChatGPT.app is absent", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"));
+    cleanupPaths.push(root);
+    const chatGptMarketplacePath = path.join(
+      root,
+      "Applications",
+      "ChatGPT.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    const legacyCodexMarketplacePath = path.join(
+      root,
+      "Applications",
+      "Codex.app",
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    );
+    fs.mkdirSync(legacyCodexMarketplacePath, { recursive: true });
+    const request = createBundledMarketplaceComputerUseRequest(legacyCodexMarketplacePath);
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+        },
+      },
+      request,
+      defaultBundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+      message: "Computer Use is ready.",
+    });
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: legacyCodexMarketplacePath,
+    });
+  });
+
+  it("keeps explicit bundled marketplace test overrides authoritative during auto-install", async () => {
     const bundledMarketplacePath = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
     );

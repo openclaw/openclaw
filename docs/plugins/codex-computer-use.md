@@ -106,8 +106,11 @@ With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
 re-enable the plugin and reload MCP servers. On macOS, when no matching
-marketplace is registered and the standard Codex app bundle exists, OpenClaw
-also tries to register the bundled Codex marketplace from
+marketplace is registered and the standard desktop app bundle exists, OpenClaw
+also tries to register the bundled Codex marketplace from the current ChatGPT
+app bundle at
+`/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled`, falling
+back to the legacy Codex app bundle at
 `/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` before it
 fails. If setup still cannot make the MCP server available, the turn fails
 before the thread starts.
@@ -135,16 +138,17 @@ Installation and MCP exposure failures remain blocking in both modes.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
-bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
-That keeps Computer Use under the app bundle that owns the local
-desktop-control permissions. If the desktop app is not installed, OpenClaw
-falls back to the managed Codex binary installed beside the plugin. If an
-installed desktop app initializes with an unsupported app-server version,
-OpenClaw closes that child and retries the next managed binary candidate
-instead of letting a stale desktop app shadow the plugin-local fallback.
-Explicit `appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still
-overrides this managed selection.
+On macOS managed stdio startup, OpenClaw prefers the signed desktop app binary
+at `/Applications/ChatGPT.app/Contents/Resources/codex` when it exists. Legacy
+installs remain supported: if ChatGPT.app is absent, OpenClaw falls back to
+`/Applications/Codex.app/Contents/Resources/codex` before trying the managed
+Codex binary installed beside the plugin. That keeps Computer Use under the app
+bundle that owns the local desktop-control permissions. If an installed desktop
+app initializes with an unsupported app-server version, OpenClaw closes that
+child and retries the next managed binary candidate instead of letting a stale
+desktop app shadow the plugin-local fallback. Explicit `appServer.command`
+config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides this managed
+selection.
 
 ## Commands
 
@@ -203,27 +207,37 @@ matches fail closed and ask you to set `marketplaceName` or
 
 ## Bundled macOS marketplace
 
-Recent Codex desktop builds bundle Computer Use here:
+Recent desktop builds bundle Computer Use in the ChatGPT.app bundle:
+
+```text
+/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use
+```
+
+Legacy Codex.app installs remain supported at the old location:
 
 ```text
 /Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use
 ```
 
 When `computerUse.autoInstall` is true and no marketplace containing
-`computer-use` is registered, OpenClaw tries to add the standard bundled
-marketplace root automatically:
+`computer-use` is registered, OpenClaw tries to add the current bundled
+marketplace root automatically, falling back to the legacy root when the
+current bundle is absent:
 
 ```text
+/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
 /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
-You can also register it explicitly from a shell with Codex:
+You can also register either root explicitly from a shell with Codex:
 
 ```bash
+codex plugin marketplace add /Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
+# Legacy fallback:
 codex plugin marketplace add /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
-If you use a nonstandard Codex app path, run `/codex computer-use install
+If you use a nonstandard desktop app path, run `/codex computer-use install
 --source <marketplace-root>` once, or set `computerUse.marketplacePath` to a
 local marketplace file path. Use `--marketplace-path` only when you have the
 marketplace JSON file path, not the bundled marketplace root.
@@ -232,15 +246,17 @@ marketplace JSON file path, not the bundled marketplace root.
 
 OpenClaw normally launches local Codex app-server children with isolated
 per-agent `CODEX_HOME` directories. Without reconciliation, one agent can keep
-a stale cached Computer Use plugin even after Codex.app is updated elsewhere.
+a stale cached Computer Use plugin even after the desktop app is updated
+elsewhere.
 
 When Computer Use is enabled, `pluginCacheMode: "shared"` is the default.
-Before app-server startup, OpenClaw reads the locally installed Codex.app
-bundled Computer Use plugin version, removes stale per-agent Computer Use
-cache versions for that marketplace/plugin, and refreshes the active per-agent
-cache entry as a real copied directory that Codex can discover. Set
-`pluginCacheMode: "independent"` only when a runtime intentionally needs its own
-unmanaged plugin cache.
+Before app-server startup, OpenClaw reads the locally installed bundled
+Computer Use plugin version from ChatGPT.app, or from legacy Codex.app when
+ChatGPT.app is absent, removes stale per-agent Computer Use cache versions for
+that marketplace/plugin, and refreshes the active per-agent cache entry as a
+real copied directory that Codex can discover. Set `pluginCacheMode:
+"independent"` only when a runtime intentionally needs its own unmanaged plugin
+cache.
 
 ## Remote catalog limit
 
@@ -391,6 +407,8 @@ host previously ran Computer Use through an older managed Codex app-server,
 refresh the installed plugin from the desktop bundled marketplace:
 
 ```text
+/codex computer-use install --source /Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
+# Legacy fallback:
 /codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
