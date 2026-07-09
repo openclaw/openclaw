@@ -1158,14 +1158,19 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isRateLimit = isFallbackSummary
     ? isPureTransientSummary
     : isFailoverError(params.err)
-      ? params.err.reason === "rate_limit" || params.err.reason === "overloaded"
+      ? params.err.reason === "rate_limit"
       : isRateLimitErrorMessage(message);
+  const isOverloaded = isFallbackSummary
+    ? false // FallbackSummaryError overloaded handled separately
+    : isFailoverError(params.err)
+      ? params.err.reason === "overloaded"
+      : isOverloadedErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(message)
       : undefined;
 
-  if (isRateLimit && !isOverloadedErrorMessage(message)) {
+  if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: buildRateLimitCooldownMessage(params.err),
@@ -3461,8 +3466,13 @@ async function runAgentTurnWithFallbackInternal(
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
         : isFailoverError(err)
-          ? err.reason === "rate_limit" || err.reason === "overloaded"
+          ? err.reason === "rate_limit"
           : isRateLimitErrorMessage(message);
+      const isOverloaded = isFallbackSummary
+        ? false // FallbackSummaryError overloaded handled separately
+        : isFailoverError(err)
+          ? err.reason === "overloaded"
+          : isOverloadedErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
           ? formatRateLimitOrOverloadedErrorCopy(message)
@@ -3473,7 +3483,7 @@ async function runAgentTurnWithFallbackInternal(
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const externalRunFailureReply =
         !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !(isRateLimit && !isOverloaded) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi

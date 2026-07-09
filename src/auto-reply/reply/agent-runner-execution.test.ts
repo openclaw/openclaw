@@ -7175,6 +7175,72 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces periodic usage-limit failures in group chats via typed FailoverError.reason", async () => {
+    // Simulate a FailoverError with reason="rate_limit" from periodic usage limit
+    const failoverError = Object.assign(
+      new Error("You've hit your weekly limit · resets 6pm (UTC)"),
+      {
+        name: "FailoverError",
+        reason: "rate_limit",
+      },
+    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(failoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          GroupSubject: "test group",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      // Should surface the rate-limit message, not generic failure
+      expect(result.payload.text).toContain("rate limit");
+    }
+  });
+
+  it("surfaces typed overloaded failures in group chats via FailoverError.reason", async () => {
+    // Simulate a FailoverError with reason="overloaded" but generic message
+    const failoverError = Object.assign(
+      new Error("Service temporarily unavailable"),
+      {
+        name: "FailoverError",
+        reason: "overloaded",
+      },
+    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(failoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          GroupSubject: "test group",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      // Should surface overloaded message, not rate-limit cooldown
+      expect(result.payload.text).toContain("overloaded");
+    }
+  });
+
   it("uses compact generic copy for raw runner failures in normal Discord direct chats", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
