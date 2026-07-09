@@ -564,6 +564,9 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
         "@openclaw/demo-plugin-npm",
         "1.0.0",
         tarballPath,
+        "@openclaw/demo-plugin-npm/extra",
+        "1.0.0",
+        tarballPath,
       ],
       {
         cwd: process.cwd(),
@@ -591,6 +594,23 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
         name: "@openclaw/demo-plugin-npm",
         "dist-tags": { latest: "1.0.0" },
       });
+
+      const extra = await requestFixtureRegistry(port, "/@openclaw%2Fdemo-plugin-npm%2Fextra");
+      const extraMetadata = JSON.parse(extra.body) as {
+        versions: Record<string, { dist: { tarball: string } }>;
+      };
+      const extraTarballUrl = new URL(extraMetadata.versions["1.0.0"].dist.tarball);
+      const extraTarball = await requestFixtureRegistry(
+        port,
+        `${extraTarballUrl.pathname}${extraTarballUrl.search}`,
+      );
+
+      expect(extra.statusCode, stderr.text()).toBe(200);
+      expect(extraMetadata.versions["1.0.0"].dist.tarball).toContain(
+        "/@openclaw%2Fdemo-plugin-npm%2Fextra/-/",
+      );
+      expect(extraTarball.statusCode, stderr.text()).toBe(200);
+      expect(extraTarball.body).toBe("fixture package archive");
     } finally {
       if (child.exitCode === null) {
         child.kill();

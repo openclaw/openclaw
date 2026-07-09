@@ -14,13 +14,19 @@ if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
 }
 
 const packages = new Map();
+
+function encodePackagePathName(packageName) {
+  const encoded = encodeURIComponent(packageName);
+  return encoded.startsWith("%40") ? `@${encoded.slice("%40".length)}` : encoded;
+}
+
 for (let index = 0; index < packageArgs.length; index += 3) {
   const packageName = packageArgs[index];
   const version = packageArgs[index + 1];
   const tarballPath = packageArgs[index + 2];
   const archive = fs.readFileSync(tarballPath);
   const existing = packages.get(packageName) ?? {
-    encodedPackageName: encodeURIComponent(packageName).replace("%40", "@"),
+    encodedPackageName: encodePackagePathName(packageName),
     packageName,
     latestVersion: version,
     versions: new Map(),
