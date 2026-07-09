@@ -608,9 +608,9 @@ export const ja_JP: TranslationMap = {
   },
   tasksPage: {
     active: "アクティブ",
-    activeSub: "Queued and running background work.",
+    activeSub: "キューに入っているバックグラウンド作業と実行中のバックグラウンド作業。",
     recent: "最近",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
+    recentSub: "完了、失敗、キャンセルされた最新のタスク。",
     loading: "タスクを読み込み中…",
     empty: "バックグラウンドタスクはまだありません。",
     emptyActive: "キュー内または実行中のタスクはありません。",
@@ -1949,7 +1949,7 @@ export const ja_JP: TranslationMap = {
     },
     summary: {
       enabled: "有効",
-      scheduler: "Scheduler",
+      scheduler: "スケジューラー",
       jobs: "ジョブ",
       nextWake: "次回のウェイク",
       refreshing: "更新中...",

@@ -607,9 +607,9 @@ export const tr: TranslationMap = {
   },
   tasksPage: {
     active: "Etkin",
-    activeSub: "Queued and running background work.",
+    activeSub: "Kuyruğa alınmış ve çalışan arka plan işleri.",
     recent: "Son",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
+    recentSub: "En son tamamlanan, başarısız olan ve iptal edilen görevler.",
     loading: "Görevler yükleniyor…",
     empty: "Henüz arka plan görevi yok.",
     emptyActive: "Kuyrukta veya çalışan görev yok.",
@@ -1950,7 +1950,7 @@ export const tr: TranslationMap = {
     },
     summary: {
       enabled: "Etkin",
-      scheduler: "Scheduler",
+      scheduler: "Zamanlayıcı",
       jobs: "İşler",
       nextWake: "Sonraki uyandırma",
       refreshing: "Yenileniyor...",

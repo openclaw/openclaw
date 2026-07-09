@@ -603,9 +603,9 @@ export const fa: TranslationMap = {
   },
   tasksPage: {
     active: "فعال",
-    activeSub: "Queued and running background work.",
+    activeSub: "کارهای پس‌زمینه در صف و در حال اجرا.",
     recent: "اخیر",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
+    recentSub: "آخرین وظایف تکمیل‌شده، ناموفق و لغوشده.",
     loading: "در حال بارگذاری وظایف…",
     empty: "هنوز هیچ وظیفهٔ پس‌زمینه‌ای وجود ندارد.",
     emptyActive: "هیچ وظیفه‌ای در صف یا در حال اجرا نیست.",
@@ -1941,7 +1941,7 @@ export const fa: TranslationMap = {
     },
     summary: {
       enabled: "فعال",
-      scheduler: "Scheduler",
+      scheduler: "زمان‌بند",
       jobs: "کارها",
       nextWake: "بیدارباش بعدی",
       refreshing: "در حال تازه‌سازی...",

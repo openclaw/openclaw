@@ -604,9 +604,9 @@ export const uk: TranslationMap = {
   },
   tasksPage: {
     active: "Активні",
-    activeSub: "Queued and running background work.",
+    activeSub: "Фонові завдання в черзі та в процесі виконання.",
     recent: "Нещодавні",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
+    recentSub: "Останні виконані, невдалі та скасовані завдання.",
     loading: "Завантаження завдань…",
     empty: "Фонових завдань ще немає.",
     emptyActive: "Немає завдань у черзі або виконанні.",
@@ -1944,7 +1944,7 @@ export const uk: TranslationMap = {
     },
     summary: {
       enabled: "Увімкнено",
-      scheduler: "Scheduler",
+      scheduler: "Планувальник",
       jobs: "Завдання",
       nextWake: "Наступне пробудження",
       refreshing: "Оновлення...",

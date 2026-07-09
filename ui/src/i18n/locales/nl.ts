@@ -605,9 +605,9 @@ export const nl: TranslationMap = {
   },
   tasksPage: {
     active: "Actief",
-    activeSub: "Queued and running background work.",
+    activeSub: "In wachtrij geplaatste en actieve achtergrondtaken.",
     recent: "Recent",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
+    recentSub: "Meest recente voltooide, mislukte en geannuleerde taken.",
     loading: "Taken laden…",
     empty: "Nog geen achtergrondtaken.",
     emptyActive: "Geen taken in de wachtrij of actief.",
@@ -1949,7 +1949,7 @@ export const nl: TranslationMap = {
     },
     summary: {
       enabled: "Ingeschakeld",
-      scheduler: "Scheduler",
+      scheduler: "Planner",
       jobs: "Taken",
       nextWake: "Volgende wake",
       refreshing: "Vernieuwen...",
