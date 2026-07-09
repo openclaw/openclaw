@@ -612,15 +612,15 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
 }
 
 export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /^gemma-?4\b/.test(model.id.toLowerCase());
+  return /(?:^|\/)gemma-?4\b/.test(model.id.toLowerCase());
 }
 
 function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /^(?:google\/)?gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
+  return /^(?:google\/)?gemini-3(?:\.\d+)?-pro\b/.test(model.id.toLowerCase());
 }
 
 function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /^(?:google\/)?gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
+  return /^(?:google\/)?gemini-3(?:\.\d+)?-flash\b/.test(model.id.toLowerCase());
 }
 
 function getGoogleThinkingLevel<T extends GoogleApiType>(
@@ -671,7 +671,7 @@ function getGoogleBudget<T extends GoogleApiType>(
     return customBudgets[effort];
   }
 
-  if (model.id.includes("gemini-2.5-pro")) {
+  if (/\bgemini-2\.5-pro$/.test(model.id)) {
     const budgets: Record<ClampedGoogleThinkingLevel, number> = {
       minimal: 128,
       low: 2048,
@@ -681,7 +681,7 @@ function getGoogleBudget<T extends GoogleApiType>(
     return budgets[effort];
   }
 
-  if (config?.useFlashLiteBudgets && model.id.includes("gemini-2.5-flash-lite")) {
+  if (config?.useFlashLiteBudgets && /\bgemini-2\.5-flash-lite$/.test(model.id)) {
     const budgets: Record<ClampedGoogleThinkingLevel, number> = {
       minimal: 512,
       low: 2048,
@@ -691,7 +691,7 @@ function getGoogleBudget<T extends GoogleApiType>(
     return budgets[effort];
   }
 
-  if (model.id.includes("gemini-2.5-flash")) {
+  if (/\bgemini-2\.5-flash$/.test(model.id)) {
     const budgets: Record<ClampedGoogleThinkingLevel, number> = {
       minimal: 128,
       low: 2048,
