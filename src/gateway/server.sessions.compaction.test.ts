@@ -524,7 +524,9 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compactionCall.workspaceDir).toBe("/tmp/task-repo");
   expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
-  expect(callConfig.agents?.defaults?.workspace).toBe("/tmp/task-repo");
+  expect(callConfig.agents?.defaults?.workspace).toBe(
+    path.join(os.tmpdir(), "openclaw-gateway-test"),
+  );
   expect(compactionCall.provider).toBe("anthropic");
   expect(compactionCall.model).toBe("claude-opus-4-6");
   expect(compactionCall.allowGatewaySubagentBinding).toBe(true);
