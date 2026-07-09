@@ -3166,6 +3166,9 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    if (typeof choiceDelta.refusal === "string" && choiceDelta.refusal.length > 0) {
+      appendFilteredVisibleTextDelta(choiceDelta.refusal);
+    }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
         continue;

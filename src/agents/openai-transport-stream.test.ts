@@ -2728,6 +2728,86 @@ describe("openai transport stream", () => {
     expect(output.responseId).toBe("resp_azure_text");
   });
 
+  it("surfaces refusal-only OpenAI-compatible delta chunks as visible text", async () => {
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    async function* mockStream() {
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, refusal: "I can't help with that." },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, { push() {} });
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("surfaces refusal-only aggregated OpenAI-compatible messages as visible text", async () => {
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    async function* mockStream() {
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant" as const,
+              content: null,
+              refusal: "I can't help with that.",
+            },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, { push() {} });
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
     const model = {
       id: "glm-5",
