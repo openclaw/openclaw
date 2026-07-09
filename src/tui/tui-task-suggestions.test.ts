@@ -169,11 +169,34 @@ describe("TUI task suggestions", () => {
     expect(firstPage).toContain("PgUp/PgDn to inspect");
     expect(firstPage).toContain("TASK ACTIONS");
 
-    prompt.handleInput?.("\u001b[6~");
-    const secondPage = stripAnsi(prompt.render(80).join("\n"));
-    expect(secondPage).toContain("instruction-06");
-    expect(secondPage).toContain("TASK ACTIONS");
+    const pages = [firstPage];
+    for (let page = 0; page < 3; page += 1) {
+      prompt.handleInput?.("\u001b[6~");
+      const rendered = stripAnsi(prompt.render(80).join("\n"));
+      pages.push(rendered);
+      expect(rendered).toContain("TASK ACTIONS");
+    }
+    expect(pages.join("\n")).toContain("instruction-20");
     expect(harness.requestRender).toHaveBeenCalled();
+  });
+
+  it("keeps every project path segment inspectable before acceptance", () => {
+    const harness = createHarness();
+    const cwd = `/repo/${"nested-segment/".repeat(20)}distinguishing-project`;
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload({ cwd }),
+    });
+
+    const prompt = harness.openOverlay.mock.calls[0]?.[0];
+    const pages: string[] = [];
+    for (let page = 0; page < 20; page += 1) {
+      const rendered = stripAnsi(prompt.render(24).join("\n"));
+      pages.push(rendered);
+      expect(rendered).toContain("TASK ACTIONS");
+      prompt.handleInput?.("\u001b[6~");
+    }
+    expect(pages.join("\n").replace(/\s/g, "")).toContain("distinguishing-project");
   });
 
   it("strips bidi controls from every displayed confirmation field", () => {

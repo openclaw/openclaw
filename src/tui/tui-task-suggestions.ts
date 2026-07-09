@@ -38,8 +38,8 @@ type TaskSuggestionControllerDeps = {
 };
 
 const TASK_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-const TASK_INSTRUCTION_VIEWPORT_LINES = 6;
-const TASK_INSTRUCTION_PAGE_LINES = TASK_INSTRUCTION_VIEWPORT_LINES - 1;
+const TASK_DETAIL_VIEWPORT_LINES = 12;
+const TASK_DETAIL_PAGE_LINES = TASK_DETAIL_VIEWPORT_LINES - 1;
 const PAGE_UP_INPUT = "\u001b[5~";
 const PAGE_DOWN_INPUT = "\u001b[6~";
 
@@ -100,10 +100,10 @@ class TaskPrompt implements Component {
   private readonly summary: Text;
   private readonly instructionLabel = new Text(theme.system("Instructions:"));
   private readonly instructions: Text;
-  private readonly instructionPosition = new Text();
+  private readonly detailPosition = new Text();
   private readonly confirmation = new Text();
-  private instructionOffset = 0;
-  private instructionLineCount = 0;
+  private detailOffset = 0;
+  private detailLineCount = 0;
 
   constructor(
     suggestion: TaskSuggestion,
@@ -127,7 +127,7 @@ class TaskPrompt implements Component {
       this.summary,
       this.instructionLabel,
       this.instructions,
-      this.instructionPosition,
+      this.detailPosition,
       this.confirmation,
       this.selector,
     ]) {
@@ -136,36 +136,37 @@ class TaskPrompt implements Component {
   }
 
   render(width: number): string[] {
-    const instructionLines = this.instructions.render(width);
-    this.instructionLineCount = instructionLines.length;
-    const maxInstructionOffset = Math.max(
-      0,
-      instructionLines.length - TASK_INSTRUCTION_VIEWPORT_LINES,
+    // Page the complete confirmation details as one unit. This keeps actions
+    // visible without hiding a long project-path suffix from the operator.
+    const detailLines = [
+      ...this.metadata.render(width),
+      ...this.summary.render(width),
+      ...this.instructionLabel.render(width),
+      ...this.instructions.render(width),
+    ];
+    this.detailLineCount = detailLines.length;
+    const maxDetailOffset = Math.max(0, detailLines.length - TASK_DETAIL_VIEWPORT_LINES);
+    this.detailOffset = Math.min(this.detailOffset, maxDetailOffset);
+    const visibleDetails = detailLines.slice(
+      this.detailOffset,
+      this.detailOffset + TASK_DETAIL_VIEWPORT_LINES,
     );
-    this.instructionOffset = Math.min(this.instructionOffset, maxInstructionOffset);
-    const visibleInstructions = instructionLines.slice(
-      this.instructionOffset,
-      this.instructionOffset + TASK_INSTRUCTION_VIEWPORT_LINES,
-    );
-    if (instructionLines.length > TASK_INSTRUCTION_VIEWPORT_LINES) {
-      const visibleEnd = this.instructionOffset + visibleInstructions.length;
-      this.instructionPosition.setText(
+    if (detailLines.length > TASK_DETAIL_VIEWPORT_LINES) {
+      const visibleEnd = this.detailOffset + visibleDetails.length;
+      this.detailPosition.setText(
         theme.dim(
-          `Instructions ${this.instructionOffset + 1}-${visibleEnd} of ${instructionLines.length} · PgUp/PgDn to inspect`,
+          `Details ${this.detailOffset + 1}-${visibleEnd} of ${detailLines.length} · PgUp/PgDn to inspect`,
         ),
       );
     } else {
-      this.instructionPosition.setText("");
+      this.detailPosition.setText("");
     }
-    const instructionPosition = this.instructionPosition.render(width);
+    const detailPosition = this.detailPosition.render(width);
     const confirmation = this.confirmation.render(width);
     return [
       ...this.title.render(width).slice(0, 2),
-      ...this.metadata.render(width).slice(0, 2),
-      ...this.summary.render(width).slice(0, 2),
-      ...this.instructionLabel.render(width),
-      ...visibleInstructions,
-      ...(instructionPosition.some((line) => line.trim()) ? instructionPosition : []),
+      ...visibleDetails,
+      ...(detailPosition.some((line) => line.trim()) ? detailPosition : []),
       ...(confirmation.some((line) => line.trim()) ? ["", ...confirmation] : []),
       "",
       ...this.selector.render(width),
@@ -174,12 +175,14 @@ class TaskPrompt implements Component {
 
   handleInput(data: string): void {
     if (data === PAGE_UP_INPUT || data === PAGE_DOWN_INPUT) {
-      const maxOffset = Math.max(0, this.instructionLineCount - TASK_INSTRUCTION_VIEWPORT_LINES);
-      const delta =
-        data === PAGE_UP_INPUT ? -TASK_INSTRUCTION_PAGE_LINES : TASK_INSTRUCTION_PAGE_LINES;
-      const nextOffset = Math.min(maxOffset, Math.max(0, this.instructionOffset + delta));
-      if (nextOffset !== this.instructionOffset) {
-        this.instructionOffset = nextOffset;
+      const maxOffset = Math.max(0, this.detailLineCount - TASK_DETAIL_VIEWPORT_LINES);
+      const delta = data === PAGE_UP_INPUT ? -TASK_DETAIL_PAGE_LINES : TASK_DETAIL_PAGE_LINES;
+      const nextOffset = Math.min(maxOffset, Math.max(0, this.detailOffset + delta));
+      if (nextOffset !== this.detailOffset) {
+        this.detailOffset = nextOffset;
+        this.metadata.invalidate();
+        this.summary.invalidate();
+        this.instructionLabel.invalidate();
         this.instructions.invalidate();
         this.requestRender();
       }
