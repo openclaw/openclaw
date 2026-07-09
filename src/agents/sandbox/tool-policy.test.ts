@@ -305,8 +305,26 @@ describe("sandbox/tool-policy", () => {
     );
   });
 
-  it("keeps redacted session keys UTF-16 safe", () => {
-    const sessionKey = `abcde\u{1F600}middle123456`;
+  it.each([
+    {
+      boundary: "prefix",
+      sessionKey: `abcde\u{1f600}middle123456`,
+      expectedLabel: "abcde…123456",
+    },
+    {
+      boundary: "suffix",
+      sessionKey: `abcdefmiddle\u{1f600}12345`,
+      expectedLabel: "abcdef…12345",
+    },
+    {
+      boundary: "both",
+      sessionKey: `abcde\u{1f600}middle\u{1f600}12345`,
+      expectedLabel: "abcde…12345",
+    },
+  ])("keeps redacted session keys UTF-16 safe at the $boundary boundary", ({
+    sessionKey,
+    expectedLabel,
+  }) => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -329,8 +347,13 @@ describe("sandbox/tool-policy", () => {
     });
 
     const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
-    expect(sessionLine).toBe("Session: abcde…123456");
-    expect(sessionLine).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    const sessionLabel = sessionLine?.slice("Session: ".length);
+    expect(sessionLabel).toBe(expectedLabel);
+    expect(sessionLabel?.length).toBeLessThanOrEqual(13);
+    expect(sessionLabel).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
   });
 
   it("avoids terminal injection for control-character session keys", () => {
