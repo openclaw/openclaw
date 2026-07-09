@@ -634,7 +634,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
+            text: truncateUtf16Safe(String(el.textContent || "").replace(/\\s+/g, " ").trim(), 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
