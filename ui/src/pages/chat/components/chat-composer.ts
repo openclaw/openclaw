@@ -45,7 +45,11 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderChatVoiceActivity } from "./chat-voice-activity.ts";
+import {
+  renderChatVoiceError,
+  renderMicrophoneActivity,
+  voiceStatusLabel,
+} from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -1738,6 +1742,9 @@ export type ChatRunControlsProps = {
   isBusy: boolean;
   sending: boolean;
   voiceActive?: boolean;
+  voiceStatus?: RealtimeTalkStatus;
+  voiceDetail?: string | null;
+  voiceInputLevel?: RealtimeTalkLevelSignal;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
@@ -1776,14 +1783,24 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
       ? html`
           <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
             <button
-              class="chat-send-btn chat-send-btn--stop"
+              class="chat-send-btn chat-send-btn--voice-live"
               @click=${props.onToggleVoice}
               aria-label=${t("chat.composer.stopVoiceInput")}
             >
-              ${icons.stop}
-              <span class="agent-chat__control-label">${t("chat.composer.stopVoiceInput")}</span>
+              ${renderMicrophoneActivity({
+                status: props.voiceStatus,
+                inputLevel: props.voiceInputLevel,
+              })}
+              <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
             </button>
           </openclaw-tooltip>
+          <span
+            class="agent-chat__sr-only agent-chat__voice-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
+          >
           ${abortAction}
         `
       : props.canAbort
@@ -2166,6 +2183,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     isBusy,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
+    voiceStatus: props.realtimeTalkStatus,
+    voiceDetail: props.realtimeTalkDetail,
+    voiceInputLevel: props.realtimeTalkInputLevel,
     onAbort: props.onAbort,
     onExport: () => exportMarkdown(props),
     onNewSession: props.onNewSession,
@@ -2289,11 +2309,9 @@ export function renderChatComposer(props: ChatComposerProps) {
           }}
         />
 
-        ${renderChatVoiceActivity({
-          active: props.realtimeTalkActive,
+        ${renderChatVoiceError({
           status: props.realtimeTalkStatus,
           detail: props.realtimeTalkDetail,
-          inputLevel: props.realtimeTalkInputLevel,
           onDismissError: props.onDismissRealtimeTalkError,
         })}
 

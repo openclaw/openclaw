@@ -69,21 +69,16 @@ if (!customElements.get(MICROPHONE_ACTIVITY_TAG)) {
   customElements.define(MICROPHONE_ACTIVITY_TAG, MicrophoneActivityElement);
 }
 
-type ChatVoiceActivityProps = {
-  active?: boolean;
-  status?: RealtimeTalkStatus;
-  detail?: string | null;
-  inputLevel?: RealtimeTalkLevelSignal;
-  onDismissError?: () => void;
-};
-
 function activeStatus(
   status: RealtimeTalkStatus | undefined,
 ): "connecting" | "listening" | "thinking" {
   return status === "connecting" || status === "thinking" ? status : "listening";
 }
 
-function statusLabel(status: RealtimeTalkStatus | undefined, detail: string | null | undefined) {
+export function voiceStatusLabel(
+  status: RealtimeTalkStatus | undefined,
+  detail: string | null | undefined,
+) {
   const explicitDetail = detail?.trim();
   if (explicitDetail) {
     return explicitDetail;
@@ -97,52 +92,54 @@ function statusLabel(status: RealtimeTalkStatus | undefined, detail: string | nu
   return "Listening...";
 }
 
-export function renderChatVoiceActivity(
-  props: ChatVoiceActivityProps,
-): TemplateResult | typeof nothing {
-  if (props.status === "error" && props.detail) {
-    return html`
-      <div class="agent-chat__stt-interim agent-chat__talk-status" role="alert">
-        <span class="agent-chat__talk-status-text">${props.detail}</span>
-        ${props.onDismissError
-          ? html`
-              <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
-                <button
-                  class="callout__dismiss"
-                  type="button"
-                  @click=${props.onDismissError}
-                  aria-label=${t("chat.composer.dismissVoiceInputError")}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
-      </div>
-    `;
-  }
-  if (!props.active) {
+type MicrophoneActivityProps = {
+  status?: RealtimeTalkStatus;
+  inputLevel?: RealtimeTalkLevelSignal;
+};
+
+// Class names and data attributes are asserted by the talk e2e suite; the
+// element is decorative inside the labeled stop-voice button, so it stays
+// aria-hidden while `data-status` keeps driving the bar animations.
+export function renderMicrophoneActivity(props: MicrophoneActivityProps): TemplateResult {
+  return html`
+    <openclaw-microphone-activity
+      class="agent-chat__voice-activity"
+      data-status=${activeStatus(props.status)}
+      data-source="microphone"
+      aria-hidden="true"
+      .signal=${props.inputLevel ?? EMPTY_LEVEL_SIGNAL}
+    >
+    </openclaw-microphone-activity>
+  `;
+}
+
+type ChatVoiceErrorProps = {
+  status?: RealtimeTalkStatus;
+  detail?: string | null;
+  onDismissError?: () => void;
+};
+
+export function renderChatVoiceError(props: ChatVoiceErrorProps): TemplateResult | typeof nothing {
+  if (props.status !== "error" || !props.detail) {
     return nothing;
   }
-
-  const status = activeStatus(props.status);
   return html`
-    <div
-      class="agent-chat__stt-interim agent-chat__talk-status agent-chat__talk-status--active"
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
-    >
-      <openclaw-microphone-activity
-        class="agent-chat__voice-activity"
-        data-status=${status}
-        data-source="microphone"
-        role="img"
-        aria-label=${t("chat.composer.microphoneInput")}
-        .signal=${props.inputLevel ?? EMPTY_LEVEL_SIGNAL}
-      >
-      </openclaw-microphone-activity>
-      <span class="agent-chat__sr-only">${statusLabel(props.status, props.detail)}</span>
+    <div class="agent-chat__stt-interim agent-chat__talk-status" role="alert">
+      <span class="agent-chat__talk-status-text">${props.detail}</span>
+      ${props.onDismissError
+        ? html`
+            <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
+              <button
+                class="callout__dismiss"
+                type="button"
+                @click=${props.onDismissError}
+                aria-label=${t("chat.composer.dismissVoiceInputError")}
+              >
+                ${icons.x}
+              </button>
+            </openclaw-tooltip>
+          `
+        : nothing}
     </div>
   `;
 }
