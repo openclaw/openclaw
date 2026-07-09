@@ -57,7 +57,6 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -72,6 +71,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -348,7 +348,7 @@ private fun CronJobDetailSettingsScreen(
   val actionState by viewModel.cronActionState.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  val activity = LocalContext.current as? Activity
+  val activity = LocalActivity.current
 
   DisposableEffect(activity, viewModel, jobId) {
     onDispose {
