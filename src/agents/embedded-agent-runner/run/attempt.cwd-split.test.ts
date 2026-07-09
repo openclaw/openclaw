@@ -122,4 +122,29 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     ).rejects.toThrow("cwd override is not supported");
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
+
+  it("runs a managed worktree when sandbox workspace and cwd match", async () => {
+    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-worktree-"));
+    tempPaths.push(worktree);
+    hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
+      enabled: true,
+      workspaceAccess: "rw",
+      workspaceDir: worktree,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:dashboard:worktree",
+      tempPaths,
+      attemptOverrides: {
+        workspaceDir: worktree,
+        cwd: worktree,
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
+    );
+  });
 });
