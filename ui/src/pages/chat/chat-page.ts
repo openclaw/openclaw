@@ -398,90 +398,108 @@ export class ChatPage extends LitElement {
     `;
   }
 
-  private renderSplitToolbar(layout: ChatSplitLayout) {
+  private renderSplitToolbarPane(layout: ChatSplitLayout, pane: ChatSplitPane) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
-    const panes = this.narrow
-      ? [findPane(layout, layout.activePaneId)?.pane].filter(
-          (pane): pane is ChatSplitPane => pane != null,
-        )
-      : panesOf(layout);
+    const active = pane.id === layout.activePaneId;
+    const currentSession = sessions.find((row) => row.key === pane.sessionKey);
+    const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
     return html`
-      <div class="chat-split-toolbar">
-        ${panes.map((pane) => {
-          const active = pane.id === layout.activePaneId;
-          const currentSession = sessions.find((row) => row.key === pane.sessionKey);
-          const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
-          return html`
-            <div
-              class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
-              @pointerdown=${() => this.handleFocusPane(pane.id)}
-              @focusin=${() => this.handleFocusPane(pane.id)}
-            >
-              <label class="chat-pane__session-label">
-                <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
-                <select
-                  class="chat-pane__session-select"
-                  data-session-key=${pane.sessionKey}
-                  aria-label=${t("chat.splitView.sessionSelect")}
-                  .value=${pane.sessionKey}
-                  @change=${(event: Event) => {
-                    const nextSessionKey = (event.target as HTMLSelectElement).value;
-                    if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
-                      this.handlePaneSessionChange(pane.id, nextSessionKey);
-                    }
-                  }}
-                >
-                  ${options.map(
-                    (row) => html`
-                      <option value=${row.key}>
-                        ${resolveSessionDisplayName(
-                          row.key,
-                          sessions.find((session) => session.key === row.key),
-                        )}
-                      </option>
-                    `,
+      <div
+        class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
+        @pointerdown=${() => this.handleFocusPane(pane.id)}
+        @focusin=${() => this.handleFocusPane(pane.id)}
+      >
+        <label class="chat-pane__session-label">
+          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
+          <select
+            class="chat-pane__session-select"
+            data-session-key=${pane.sessionKey}
+            aria-label=${t("chat.splitView.sessionSelect")}
+            .value=${pane.sessionKey}
+            @change=${(event: Event) => {
+              const nextSessionKey = (event.target as HTMLSelectElement).value;
+              if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
+                this.handlePaneSessionChange(pane.id, nextSessionKey);
+              }
+            }}
+          >
+            ${options.map(
+              (row) => html`
+                <option value=${row.key}>
+                  ${resolveSessionDisplayName(
+                    row.key,
+                    sessions.find((session) => session.key === row.key),
                   )}
-                </select>
-              </label>
-              <div class="chat-pane__actions">
-                ${!this.narrow
-                  ? html`
-                      <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                        <button
-                          class="btn btn--ghost btn--icon"
-                          type="button"
-                          aria-label=${t("chat.splitView.splitDown")}
-                          @click=${() => this.handleSplitDown(pane.id)}
-                        >
-                          ${icons.panelBottomOpen}
-                        </button>
-                      </openclaw-tooltip>
-                      <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                        <button
-                          class="btn btn--ghost btn--icon"
-                          type="button"
-                          aria-label=${t("chat.splitView.splitRight")}
-                          @click=${() => this.handleSplitRight(pane.id)}
-                        >
-                          ${icons.panelRightOpen}
-                        </button>
-                      </openclaw-tooltip>
-                    `
-                  : nothing}
-                <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+                </option>
+              `,
+            )}
+          </select>
+        </label>
+        <div class="chat-pane__actions">
+          ${!this.narrow
+            ? html`
+                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
                   <button
                     class="btn btn--ghost btn--icon"
                     type="button"
-                    aria-label=${t("chat.splitView.closePane")}
-                    @click=${() => this.handleClosePane(pane.id)}
+                    aria-label=${t("chat.splitView.splitDown")}
+                    @click=${() => this.handleSplitDown(pane.id)}
                   >
-                    ${icons.x}
+                    ${icons.panelBottomOpen}
                   </button>
                 </openclaw-tooltip>
-              </div>
+                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitRight")}
+                    @click=${() => this.handleSplitRight(pane.id)}
+                  >
+                    ${icons.panelRightOpen}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label=${t("chat.splitView.closePane")}
+              @click=${() => this.handleClosePane(pane.id)}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderSplitToolbar(layout: ChatSplitLayout) {
+    if (this.narrow) {
+      const activePane = findPane(layout, layout.activePaneId)?.pane;
+      return html`
+        <div class="chat-split-toolbar">
+          ${activePane ? this.renderSplitToolbarPane(layout, activePane) : nothing}
+        </div>
+      `;
+    }
+    // Mirror the split view's flex geometry (same column weights, 4px gaps at
+    // divider positions, same container bounds) so header segment edges land
+    // exactly on the pane edges below; see .chat-split-toolbar in split-view.css.
+    return html`
+      <div class="chat-split-toolbar">
+        ${layout.columns.map(
+          (column, columnIndex) => html`
+            ${columnIndex > 0 ? html`<div class="chat-split-toolbar__gap"></div>` : nothing}
+            <div
+              class="chat-split-toolbar__column"
+              style="flex: ${layout.columnWeights[columnIndex]} 1 0"
+            >
+              ${column.panes.map((pane) => this.renderSplitToolbarPane(layout, pane))}
             </div>
-          `;
-        })}
+          `,
+        )}
       </div>
     `;
   }
