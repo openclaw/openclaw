@@ -230,7 +230,7 @@ internal class LinkPreviewFetcher(
 
 private suspend fun Call.executeCancellable(): Response? =
   suspendCancellableCoroutine { continuation ->
-    // execute() blocks this IO worker, so cancellation must close the Call from the cancelling thread.
+    // execute() blocks this IO worker, so cancellation must cancel the Call from the cancelling thread.
     continuation.invokeOnCancellation { cancel() }
     val response =
       try {
