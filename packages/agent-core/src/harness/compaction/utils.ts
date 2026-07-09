@@ -1,4 +1,5 @@
 // Agent Core helper module supports utils behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Message } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 
@@ -106,7 +107,7 @@ function truncateForSummary(text: string, maxChars: number): string {
     return text;
   }
   const truncatedChars = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+  return `${truncateUtf16Safe(text, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
