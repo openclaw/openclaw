@@ -79,20 +79,20 @@ final class ComputerActionService {
     private static let dragDurationMs = 400
     private static let dragSteps = 24
     private static let clickInterEventDelay: useconds_t = 12000
-    // Cap wheel ticks at the node so a direct armed caller cannot overflow the
-    // Int32 wheel delta (line count = ticks * 5) and crash the app.
+    /// Cap wheel ticks at the node so a direct armed caller cannot overflow the
+    /// Int32 wheel delta (line count = ticks * 5) and crash the app.
     private static let maxScrollTicks = 100
-    // Cap hold_key at the node: computer.act is directly invocable once armed,
-    // so an unbounded durationMs must not pin a key down for minutes.
+    /// Cap hold_key at the node: computer.act is directly invocable once armed,
+    /// so an unbounded durationMs must not pin a key down for minutes.
     private static let maxHoldMs = 10000
-    // Allow slightly-past-edge coordinates so clicks on the last row/column of
-    // the reported frame still land instead of erroring on rounding.
+    /// Allow slightly-past-edge coordinates so clicks on the last row/column of
+    /// the reported frame still land instead of erroring on rounding.
     private static let coordinateBoundsEpsilon: Double = 2
-    // Idle timeout for an outstanding left button. Refreshed by each drag move,
-    // so a legitimate multi-turn drag (every turn adds a screenshot plus a model
-    // inference) is not force-released mid-gesture. Only a truly abandoned button
-    // (arm expiry, disconnect, or a failed turn with no further activity) hits
-    // this bounded cleanup.
+    /// Idle timeout for an outstanding left button. Refreshed by each drag move,
+    /// so a legitimate multi-turn drag (every turn adds a screenshot plus a model
+    /// inference) is not force-released mid-gesture. Only a truly abandoned button
+    /// (arm expiry, disconnect, or a failed turn with no further activity) hits
+    /// this bounded cleanup.
     private static let buttonHoldIdleTimeoutNanoseconds: UInt64 = 120 * 1_000_000_000
 
     init() {
