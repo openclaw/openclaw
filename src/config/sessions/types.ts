@@ -461,6 +461,11 @@ export type SessionEntry = {
   fallbackNoticeSelectedModel?: string;
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
+  /**
+   * Operational reply fingerprints already delivered under
+   * messages.operationalReplies.policy="once".
+   */
+  operationalReplyOnceKeys?: string[];
   contextTokens?: number;
   contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;

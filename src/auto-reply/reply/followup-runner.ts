@@ -61,6 +61,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -100,6 +101,12 @@ import {
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
+import {
+  applyOperationalReplyPolicy,
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
+} from "./operational-reply-policy.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import {
@@ -138,6 +145,21 @@ const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([
   "reasoning_only_result",
   "planning_only_result",
 ]);
+
+function resolveFollowupOperationalReplySourceEventKey(params: {
+  queued: FollowupRun;
+  kind: ReplyDispatchKind;
+  payloadIndex: number;
+  runId?: string;
+}): string {
+  const sourceMessageKey =
+    params.queued.messageId ??
+    params.queued.originatingReplyToId ??
+    params.runId ??
+    params.queued.run.sessionId ??
+    "queued-followup";
+  return `${sourceMessageKey}:${params.kind}:${params.payloadIndex}`;
+}
 
 function preserveNonVisibleFollowupResult(
   classification: ModelFallbackResultClassification,
@@ -457,28 +479,46 @@ export function createFollowupRunner(params: {
       agentDir: queued.run.agentDir,
     });
 
-    const sendablePayloads = payloads.filter(
+    const policyCandidatePayloads = payloads.filter(
       (payload): payload is ReplyPayload =>
         hasOutboundReplyContent(payload) &&
         (!deliveryPlan.isSilentPayload(payload) ||
           getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
     );
-
-    if (sendablePayloads.length === 0) {
-      return false;
-    }
-
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      defaultRuntime.error?.(
-        "followup queue: completed with payloads but no origin route or visible dispatcher is available",
-      );
+    const replyKind = options.kind ?? "final";
+    const applyFollowupPayloadPolicy = async (
+      payload: ReplyPayload,
+      payloadIndex: number,
+      kind: ReplyDispatchKind,
+    ) =>
+      await applyOperationalReplyPolicy({
+        cfg: runtimeConfig,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceSessionKey: queued.run.runtimePolicySessionKey ?? queued.run.sessionKey,
+        sourceStorePath: storePath,
+        sourceEventKey: resolveFollowupOperationalReplySourceEventKey({
+          queued,
+          kind,
+          payloadIndex,
+          runId: options.runId,
+        }),
+        sourceChannel: queued.originatingChannel ?? queued.run.messageProvider,
+        provider: queued.run.messageProvider,
+        surface: queued.originatingChannel,
+        chatType: queued.originatingChatType ?? queued.run.chatType,
+        inboundEventKind: queued.currentInboundEventKind,
+        messageKey: queued.messageId,
+        logPrefix: "followup queue",
+      });
+    if (policyCandidatePayloads.length === 0) {
       return false;
     }
 
     let deliveredAnyPayload = false;
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
-    const replyKind = options.kind ?? "final";
     const sendDispatcherPayload = async (payload: ReplyPayload): Promise<boolean> => {
       if (!opts?.onBlockReply) {
         return false;
@@ -489,7 +529,17 @@ export function createFollowupRunner(params: {
       await opts.onBlockReply(payload);
       return true;
     };
-    for (const payload of sendablePayloads) {
+    for (const [payloadIndex, payload] of policyCandidatePayloads.entries()) {
+      const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
+      if (!policyResult.shouldDeliver) {
+        continue;
+      }
+      if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+        defaultRuntime.error?.(
+          "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+        );
+        return false;
+      }
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
         originatingChannel,
@@ -548,7 +598,9 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
+              const delivered = await sendDispatcherPayload(payload);
+              await markOperationalReplyPolicyDelivered(policyResult, delivered);
+              deliveredAnyPayload = delivered || deliveredAnyPayload;
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
@@ -556,6 +608,7 @@ export function createFollowupRunner(params: {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
         } else if (!result.suppressed) {
+          await markOperationalReplyPolicyDelivered(policyResult, true);
           deliveredAnyPayload = true;
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
@@ -568,7 +621,9 @@ export function createFollowupRunner(params: {
           }
         }
       } else if (deliveryRoute === "dispatcher") {
-        deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
+        const delivered = await sendDispatcherPayload(payload);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+        deliveredAnyPayload = delivered || deliveredAnyPayload;
       }
     }
     if (
@@ -576,18 +631,30 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      if (queued.currentInboundEventKind === "room_event") {
-        logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-        return deliveredAnyPayload;
+      const routeFailureNotice: ReplyPayload = {
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      };
+      const policyResult = await applyFollowupPayloadPolicy(
+        routeFailureNotice,
+        policyCandidatePayloads.length,
+        "block",
+      );
+      if (policyResult.shouldDeliver) {
+        if (
+          queued.currentInboundEventKind === "room_event" &&
+          resolveOperationalReplyPolicy(runtimeConfig).policy === "always"
+        ) {
+          logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+          return deliveredAnyPayload;
+        }
+        const delivered = await sendDispatcherPayload(routeFailureNotice);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+        deliveredAnyPayload = delivered || deliveredAnyPayload;
       }
-      deliveredAnyPayload =
-        (await sendDispatcherPayload({
-          text:
-            "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-            "channel. The reply content was not forwarded to this channel to avoid " +
-            "cross-channel misdelivery.",
-          isError: true,
-        })) || deliveredAnyPayload;
     }
     return deliveredAnyPayload;
   };
@@ -662,6 +729,20 @@ export function createFollowupRunner(params: {
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
       const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
+      const shouldEvaluateRoomEventOperationalPayload = (payload: ReplyPayload) => {
+        if (!isRoomEventFollowup()) {
+          return true;
+        }
+        if (!isOperationalReplyPayload({ payload, explicitCommandTurn: false })) {
+          return false;
+        }
+        const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
+        return (
+          operationalPolicy === "redirect" ||
+          operationalPolicy === "silent" ||
+          operationalPolicy === "once"
+        );
+      };
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -802,7 +883,7 @@ export function createFollowupRunner(params: {
           modelId: fallbackModel,
         },
       ) => {
-        if (isRoomEventFollowup()) {
+        if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
           logVerbose("followup queue: compaction notice suppressed for room_event");
           return;
         }
@@ -875,21 +956,19 @@ export function createFollowupRunner(params: {
           includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
         });
         if (preflightCompactionFailureText) {
-          if (isRoomEventFollowup()) {
+          const preflightCompactionFailurePayload = markReplyPayloadForSourceSuppressionDelivery({
+            text: preflightCompactionFailureText,
+          });
+          if (!shouldEvaluateRoomEventOperationalPayload(preflightCompactionFailurePayload)) {
             logVerbose(
               "followup queue: preflight compaction failure notice suppressed for room_event",
             );
             return;
           }
-          await sendRunPayloads(
-            [
-              markReplyPayloadForSourceSuppressionDelivery({
-                text: preflightCompactionFailureText,
-              }),
-            ],
-            effectiveQueued,
-            { provider: fallbackProvider, modelId: fallbackModel },
-          );
+          await sendRunPayloads([preflightCompactionFailurePayload], effectiveQueued, {
+            provider: fallbackProvider,
+            modelId: fallbackModel,
+          });
           return;
         }
         throw err;
@@ -1123,7 +1202,7 @@ export function createFollowupRunner(params: {
               enqueueProgressDelivery(async () => {
                 // room_event turns are ambient; only an explicit message tool call
                 // may post back into the source chat.
-                if (isRoomEventFollowup()) {
+                if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
                   return;
                 }
                 if (
@@ -1237,7 +1316,7 @@ export function createFollowupRunner(params: {
                     await enqueueProgressDelivery(async () => {
                       // Mirrors direct dispatch progress suppression: ambient
                       // room events never get automatic fast-mode notices.
-                      if (isRoomEventFollowup()) {
+                      if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
                         return;
                       }
                       await sendRunPayloads(
@@ -1954,6 +2033,11 @@ export function createFollowupRunner(params: {
       if (responseUsageLine) {
         deliveryPayloads = appendUsageLine(deliveryPayloads, responseUsageLine);
       }
+      if (runResult.meta?.error?.kind === "hook_block") {
+        deliveryPayloads = deliveryPayloads.map((payload) =>
+          setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
+        );
+      }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -1987,6 +2071,7 @@ export function createFollowupRunner(params: {
           deliveryPayloads = [
             {
               text: `🧹 Auto-compaction complete${suffix}.`,
+              isCompactionNotice: true,
             },
             ...deliveryPayloads,
           ];
@@ -2009,6 +2094,30 @@ export function createFollowupRunner(params: {
             { runId },
           );
           return;
+        }
+        const operationalDeliveryPayloads = deliveryPayloads.filter((payload) =>
+          isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
+        );
+        const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
+        const shouldEvaluateOperationalPayloads =
+          operationalDeliveryPayloads.length > 0 &&
+          (!isRoomEventFollowup() ||
+            operationalPolicy === "redirect" ||
+            operationalPolicy === "silent" ||
+            operationalPolicy === "once");
+        if (shouldEvaluateOperationalPayloads) {
+          await sendRunPayloads(
+            operationalDeliveryPayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          return;
+        } else if (operationalDeliveryPayloads.length > 0) {
+          logVerbose("followup queue: operational notice suppressed for room_event");
         }
         if (await enqueueStrandedReplyRecoveryRetry()) {
           return;

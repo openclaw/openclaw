@@ -4,7 +4,7 @@ import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
-type Delivery = { kind: string; text?: string };
+type Delivery = { kind: string; text?: string; isStatusNotice?: boolean };
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -25,7 +25,11 @@ function createProjectorHarness(
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: true,
     deliver: async (kind, payload) => {
-      deliveries.push({ kind, text: payload.text });
+      deliveries.push({
+        kind,
+        text: payload.text,
+        ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
+      });
       return true;
     },
     onProgress: opts?.onProgress,
@@ -505,6 +509,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
+      isStatusNotice: true,
     });
     expectToolCallSummary(deliveries[1]);
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
@@ -533,6 +538,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
+      isStatusNotice: true,
     });
     expectToolCallSummary(deliveries[1]);
   });
@@ -581,8 +587,16 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(shown).toEqual([
-      { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
-      { kind: "tool", text: prefixSystemMessage("usage updated: 11/100") },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("usage updated: 10/100"),
+        isStatusNotice: true,
+      },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("usage updated: 11/100"),
+        isStatusNotice: true,
+      },
     ]);
   });
 
@@ -718,10 +732,12 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated"),
+      isStatusNotice: true,
     });
     expect(deliveries[1]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated"),
+      isStatusNotice: true,
     });
     expectToolCallSummary(deliveries[2]);
     expectToolCallSummary(deliveries[3]);
@@ -756,8 +772,16 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries).toEqual([
-      { kind: "tool", text: prefixSystemMessage("available commands updated (7)") },
-      { kind: "tool", text: prefixSystemMessage("available commands updated (8)") },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("available commands updated (7)"),
+        isStatusNotice: true,
+      },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("available commands updated (8)"),
+        isStatusNotice: true,
+      },
     ]);
   });
 
@@ -817,6 +841,7 @@ describe("createAcpReplyProjector", () => {
       {
         kind: "tool",
         text: prefixSystemMessage("output truncated"),
+        isStatusNotice: true,
       },
     ]);
   });

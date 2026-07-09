@@ -1,4 +1,5 @@
 // Delivers ACP turn results through reply payload routing.
+import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,9 +14,16 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  applyOperationalReplyPolicy,
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
+} from "./operational-reply-policy.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
@@ -197,6 +205,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
+  suppressUserDeliveryBySourceReplyPolicy?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sendPolicyDenied?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -210,6 +221,30 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
+  const operationalReplySourceEventKey =
+    normalizeOptionalString(params.ctx.MessageSidFull) ??
+    normalizeOptionalString(params.ctx.MessageSid) ??
+    normalizeOptionalString(params.ctx.AmbientTranscriptMessageId) ??
+    normalizeOptionalString(params.ctx.MessageSidLast) ??
+    normalizeOptionalString(params.ctx.MessageSidFirst) ??
+    normalizeOptionalString(params.runId) ??
+    crypto.randomUUID();
+  const applyAcpOperationalReplyPolicy = async (payload: ReplyPayload) =>
+    await applyOperationalReplyPolicy({
+      cfg: params.cfg,
+      payload,
+      explicitCommandTurn: false,
+      sendPolicyDenied: params.sendPolicyDenied === true,
+      sourceSessionKey: deliverySessionKey,
+      sourceEventKey: operationalReplySourceEventKey,
+      sourceChannel: params.originatingChannel ?? params.ttsChannel ?? directChannel,
+      provider: params.ctx.Provider,
+      surface: params.ctx.Surface,
+      chatType: params.originatingChatType ?? params.ctx.ChatType,
+      inboundEventKind: params.ctx.InboundEventKind,
+      messageKey: params.ctx.MessageSidFull ?? params.ctx.MessageSid ?? params.runId,
+      logPrefix: "dispatch-acp",
+    });
   const explicitAccountId =
     normalizeOptionalString(params.originatingAccountId) ??
     normalizeOptionalString(params.ctx.AccountId);
@@ -351,10 +386,28 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   ): Promise<boolean> => {
     let visiblePayload = payload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
+    const isStatusNotice = isReplyPayloadStatusNotice(payload);
+    const joinsBufferedTtsDirective =
+      rawBlockText && !isStatusNotice
+        ? state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true
+        : false;
     if (rawBlockText) {
-      const isStatusNotice = isReplyPayloadStatusNotice(payload);
-      const joinsBufferedTtsDirective =
-        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
+      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
+        const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
+        visiblePayload = { ...payload, text: text.trim() ? text : undefined };
+      }
+    }
+
+    const policyResult = await applyAcpOperationalReplyPolicy(visiblePayload);
+    if (!policyResult.shouldDeliver) {
+      return false;
+    }
+    const isOperationalReply = isOperationalReplyPayload({
+      payload: visiblePayload,
+      explicitCommandTurn: false,
+    });
+
+    if (rawBlockText) {
       if (!isStatusNotice) {
         if (state.accumulatedBlockText.length > 0) {
           state.accumulatedBlockText += "\n";
@@ -366,11 +419,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedBlockTtsText += rawBlockText;
         state.blockCount += 1;
       }
-
-      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
-        visiblePayload = { ...payload, text: text.trim() ? text : undefined };
-      }
       if (visiblePayload.text) {
         if (state.accumulatedVisibleBlockText.length > 0) {
           state.accumulatedVisibleBlockText += "\n";
@@ -378,7 +426,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
-    const isStatusNotice = isReplyPayloadStatusNotice(payload);
     const rawFinalText =
       kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
     if (rawFinalText) {
@@ -394,7 +441,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
-    if (params.suppressUserDelivery) {
+    const allowOperationalSuppressionBypass =
+      isOperationalReply &&
+      !params.sendPolicyDenied &&
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      params.suppressUserDeliveryBySourceReplyPolicy === true &&
+      (params.ctx.InboundEventKind !== "room_event" ||
+        resolveOperationalReplyPolicy(params.cfg).policy !== "always");
+    if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
       return false;
     }
 
@@ -415,6 +469,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
         if (edited) {
+          void markOperationalReplyPolicyDelivered(policyResult, true);
           return true;
         }
       }
@@ -470,6 +525,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
         return true;
       }
+      void markOperationalReplyPolicyDelivered(policyResult, true);
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: params.originatingChannel,
@@ -508,6 +564,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }
+    void markOperationalReplyPolicyDelivered(policyResult, delivered);
     if (delivered && tracksVisibleText) {
       state.queuedDirectVisibleTextDeliveries += 1;
       state.settledDirectVisibleText = false;

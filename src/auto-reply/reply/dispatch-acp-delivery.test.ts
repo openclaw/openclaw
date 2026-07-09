@@ -27,6 +27,14 @@ const deliveryMocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
 
+const transcriptMocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    sessionFile: "/tmp/session.jsonl",
+    messageId: "message-1",
+  })),
+}));
+
 const channelPluginMocks = vi.hoisted(() => ({
   accountIds: ["default"] as string[],
   defaultAccountId: undefined as string | undefined,
@@ -88,6 +96,11 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),
+}));
+
+vi.mock("../../config/sessions/transcript.js", () => ({
+  appendAssistantMessageToSessionTranscript: (params: unknown) =>
+    transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -176,6 +189,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
     deliveryMocks.runMessageAction.mockClear();
     deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
     channelPluginMocks.getChannelPlugin.mockClear();
     channelPluginMocks.accountIds = ["default"];
     channelPluginMocks.defaultAccountId = undefined;
@@ -233,6 +247,250 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+  });
+
+  it("silences ACP operational notices when configured", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(coordinator.getAccumulatedFinalText()).toBe("");
+  });
+
+  it("redirects ACP operational notices to the configured session", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: {
+            policy: "redirect",
+            redirectSessionKey: "agent:main:ops",
+          },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "ACP turn failed before completion.",
+      isError: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("ACP turn failed before completion."),
+      }),
+    );
+    const redirectText = (
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0] as
+        | { text?: string }
+        | undefined
+    )?.text;
+    expect(redirectText).toContain("sourceSessionKey: agent:codex-acp:session-1");
+    expect(redirectText).toContain("sourceChannel: visiblechat");
+    expect(redirectText).toContain("kind: error");
+  });
+
+  it("delivers allowed ACP operational notices through user delivery suppression", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: { policy: "always" },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      suppressUserDeliveryBySourceReplyPolicy: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: false,
+    });
+    const notice = {
+      text: "ACP backend failed before completion.",
+      isError: true,
+    };
+
+    const delivered = await coordinator.deliver("final", notice);
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+  });
+
+  it("keeps ACP room-event operational notices suppressed with the default policy", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: { policy: "always" },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+        InboundEventKind: "room_event",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      suppressUserDeliveryBySourceReplyPolicy: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "ACP backend failed before completion.",
+      isError: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps ACP operational notices suppressed for background child delivery", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: { policy: "always" },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:child-session",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "Background ACP child failed before completion.",
+      isError: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not redirect ACP operational notices when send policy denies delivery", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          operationalReplies: {
+            policy: "redirect",
+            redirectSessionKey: "agent:main:ops",
+          },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      sendPolicyDenied: true,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "ACP turn failed before completion.",
+      isError: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not consume ACP once notices until delivery succeeds", async () => {
+    const cfg = createAcpTestConfig({
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    });
+    const ctx = buildTestCtx({
+      Provider: "visiblechat",
+      Surface: "visiblechat",
+      SessionKey: "agent:codex-acp:once-delivery",
+    });
+    const failedDispatcher = createDispatcher();
+    (failedDispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const failedCoordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx,
+      dispatcher: failedDispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+    const notice = {
+      text: "ACP once policy delayed delivery proof",
+      isError: true,
+    };
+
+    const failed = await failedCoordinator.deliver("final", notice);
+
+    const visibleDispatcher = createDispatcher();
+    const visibleCoordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx,
+      dispatcher: visibleDispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+    const delivered = await visibleCoordinator.deliver("final", notice);
+
+    expect(failed).toBe(false);
+    expect(failedDispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+    expect(delivered).toBe(true);
+    expect(visibleDispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
   });
 
   it("tracks successful final delivery separately from routed counters", async () => {

@@ -155,6 +155,22 @@ export const SessionSchema = z
 
 const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 
+const OperationalRepliesSchema = z
+  .object({
+    policy: z.enum(["always", "once", "redirect", "silent"]),
+    redirectSessionKey: z.string().optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.policy === "redirect" && !normalizeStringifiedOptionalString(val.redirectSessionKey)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["redirectSessionKey"],
+        message: 'redirectSessionKey is required when policy is "redirect"',
+      });
+    }
+  });
+
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
@@ -206,6 +222,7 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    operationalReplies: OperationalRepliesSchema.optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

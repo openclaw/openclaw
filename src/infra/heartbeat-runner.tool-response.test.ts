@@ -17,6 +17,7 @@ import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  seedSessionStore,
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -47,9 +48,24 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     modelRuntimeId?: string;
     model?: string;
     isolatedSession?: boolean;
+    operationalReplies?: {
+      policy: "always" | "once" | "redirect" | "silent";
+      redirectSessionKey?: string;
+    };
+    includeReasoning?: boolean;
     target?: "telegram" | "last";
     showOk?: boolean;
   }): OpenClawConfig {
+    const messages =
+      params.visibleReplies || params.groupVisibleReplies || params.operationalReplies
+        ? {
+            ...(params.visibleReplies ? { visibleReplies: params.visibleReplies } : {}),
+            ...(params.groupVisibleReplies
+              ? { groupChat: { visibleReplies: params.groupVisibleReplies } }
+              : {}),
+            ...(params.operationalReplies ? { operationalReplies: params.operationalReplies } : {}),
+          }
+        : undefined;
     return {
       agents: {
         defaults: {
@@ -58,6 +74,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
             every: "5m",
             target: params.target ?? "telegram",
             ...(params.isolatedSession ? { isolatedSession: true } : {}),
+            ...(params.includeReasoning ? { includeReasoning: true } : {}),
           },
           ...(params.model ? { model: params.model } : {}),
           ...(params.model && params.modelRuntimeId
@@ -66,16 +83,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           ...(params.agentRuntimeId ? { agentRuntime: { id: params.agentRuntimeId } } : {}),
         },
       },
-      ...(params.visibleReplies || params.groupVisibleReplies
-        ? {
-            messages: {
-              ...(params.visibleReplies ? { visibleReplies: params.visibleReplies } : {}),
-              ...(params.groupVisibleReplies
-                ? { groupChat: { visibleReplies: params.groupVisibleReplies } }
-                : {}),
-            },
-          }
-        : {}),
+      ...(messages ? { messages } : {}),
       channels: {
         telegram: {
           token: "test-token",
@@ -90,12 +98,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   function createDeps(params: {
     sendTelegram: ReturnType<typeof vi.fn>;
     getReplyFromConfig: HeartbeatDeps["getReplyFromConfig"];
+    extra?: Partial<HeartbeatDeps>;
   }): HeartbeatDeps {
     return {
       telegram: params.sendTelegram as unknown,
       getQueueSize: () => 0,
       nowMs: () => 0,
       getReplyFromConfig: params.getReplyFromConfig,
+      ...params.extra,
     };
   }
 
@@ -427,6 +437,153 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         text: usageLimitMessage,
         cfg,
       });
+    });
+  });
+
+  it("silences Codex runtime failure heartbeat notices when operational replies are silent", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        operationalReplies: { policy: "silent" },
+      });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        agentHarnessId: "codex",
+      });
+      const usageLimitMessage =
+        "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes.";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: usageLimitMessage,
+          isError: true,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "skipped",
+        reason: "operational-replies",
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("does not record suppressed heartbeat main notices when only reasoning is sent", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        includeReasoning: true,
+        operationalReplies: { policy: "silent" },
+      });
+      const sourceSessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        agentHarnessId: "codex",
+      });
+      const usageLimitMessage =
+        "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes.";
+      replySpy.mockResolvedValue([
+        { text: "checking limits", isReasoning: true },
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: usageLimitMessage,
+          isError: true,
+        }),
+      ]);
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram.mock.calls[0]?.[1]).toContain("checking limits");
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { lastHeartbeatText?: string }
+      >;
+      expect(store[sourceSessionKey]?.lastHeartbeatText).toBeUndefined();
+    });
+  });
+
+  it("redirects heartbeat notices before checking source channel readiness", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        target: "last",
+        operationalReplies: {
+          policy: "redirect",
+          redirectSessionKey: "agent:main:ops",
+        },
+      });
+      const sourceSessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+15551234567",
+        agentHarnessId: "codex",
+      });
+      await seedSessionStore(storePath, "agent:main:ops", {
+        sessionId: "ops-session",
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const usageLimitMessage =
+        "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes.";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: usageLimitMessage,
+          isError: true,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1" });
+      const webAuthExists = vi.fn(async () => false);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({
+          sendTelegram,
+          getReplyFromConfig: replySpy,
+          extra: {
+            whatsapp: sendWhatsApp,
+            webAuthExists,
+          },
+        }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(webAuthExists).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "skipped",
+        reason: "operational-replies",
+        channel: "whatsapp",
+      });
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      const redirectedEntry = store["agent:main:ops"] as { sessionFile?: string } | undefined;
+      const redirectedEntryText = redirectedEntry?.sessionFile
+        ? await fs.readFile(redirectedEntry.sessionFile, "utf-8")
+        : JSON.stringify(redirectedEntry);
+      expect(redirectedEntryText).toContain(usageLimitMessage);
+      expect(redirectedEntryText).toContain(sourceSessionKey);
+      expect(redirectedEntryText).toContain("whatsapp");
+      expect(redirectedEntryText).toContain("heartbeat");
     });
   });
 

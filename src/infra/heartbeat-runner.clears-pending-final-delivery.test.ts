@@ -123,6 +123,50 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     });
   });
 
+  it("clears run-owned pendingFinalDelivery when an operational heartbeat notice is silenced", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const operationalText = "usage limit reached";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: operationalText,
+        pendingFinalDeliveryCreatedAt: NOW,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "prior-delivery-failure",
+      });
+      await patchEntry(storePath, sessionKey, {
+        pendingFinalDeliveryLastAttemptAt: NOW,
+        pendingFinalDeliveryContext: { channel: "telegram" },
+        pendingFinalDeliveryIntentId: "intent-silenced-operational",
+      });
+
+      replySpy.mockResolvedValue({ text: operationalText, isError: true });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+
+      const entry = await readEntry(storePath, sessionKey);
+      expect(entry?.lastHeartbeatText).toBeUndefined();
+      expectPendingFinalDeliveryCleared(entry);
+    });
+  });
+
   it("clears pendingFinalDelivery* on a duplicate skip even when responsePrefix diverges the stored text", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       // The send-success clear never runs here: the run reproduces a payload we

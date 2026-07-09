@@ -408,6 +408,8 @@ export async function tryDispatchAcpReply(params: {
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
+  suppressUserDeliveryBySourceReplyPolicy?: boolean;
+  sendPolicy?: "allow" | "deny";
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -468,6 +470,9 @@ export async function tryDispatchAcpReply(params: {
     ttsChannel: params.ttsChannel,
     suppressUserDelivery: params.suppressUserDelivery,
     suppressReplyLifecycle: params.suppressReplyLifecycle,
+    suppressUserDeliveryBySourceReplyPolicy: params.suppressUserDeliveryBySourceReplyPolicy,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    sendPolicyDenied: params.sendPolicy === "deny",
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
