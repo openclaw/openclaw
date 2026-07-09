@@ -25,6 +25,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
+  applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModel,
@@ -38,6 +39,10 @@ import {
 } from "./model-selection.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
@@ -168,30 +173,50 @@ async function setRuntimeApiKeyForCompletion(params: {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
-      githubToken: params.apiKey,
+      githubToken: unwrapSecretSentinelsForProviderEgress(
+        params.apiKey,
+        "GitHub Copilot runtime auth exchange",
+      ),
+      config: params.cfg,
     });
-    params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
+    const protectedAuth = protectPreparedProviderRuntimeAuth({
+      sourceApiKey: params.apiKey,
+      provider: params.model.provider,
+      preparedAuth: {
+        apiKey: copilotToken.token,
+        baseUrl: copilotToken.baseUrl,
+      },
+    });
+    const runtimeApiKey = protectedAuth?.apiKey ?? copilotToken.token;
+    params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
     return {
-      apiKey: copilotToken.token,
+      apiKey: runtimeApiKey,
       model: { ...params.model, baseUrl: copilotToken.baseUrl },
     };
   }
-  const preparedAuth = await prepareProviderRuntimeAuth({
+  const preparedAuth = protectPreparedProviderRuntimeAuth({
+    sourceApiKey: params.apiKey,
     provider: params.model.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    context: {
+    preparedAuth: await prepareProviderRuntimeAuth({
+      provider: params.model.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: process.env,
-      provider: params.model.provider,
-      modelId: params.model.id,
-      model: params.model,
-      apiKey: params.apiKey,
-      authMode: params.authMode,
-      profileId: params.profileId,
-    },
+      context: {
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: params.model.provider,
+        modelId: params.model.id,
+        model: params.model,
+        apiKey: unwrapSecretSentinelsForProviderEgress(
+          params.apiKey,
+          "provider runtime auth exchange",
+        ),
+        authMode: params.authMode,
+        profileId: params.profileId,
+      },
+    }),
   });
   const runtimeApiKey = preparedAuth?.apiKey?.trim() || params.apiKey;
   params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
@@ -255,6 +280,7 @@ export async function prepareSimpleCompletionModel(params: {
       agentDir: params.agentDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
+      secretSentinels: true,
     });
   } catch (err) {
     return {
@@ -297,7 +323,10 @@ export async function prepareSimpleCompletionModel(params: {
   };
 
   return {
-    model: applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    model: applySecretRefHeaderSentinels(
+      applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+      params.cfg,
+    ),
     auth: resolvedAuth,
   };
 }

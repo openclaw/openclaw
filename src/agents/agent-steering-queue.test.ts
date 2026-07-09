@@ -274,4 +274,28 @@ describe("agent steering queue", () => {
       }),
     ).toBe("steering\n\nCurrent parent turn:\n\ncurrent request");
   });
+
+  it("backs off before an emoji that crosses the metadata limit", () => {
+    const emojiLabel = "x".repeat(499) + "🧠extra";
+    const run = makeRun({
+      runId: "emoji-run",
+      task: emojiLabel,
+      delivery: {
+        status: "pending",
+        createdAt: 100,
+        payload: payload("emoji-run", {
+          label: emojiLabel,
+          task: emojiLabel,
+          frozenResultText: "done",
+        }),
+      },
+    });
+
+    const prompt = buildMergedAgentSteeringPrompt([
+      { runId: "emoji-run", entry: run, payload: run.delivery!.payload! },
+    ]);
+
+    const title = prompt?.split("\n").find((line) => line.startsWith("1. "));
+    expect(title).toBe(`1. ${"x".repeat(499)}`);
+  });
 });

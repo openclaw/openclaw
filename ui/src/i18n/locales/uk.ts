@@ -1559,6 +1559,16 @@ export const uk: TranslationMap = {
   chat: {
     disconnected: "Відключено від шлюзу.",
     archivedSessionDisabled: "Відновіть цей сеанс, щоб надсилати повідомлення.",
+    taskSuggestions: {
+      eyebrow: "Запропоноване подальше завдання",
+      start: "Почати в робочому дереві",
+      starting: "Запуск…",
+      dismiss: "Відхилити {title}",
+      project: "Проєкт",
+      instructions: "Інструкції",
+      adminRequired:
+        "Для створення робочого дерева з цього проєкту потрібен доступ адміністратора.",
+    },
     refreshTitle: "Оновити дані чату",
     settings: "Налаштування чату",
     usageRemaining: "Залишок використання",

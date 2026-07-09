@@ -1548,6 +1548,15 @@ export const vi: TranslationMap = {
   chat: {
     disconnected: "Đã ngắt kết nối khỏi gateway.",
     archivedSessionDisabled: "Khôi phục phiên này để gửi tin nhắn.",
+    taskSuggestions: {
+      eyebrow: "Tác vụ tiếp theo được đề xuất",
+      start: "Bắt đầu trong worktree",
+      starting: "Đang bắt đầu…",
+      dismiss: "Bỏ qua {title}",
+      project: "Dự án",
+      instructions: "Hướng dẫn",
+      adminRequired: "Cần quyền quản trị viên để tạo worktree từ dự án này.",
+    },
     refreshTitle: "Làm mới dữ liệu trò chuyện",
     settings: "Cài đặt trò chuyện",
     usageRemaining: "Mức sử dụng còn lại",

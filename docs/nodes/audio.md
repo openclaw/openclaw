@@ -174,7 +174,7 @@ Lowercase variables take precedence over uppercase; `NO_PROXY`/`no_proxy` entrie
 
 ## Mention detection in groups
 
-When `requireMention: true` is set for a group chat, OpenClaw transcribes audio **before** checking for mentions. This lets voice notes pass the mention gate even when the message has no text body.
+On channels that support audio preflight, OpenClaw transcribes audio **before** checking for mentions when `requireMention: true` is set for a group chat. This lets a captionless voice note pass the mention gate when its transcript contains a configured mention pattern. Channel-specific docs describe transports that require a typed mention instead.
 
 **How it works:**
 

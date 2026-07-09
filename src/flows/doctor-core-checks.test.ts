@@ -357,6 +357,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       "core/doctor/skills-readiness",
     );
 
+    expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({
