@@ -141,6 +141,134 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
   });
 
+  it("skips the primary-target failure notice when the announce partially delivered", () => {
+    const logger = { warn: vi.fn() };
+    const job = {
+      id: "cron-partial-announce",
+      name: "partial announce",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "command", argv: ["echo", "ok"] },
+      delivery: {
+        mode: "announce",
+        channel: "slack",
+        to: "C123",
+      },
+      state: {},
+    } satisfies CronJob;
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "chunk 2 send failed",
+        delivery: { delivered: false, sentBeforeError: true },
+      },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      { jobId: job.id },
+      "cron: skipped failure notice to primary target; announce partially delivered before the send error",
+    );
+  });
+
+  it("announces failure to the primary target when nothing was delivered", () => {
+    const logger = { warn: vi.fn() };
+    const job = {
+      id: "cron-failed-announce",
+      name: "failed announce",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "command", argv: ["echo", "ok"] },
+      delivery: {
+        mode: "announce",
+        channel: "slack",
+        to: "C123",
+      },
+      state: {},
+    } satisfies CronJob;
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "send failed",
+        delivery: { delivered: false },
+      },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1);
+    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[4]).toMatchObject({
+      channel: "slack",
+      to: "C123",
+    });
+  });
+
+  it("keeps explicit failure destinations notified when the announce partially delivered", () => {
+    const logger = { warn: vi.fn() };
+    const job = {
+      id: "cron-partial-announce-failure-dest",
+      name: "partial announce failure dest",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "command", argv: ["echo", "ok"] },
+      delivery: {
+        mode: "announce",
+        channel: "slack",
+        to: "C123",
+        failureDestination: {
+          mode: "announce",
+          channel: "slack",
+          to: "C-alerts",
+        },
+      },
+      state: {},
+    } satisfies CronJob;
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "chunk 2 send failed",
+        delivery: { delivered: false, sentBeforeError: true },
+      },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1);
+    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[4]).toMatchObject({
+      channel: "slack",
+      to: "C-alerts",
+    });
+  });
+
   it("redacts command action-required summaries before webhook completion delivery", async () => {
     const logger = { warn: vi.fn() };
     const sensitiveSummary =

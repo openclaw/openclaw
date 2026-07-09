@@ -19,6 +19,7 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
+  sendFailureNotificationAnnounceMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
@@ -36,7 +37,12 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
+  sendCronAnnouncePayloadStrictMock: vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ status: "sent" } | { status: "partial_failed"; error: unknown }>
+  >(async () => ({ status: "sent" as const })),
+  sendFailureNotificationAnnounceMock: vi.fn(async () => {}),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -167,6 +173,7 @@ vi.mock("../cron/delivery.js", async () => {
   return {
     ...actual,
     sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
+    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
   };
 });
 
@@ -293,6 +300,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
+    sendFailureNotificationAnnounceMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
@@ -736,6 +744,104 @@ describe("buildGatewayCronService", () => {
       const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("marks partial announce delivery as run error without a same-target failure notice", async () => {
+    const cfg = createCronConfig("server-cron-command-announce-partial");
+    loadConfigMock.mockReturnValue(cfg);
+    sendCronAnnouncePayloadStrictMock.mockResolvedValueOnce({
+      status: "partial_failed",
+      error: new Error("chunk 2 send failed"),
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "announce-partial-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('weekly report\\n')"],
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      runCronChangedMock.mockClear();
+      await state.cron.run(job.id, "force");
+
+      const event = runCronChangedMock.mock.calls
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
+        .find((hookEvent) => hookEvent.action === "finished");
+      expect(event?.status).toBe("error");
+      expect(event?.error).toContain("chunk 2 send failed");
+      expect(event?.delivered).toBe(false);
+      // The announce already reached the primary target; no failure re-announce.
+      expect(sendFailureNotificationAnnounceMock).not.toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("still announces failure to the primary target when nothing was delivered", async () => {
+    const cfg = createCronConfig("server-cron-command-announce-failed");
+    loadConfigMock.mockReturnValue(cfg);
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error("send failed"));
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "announce-failed-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('weekly report\\n')"],
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      await vi.waitFor(() => {
+        expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
+      });
+      const target = requireRecord(
+        callArg(sendFailureNotificationAnnounceMock, 0, 4, "failure notice target"),
+        "failure notice target",
+      );
+      expect(target.channel).toBe("telegram");
+      expect(target.to).toBe("123");
     } finally {
       state.cron.stop();
     }

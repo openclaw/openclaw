@@ -37,7 +37,8 @@ vi.mock("../logging.js", () => ({
   })),
 }));
 
-const { sendFailureNotificationAnnounce } = await import("./delivery.js");
+const { sendCronAnnouncePayloadStrict, sendFailureNotificationAnnounce } =
+  await import("./delivery.js");
 
 type DeliveryRequest = {
   abortSignal?: unknown;
@@ -226,5 +227,102 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(warnMeta.channel).toBe("telegram");
     expect(warnMeta.to).toBe("123");
     expect(warnMessage).toBe("cron: failure destination announce failed");
+  });
+
+  it("logs partial delivery of the failure notice without failing", async () => {
+    mocks.deliverOutboundPayloads.mockImplementation(
+      async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: new Error("chunk 2 send failed"),
+          sentBeforeError: true,
+          stage: "platform_send",
+        });
+        return [{ ok: true }];
+      },
+    );
+
+    await expect(
+      sendFailureNotificationAnnounce(
+        {} as never,
+        {} as never,
+        "main",
+        "job-1",
+        { channel: "telegram", to: "123" },
+        "Cron failed",
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.warn).toHaveBeenCalledTimes(1);
+    const [warnMeta, warnMessage] = firstWarnCall();
+    expect(warnMeta.err).toBe("chunk 2 send failed");
+    expect(warnMessage).toBe("cron: failure destination announce partially failed");
+  });
+});
+
+describe("sendCronAnnouncePayloadStrict", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveDeliveryTarget.mockResolvedValue({
+      ok: true,
+      channel: "slack",
+      to: "C123",
+      mode: "explicit",
+    });
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ ok: true }]);
+  });
+
+  const sendStrict = () =>
+    sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "slack", to: "C123" },
+      message: "weekly report",
+      abortSignal: new AbortController().signal,
+    });
+
+  it("returns sent when delivery fully succeeds", async () => {
+    await expect(sendStrict()).resolves.toEqual({ status: "sent" });
+  });
+
+  it("returns a partial_failed outcome instead of throwing when content reached the target", async () => {
+    mocks.deliverOutboundPayloads.mockImplementation(
+      async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: new Error("chunk 2 send failed"),
+          sentBeforeError: true,
+          stage: "platform_send",
+        });
+        return [{ ok: true }];
+      },
+    );
+
+    const outcome = await sendStrict();
+    expect(outcome.status).toBe("partial_failed");
+    if (outcome.status === "partial_failed") {
+      expect(String(outcome.error)).toContain("chunk 2 send failed");
+    }
+  });
+
+  it("throws when nothing reached the target", async () => {
+    mocks.deliverOutboundPayloads.mockImplementation(
+      async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: new Error("send failed"),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    await expect(sendStrict()).rejects.toThrow("send failed");
   });
 });

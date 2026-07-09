@@ -302,6 +302,7 @@ function buildCronDeliveryTrace(params: {
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
   delivered: boolean;
+  sentBeforeError?: boolean;
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
@@ -327,6 +328,9 @@ function buildCronDeliveryTrace(params: {
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
+    // Only meaningful for failed deliveries: a later retry that fully delivers
+    // clears the run error, so the flag would be stale audit noise there.
+    ...(params.sentBeforeError && !params.delivered ? { sentBeforeError: true } : {}),
   };
 }
 
@@ -1395,6 +1399,7 @@ async function finalizeCronRun(params: {
       deliveryResult.deliveryAttempted &&
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
+    sentBeforeError: deliveryResult.sentBeforeError,
   });
   if (deliveryResult.result) {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {

@@ -43,6 +43,15 @@ export type CronAnnounceTarget = {
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
+/**
+ * Closed outcome for strict announce sends: `partial_failed` means visible
+ * content reached the target before the send error, so callers must not treat
+ * the target as un-notified (e.g. by re-announcing a failure there).
+ */
+export type CronAnnounceSendOutcome =
+  | { status: "sent" }
+  | { status: "partial_failed"; error: unknown };
+
 async function resolveCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -105,9 +114,9 @@ async function deliverCronAnnouncePayload(params: {
   };
   message: string;
   abortSignal: AbortSignal;
-}): Promise<void> {
-  // Cron delivery is durable and non-best-effort for primary announces; partial
-  // channel failure must surface as a cron run failure.
+}): Promise<CronAnnounceSendOutcome> {
+  // Cron delivery is durable and non-best-effort for primary announces; a send
+  // where nothing reached the target must surface as a cron run failure.
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,
@@ -121,12 +130,20 @@ async function deliverCronAnnouncePayload(params: {
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
   });
-  if (send.status === "failed" || send.status === "partial_failed") {
+  if (send.status === "failed") {
     throw send.error;
   }
+  if (send.status === "partial_failed") {
+    return { status: "partial_failed", error: send.error };
+  }
+  return { status: "sent" };
 }
 
-/** Sends a cron announce payload and throws if target resolution or delivery fails. */
+/**
+ * Sends a cron announce payload. Throws when target resolution fails or when
+ * nothing reached the target; partial delivery returns a closed outcome so
+ * callers can surface the error without re-announcing to the same target.
+ */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
   cfg: OpenClawConfig;
@@ -135,12 +152,12 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   message: string;
   abortSignal: AbortSignal;
-}): Promise<void> {
+}): Promise<CronAnnounceSendOutcome> {
   const delivery = await resolveCronAnnounceDelivery(params);
   if (!delivery.ok) {
     throw delivery.error;
   }
-  await deliverCronAnnouncePayload({
+  return await deliverCronAnnouncePayload({
     deps: params.deps,
     cfg: params.cfg,
     delivery,
@@ -177,13 +194,24 @@ export async function sendFailureNotificationAnnounce(
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 
   try {
-    await deliverCronAnnouncePayload({
+    const outcome = await deliverCronAnnouncePayload({
       deps,
       cfg,
       delivery,
       message,
       abortSignal: abortController.signal,
     });
+    if (outcome.status === "partial_failed") {
+      // The notice reached the target; log the partial error instead of failing.
+      cronDeliveryLogger.warn(
+        {
+          err: formatErrorMessage(outcome.error),
+          channel: delivery.resolvedTarget.channel,
+          to: delivery.resolvedTarget.to,
+        },
+        "cron: failure destination announce partially failed",
+      );
+    }
   } catch (err) {
     cronDeliveryLogger.warn(
       {

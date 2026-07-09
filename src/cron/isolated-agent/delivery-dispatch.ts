@@ -158,6 +158,8 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  /** A failed direct delivery still sent visible content to the target first. */
+  sentBeforeError: boolean;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
@@ -1006,12 +1008,14 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
+  let sentBeforeError = false;
   let directCronSessionCleanupAttempted = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
     ...(result ? { result } : {}),
     delivered,
     deliveryAttempted,
+    sentBeforeError,
     cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
     summary,
     outputText,
@@ -1193,7 +1197,6 @@ export async function dispatchCronDelivery(
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
-      let partialDeliverySucceededBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
@@ -1236,7 +1239,9 @@ export async function dispatchCronDelivery(
           throw send.error;
         }
         if (send.status === "partial_failed") {
-          partialDeliverySucceededBeforeFailure = send.results.length > 0;
+          // partial_failed implies some platform results exist: visible content
+          // reached the target before the error (durable send contract).
+          sentBeforeError = send.results.length > 0;
           if (!params.deliveryBestEffort) {
             throw send.error;
           }
@@ -1260,7 +1265,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
           error: err,
-          partialDelivered: partialDeliverySucceededBeforeFailure,
+          partialDelivered: sentBeforeError,
         });
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,

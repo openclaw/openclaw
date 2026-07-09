@@ -121,6 +121,12 @@ export type CronDeliveryTrace = {
   messageToolSentTo?: CronDeliveryTraceMessageTarget[];
   fallbackUsed?: boolean;
   delivered?: boolean;
+  /**
+   * True when a failed announce still sent visible content to the resolved
+   * target before erroring. Suppresses the same-target failure re-announce so
+   * recipients who already saw output do not get a false "job failed" notice.
+   */
+  sentBeforeError?: boolean;
 };
 
 /** Last failed-run notification delivery state stored on job state and run logs. */

@@ -452,6 +452,17 @@ function dispatchCronFailureDestinationNotifications(params: {
   if (primaryPlan.mode !== "announce" || !primaryPlan.requested) {
     return;
   }
+  if (params.evt.delivery?.sentBeforeError) {
+    // The announce already sent visible content to this primary target before
+    // the send error; a "job failed" notice there would false-alarm recipients
+    // who just received the report (#102367). Explicit failure destinations
+    // (handled above) still fire because they route elsewhere.
+    params.logger.warn(
+      { jobId: params.evt.jobId },
+      "cron: skipped failure notice to primary target; announce partially delivered before the send error",
+    );
+    return;
+  }
 
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
   void sendFailureNotificationAnnounce(

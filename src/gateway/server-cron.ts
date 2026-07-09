@@ -564,8 +564,29 @@ export function buildGatewayCronService(params: {
         };
       }
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      const deliveryFailureResult = (error: string, sentBeforeError: boolean) => ({
+        ...result,
+        status: job.delivery?.bestEffort ? result.status : ("error" as const),
+        error: job.delivery?.bestEffort ? result.error : error,
+        deliveryAttempted: true,
+        delivered: false,
+        delivery: {
+          ...deliveryTrace,
+          delivered: false,
+          ...(sentBeforeError ? { sentBeforeError: true } : {}),
+          resolved: {
+            channel: plan.channel,
+            to: plan.to,
+            accountId: plan.accountId,
+            threadId: plan.threadId,
+            source: "explicit" as const,
+            ok: false,
+            error,
+          },
+        },
+      });
       try {
-        await sendCronAnnouncePayloadStrict({
+        const send = await sendCronAnnouncePayloadStrict({
           deps: params.deps,
           cfg: runtimeConfig,
           agentId,
@@ -579,6 +600,11 @@ export function buildGatewayCronService(params: {
           message,
           abortSignal: abortSignal ?? new AbortController().signal,
         });
+        if (send.status === "partial_failed") {
+          const error = formatErrorMessage(send.error);
+          cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery partially failed");
+          return deliveryFailureResult(error, true);
+        }
         return {
           ...result,
           deliveryAttempted: true,
@@ -591,26 +617,7 @@ export function buildGatewayCronService(params: {
       } catch (err) {
         const error = formatErrorMessage(err);
         cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
-        return {
-          ...result,
-          status: job.delivery?.bestEffort ? result.status : "error",
-          error: job.delivery?.bestEffort ? result.error : error,
-          deliveryAttempted: true,
-          delivered: false,
-          delivery: {
-            ...deliveryTrace,
-            delivered: false,
-            resolved: {
-              channel: plan.channel,
-              to: plan.to,
-              accountId: plan.accountId,
-              threadId: plan.threadId,
-              source: "explicit" as const,
-              ok: false,
-              error,
-            },
-          },
-        };
+        return deliveryFailureResult(error, false);
       }
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {

@@ -1149,6 +1149,7 @@ async function finishPreparedManualRun(
             error: coreResult.error,
             diagnostics: coreResult.diagnostics,
             delivered: coreResult.delivered,
+            sentBeforeError: coreResult.delivery?.sentBeforeError,
             provider: coreResult.provider,
             startedAt,
             endedAt,

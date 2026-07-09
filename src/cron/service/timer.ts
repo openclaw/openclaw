@@ -116,6 +116,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     taskRunId?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    delivery?: CronDeliveryTrace;
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     startedAt: number;
@@ -620,6 +621,8 @@ function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
   delivered?: boolean;
+  /** Announce sent visible content before erroring; see CronDeliveryTrace.sentBeforeError. */
+  sentBeforeError?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureDestination"];
 }): {
@@ -656,6 +659,9 @@ function resolveDeliveryState(params: {
           : { delivered: true, status: "delivered" },
       };
     }
+    // A partially delivered announce suppresses the same-target failure notice
+    // (dispatchCronFailureDestinationNotifications), so without an alternate
+    // destination no failure notification is requested for this run.
     if (params.delivered === false) {
       return {
         delivered: false,
@@ -663,17 +669,22 @@ function resolveDeliveryState(params: {
         error: params.error,
         failureNotification: alternateFailureNotificationRequested
           ? failureNotification
-          : {
-              delivered: false,
-              status: "not-delivered",
-              ...(params.error ? { error: params.error } : {}),
-            },
+          : params.sentBeforeError
+            ? { status: "not-requested" }
+            : {
+                delivered: false,
+                status: "not-delivered",
+                ...(params.error ? { error: params.error } : {}),
+              },
       };
     }
     return {
       status: "unknown",
       error: params.error,
-      failureNotification: { status: "unknown" },
+      failureNotification:
+        params.sentBeforeError && !alternateFailureNotificationRequested
+          ? { status: "not-requested" }
+          : { status: "unknown" },
     };
   }
   if (params.delivered === true) {
@@ -703,6 +714,7 @@ export function applyJobResult(
     error?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
+    sentBeforeError?: boolean;
     provider?: string;
     startedAt: number;
     endedAt: number;
@@ -749,6 +761,7 @@ export function applyJobResult(
     job,
     runStatus: result.status,
     delivered: result.delivered,
+    sentBeforeError: result.sentBeforeError,
     error: result.error,
     globalFailureDestination: state.deps.cronConfig?.failureDestination,
   });
@@ -1113,6 +1126,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
         error: result.error,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
+        sentBeforeError: result.delivery?.sentBeforeError,
         provider: result.provider,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
@@ -1148,6 +1162,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     error: result.error,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
+    sentBeforeError: result.delivery?.sentBeforeError,
     provider: result.provider,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
