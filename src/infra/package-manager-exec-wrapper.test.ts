@@ -24,6 +24,12 @@ describe("resolveKnownPackageManagerExecInvocation", () => {
       expect(
         resolveKnownPackageManagerExecInvocation(["bun", "x", "--", "tsx", "./run.ts"]),
       ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
+      expect(resolveKnownPackageManagerExecInvocation(["bun", "", "x", "tsx", "./run.ts"])).toEqual(
+        { kind: "unwrapped", argv: ["tsx", "./run.ts"] },
+      );
+      expect(
+        resolveKnownPackageManagerExecInvocation(["bun", "--foo=bar", "x", "tsx", "./run.ts"]),
+      ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
     });
 
     it.each(["-c", "--config", "--cwd", "--env-file"])(
