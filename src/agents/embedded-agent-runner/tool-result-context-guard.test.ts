@@ -179,23 +179,6 @@ function recordMockArg(
   return arg as Record<string, unknown>;
 }
 
-function hasLoneSurrogate(s: string): boolean {
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff) {
-      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) {
-        return true;
-      }
-    }
-    if (c >= 0xdc00 && c <= 0xdfff) {
-      if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 describe("formatContextLimitTruncationNotice", () => {
   it("formats truncation wording with a count", () => {
     expect(formatContextLimitTruncationNotice(123)).toBe(
@@ -358,9 +341,9 @@ describe("installToolResultContextGuard", () => {
       1_000,
     )) as AgentMessage[];
 
-    const truncated = getToolResultText(transformed[0]);
-    expectOpenClawTruncation(truncated);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
+    expect(getToolResultText(transformed[0])).toBe(
+      "a".repeat(439) + formatContextLimitTruncationNotice(1_002),
+    );
     expect(getToolResultText(contextForNextCall[0])).toBe(text);
   });
 

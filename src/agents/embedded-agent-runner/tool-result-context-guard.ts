@@ -165,8 +165,8 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return truncateUtf16Safe(text, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const prefix = truncateUtf16Safe(text, cutPoint);
+  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
