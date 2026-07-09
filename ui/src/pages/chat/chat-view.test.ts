@@ -45,6 +45,7 @@ import {
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: ChatHeaderTestState) => {
@@ -1769,6 +1770,73 @@ describe("chat voice controls", () => {
 
     expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["connecting", "Connecting voice input..."],
+    ["listening", "Listening..."],
+    ["thinking", "Asking OpenClaw..."],
+  ] as const)("renders %s voice activity without visible status copy", (status, label) => {
+    const inputLevel = new RealtimeTalkLevelSignal();
+    inputLevel.set(0.64);
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: status,
+      realtimeTalkInputLevel: inputLevel,
+    });
+
+    const statusRegion = container.querySelector('[role="status"].agent-chat__talk-status');
+    const visualizer = statusRegion?.querySelector<HTMLElement>(
+      `.agent-chat__voice-activity[data-status="${status}"]`,
+    );
+    expect(visualizer?.getAttribute("data-level")).toBe("0.64");
+    expect(visualizer?.getAttribute("data-source")).toBe("microphone");
+    expect(visualizer?.getAttribute("role")).toBe("img");
+    expect(visualizer?.getAttribute("aria-label")).toBe(t("chat.composer.microphoneInput"));
+    expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
+    expect(statusRegion?.getAttribute("aria-live")).toBe("polite");
+    expect(statusRegion?.getAttribute("aria-atomic")).toBe("true");
+    expect(statusRegion?.querySelector(".agent-chat__sr-only")?.textContent?.trim()).toBe(label);
+    expect(statusRegion?.querySelector(".agent-chat__talk-status-text")).toBeNull();
+  });
+
+  it("clamps the rendered microphone level", () => {
+    const inputLevel = new RealtimeTalkLevelSignal();
+    inputLevel.set(4);
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkInputLevel: inputLevel,
+    });
+
+    expect(container.querySelector(".agent-chat__voice-activity")?.getAttribute("data-level")).toBe(
+      "1",
+    );
+  });
+
+  it("updates microphone bars without rerendering the chat", () => {
+    const inputLevel = new RealtimeTalkLevelSignal();
+    inputLevel.set(0.2);
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkInputLevel: inputLevel,
+    });
+    document.body.append(container);
+    try {
+      const visualizer = container.querySelector<HTMLElement>(".agent-chat__voice-activity");
+      const centerBar = visualizer?.querySelector<HTMLElement>(
+        ".agent-chat__voice-activity-bar:nth-child(4)",
+      );
+      const initialScale = centerBar?.style.getPropertyValue("--talk-bar-scale");
+
+      inputLevel.set(0.8);
+
+      expect(visualizer?.getAttribute("data-level")).toBe("0.8");
+      expect(centerBar?.style.getPropertyValue("--talk-bar-scale")).not.toBe(initialScale);
+    } finally {
+      container.remove();
+    }
   });
 
   it("shows every available microphone in Voice settings", () => {
