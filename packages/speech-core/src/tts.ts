@@ -1907,6 +1907,7 @@ export async function listSpeechVoices(params: {
   config?: ResolvedTtsConfig;
   apiKey?: string;
   baseUrl?: string;
+  timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
@@ -1929,6 +1930,11 @@ export async function listSpeechVoices(params: {
     providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
+    timeoutMs: resolveSpeechProviderTimeoutMs({
+      timeoutMs: params.timeoutMs,
+      config,
+      provider: resolvedProvider,
+    }),
   });
 }
 

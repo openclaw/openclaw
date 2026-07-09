@@ -1,4 +1,7 @@
 // Elevenlabs tests cover speech provider plugin behavior.
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { Socket } from "node:net";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
@@ -7,11 +10,20 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async ({
     url,
     init,
+    timeoutMs,
   }: {
     url: string;
     init?: RequestInit;
+    timeoutMs?: number;
   }): Promise<{ response: Response; release: () => Promise<void> }> => ({
-    response: await globalThis.fetch(url, init),
+    response: await globalThis.fetch(url, {
+      ...init,
+      signal:
+        init?.signal ??
+        (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? AbortSignal.timeout(timeoutMs)
+          : undefined),
+    }),
     release: vi.fn(async () => {}),
   }),
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
@@ -26,6 +38,26 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
     throw new Error("expected ElevenLabs request body");
   }
   return body as Record<string, unknown>;
+}
+
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected local HTTP server address");
+  }
+  return `http://127.0.0.1:${(address as AddressInfo).port}`;
+}
+
+async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 describe("elevenlabs speech provider", () => {
@@ -258,5 +290,42 @@ describe("elevenlabs speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out a hanging ElevenLabs voices list request", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    if (!provider.listVoices) {
+      throw new Error("expected ElevenLabs provider to support voice listing");
+    }
+    const sockets = new Set<Socket>();
+    let requestCount = 0;
+    const server = createServer((_req, _res) => {
+      requestCount += 1;
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    const baseUrl = await listen(server);
+    const startedAt = Date.now();
+
+    try {
+      await expect(
+        Promise.race([
+          provider.listVoices({
+            apiKey: "xi-test",
+            baseUrl,
+            timeoutMs: 250,
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error("voices list did not time out")), 2_000);
+          }),
+        ]),
+      ).rejects.toThrow(/aborted|timeout|timed out/i);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(requestCount).toBe(1);
+    } finally {
+      await closeServer(server, sockets);
+    }
   });
 });
