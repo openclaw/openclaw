@@ -622,8 +622,18 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-fable-5",
       } as never),
     ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
     });
     expect(
       provider
@@ -743,8 +753,18 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-mythos-5",
       } as never),
     ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
     });
   });
 

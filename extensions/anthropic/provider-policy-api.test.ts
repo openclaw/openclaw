@@ -164,8 +164,18 @@ describe("anthropic provider policy public artifact", () => {
           modelId,
         }),
       ).toEqual({
-        levels: [{ id: "off" }],
-        defaultLevel: "off",
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "high",
+        preserveWhenCatalogReasoningFalse: true,
       });
     },
   );
