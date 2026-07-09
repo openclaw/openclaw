@@ -149,6 +149,29 @@ describe("createOpenAIRealtimeClientSecret", () => {
         body: JSON.stringify({ session: { model: "gpt-4o-realtime-preview" } }),
       });
 
+      const realSsrFRuntime = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      let realGuardError: unknown;
+      try {
+        await realSsrFRuntime.fetchWithSsrFGuard({
+          url: `${baseUrl}/guarded`,
+          init: {
+            method: "POST",
+            body: JSON.stringify({ session: { model: "gpt-4o-realtime-preview" } }),
+          },
+          policy: { hostnameAllowlist: ["127.0.0.1"], allowPrivateNetwork: true },
+          timeoutMs: 50,
+          auditContext: "openai-realtime-client-secret-test",
+        });
+      } catch (error) {
+        realGuardError = error;
+      }
+      expect(realGuardError).toBeInstanceOf(Error);
+      expect(`${(realGuardError as Error).name} ${(realGuardError as Error).message}`).toMatch(
+        /timeout|timed out|aborted/i,
+      );
+
       fetchWithSsrFGuardMock.mockImplementationOnce(
         async (params: { init?: RequestInit; timeoutMs?: number }) => {
           const controller = new AbortController();
@@ -193,7 +216,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
           }),
         }),
       );
-      expect(requests).toEqual(["POST /control", "POST /realtime/client_secrets"]);
+      expect(requests).toEqual(["POST /control", "POST /guarded", "POST /realtime/client_secrets"]);
     } finally {
       await closeServer(server, sockets);
     }
