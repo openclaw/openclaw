@@ -472,6 +472,11 @@ export const uk: TranslationMap = {
   nav: {
     chat: "Чат",
     settings: "Налаштування",
+    settingsGeneral: "Загальні",
+    settingsGroupConnections: "Підключення",
+    settingsGroupAgents: "Агенти й інструменти",
+    settingsGroupSystem: "Система",
+    exitSettings: "Назад до застосунку",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
     resize: "Змінити розмір бічної панелі",

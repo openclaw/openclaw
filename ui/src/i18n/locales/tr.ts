@@ -475,6 +475,11 @@ export const tr: TranslationMap = {
   nav: {
     chat: "Sohbet",
     settings: "Ayarlar",
+    settingsGeneral: "Genel",
+    settingsGroupConnections: "Bağlantılar",
+    settingsGroupAgents: "Aracılar ve Araçlar",
+    settingsGroupSystem: "Sistem",
+    exitSettings: "Uygulamaya dön",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
     resize: "Kenar çubuğunu yeniden boyutlandır",
