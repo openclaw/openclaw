@@ -208,6 +208,8 @@ describe("ModelRegistry models.json auth", () => {
                     id: "microsoft/phi-4-multimodal-instruct",
                     input: ["text", "image", "audio"],
                   },
+                  { id: "audio-only", input: ["audio"] },
+                  { id: "explicit-empty", input: [] },
                 ],
               },
             },
@@ -236,6 +238,8 @@ describe("ModelRegistry models.json auth", () => {
       "text",
       "image",
     ]);
+    expect(registry.find("nvidia", "audio-only")?.input).toEqual([]);
+    expect(registry.find("nvidia", "explicit-empty")?.input).toEqual([]);
   });
 
   it("isolates invalid generated plugin catalog shards from valid models", () => {
