@@ -329,13 +329,19 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+function hasPreservedTakeoverPromptError(err: unknown): err is Record<"promptError", unknown> {
+  return Boolean(
+    isEmbeddedAttemptSessionTakeover(err) &&
+    err &&
+    typeof err === "object" &&
+    Object.hasOwn(err, "promptError"),
+  );
+}
+
 function resolveFailoverSourceError(err: unknown): unknown {
-  if (!isEmbeddedAttemptSessionTakeover(err) || !err || typeof err !== "object") {
-    return err;
-  }
   // Cleanup takeover is a secondary failure when the wrapper preserves the
   // prompt error. Classify and report that provider-facing source instead.
-  return "promptError" in err ? err.promptError : err;
+  return hasPreservedTakeoverPromptError(err) ? err.promptError : err;
 }
 
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
@@ -804,6 +810,12 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
+  // A direct takeover remains a coordination failure unless the dedicated
+  // cleanup wrapper owns a preserved prompt error. Its message alone must not
+  // reclassify session-state loss as a provider failure.
+  if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
+    return { kind: "coordination", error: err };
+  }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
     return { kind: "failover", error: failoverError };

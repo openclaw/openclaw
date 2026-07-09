@@ -4208,7 +4208,9 @@ describe("runWithImageModelFallback", () => {
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
   });
+});
 
+describe("runWithModelFallback preserved prompt errors", () => {
   it.each([
     {
       label: "timeout",

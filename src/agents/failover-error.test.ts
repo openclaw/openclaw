@@ -1389,6 +1389,13 @@ describe("failover-error", () => {
         { name: "EmbeddedAttemptSessionTakeoverError" },
       );
       expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          Object.assign(new Error("provider rejected request: rate limit"), {
+            name: "EmbeddedAttemptSessionTakeoverError",
+          }),
+        ),
+      ).toBe(true);
     });
   });
 });
