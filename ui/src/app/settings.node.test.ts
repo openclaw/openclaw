@@ -58,7 +58,7 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
-    navWidth: 220,
+    navWidth: 258,
     sidebarPinnedRoutes: ["overview"],
     sidebarMoreExpanded: false,
     borderRadius: 50,
@@ -167,7 +167,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -202,7 +202,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -235,7 +235,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -253,7 +253,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -283,7 +283,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -303,7 +303,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -338,7 +338,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["sessions", "cron"],
       sidebarMoreExpanded: true,
       borderRadius: 50,
@@ -347,6 +347,7 @@ describe("loadSettings default gateway URL derivation", () => {
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["sessions", "cron"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(true);
+    expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -356,10 +357,12 @@ describe("loadSettings default gateway URL derivation", () => {
     >;
     persisted.sidebarPinnedRoutes = "sessions";
     persisted.sidebarMoreExpanded = "yes";
+    persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["overview"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(false);
+    expect(loadSettings().navWidth).toBe(258);
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {
@@ -475,7 +478,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -491,7 +494,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -592,7 +595,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -623,7 +626,7 @@ describe("loadSettings default gateway URL derivation", () => {
         chatShowToolCalls: true,
         splitRatio: 0.6,
         navCollapsed: false,
-        navWidth: 220,
+        navWidth: 258,
         sidebarPinnedRoutes: ["overview"],
         sidebarMoreExpanded: false,
         borderRadius: 50,
@@ -668,7 +671,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
@@ -712,7 +715,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
+      navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
