@@ -312,8 +312,10 @@ main model can read the screenshot directly.
   browser processes.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   default to headless automatically when neither the environment nor profile/global
-  config explicitly chooses headed mode. `openclaw browser status --json`
-  reports `headlessSource` as `env`, `profile`, `config`,
+  config explicitly chooses headed mode. The canonical JSON form is
+  `openclaw browser --json status`, and trailing `status --json` also works
+  because `status` does not define its own `--json`. It reports
+  `headlessSource` as `env`, `profile`, `config`,
   `request`, `linux-display-fallback`, or `default`.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary

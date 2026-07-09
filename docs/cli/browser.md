@@ -20,7 +20,10 @@ Related: [Browser tool](/tools/browser)
 - `--timeout <ms>`: request timeout in ms (default: `30000`).
 - `--expect-final`: wait for a final Gateway response.
 - `--browser-profile <name>`: choose a browser profile (default: `openclaw`, or `browser.defaultProfile`).
-- `--json`: machine-readable output (where supported).
+- `--json`: machine-readable output (where supported). Prefer the browser-level flag before
+  the subcommand, for example `openclaw browser --json status`; trailing placement such as
+  `openclaw browser status --json` is also supported when the selected child command does
+  not define its own `--json`.
 
 ## Quick start (local)
 
