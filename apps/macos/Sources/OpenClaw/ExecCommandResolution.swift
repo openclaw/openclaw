@@ -103,8 +103,8 @@ struct ExecCommandResolution {
     }
 
     /// Reusable authorization must execute the same canonical executable that
-    /// was matched. The node host's exact `sh -c`/`sh -lc` transport may bind a
-    /// static single command directly; every other shell or carrier stays gated.
+    /// was matched. A non-login `sh -c` transport may bind a static command
+    /// directly; login shells and other modes stay gated.
     static func bindForAllowlistExecution(
         command: [String],
         rawCommand: String?,
@@ -129,26 +129,18 @@ struct ExecCommandResolution {
               FileManager().isExecutableFile(atPath: realPath)
         else { return nil }
         guard !self.isUnsafeReusableExecutionTarget(resolution) else { return nil }
-        let boundArgv = [realPath] + Array(argv.dropFirst())
-        if shell.isWrapper, command[1] == "-lc" {
-            // The node transport intentionally requests a login shell. Keep its
-            // startup semantics, but pin the approved executable inside it.
-            guard command[0] == "/bin/sh" else { return nil }
-            return ["/bin/sh", "-lc", boundArgv.map(self.shellQuote).joined(separator: " ")]
-        }
-        return boundArgv
+        return [realPath] + Array(argv.dropFirst())
     }
 
-    /// The macOS node receives ordinary POSIX commands through this exact
-    /// wrapper. Binding the parsed argv directly avoids re-running a shell,
-    /// profile, expansion, redirection, or command chain after authorization.
+    /// Bind only the static non-login transport. Login startup files execute
+    /// outside the matched argv, and other shell modes change semantics.
     private static func staticNodeShellPayload(
         command: [String],
         parsed: ExecShellWrapperParser.ParsedShellWrapper) -> String?
     {
         guard command.count == 3,
               ExecCommandToken.basenameLower(command[0]) == "sh",
-              command[1] == "-c" || command[1] == "-lc",
+              command[1] == "-c",
               let payload = parsed.command,
               self.isStaticShellPayload(payload),
               !self.hasLeadingShellAssignment(payload),
@@ -162,13 +154,6 @@ struct ExecCommandResolution {
         return first.range(
             of: #"^[A-Za-z_][A-Za-z0-9_]*\+?="#,
             options: .regularExpression) != nil
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        if value.isEmpty {
-            return "''"
-        }
-        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func isStaticShellPayload(_ payload: String) -> Bool {
