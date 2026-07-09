@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
@@ -30,6 +31,8 @@ import {
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+// These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -611,9 +614,8 @@ describe("scripts/run-vitest", () => {
 
   posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
     const fixturePath = nodePath.join(
-      "test",
-      "scripts",
-      `run-vitest-delegated-signal-${process.pid}-${Date.now()}.test.ts`,
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-signal-${process.pid}-${Date.now()}.mjs`,
     );
     const childPidPath = nodePath.join(
       os.tmpdir(),
@@ -629,20 +631,23 @@ describe("scripts/run-vitest", () => {
       [
         'import { spawn } from "node:child_process";',
         'import fs from "node:fs";',
-        'import { it } from "vitest";',
-        'it("waits for wrapper termination", async () => {',
-        '  const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
-        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
-        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID!, String(child.pid));",
-        "  await new Promise(() => {});",
-        "});",
+        'const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
+        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID, String(process.pid));",
+        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID, String(child.pid));",
+        "await new Promise(() => {});",
         "",
       ].join("\n"),
     );
 
     const runner = spawn(
       process.execPath,
-      ["scripts/run-vitest.mjs", fixturePath, "--reporter=verbose"],
+      [
+        "--input-type=module",
+        "--eval",
+        `import { runTestProjectsDelegation } from ${JSON.stringify(
+          pathToFileURL(nodePath.resolve("scripts/run-vitest.mjs")).href,
+        )}; runTestProjectsDelegation([], process.env, { runnerPath: ${JSON.stringify(fixturePath)} });`,
+      ],
       {
         env: {
           ...process.env,
@@ -656,8 +661,10 @@ describe("scripts/run-vitest", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(childPidPath), 10_000);
-      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
+      await waitFor(
+        () => fs.existsSync(childPidPath) && fs.existsSync(descendantPidPath),
+        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+      );
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
@@ -667,11 +674,11 @@ describe("scripts/run-vitest", () => {
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
-      const result = await waitForClose(runner);
+      const result = await waitForClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
 
       expect(result).toEqual({ code: null, signal: "SIGTERM" });
-      await waitFor(() => !isProcessAlive(childPid), 5_000);
-      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+      await waitFor(() => !isProcessAlive(childPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+      await waitFor(() => !isProcessAlive(descendantPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");

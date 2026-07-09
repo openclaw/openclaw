@@ -16,6 +16,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -130,7 +131,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-export type ShortTermRecallStore = {
+type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -145,7 +146,7 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-export type ShortTermPhaseSignalStore = {
+type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
@@ -359,7 +360,7 @@ function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -2351,7 +2352,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),
@@ -2849,55 +2850,43 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
+async function writeRawShortTermStoreForTest(
+  workspaceDir: string,
+  raw: unknown,
+  namespace: string,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asRecord(raw);
+  const entries = asRecord(record?.entries);
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace,
+      workspaceDir,
+      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: metaKey,
+      value: {
+        updatedAt:
+          typeof record?.updatedAt === "string" && record.updatedAt.trim()
+            ? record.updatedAt
+            : new Date().toISOString(),
+      },
+    }),
+  ]);
+}
+
 export const testing = {
   parseLockOwnerPid,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,
-  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "recall",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
-  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "phase",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
+  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
+  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
   writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
     await openMemoryCoreStateStore<ShortTermLockEntry>({
       namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2913,6 +2902,7 @@ export const testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  compareShortTermRecallRetention,
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,

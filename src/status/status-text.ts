@@ -69,7 +69,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
-function resolveStatusChannelFeatureLine(params: {
+export function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
   statusChannel: string;
   statusAccountId?: string;
@@ -476,7 +476,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       if (
         usageEntry &&
         !usageEntry.error &&
-        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+        (usageEntry.windows.length > 0 ||
+          Boolean(usageEntry.billing?.length) ||
+          Boolean(usageEntry.summary?.trim()))
       ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),

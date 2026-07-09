@@ -29,6 +29,7 @@ vi.mock("../tool-display.ts", () => ({
 }));
 
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
@@ -50,7 +51,49 @@ function requireFirstMockArg(
   return arg;
 }
 
+function selectText(element: Element) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function pointerClick(element: Element) {
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+}
+
 describe("tool-cards", () => {
+  it("keeps selected summary text from toggling the disclosure", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const toggle = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:selectable",
+          name: "web_search",
+          args: { query: "openclaw" },
+        },
+        { expanded: false, onToggleExpanded: toggle },
+      ),
+      container,
+    );
+
+    const summary = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
+    const label = summary?.querySelector(".chat-tool-msg-summary__label");
+    expect(summary).not.toBeNull();
+    expect(label).not.toBeNull();
+    selectText(label!);
+    pointerClick(summary!);
+    expect(toggle).not.toHaveBeenCalled();
+
+    window.getSelection()?.removeAllRanges();
+    pointerClick(summary!);
+    expect(toggle).toHaveBeenCalledWith("msg:selectable");
+    container.remove();
+  });
+
   it("renders expanded cards with inline input and output sections", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
@@ -76,6 +119,35 @@ describe("tool-cards", () => {
       '{\n  "url": "https://example.com"\n}',
       "Opened page",
     ]);
+  });
+
+  it("does not repeat the tool identity in expanded details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:4a:call-4a",
+          name: "skill_workshop",
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
+          outputText: "Proposal created",
+        },
+        {
+          expanded: true,
+          onOpenSidebar: vi.fn(),
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
+    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Skill Workshop");
+    expect(bodyText).toContain('"action": "create"');
+    expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
   });
 
   it("renders expanded tool calls without an inline output block when no output is present", () => {
@@ -195,12 +267,23 @@ describe("tool-cards", () => {
     expect(formatCollapsedToolSummaryText("   ")).toBeUndefined();
   });
 
+  it("omits normalized tool details that repeat the label", () => {
+    expect(formatDistinctCollapsedToolSummaryText("bash", "Bash")).toBeUndefined();
+    expect(
+      formatDistinctCollapsedToolSummaryText("heartbeat_respond", "Heartbeat Respond"),
+    ).toBeUndefined();
+    expect(formatDistinctCollapsedToolSummaryText("run openclaw doctor", "Bash")).toBe(
+      "run openclaw doctor",
+    );
+  });
+
   it("keeps collapsed markdown previews bounded after display cleanup", () => {
     const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
 
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");
+    expect(formatCollapsedToolPreviewText(`${"A".repeat(119)}🚀tail`)).toBe("A".repeat(119));
   });
 
   it("bounds raw string argument fallbacks in collapsed summaries", () => {
@@ -430,7 +513,7 @@ describe("tool-cards", () => {
     });
   });
 
-  it("renders a Tool error label and Error badge when output is an error JSON", () => {
+  it("renders an error summary without a redundant Error badge", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -453,10 +536,18 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Tool error",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
     const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-card__status-badge")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".chat-tool-card__block-label")).map(
+        (label) => label.textContent,
+      ),
+    ).toContain("Tool error");
   });
 
   it("renders a Tool error label when output has a status-only error payload", () => {
@@ -497,7 +588,7 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
   it("renders a Tool error label when the tool card has an explicit error flag", () => {
@@ -519,6 +610,27 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+  });
+
+  it("renders a plain error detail when a failed tool has no output", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:no-output",
+          name: "lookup",
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool error");
+    expect(container.querySelector(".chat-tool-card__block-content")?.textContent).toBe(
+      "No output — tool failed.",
+    );
   });
 
   it("respects an explicit success flag even when the payload looks like an error", () => {

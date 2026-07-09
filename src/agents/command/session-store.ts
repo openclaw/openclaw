@@ -62,6 +62,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   result: RunResult;
   touchInteraction?: boolean;
   /**
+   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
+  /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for heartbeat turns so the
@@ -84,6 +89,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
+  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -126,6 +132,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -211,10 +218,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const usageForContext = isCliProvider(providerUsed, cfg)
-      ? promptTokens
-        ? undefined
-        : lastCallUsage
-      : usage;
+      ? lastCallUsage
+      : lastCallUsage?.contextUsage
+        ? lastCallUsage
+        : usage;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,
@@ -282,6 +289,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch: Partial<SessionEntry> = preserveUserFacingRunState
     ? {
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }

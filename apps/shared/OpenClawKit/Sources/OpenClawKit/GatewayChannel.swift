@@ -78,11 +78,25 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
 public protocol WebSocketSessioning: AnyObject {
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox
+}
+
+extension WebSocketSessioning {
+    /// Compatibility path for existing session conformers. URLSession and pinning sessions
+    /// override this requirement so operator headers remain attached to the upgrade request.
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        guard let url = request.url else { preconditionFailure("WebSocket request URL is required") }
+        return self.makeWebSocketTask(url: url)
+    }
 }
 
 extension URLSession: WebSocketSessioning {
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.webSocketTask(with: url)
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        let task = self.webSocketTask(with: request)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
         task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
         return WebSocketTaskBox(task: task)
@@ -112,6 +126,12 @@ public struct GatewayConnectOptions: Sendable {
     /// device-scoped auth (role/scope upgrades will require pairing). Keep this true for
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
+    /// Set false for an endpoint handoff whose explicit credentials (including none) must be
+    /// tried without reusing a device token issued by a different gateway.
+    public var allowStoredDeviceAuth: Bool
+    /// Stable gateway owner for device tokens. Nil preserves legacy unscoped storage for clients
+    /// that have not adopted endpoint ownership yet.
+    public var deviceAuthGatewayID: String?
 
     public init(
         role: String,
@@ -124,7 +144,9 @@ public struct GatewayConnectOptions: Sendable {
         clientMode: String,
         clientDisplayName: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
-        includeDeviceIdentity: Bool = true)
+        includeDeviceIdentity: Bool = true,
+        allowStoredDeviceAuth: Bool = true,
+        deviceAuthGatewayID: String? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -137,6 +159,8 @@ public struct GatewayConnectOptions: Sendable {
         self.clientDisplayName = clientDisplayName
         self.deviceIdentityProfile = deviceIdentityProfile
         self.includeDeviceIdentity = includeDeviceIdentity
+        self.allowStoredDeviceAuth = allowStoredDeviceAuth
+        self.deviceAuthGatewayID = deviceAuthGatewayID
     }
 }
 
@@ -226,20 +250,6 @@ private struct SelectedConnectAuth {
     let suppressedDeviceTokenRetry: Bool
 }
 
-private enum GatewayConnectErrorCodes {
-    static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
-    static let authDeviceTokenMismatch = GatewayConnectAuthDetailCode.authDeviceTokenMismatch.rawValue
-    static let authTokenMissing = GatewayConnectAuthDetailCode.authTokenMissing.rawValue
-    static let authTokenNotConfigured = GatewayConnectAuthDetailCode.authTokenNotConfigured.rawValue
-    static let authPasswordMissing = GatewayConnectAuthDetailCode.authPasswordMissing.rawValue
-    static let authPasswordMismatch = GatewayConnectAuthDetailCode.authPasswordMismatch.rawValue
-    static let authPasswordNotConfigured = GatewayConnectAuthDetailCode.authPasswordNotConfigured.rawValue
-    static let authRateLimited = GatewayConnectAuthDetailCode.authRateLimited.rawValue
-    static let pairingRequired = GatewayConnectAuthDetailCode.pairingRequired.rawValue
-    static let controlUiDeviceIdentityRequired = GatewayConnectAuthDetailCode.controlUiDeviceIdentityRequired.rawValue
-    static let deviceIdentityRequired = GatewayConnectAuthDetailCode.deviceIdentityRequired.rawValue
-}
-
 public actor GatewayChannelActor {
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
@@ -276,10 +286,12 @@ public actor GatewayChannelActor {
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
     private var deviceTokenRetryBudgetUsed = false
+    private var issuedDeviceAuthRoles = Set<String>()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
+    private let extraHeadersProvider: (@Sendable () -> [String: String])?
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
-    private let connectOptions: GatewayConnectOptions?
+    private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String) async -> Void)?
 
     public init(
@@ -290,12 +302,14 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
-        disconnectHandler: (@Sendable (String) async -> Void)? = nil)
+        disconnectHandler: (@Sendable (String) async -> Void)? = nil,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil)
     {
         self.url = url
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+        self.extraHeadersProvider = extraHeadersProvider
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
@@ -370,6 +384,21 @@ public actor GatewayChannelActor {
         }
     }
 
+    /// Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
+    /// request. Read from the provider at connect time so edits apply on the next reconnect
+    /// without re-pairing. Values are credentials: never log them.
+    private func makeUpgradeRequest() -> URLRequest {
+        var request = URLRequest(url: self.url)
+        // Custom headers can contain service tokens or Authorization values. Do not even read
+        // the provider for cleartext routes, where credentials would be exposed in transit.
+        guard self.url.scheme?.lowercased() == "wss" else { return request }
+        guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
+        for (name, value) in GatewayCustomHeaders.sanitized(headers) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
     public func connect() async throws {
         if self.connected, self.task?.state == .running { return }
         if self.isConnecting {
@@ -382,7 +411,7 @@ public actor GatewayChannelActor {
         defer { self.isConnecting = false }
 
         self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = self.session.makeWebSocketTask(url: self.url)
+        self.task = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
         self.task?.resume()
         do {
             try await AsyncTimeout.withTimeout(
@@ -470,10 +499,14 @@ public actor GatewayChannelActor {
         let requestedScopes = options.scopes
         let scopesAreExplicit = options.scopesAreExplicit
         let includeDeviceIdentity = options.includeDeviceIdentity
+        let allowStoredDeviceAuth = options.allowStoredDeviceAuth
+        let deviceAuthGatewayID = options.deviceAuthGatewayID
         let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate(profile: deviceIdentityProfile) : nil
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,
+            allowStoredDeviceAuth: allowStoredDeviceAuth,
+            deviceAuthGatewayID: deviceAuthGatewayID,
             deviceIdentityProfile: deviceIdentityProfile,
             deviceId: identity?.deviceId,
             requestedScopes: requestedScopes)
@@ -531,10 +564,10 @@ public actor GatewayChannelActor {
         } else if let password = selectedAuth.authPassword {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
         if includeDeviceIdentity, let identity {
-            let payload = GatewayDeviceAuthPayload.buildV3(
+            let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
                 deviceId: identity.deviceId,
                 clientId: clientId,
                 clientMode: clientMode,
@@ -542,9 +575,7 @@ public actor GatewayChannelActor {
                 scopes: scopes,
                 signedAtMs: signedAtMs,
                 token: selectedAuth.signatureToken,
-                nonce: connectNonce,
-                platform: platform,
-                deviceFamily: InstanceIdentity.deviceFamily)
+                nonce: connectNonce)
             if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
                 payload: payload,
                 identity: identity,
@@ -564,11 +595,17 @@ public actor GatewayChannelActor {
         try await self.task?.send(.data(data))
         do {
             let response = try await self.waitForConnectResponse(reqId: reqId)
-            try await self.handleConnectResponse(
+            let issuedRoles = try await self.handleConnectResponse(
                 response,
                 identity: identity,
                 role: role,
+                deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile)
+            self.issuedDeviceAuthRoles.formUnion(issuedRoles)
+            if issuedRoles.contains(role) {
+                // Only a token persisted from this endpoint may unlock stored auth for its role.
+                self.connectOptions?.allowStoredDeviceAuth = true
+            }
             self.pendingDeviceTokenRetry = false
             self.deviceTokenRetryBudgetUsed = false
         } catch {
@@ -589,6 +626,7 @@ public actor GatewayChannelActor {
                 DeviceAuthStore.clearToken(
                     deviceId: identity.deviceId,
                     role: role,
+                    gatewayID: deviceAuthGatewayID,
                     profile: deviceIdentityProfile)
             }
             throw error
@@ -598,6 +636,8 @@ public actor GatewayChannelActor {
     private func selectConnectAuth(
         role: String,
         includeDeviceIdentity: Bool,
+        allowStoredDeviceAuth: Bool,
+        deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
         deviceId: String?,
         requestedScopes: [String]) -> SelectedConnectAuth
@@ -607,8 +647,12 @@ public actor GatewayChannelActor {
             self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let storedEntry =
-            (includeDeviceIdentity && deviceId != nil)
-            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role, profile: deviceIdentityProfile)
+            (includeDeviceIdentity && allowStoredDeviceAuth && deviceId != nil)
+            ? DeviceAuthStore.loadToken(
+                deviceId: deviceId!,
+                role: role,
+                gatewayID: deviceAuthGatewayID,
+                profile: deviceIdentityProfile)
             : nil
         let storedToken = storedEntry?.token
         let storedScopes = storedEntry?.scopes ?? []
@@ -793,22 +837,25 @@ public actor GatewayChannelActor {
         return requestedScopes
     }
 
+    @discardableResult
     private func persistBootstrapHandoffToken(
         deviceId: String,
         role: String,
         token: String,
         scopes: [String],
-        deviceIdentityProfile: GatewayDeviceIdentityProfile)
+        deviceAuthGatewayID: String?,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
     {
         guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
-            return
+            return false
         }
-        _ = DeviceAuthStore.storeToken(
+        return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
             role: role,
             token: token,
             scopes: filteredScopes,
-            profile: deviceIdentityProfile)
+            gatewayID: deviceAuthGatewayID,
+            profile: deviceIdentityProfile).persisted
     }
 
     private func persistIssuedDeviceToken(
@@ -817,33 +864,36 @@ public actor GatewayChannelActor {
         role: String,
         token: String,
         scopes: [String],
-        deviceIdentityProfile: GatewayDeviceIdentityProfile)
+        deviceAuthGatewayID: String?,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
     {
         if authSource == .bootstrapToken {
             guard self.shouldPersistBootstrapHandoffTokens() else {
-                return
+                return false
             }
-            self.persistBootstrapHandoffToken(
+            return self.persistBootstrapHandoffToken(
                 deviceId: deviceId,
                 role: role,
                 token: token,
                 scopes: scopes,
+                deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile)
-            return
         }
-        _ = DeviceAuthStore.storeToken(
+        return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
             role: role,
             token: token,
             scopes: scopes,
-            profile: deviceIdentityProfile)
+            gatewayID: deviceAuthGatewayID,
+            profile: deviceIdentityProfile).persisted
     }
 
     private func handleConnectResponse(
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
         role: String,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile) async throws
+        deviceAuthGatewayID: String?,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile) async throws -> Set<String>
     {
         if res.ok == false {
             let error = res.error
@@ -900,18 +950,23 @@ public actor GatewayChannelActor {
             self.tickIntervalMs = Double(tick)
         }
         let auth = ok.auth
+        var issuedRoles = Set<String>()
         if let identity {
             if let deviceToken = auth["deviceToken"]?.value as? String {
                 let authRole = auth["role"]?.value as? String ?? role
                 let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
                     .compactMap { $0.value as? String } ?? []
-                self.persistIssuedDeviceToken(
+                if self.persistIssuedDeviceToken(
                     authSource: self.lastAuthSource,
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
                     scopes: scopes,
+                    deviceAuthGatewayID: deviceAuthGatewayID,
                     deviceIdentityProfile: deviceIdentityProfile)
+                {
+                    issuedRoles.insert(authRole)
+                }
             }
             if self.shouldPersistBootstrapHandoffTokens(),
                let tokenEntries = auth["deviceTokens"]?.value as? [ProtoAnyCodable]
@@ -925,12 +980,16 @@ public actor GatewayChannelActor {
                     }
                     let scopes = (rawEntry["scopes"]?.value as? [ProtoAnyCodable])?
                         .compactMap { $0.value as? String } ?? []
-                    self.persistBootstrapHandoffToken(
+                    if self.persistBootstrapHandoffToken(
                         deviceId: identity.deviceId,
                         role: authRole,
                         token: deviceToken,
                         scopes: scopes,
+                        deviceAuthGatewayID: deviceAuthGatewayID,
                         deviceIdentityProfile: deviceIdentityProfile)
+                    {
+                        issuedRoles.insert(authRole)
+                    }
                 }
             }
         }
@@ -943,6 +1002,11 @@ public actor GatewayChannelActor {
         if let pushHandler = self.pushHandler {
             Task { await pushHandler(.snapshot(ok)) }
         }
+        return issuedRoles
+    }
+
+    public func currentIssuedDeviceAuthRoles() -> Set<String> {
+        self.issuedDeviceAuthRoles
     }
 
     private func listen() {
@@ -1152,7 +1216,7 @@ public actor GatewayChannelActor {
         else {
             return false
         }
-        if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
+        if Self.isTrustedDeviceRetryLoopbackHost(host) {
             return true
         }
         if self.url.scheme?.lowercased() == "wss",
@@ -1161,6 +1225,14 @@ public actor GatewayChannelActor {
             return trust.allowsDeviceTokenRetryAuth
         }
         return false
+    }
+
+    private static func isTrustedDeviceRetryLoopbackHost(_ host: String) -> Bool {
+        let normalized = LoopbackHost.normalizedHost(host)
+        if normalized == "0.0.0.0" || normalized == "::" {
+            return false
+        }
+        return LoopbackHost.isLoopbackHost(normalized)
     }
 
     private nonisolated func sleepUnlessCancelled(nanoseconds: UInt64) async -> Bool {

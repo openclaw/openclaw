@@ -29,10 +29,22 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         missingCostEntries: 0,
       },
     })),
+    discoverAllSessions: vi.fn(async () => []),
   };
 });
 
-import { loadCostUsageSummaryFromCache } from "../../infra/session-cost-usage.js";
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+  };
+});
+
+import {
+  discoverAllSessions,
+  loadCostUsageSummaryFromCache,
+} from "../../infra/session-cost-usage.js";
 import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
@@ -87,6 +99,20 @@ describe("gateway usage helpers", () => {
       throw new Error(result.error);
     }
     return result.value;
+  }
+
+  function withTimeZone<T>(timeZone: string, run: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      return run();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previous;
+      }
+    }
   }
 
   beforeEach(() => {
@@ -262,6 +288,35 @@ describe("gateway usage helpers", () => {
     expect(range.endMs).toBe(expectedStart + dayMs - 1);
   });
 
+  it("resolveDateRange uses gateway calendar end boundaries for explicit DST-short days", () => {
+    withTimeZone("America/New_York", () => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-03-08",
+          endDate: "2026-03-08",
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 9).getTime() - 1);
+    });
+  });
+
+  it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
+    withTimeZone("America/New_York", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          days: 2,
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+    });
+  });
+
   it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
@@ -329,6 +384,31 @@ describe("gateway usage helpers", () => {
     });
   });
 
+  it("keeps cost usage cache entries scoped by daily timezone offset", async () => {
+    const config = {} as OpenClawConfig;
+
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: -300,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
   it("passes usage.cost agentId through to the cost summary loader", async () => {
     const respond = vi.fn();
 
@@ -341,6 +421,25 @@ describe("gateway usage helpers", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
+    );
+  });
+
+  it("buckets usage.cost daily rows with the requested UTC offset", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: {
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        utcOffset: "UTC-5",
+      },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
     );
   });
 
@@ -431,5 +530,135 @@ describe("gateway usage helpers", () => {
     expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });
+  });
+
+  it("bounds usage.cost all-agent cache loads", async () => {
+    const agentCount = 13;
+    const concurrencyLimit = 12;
+    let releaseLoads!: () => void;
+    const loadsReleased = new Promise<void>((resolve) => {
+      releaseLoads = resolve;
+    });
+    let resolveFirstBatchStarted!: () => void;
+    const firstBatchStarted = new Promise<void>((resolve) => {
+      resolveFirstBatchStarted = resolve;
+    });
+    let started = 0;
+    let inFlight = 0;
+    let peakInFlight = 0;
+
+    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async () => {
+      started += 1;
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      if (started === concurrencyLimit) {
+        resolveFirstBatchStarted();
+      }
+      await loadsReleased;
+      inFlight -= 1;
+      return costSummary({ totalTokens: 1, totalCost: 0 });
+    });
+
+    const respond = vi.fn();
+    const request = usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: {
+            list: Array.from({ length: agentCount }, (_, i) => ({ id: `agent-${i}` })),
+          },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    await firstBatchStarted;
+    const startedBeforeRelease = started;
+    const peakBeforeRelease = peakInFlight;
+    releaseLoads();
+    await request;
+
+    expect(startedBeforeRelease).toBe(concurrencyLimit);
+    expect(peakBeforeRelease).toBe(concurrencyLimit);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        totals: expect.objectContaining({ totalTokens: agentCount }),
+      }),
+      undefined,
+    );
+  });
+
+  it("rejects an all-agent usage load when one agent task fails", async () => {
+    const failure = new Error("agent usage load failed");
+    vi.mocked(loadCostUsageSummaryFromCache)
+      .mockResolvedValueOnce(costSummary({ totalTokens: 1, totalCost: 0 }))
+      .mockRejectedValueOnce(failure);
+
+    const respond = vi.fn();
+    const request = usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }, { id: "broken" }] },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    await expect(request).rejects.toBe(failure);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("bounds sessions.usage all-agent session discovery", async () => {
+    const agentCount = 13;
+    const concurrencyLimit = 12;
+    let releaseLoads!: () => void;
+    const loadsReleased = new Promise<void>((resolve) => {
+      releaseLoads = resolve;
+    });
+    let resolveFirstBatchStarted!: () => void;
+    const firstBatchStarted = new Promise<void>((resolve) => {
+      resolveFirstBatchStarted = resolve;
+    });
+    let started = 0;
+    let inFlight = 0;
+    let peakInFlight = 0;
+
+    vi.mocked(discoverAllSessions).mockImplementation(async () => {
+      started += 1;
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      if (started === concurrencyLimit) {
+        resolveFirstBatchStarted();
+      }
+      await loadsReleased;
+      inFlight -= 1;
+      return [];
+    });
+
+    const respond = vi.fn();
+    const request = usageHandlers["sessions.usage"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: {
+            list: Array.from({ length: agentCount }, (_, i) => ({ id: `agent-${i}` })),
+          },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+
+    await firstBatchStarted;
+    const startedBeforeRelease = started;
+    const peakBeforeRelease = peakInFlight;
+    releaseLoads();
+    await request;
+
+    expect(startedBeforeRelease).toBe(concurrencyLimit);
+    expect(peakBeforeRelease).toBe(concurrencyLimit);
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(agentCount);
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
   });
 });

@@ -13,6 +13,7 @@ import {
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -110,12 +111,18 @@ function sanitizeFreshCronSessionEntry(
   return next;
 }
 
-/** Reads the exact cron session row without an in-process cache snapshot. */
+/**
+ * Reads the current cron session row without an in-process cache snapshot.
+ * Lifecycle admission guards compare this against the run's initial entry, so
+ * the read must bypass cached store snapshots (accessor readConsistency
+ * "latest"). Cron keys are canonicalized before use, so accessor key
+ * resolution selects the same row the cron persist path writes.
+ */
 export function loadCronSessionEntryLatest(
   storePath: string,
   sessionKey: string,
 ): SessionEntry | undefined {
-  return loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
 }
 
 /** Resolves or rolls over the cron session entry for one isolated-agent run. */

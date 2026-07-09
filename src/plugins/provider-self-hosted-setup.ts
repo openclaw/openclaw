@@ -105,7 +105,11 @@ async function readSelfHostedDiscoveryJson(response: Response, label: string): P
         `${label} discovery response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
       ),
   });
-  return JSON.parse(new TextDecoder().decode(bytes));
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch (cause) {
+    throw new Error(`${label} discovery response is not valid JSON`, { cause });
+  }
 }
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {

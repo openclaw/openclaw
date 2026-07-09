@@ -36,6 +36,7 @@ const unavailableCron: CronServiceContract = {
   listPage: async () => cronUnavailable(),
   add: async () => cronUnavailable(),
   update: async () => cronUnavailable(),
+  updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
@@ -46,7 +47,7 @@ const unavailableCron: CronServiceContract = {
 };
 
 /** Creates the minimal gateway context used by embedded local agent execution. */
-export function createLocalGatewayRequestContext(
+function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
@@ -135,6 +136,7 @@ export function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
+    crestodianSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,

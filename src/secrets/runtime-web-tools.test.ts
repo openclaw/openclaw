@@ -391,6 +391,8 @@ describe("runtime web tools resolution", () => {
     secretResolve = await import("./resolve.js");
     ({ createResolverContext } = await import("./runtime-shared.js"));
     ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+    // The managed-index branch lazily loads this stable runtime once per process.
+    await import("./runtime-web-tools-fallback.runtime.js");
   });
 
   beforeEach(() => {

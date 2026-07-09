@@ -1,7 +1,7 @@
 // Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
@@ -114,5 +114,39 @@ describe("Control UI mount fallback", () => {
     );
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
+  });
+
+  it("probes a cache-busted current document when the original bundle did not start", async () => {
+    const frameWindow = createIsolatedWindow();
+    const html = await readIndexHtmlWithDelay(1);
+    const fetch = vi.fn().mockResolvedValue({ ok: false });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, html);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+
+    expect(fetch).toHaveBeenNthCalledWith(1, expect.stringContaining("openclaw_mount_recovery="), {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+  });
+
+  it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    await waitForWindowTimeout(frameWindow, 10);
+
+    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(
+      requireElementById(
+        frameWindow,
+        "openclaw-mount-fallback-summary",
+        frameWindow.HTMLParagraphElement,
+      ).textContent,
+    ).toContain("gateway is still unavailable");
   });
 });

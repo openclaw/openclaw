@@ -80,6 +80,7 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
@@ -690,7 +691,9 @@ async function initSessionStateAttemptLocked(
     previousSessionId: previousSessionEntry?.sessionId,
   });
   if (previousSessionEntry) {
-    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
+    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
+      activeReplySessionId: previousSessionEntry.sessionId,
+    });
   }
 
   const recoveredTerminalEntry =
@@ -751,13 +754,14 @@ async function initSessionStateAttemptLocked(
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
       persistedResponseUsage = entry.responseUsage;
+      persistedLabel = entry.label;
+      persistedDisplayName = entry.displayName;
     }
     // When a reset trigger (/new, /reset) starts a new session, also rotate the
-    // underlying CLI conversation and carry forward spawn lineage/label.
+    // underlying CLI conversation and carry forward spawn lineage.
     if (resetTriggered && entry) {
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
-      persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
       persistedSpawnedCwd = entry.spawnedCwd;
@@ -766,7 +770,6 @@ async function initSessionStateAttemptLocked(
       persistedSpawnDepth = entry.spawnDepth;
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
-      persistedDisplayName = entry.displayName;
     }
   }
 
@@ -966,6 +969,9 @@ async function initSessionStateAttemptLocked(
     sessionEntry.fallbackNoticeActiveModel = undefined;
     sessionEntry.fallbackNoticeReason = undefined;
     sessionEntry.systemPromptReport = undefined;
+    sessionEntry.memoryFlushFailureCount = undefined;
+    sessionEntry.memoryFlushLastFailedAt = undefined;
+    sessionEntry.memoryFlushLastFailureError = undefined;
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;
@@ -1054,14 +1060,19 @@ async function initSessionStateAttemptLocked(
       },
     });
     await resetRegisteredAgentHarnessSessions({
+      agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
+    // Direct-message browser tabs use a peer-scoped runtime identity even when
+    // their transcript aliases main; cleanup must carry both exact keys.
+    const runtimePolicySessionKey =
+      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
       onWarn: (message) => log.warn(message),
       onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });

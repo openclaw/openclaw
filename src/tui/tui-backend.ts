@@ -6,6 +6,8 @@ import type {
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
+  TaskSuggestion,
+  TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
@@ -25,6 +27,29 @@ export type ChatSendOptions = {
 export type TuiChatSendResult = {
   runId: string;
   status?: string;
+};
+
+export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type TuiTaskSuggestionActionCapabilities = {
+  canAccept: boolean;
+  canDismiss: boolean;
+};
+
+export type TuiPluginApproval = {
+  id: string;
+  request: {
+    title: string;
+    description?: string | null;
+    pluginId?: string | null;
+    severity?: "info" | "warning" | "critical" | null;
+    toolName?: string | null;
+    allowedDecisions?: readonly TuiApprovalDecision[] | null;
+    agentId?: string | null;
+    sessionKey?: string | null;
+  };
+  createdAtMs: number;
+  expiresAtMs: number;
 };
 
 /** Options for forwarding a goal command to a backend session. */
@@ -134,6 +159,13 @@ export type TuiSessionMutationResult = {
   };
 };
 
+/** Options for creating a fresh TUI session through the backend lifecycle. */
+export type TuiSessionCreateOptions = {
+  key: string;
+  agentId?: string;
+  parentSessionKey?: string;
+};
+
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
@@ -159,6 +191,7 @@ export type TuiBackend = {
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
+  createSession: (opts: TuiSessionCreateOptions) => Promise<TuiSessionMutationResult>;
   resetSession: (
     key: string,
     reason?: "new" | "reset",
@@ -167,5 +200,11 @@ export type TuiBackend = {
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  listPluginApprovals?: () => Promise<unknown>;
+  resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
+  listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
+  acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
+  dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;
   runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

@@ -142,6 +142,15 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
+    const payload = testing.stringifyRedactedPayload(`${"x".repeat(7_998)}🚀tail`);
+    const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+
+    expect(payload).toContain(`${"x".repeat(7_998)}…<truncated>`);
+    expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+    expect(payload).not.toContain("\uD83D");
+    expect(event).not.toContain("\uD83D");
+  });
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -966,6 +975,124 @@ describe("openai transport stream", () => {
     });
     expect(headers.Accept).toBeUndefined();
     expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds session_id header for the native ChatGPT/Codex Responses transport when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("session-abc-123");
+  });
+
+  it("omits the session_id header for the native ChatGPT/Codex Responses transport when no session id is available", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not add a session_id header for non-native OpenAI Responses transports even when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { session_id: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("caller-supplied-session");
+  });
+
+  it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { Session_ID: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.Session_ID).toBe("caller-supplied-session");
+    expect(headers.session_id).toBeUndefined();
   });
 
   it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
@@ -2101,6 +2228,62 @@ describe("openai transport stream", () => {
     );
   });
 
+  it("preserves a valid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBe(0);
+    expect(usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: -1,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBeCloseTo(0.00002);
+    expect(usage.cost.totalOrigin).toBeUndefined();
+  });
+
   it("clamps uncached prompt usage at zero", () => {
     const model = {
       id: "gpt-5",
@@ -2599,6 +2782,101 @@ describe("openai transport stream", () => {
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-delta",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: null, refusal: "I can't help with that." },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(output.stopReason).toBe("stop");
+    expect(
+      events.some(
+        (event) => event.type === "text_delta" && event.delta === "I can't help with that.",
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-message",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              // Some OpenAI-compatible endpoints deliver a full message instead of delta.
+              message: {
+                role: "assistant",
+                content: null,
+                refusal: "Requests like this are not allowed.",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            } as unknown as ChatCompletionChunk["choices"][number],
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toStrictEqual([
+      { type: "text", text: "Requests like this are not allowed." },
+    ]);
     expect(output.stopReason).toBe("stop");
   });
 
@@ -4268,6 +4546,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4290,6 +4569,7 @@ describe("openai transport stream", () => {
       phase: "commentary",
     });
     expect(assistantMessage?.id).toBeUndefined();
+    expect(assistantMessage?.status).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
@@ -4376,6 +4656,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4395,6 +4676,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       id: "msg_prior",
       phase: "commentary",
+      status: "completed",
     });
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
@@ -7663,6 +7945,31 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("omits output-token fields when the resolved model has no known cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+      } as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -8748,6 +9055,50 @@ describe("openai transport stream", () => {
         | undefined;
       expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
     });
+
+    it.each([
+      ["gemini-pro-latest", "Gemini Pro Latest"],
+      ["gemini-flash-latest", "Gemini Flash Latest"],
+      ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+    ])(
+      "uses the Gemini skip-validator signature for unsigned tool calls on %s",
+      (modelId, modelName) => {
+        const latestModel = { ...geminiModel, id: modelId, name: modelName };
+        const params = buildOpenAICompletionsParams(
+          latestModel,
+          {
+            messages: [
+              {
+                role: "assistant",
+                api: latestModel.api,
+                provider: latestModel.provider,
+                model: latestModel.id,
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "toolUse",
+                timestamp: 1,
+                content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+              },
+            ],
+            tools: [],
+          } as never,
+          undefined,
+        ) as { messages: Array<Record<string, unknown>> };
+
+        const assistant = params.messages.find((message) => message.role === "assistant") as
+          | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+          | undefined;
+        expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+          "skip_thought_signature_validator",
+        );
+      },
+    );
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

@@ -57,6 +57,13 @@ type GatewayProxy = {
   url: string;
 };
 
+type ChannelMcpInvocation = {
+  args: string[];
+  command: string;
+  cwd: string;
+  envPatch: NodeJS.ProcessEnv;
+};
+
 type McpClientHandle = {
   client: Client;
   cleanup: () => void;
@@ -205,11 +212,65 @@ function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawC
   };
 }
 
-function emptyTransport() {
-  return {
-    requiredPluginIds: [] as string[],
-    createGatewayConfig: () => ({}),
-  };
+function resolveChannelMcpInvocation(params: {
+  gatewayToken: string;
+  gatewayUrl: string;
+  repoRoot: string;
+  tokenFile: string;
+}): ChannelMcpInvocation {
+  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
+    const entryPath = path.join(params.repoRoot, relativePath);
+    if (existsSync(entryPath)) {
+      return {
+        args: [
+          entryPath,
+          "mcp",
+          "serve",
+          "--url",
+          params.gatewayUrl,
+          "--token-file",
+          params.tokenFile,
+          "--claude-channel-mode",
+          "off",
+          "--verbose",
+        ],
+        command: process.execPath,
+        cwd: params.repoRoot,
+        envPatch: {},
+      };
+    }
+  }
+
+  const channelServerPath = path.join(params.repoRoot, "src/mcp/channel-server.ts");
+  if (existsSync(channelServerPath)) {
+    const channelServerUrl = pathToFileURL(channelServerPath).href;
+    return {
+      args: [
+        "--import",
+        "tsx",
+        "--eval",
+        [
+          `import(${JSON.stringify(channelServerUrl)})`,
+          `.then((module) => module.serveOpenClawChannelMcp({`,
+          `gatewayUrl: process.env.OPENCLAW_QA_GATEWAY_URL,`,
+          `gatewayToken: process.env.OPENCLAW_QA_GATEWAY_TOKEN,`,
+          `claudeChannelMode: "off",`,
+          `verbose: true`,
+          `}))`,
+        ].join(""),
+      ],
+      command: process.execPath,
+      cwd: params.repoRoot,
+      envPatch: {
+        OPENCLAW_QA_GATEWAY_TOKEN: params.gatewayToken,
+        OPENCLAW_QA_GATEWAY_URL: params.gatewayUrl,
+      },
+    };
+  }
+
+  throw new Error(
+    "OpenClaw channel MCP entry not found: expected dist/index.(m)js or src/mcp/channel-server.ts",
+  );
 }
 
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
@@ -332,24 +393,20 @@ async function connectChannelMcpClient(params: {
   repoRoot: string;
 }): Promise<McpClientHandle> {
   const tempState = createMcpClientTempState({ gatewayToken: params.gatewayToken });
+  const mcpInvocation = resolveChannelMcpInvocation({
+    gatewayToken: params.gatewayToken,
+    gatewayUrl: params.gatewayUrl,
+    repoRoot: params.repoRoot,
+    tokenFile: tempState.tokenFile,
+  });
   const stderrChunks: Buffer[] = [];
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [
-      path.join(params.repoRoot, "dist/index.js"),
-      "mcp",
-      "serve",
-      "--url",
-      params.gatewayUrl,
-      "--token-file",
-      tempState.tokenFile,
-      "--claude-channel-mode",
-      "off",
-      "--verbose",
-    ],
-    cwd: params.repoRoot,
+    command: mcpInvocation.command,
+    args: mcpInvocation.args,
+    cwd: mcpInvocation.cwd,
     env: {
       ...process.env,
+      ...mcpInvocation.envPatch,
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
       OPENCLAW_LOG_LEVEL: "debug",
       OPENCLAW_STATE_DIR: tempState.stateDir,
@@ -416,7 +473,7 @@ async function approvePendingMcpPairing(gateway: Awaited<ReturnType<typeof start
 async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
   const gateway = await startQaGatewayChild({
     repoRoot: options.repoRoot,
-    transport: emptyTransport(),
+    useRepoCli: true,
     transportBaseUrl: "http://127.0.0.1",
     controlUiEnabled: false,
   });
@@ -475,7 +532,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     };
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      transport: emptyTransport(),
+      useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
       onListening,
@@ -656,7 +713,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-export async function runGatewayMcpRealTransportProducer(
+async function runGatewayMcpRealTransportProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const scenario = SCENARIOS[options.scenarioId];
@@ -699,3 +756,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exitCode = 1;
     });
 }
+
+export const testing = {
+  resolveChannelMcpInvocation,
+};

@@ -70,9 +70,17 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
+);
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
 );
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
@@ -98,6 +106,10 @@ const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
 );
+const loadControlUiHandlers = lazyHandlerModule(
+  () => import("./server-methods/control-ui.js"),
+  (module) => module.controlUiHandlers,
+);
 const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
   (module) => module.cronHandlers,
@@ -121,6 +133,10 @@ const loadDoctorHandlers = lazyHandlerModule(
 const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
+);
+const loadWorktreesHandlers = lazyHandlerModule(
+  () => import("./server-methods/worktrees.js"),
+  (module) => module.worktreesHandlers,
 );
 const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
@@ -198,6 +214,10 @@ const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
 );
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
+);
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
   (module) => module.toolsCatalogHandlers,
@@ -233,6 +253,10 @@ const loadVoicewakeHandlers = lazyHandlerModule(
 const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
+);
+const loadCrestodianHandlers = lazyHandlerModule(
+  () => import("./server-methods/crestodian.js"),
+  (module) => module.crestodianHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -369,6 +393,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["controlUi.githubPreview"],
+    loadHandlers: loadControlUiHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "doctor.memory.status",
       "doctor.memory.dreamDiary",
@@ -384,6 +412,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["environments.list", "environments.status"],
     loadHandlers: loadEnvironmentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "worktrees.list",
+      "worktrees.create",
+      "worktrees.remove",
+      "worktrees.restore",
+      "worktrees.gc",
+    ],
+    loadHandlers: loadWorktreesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -431,6 +469,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    loadHandlers: loadCrestodianHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "talk.session.create",
       "talk.session.join",
@@ -453,8 +495,21 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTalkHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["audit.list"],
+    loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
     loadHandlers: loadTasksHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
@@ -474,6 +529,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -494,6 +550,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.curator.status",
+      "skills.curator.pin",
+      "skills.curator.unpin",
+      "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.create",
@@ -540,6 +600,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "last-heartbeat",
       "set-heartbeats",
       "system-presence",
+      "system.info",
       "system-event",
     ],
     loadHandlers: loadSystemHandlers,
@@ -615,6 +676,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.set",
     ],
     loadHandlers: loadAgentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

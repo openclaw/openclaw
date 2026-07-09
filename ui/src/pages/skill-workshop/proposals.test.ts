@@ -29,6 +29,7 @@ function createFixture(
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
     connected: true,
+    reconnecting: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",

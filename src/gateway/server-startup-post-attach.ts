@@ -23,6 +23,7 @@ import {
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -36,7 +37,6 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const SKIP_PROVIDER_AUTH_PREWARM_ENV = "OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 
 type Awaitable<T> = T | Promise<T>;
@@ -129,12 +129,6 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-export function shouldSkipProviderAuthStartupPrewarm(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return isTruthyEnvValue(env[SKIP_PROVIDER_AUTH_PREWARM_ENV]);
-}
-
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
@@ -207,7 +201,7 @@ function scheduleProviderAuthStatePrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
-  startupEnabled?: boolean;
+  startupWarmEnabled: boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -278,7 +272,9 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
-    if (params.startupEnabled === false) {
+    // Keep the broad provider sweep explicit; default startup only retains
+    // failure-triggered repair so discovery cannot starve gateway work.
+    if (!params.startupWarmEnabled) {
       return;
     }
     startupTimer = setTimeout(
@@ -1116,11 +1112,9 @@ export async function startGatewayPostAttachRuntime(
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
-    deferSidecars?: boolean;
-    logReadyOnSidecars?: boolean;
+    sidecarStartup?: GatewaySidecarStartupMode;
     providerAuthPrewarm?: {
       enabled?: boolean;
-      startupEnabled?: boolean;
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
@@ -1219,7 +1213,7 @@ export async function startGatewayPostAttachRuntime(
   };
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
-      if (params.deferSidecars === true) {
+      if (params.sidecarStartup === "defer") {
         // Give startup logging and bind observers a deterministic head start
         // when tests or callers request deferred sidecar startup.
         const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
@@ -1294,13 +1288,13 @@ export async function startGatewayPostAttachRuntime(
             }),
           );
         }
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
-              getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
+              getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
-              delayMs: params.providerAuthPrewarm?.delayMs,
-              startupEnabled: params.providerAuthPrewarm?.startupEnabled,
+              delayMs: params.providerAuthPrewarm.delayMs,
+              startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
             }),
           );
         }
@@ -1324,7 +1318,7 @@ export async function startGatewayPostAttachRuntime(
           ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
         ]);
         params.startupTrace?.mark("sidecars.ready");
-        if (params.logReadyOnSidecars !== false) {
+        if (params.sidecarStartup !== "defer") {
           params.log.info("gateway ready");
         }
         return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
@@ -1370,7 +1364,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.deferSidecars !== true) {
+  if (params.sidecarStartup !== "defer") {
     const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
       startupLogPromise,
       tailscaleCleanupPromise,
@@ -1404,7 +1398,6 @@ export const testing = {
   cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
-  shouldSkipProviderAuthStartupPrewarm,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

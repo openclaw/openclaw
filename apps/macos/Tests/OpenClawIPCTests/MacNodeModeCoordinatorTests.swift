@@ -30,6 +30,7 @@ struct MacNodeModeCoordinatorTests {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
+            computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -44,12 +45,96 @@ struct MacNodeModeCoordinatorTests {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
+            computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(caps.contains(OpenClawCapability.browser.rawValue))
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+    }
+
+    @Test func `codex supervisor config advertises native thread catalog`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .remote,
+            codexThreadCatalogEnabled: true)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+    }
+
+    @Test func `codex supervisor plugin activation respects global policy`() {
+        let enabled: [String: Any] = [
+            "plugins": [
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: enabled))
+
+        let denied: [String: Any] = [
+            "plugins": [
+                "deny": ["codex-supervisor"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: denied))
+
+        let omittedByAllowlist: [String: Any] = [
+            "plugins": [
+                "allow": ["other-plugin"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: omittedByAllowlist))
+
+        let paddedIds: [String: Any] = [
+            "plugins": [
+                "allow": [" codex-supervisor "],
+                "entries": [" codex-supervisor ": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedIds))
+
+        let paddedDeny: [String: Any] = [
+            "plugins": [
+                "deny": [" codex-supervisor "],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedDeny))
+    }
+
+    @Test func `computer control cap gates the computer.act command`() {
+        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: true,
+            locationMode: .off,
+            connectionMode: .local)
+        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
+        #expect(enabledCaps.contains(OpenClawCapability.computer.rawValue))
+        #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
+
+        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
+        #expect(!disabledCaps.contains(OpenClawCapability.computer.rawValue))
+        #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {

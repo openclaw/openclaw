@@ -4,8 +4,6 @@ import type { TaskRecord } from "./task-registry.types.js";
 
 export const COPILOT_NATIVE_SUBAGENT_TASK_KIND = "copilot-native";
 export const COPILOT_NATIVE_SUBAGENT_RUN_ID_PREFIX = "copilot-agent:";
-export const COPILOT_NATIVE_SUBAGENT_STALE_ERROR =
-  "Copilot native subagent stopped reporting progress";
 
 const CHILDLESS_NATIVE_SUBAGENT_DEFINITIONS = [
   {

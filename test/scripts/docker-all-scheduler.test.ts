@@ -1,6 +1,14 @@
 // Docker All Scheduler tests cover docker all scheduler script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,10 +23,12 @@ import {
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
+  runCleanupSmokePhase,
   runShellCaptureCommand,
   runShellCommand,
   SHELL_CAPTURE_MAX_CHARS,
   tailFile,
+  writeRunSummary,
 } from "../../scripts/test-docker-all.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -196,12 +206,12 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
-  posixIt("writes Docker run artifacts when cleanup smoke fails", () => {
+  posixIt("writes Docker run artifacts when cleanup smoke fails", async () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-cleanup-`);
     const logDir = path.join(root, "logs");
-    const packageTgz = path.join(root, "openclaw-current.tgz");
     const fakePnpm = path.join(root, "pnpm");
-    writeFileSync(packageTgz, "fake package\n", "utf8");
+    const phases: Array<Record<string, unknown>> = [];
+    mkdirSync(logDir, { recursive: true });
     writeFileSync(
       fakePnpm,
       `#!/usr/bin/env node
@@ -217,27 +227,29 @@ process.exit(0);
     chmodSync(fakePnpm, 0o755);
 
     try {
-      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
-          OPENCLAW_DOCKER_ALL_BUILD: "0",
-          OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
-          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
-          OPENCLAW_DOCKER_ALL_PARALLELISM: "16",
-          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
-          OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
-          OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
-          OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: "16",
-          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
-          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      const baseEnv = {
+        ...process.env,
+        OPENCLAW_DOCKER_E2E_IMAGE: "openclaw-test-image",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      };
+      const cleanupFailure = await runCleanupSmokePhase(baseEnv, logDir, phases);
+      expect(cleanupFailure).toMatchObject({ name: "cleanup-smoke", status: 42 });
+      if (!cleanupFailure) {
+        throw new Error("expected cleanup smoke failure");
+      }
+      await writeRunSummary(logDir, {
+        failures: [cleanupFailure],
+        image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+        images: {
+          bare: "openclaw-test-bare",
+          functional: "openclaw-test-image",
         },
+        lanes: [],
+        phases,
+        profile: "local",
+        startedAt: new Date().toISOString(),
+        status: "failed",
       });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("cleanup smoke failed intentionally");
 
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("failed");
@@ -560,7 +572,7 @@ setInterval(() => {}, 1000);
         env: process.env,
         label: "timeout-leader-exits",
         timeoutKillGraceMs: 25,
-        timeoutMs: 1_000,
+        timeoutMs: 250,
       });
 
       await waitFor(() => existsSync(grandchildPidPath));

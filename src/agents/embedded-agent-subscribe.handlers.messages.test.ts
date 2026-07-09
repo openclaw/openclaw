@@ -1028,6 +1028,25 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
+    const text = `${"a".repeat(49)}😀tail`;
+    const ctx = createMessageEndContext({
+      consumeReplyDirectives: vi.fn((value: string) => ({ text: value })),
+      state: { messagingToolSentTextsNormalized: [`${"a".repeat(49)}tail`] },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    } as never);
+
+    const diagnostic = (ctx.log.debug as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .find((value) => String(value).startsWith("Skipping message_end block reply"));
+    expect(diagnostic).toEqual(expect.any(String));
+    expect(Buffer.from(String(diagnostic)).toString()).toBe(diagnostic);
+  });
+
   it("persists streamed usage when the final assistant snapshot is zeroed", () => {
     const ctx = createMessageEndContext({
       state: {
@@ -1291,6 +1310,34 @@ describe("handleMessageEnd", () => {
     // consumeReplyDirectives is called once with "" (the final flush for
     // text_end channels) but returns null, so emitBlockReply is never called.
     expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("tags message-end safety replies with the current assistant message", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn((text: string) => (text ? { text } : null)),
+      state: {
+        assistantMessageIndex: 7,
+        blockReplyBreak: "text_end",
+        lastBlockReplyText: null,
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      { text: "Final answer" },
+      { assistantMessageIndex: 7 },
+    );
   });
 
   it("does not duplicate block reply for text_end channels even when stripping differs", () => {

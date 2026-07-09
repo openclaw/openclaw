@@ -50,10 +50,9 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(entries.some((entry) => entry.source === "Request ID: \\(value)")).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
-    expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Preview · $domain")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Pairing required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
@@ -74,6 +73,38 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search OpenClaw",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Message actions",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Reply",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-chooser" &&
+          entry.source === "Share message",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
     expect(entries.some((entry) => entry.source === "Check OpenClaw status")).toBe(true);
     expect(entries.some((entry) => entry.source === "What can I control here?")).toBe(true);
@@ -120,7 +151,7 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Don’t show this again")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
     expect(

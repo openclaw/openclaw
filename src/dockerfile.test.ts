@@ -256,6 +256,8 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
     );
+    expect(dockerfile).toContain("readlink -f /app/node_modules/@openclaw/ai");
+    expect(dockerfile).toContain('mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai');
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
@@ -298,7 +300,7 @@ describe("Dockerfile", () => {
     expect(templatesCopyIndex).toBeLessThan(userIndex);
   });
 
-  it("keeps package manager patch files in runtime images", async () => {
+  it("keeps package manager metadata in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const pruneProd = "CI=true pnpm prune --prod";
     const finalWorkspaceCopy =

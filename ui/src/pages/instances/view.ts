@@ -6,7 +6,7 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatPresenceAge } from "../../lib/presenter.ts";
 
-export type InstancesProps = {
+type InstancesProps = {
   loading: boolean;
   entries: PresenceEntry[];
   lastError: string | null;

@@ -14,13 +14,17 @@ import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
+import { page as pluginPage } from "./pages/plugin/route.ts";
+import { page as profilePage } from "./pages/profile/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
+import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
+import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-export type AppRouteModule = {
+type AppRouteModule = {
   render: (data: unknown) => unknown;
 };
 
@@ -30,16 +34,18 @@ export type ApplicationRouter = Router<
   AppRouteModule,
   unknown
 >;
-export type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
-export const APP_ROUTE_TREE = [
+const APP_ROUTE_TREE = [
   chatPage,
   overviewPage,
   activityPage,
   agentsPage,
   channelsPage,
   ...configPages,
+  profilePage,
   workboardPage,
+  worktreesPage,
   instancesPage,
   sessionsPage,
   usagePage,
@@ -48,8 +54,10 @@ export const APP_ROUTE_TREE = [
   skillWorkshopPage,
   skillsPage,
   cronPage,
+  tasksPage,
   nodesPage,
   dreamsPage,
+  pluginPage,
 ] as const;
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
@@ -76,23 +84,12 @@ export async function startApplicationRouter(
   await router.start(history, basePath, context);
 }
 
-export function startAppRouter(
-  router: ApplicationRouter,
-  history: RouterHistory,
-  basePath: string,
-  context: ApplicationContext<RouteId>,
-): Promise<void> {
-  return startApplicationRouter(router, history, basePath, context);
-}
-
 export {
-  APP_ROUTE_DEFINITIONS,
   APP_ROUTE_IDS,
   inferBasePathFromPathname,
   isRouteId,
   locationForRoute,
   normalizeBasePath,
-  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

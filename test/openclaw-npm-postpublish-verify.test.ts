@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
@@ -444,6 +445,43 @@ describe("collectInstalledPackageErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string): void {
+    const filePath = join(packageRoot, relativePath);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, "export {};\n", "utf8");
+  }
+
+  it("reports the activation runtime and every missing allowlisted sidecar", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
+        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
+      ]);
+    });
+  });
+
+  it("accepts a package with the activation runtime and allowlisted sidecars", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
+      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
+      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
   });
 });
 

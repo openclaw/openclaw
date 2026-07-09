@@ -1,7 +1,10 @@
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
@@ -91,6 +94,7 @@ export type RunCliAgentParams = {
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -116,6 +120,8 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   currentChannelId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
@@ -131,6 +137,12 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
+  /**
+   * Ring-zero Crestodian tool served over a dedicated stdio MCP server; set
+   * only by the Crestodian agent runner. Replaces the normal bundle MCP
+   * surface for the run — the harness still owns its native tools.
+   */
+  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;

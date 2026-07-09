@@ -552,7 +552,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
+  it("omits device identity for explicit CLI loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -564,6 +564,19 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps CLI device identity when an ambient token is inactive under auth mode none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "inactive-env-token";
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("inactive-env-token");
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
@@ -1628,6 +1641,25 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const message = (err as { message: string }).message;
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
+    expect(message).not.toContain("crashed or was terminated unexpectedly");
+    expect(message).toContain("Run `openclaw doctor`");
+  });
+
   it("formats typed request errors for CLI JSON output", () => {
     const error = Object.assign(new Error("unauthorized role: operator"), {
       name: "GatewayClientRequestError",
@@ -2233,7 +2265,7 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
-    ).rejects.toThrow("explicit credentials");
+    ).rejects.toThrow(/remove --url to use the configured target/i);
   });
 
   it("throws when env URL override is set without env credentials", async () => {
@@ -2245,7 +2277,9 @@ describe("callGateway url override auth requirements", () => {
       },
     });
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      /OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD/i,
+    );
   });
 });
 

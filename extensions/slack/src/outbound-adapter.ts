@@ -171,6 +171,12 @@ async function sendSlackOutboundMessage(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
+  deliveryQueueId?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["deliveryQueueId"];
+  onPlatformSendDispatch?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onPlatformSendDispatch"];
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"];
@@ -197,6 +203,8 @@ async function sendSlackOutboundMessage(params: {
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
+    deliveryQueueId: params.deliveryQueueId,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
     onDeliveryResult: params.onDeliveryResult
       ? async (progress) => {
           await params.onDeliveryResult?.(attachChannelToResult("slack", progress));
@@ -421,6 +429,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      deliveryQueueId,
+      onPlatformSendDispatch,
       onDeliveryResult,
     }) =>
       await sendSlackOutboundMessage({
@@ -432,6 +442,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
+        deliveryQueueId,
+        onPlatformSendDispatch,
         onDeliveryResult,
       }),
     sendMedia: async ({

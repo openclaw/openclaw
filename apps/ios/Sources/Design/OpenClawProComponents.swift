@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 enum OpenClawProMetric {
@@ -20,7 +21,6 @@ enum OpenClawRadius {
     static let xs: CGFloat = 8
     static let sm: CGFloat = 10
     static let md: CGFloat = 12
-    static let lg: CGFloat = 16
 }
 
 struct OpenClawProBackground: View {
@@ -557,62 +557,6 @@ struct OpenClawStatusBadge: View {
             Capsule()
                 .fill(self.tone.color.opacity(self.colorScheme == .dark ? 0.14 : 0.10))
         }
-    }
-}
-
-struct OpenClawPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(OpenClawType.headline)
-            .foregroundStyle(self.isEnabled ? Color.white : OpenClawBrand.textSecondary)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background {
-                RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                    .fill(
-                        !self.isEnabled
-                            ? Color(uiColor: .tertiarySystemFill)
-                            : configuration.isPressed
-                            ? OpenClawBrand.accentPressed
-                            : OpenClawBrand.accent)
-            }
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.15), value: self.isEnabled)
-    }
-}
-
-struct OpenClawSecondaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(OpenClawType.headline)
-            .foregroundStyle(self.isEnabled ? OpenClawBrand.textPrimary : OpenClawBrand.textSecondary.opacity(0.68))
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background {
-                RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                    .fill(Color(uiColor: self.isEnabled ? .secondarySystemBackground : .tertiarySystemFill))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                            .strokeBorder(
-                                Color(uiColor: .separator).opacity(self.isEnabled ? 0.35 : 0.20),
-                                lineWidth: 1)
-                    }
-            }
-            .opacity(!self.isEnabled ? 0.74 : configuration.isPressed ? 0.82 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.15), value: self.isEnabled)
-    }
-}
-
-extension View {
-    func openClawPrimaryButton() -> some View {
-        self.buttonStyle(OpenClawPrimaryButtonStyle())
-    }
-
-    func openClawSecondaryButton() -> some View {
-        self.buttonStyle(OpenClawSecondaryButtonStyle())
     }
 }
 

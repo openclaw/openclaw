@@ -7,6 +7,7 @@ import {
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
+  createRecoveryReplayPacer,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "./delivery-recovery.shared.js";
@@ -46,6 +47,7 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
@@ -247,6 +249,14 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (!retryEligibility.eligible) {
         summary.deferredBackoff += 1;
         continue;
+      }
+
+      const paceResult = await recoveryReplayPacer.wait(deadline);
+      if (paceResult === "deadline-exceeded") {
+        opts.log.warn(
+          "Session delivery recovery time budget exceeded — remaining entries deferred",
+        );
+        break;
       }
 
       const result = await drainQueuedEntry({

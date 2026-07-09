@@ -7,8 +7,9 @@ title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-The macOS app's first-run wizard: pick where the Gateway runs, connect auth,
-grant permissions, and hand off to the agent's own bootstrap ritual.
+The macOS app's first-run flow: pick where the Gateway runs, connect a
+verified AI backend, grant permissions, and hand off to the agent's own
+bootstrap ritual.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Steps>
@@ -59,7 +60,31 @@ Where does the **Gateway** run?
 
 </Tip>
 </Step>
+<Step title="CLI">
+  Local setup installs the global `openclaw` CLI via npm, pnpm, or bun,
+  preferring npm first. Node remains the recommended runtime for the Gateway
+  itself. Existing compatible installations are reused.
+</Step>
+<Step title="Connect your AI">
+  Once the Gateway is ready, onboarding looks for AI access you already have:
+  a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
+  `ANTHROPIC_API_KEY`. The best option is tested with a real completion and
+  only saved after it answers; when a test fails the app automatically tries
+  the next option and shows why the previous one failed. If several options
+  are found you can switch between them before continuing.
+
+If nothing is found (or nothing works), the manual key/token picker loads the
+Gateway's active text-inference provider plugins instead of using a fixed app
+list. The selected provider supplies its starter model and config; OpenClaw
+verifies the credential with the same live test before storing its auth profile. Next
+remains locked until one backend has passed, so the first agent chat cannot
+start without working inference. The Crestodian chat stays available from this
+page (and later under Settings → Crestodian) for help in plain language.
+
+Configure Later skips this step.
+</Step>
 <Step title="Permissions">
+
 <Frame caption="Choose what permissions do you want to give OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -67,16 +92,11 @@ Where does the **Gateway** run?
 Onboarding requests TCC permissions for: Automation (AppleScript), Notifications, Accessibility, Screen Recording, Microphone, Speech Recognition, Camera, and Location.
 
 </Step>
-<Step title="CLI">
-  <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm, pnpm, or bun,
-  preferring npm first. Node remains the recommended runtime for the Gateway
-  itself.
-</Step>
 <Step title="Onboarding Chat (dedicated session)">
-  After setup, the app opens a dedicated onboarding chat session so the agent can
-  introduce itself and guide next steps, kept separate from your normal
-  conversation history. See [Bootstrapping](/start/bootstrapping) for what
+  After setup, the app opens a separate agent onboarding chat so the agent can
+  introduce itself and guide next steps without mixing that exchange into the
+  normal conversation history. This follows the Crestodian setup conversation;
+  it does not replace it. See [Bootstrapping](/start/bootstrapping) for what
   happens on the gateway host during the agent's first real turn.
 </Step>
 </Steps>

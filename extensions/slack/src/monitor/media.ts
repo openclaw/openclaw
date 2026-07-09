@@ -106,7 +106,7 @@ const SLACK_MEDIA_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
-export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
 type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
 
 function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {

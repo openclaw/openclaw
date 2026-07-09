@@ -1,9 +1,14 @@
 // Voyage batch tests cover bounded status/error response reads.
 import { describe, expect, it } from "vitest";
-import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 import { testing } from "./embedding-batch.js";
+import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
-const { fetchVoyageBatchStatus, readVoyageBatchError, VOYAGE_BATCH_RESPONSE_MAX_BYTES } = testing;
+const {
+  fetchVoyageBatchStatus,
+  readVoyageBatchError,
+  readBatchOutputContent,
+  VOYAGE_BATCH_RESPONSE_MAX_BYTES,
+} = testing;
 
 function buildClient(): VoyageEmbeddingClient {
   return {
@@ -214,4 +219,92 @@ describe("voyage batch bounded reads", () => {
       }),
     ).rejects.toThrow(/voyage batch status failed: 503 voyage upstream is down/);
   });
+});
+
+describe("readBatchOutputContent stream cleanup", () => {
+  it("returns without error on a null body", async () => {
+    const response = new Response(null, { status: 200 });
+    const remaining = new Set<string>();
+    const errors: string[] = [];
+    const byCustomId = new Map<string, number[]>();
+
+    await expect(
+      readBatchOutputContent(response, remaining, errors, byCustomId),
+    ).resolves.toBeUndefined();
+  });
+
+  it("applies every valid JSONL line and tracks remaining and errors", async () => {
+    const body = [
+      JSON.stringify({
+        custom_id: "req-0",
+        response: { status_code: 200, body: { data: [{ embedding: [0.1, 0.2] }] } },
+      }),
+      JSON.stringify({
+        custom_id: "req-1",
+        response: { status_code: 200, body: { data: [{ embedding: [0.3, 0.4] }] } },
+      }),
+      JSON.stringify({ custom_id: "req-2", error: { message: "voyage failed" } }),
+      "",
+    ].join("\n");
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/x-ndjson" },
+    });
+    const remaining = new Set(["req-0", "req-1", "req-2", "req-3"]);
+    const errors: string[] = [];
+    const byCustomId = new Map<string, number[]>();
+
+    await readBatchOutputContent(response, remaining, errors, byCustomId);
+
+    // valid lines should be removed from remaining
+    expect(remaining.has("req-0")).toBe(false);
+    expect(remaining.has("req-1")).toBe(false);
+    // Error line is tracked; applyEmbeddingBatchOutputLine also removes
+    // error custom_ids from remaining (both consumed and errored lines)
+    expect(remaining.has("req-2")).toBe(false);
+    expect(remaining.has("req-3")).toBe(true);
+    // error line should be tracked in errors array
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("req-2");
+  });
+
+  it.runIf(process.platform === "linux")(
+    "cancels the response stream when JSON.parse encounters malformed JSONL",
+    async () => {
+      let wasCanceled = false;
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // First line: valid
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({
+                custom_id: "req-0",
+                response: { status_code: 200, body: { data: [{ embedding: [0.1] }] } },
+              }) + "\n",
+            ),
+          );
+          // Second line: malformed JSON — this should trigger the stream cancel
+          controller.enqueue(encoder.encode("{not valid json}\n"));
+        },
+        cancel() {
+          wasCanceled = true;
+        },
+      });
+      const response = new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/x-ndjson" },
+      });
+      const remaining = new Set(["req-0"]);
+      const errors: string[] = [];
+      const byCustomId = new Map<string, number[]>();
+
+      await expect(
+        readBatchOutputContent(response, remaining, errors, byCustomId),
+      ).rejects.toThrow();
+
+      // The stream should have been destroyed/canceled, not left dangling
+      expect(wasCanceled).toBe(true);
+    },
+  );
 });

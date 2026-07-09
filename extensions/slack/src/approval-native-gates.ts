@@ -64,7 +64,8 @@ function isSlackApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  return isSlackPluginAccountConfigured(resolveSlackAccount(params));
+  const account = resolveSlackAccount(params);
+  return account.config.enterpriseOrgInstall !== true && isSlackPluginAccountConfigured(account);
 }
 
 function resolveSlackNativeApprovalConfig(params: {
@@ -369,7 +370,7 @@ export function shouldHandleSlackPluginViaForwardingSession(params: {
   });
 }
 
-export function isSlackNativeApprovalClientEnabled(params: {
+function isSlackNativeApprovalClientEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   approvalKind: SlackApprovalKind;

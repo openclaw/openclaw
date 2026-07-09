@@ -1,6 +1,7 @@
 // Control UI tests cover build chat items behavior.
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
   buildCachedChatItems,
   buildChatItems,
@@ -96,6 +97,23 @@ describe("buildChatItems", () => {
     expect(groups[0].messages).toHaveLength(2);
   });
 
+  it("groups and hides top-level tool-use id results consistently", () => {
+    const message = {
+      role: "assistant",
+      toolUseId: "provider-result",
+      toolName: "bash",
+      content: "Provider output",
+      timestamp: 1000,
+    };
+
+    const visibleGroups = messageGroups({ messages: [message] });
+    expect(visibleGroups).toHaveLength(1);
+    expect(visibleGroups[0].role).toBe("tool");
+
+    const hiddenGroups = messageGroups({ messages: [message], showToolCalls: false });
+    expect(hiddenGroups).toHaveLength(0);
+  });
+
   it("keeps forwarded assistant display messages separate from local assistant replies", () => {
     const groups = messageGroups({
       messages: [
@@ -144,6 +162,133 @@ describe("buildChatItems", () => {
 
     const toolGroups = groups.filter((group) => group.role === "tool");
     expect(toolGroups.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("coalesces adjacent tool calls and results into one activity item", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call-shell",
+              name: "bash",
+              input: { command: "run openclaw doctor" },
+            },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-shell",
+          toolName: "bash",
+          content: [
+            { type: "text", text: "Doctor complete" },
+            { type: "image", data: "fixture-image", mimeType: "image/png" },
+          ],
+          isError: false,
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("tool");
+    expect(groups[0].messages).toHaveLength(1);
+    const cards = extractToolCards(groups[0].messages[0]?.message, "coalesced");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      callId: "call-shell",
+      name: "bash",
+      outputText: "Doctor complete",
+    });
+    expect(firstMessageContent(groups[0])).toContainEqual({
+      type: "image",
+      data: "fixture-image",
+      mimeType: "image/png",
+    });
+  });
+
+  it("coalesces provider-shaped result blocks by canonical tool-use id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              toolUseId: "provider-call",
+              name: "bash",
+              input: { command: "provider command" },
+            },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "provider-call",
+              text: "Provider result",
+            },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    const cards = extractToolCards(groups[0].messages[0]?.message, "provider-coalesced");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      callId: "provider-call",
+      name: "bash",
+      outputText: "Provider result",
+    });
+  });
+
+  it("does not coalesce repeated call-only snapshots", () => {
+    const callSnapshot = (timestamp: number) => ({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call-pending",
+          name: "bash",
+          input: { command: "still running" },
+        },
+      ],
+      timestamp,
+    });
+    const groups = messageGroups({ messages: [callSnapshot(1000), callSnapshot(1001)] });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+  });
+
+  it("keeps adjacent tool messages separate when their call ids differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-a", name: "bash", input: { command: "one" } }],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "bash",
+          content: "Different call",
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
   });
 
   it("keeps empty forwarded assistant display groups", () => {
@@ -644,6 +789,99 @@ describe("buildChatItems", () => {
     ]);
     const streamItems = items.filter((item) => item.kind === "stream");
     expect(streamItems).toHaveLength(1);
+  });
+
+  it("keeps a live tool card after the stream segment that introduced it", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "I will inspect the file.", ts: 2_000, toolCallId: "call-read" }],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "I will inspect the file.",
+    });
+    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+  });
+
+  it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
+          { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-list",
+            toolName: "list",
+            content: "file list",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(4);
+    expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
+    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+    expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
+    expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
+  });
+
+  it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Checking workspace", ts: 1_500 },
+          {
+            text: "Checking workspace I will inspect the file.",
+            ts: 2_000,
+            toolCallId: "call-read",
+          },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Checking workspace",
+      startedAt: 1_500,
+    });
+    expect(items[1]).toMatchObject({
+      kind: "stream",
+      text: "I will inspect the file.",
+    });
+    expect(messageRecord(requireGroup(items[2])).toolCallId).toBe("call-read");
   });
 
   it("suppresses metadata-only history messages before grouping", () => {
@@ -1238,6 +1476,31 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("main", [group], true);
     expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBe(true);
   });
+
+  it("auto-expands top-level tool-name result disclosures", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-name-result",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-name-result",
+          message: {
+            role: "assistant",
+            toolName: "bash",
+            content: "Tool output",
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+
+    syncToolCardExpansionState("tool-name-session", [group], true);
+
+    expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
 });
 
 describe("thread item cache", () => {
@@ -1327,6 +1590,67 @@ describe("tool turn outcome annotation (#89683)", () => {
       { role: "assistant", content: [], timestamp: 3 },
     ]);
     expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("scopes adjacent autonomous turns at an empty forwarded boundary", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [],
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        senderLabel: "Forwarded from main",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("Recovered on the next autonomous turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it("does not treat a forwarded message as the prior turn's reply", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Start the next autonomous task." }],
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        senderLabel: "Forwarded from main",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("Recovered on the next autonomous turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it("treats an ordinary labeled assistant message as a reply", () => {
+    const tools = toolGroups([
+      userMsg("check the service", 1),
+      failedTool(2),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Parzival recovered the service." }],
+        senderLabel: "Parzival",
+        timestamp: 3,
+      },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it("does not treat non-text assistant content as a turn boundary", () => {
+    const tools = toolGroups([
+      userMsg("make a preview", 1),
+      failedTool(2),
+      {
+        role: "assistant",
+        content: [createAssistantCanvasBlock({ suffix: "tool_turn_outcome" })],
+        timestamp: 3,
+      },
+      failedTool(4),
+      assistantReply("Done.", 5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, true]);
   });
 
   it("scopes the outcome per turn at user boundaries", () => {

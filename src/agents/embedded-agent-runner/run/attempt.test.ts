@@ -11,6 +11,7 @@ import { addSession, resetProcessRegistryForTests } from "../../bash-process-reg
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
@@ -3419,8 +3420,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       output: 5,
       cacheRead: 40,
       cacheWrite: 2,
+      contextUsage: {
+        state: "available",
+        promptTokens: 23,
+        totalTokens: 28,
+      },
       total: 57,
-    };
+    } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
       attempt: {
@@ -3445,7 +3451,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.currentTokenCount).toBe(23);
     expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 

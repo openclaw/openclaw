@@ -3,8 +3,13 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import {
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type {
@@ -14,36 +19,40 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
-export { resolveAssistantTextAvatar } from "../../../lib/agents/display.ts";
-import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
-import "../../../components/tooltip.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "../../../lib/chat/message-extract.ts";
-import { isToolResultMessage, normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import {
   extractToolCardsCached,
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
+import "../../../components/tooltip.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
+  shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
@@ -71,7 +80,7 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
-export type ChatTimestampDisplay = {
+type ChatTimestampDisplay = {
   label: string;
   title: string;
   dateTime: string;
@@ -112,13 +121,53 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
-function renderChatTimestamp(timestamp: number) {
+function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
   return html`
-    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+    <time
+      class="chat-group-timestamp"
+      datetime=${display.dateTime}
+      title=${interactive ? nothing : display.title}
+    >
       ${display.label}
     </time>
   `;
+}
+
+function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
+  if (target instanceof HTMLDetailsElement) {
+    return target;
+  }
+  return target instanceof HTMLElement
+    ? target.closest<HTMLDetailsElement>("details.msg-meta")
+    : null;
+}
+
+function previewMessageMeta(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.open || ("pointerType" in event && event.pointerType === "touch")) {
+    return;
+  }
+  details.dataset.preview = "true";
+  details.open = true;
+}
+
+function closeMessageMetaPreview(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.dataset.preview !== "true" || details.matches(":hover, :focus-within")) {
+    return;
+  }
+  delete details.dataset.preview;
+  details.open = false;
+}
+
+function pinMessageMetaPreview(event: MouseEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (details?.dataset.preview !== "true") {
+    return;
+  }
+  event.preventDefault();
+  delete details.dataset.preview;
 }
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
@@ -241,7 +290,8 @@ function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   }
   const ext = getFileExtension(path);
   return (
-    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+    ext !== undefined &&
+    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
   );
 }
 
@@ -311,6 +361,15 @@ function extractImages(message: unknown): ImageBlock[] {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
+            }),
+            ...imageMeta,
+          });
+        } else if (typeof b.data === "string") {
+          // Direct tool-result image block from imageResult() / read tool.
+          appendImageBlock(images, {
+            url: buildBase64ImageUrl({
+              data: b.data,
+              mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
             }),
             ...imageMeta,
           });
@@ -494,7 +553,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -647,24 +706,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   if (normalizedRole === "tool" && group.messages.length > 1) {
     const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
     const toolCount = cards.length || group.messages.length;
-    const toolLabels = [
-      ...new Set(
-        cards.map(
-          (card) =>
-            resolveToolDisplay({
-              name: card.name,
-              args: card.args,
-              detailMode: "explain",
-            }).label,
-        ),
-      ),
-    ];
-    const preview =
-      toolLabels.length === 0
-        ? "Tool output"
-        : toolLabels.length <= 3
-          ? toolLabels.join(", ")
-          : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
@@ -692,17 +733,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 : ""}"
               type="button"
               aria-expanded=${String(activityExpanded)}
-              @click=${() =>
-                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
+              aria-label=${hasError
+                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
+                : nothing}
+              @click=${(event: MouseEvent) => {
+                if (shouldToggleSelectableDisclosure(event)) {
+                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+                }
+              }}
             >
-              <span class="chat-activity-group__icon">${icons.activity}</span>
+              <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
               <span class="chat-activity-group__label"
                 >Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}</span
               >
-              <span class="chat-activity-group__preview">${preview}</span>
-              ${hasError
-                ? html`<span class="chat-activity-group__badge">${icons.x}<span>Error</span></span>`
-                : nothing}
               <span
                 class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
                 aria-hidden="true"
@@ -734,6 +777,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     `;
   }
 
+  const messageActionDetails = group.messages.map((item) =>
+    resolveMessageActionDetails(item.message, opts.onOpenSidebar),
+  );
+  const lastMessageIndex = group.messages.length - 1;
+  const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
+
   return html`
     <div class="chat-group ${roleClass}">
       ${renderChatAvatar(
@@ -750,19 +799,43 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         opts.assistantAttachmentAuthToken,
       )}
       <div class="chat-group-messages">
-        ${group.messages.map((item, index) =>
-          renderGroupedMessage(
-            item.message,
-            item.key,
-            buildGroupedMessageRenderOptions(group, item, index, opts),
-            opts.onOpenSidebar,
-          ),
-        )}
+        ${group.messages.map((item, index) => {
+          const actionDetails = messageActionDetails[index];
+          return html`
+            ${renderGroupedMessage(
+              item.message,
+              item.key,
+              buildGroupedMessageRenderOptions(group, item, index, opts),
+              opts.onOpenSidebar,
+            )}
+            ${actionDetails && index < lastMessageIndex
+              ? html`
+                  <div class="chat-message-actions-row">
+                    ${renderMessageActionButtons(actionDetails, opts, opts.onOpenSidebar)}
+                  </div>
+                `
+              : nothing}
+          `;
+        })}
         <div class="chat-group-footer">
-          <span class="chat-sender-name">${who}</span>
-          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
-          ${opts.onDelete
-            ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
+          <div class="chat-group-footer__meta">
+            ${opts.onDelete && normalizedRole === "user"
+              ? renderDeleteButton(opts.onDelete, "left")
+              : nothing}
+            <span class="chat-sender-name">${who}</span>
+            ${renderMessageMeta(group.timestamp, meta)}
+          </div>
+          ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
+            ? html`
+                <div class="chat-group-footer-actions">
+                  ${opts.onDelete && normalizedRole !== "user"
+                    ? renderDeleteButton(opts.onDelete, "right")
+                    : nothing}
+                  ${footerActionDetails
+                    ? renderMessageActionButtons(footerActionDetails, opts, opts.onOpenSidebar)
+                    : nothing}
+                </div>
+              `
             : nothing}
         </div>
       </div>
@@ -831,9 +904,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
-function renderMessageMeta(meta: GroupMeta | null) {
+function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   if (!meta) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
 
   const parts: Array<ReturnType<typeof html>> = [];
@@ -885,14 +958,25 @@ function renderMessageMeta(meta: GroupMeta | null) {
   }
 
   if (parts.length === 0) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
 
+  const display = formatChatTimestampForDisplay(timestamp);
+
   return html`
-    <details class="msg-meta">
-      <summary class="msg-meta__summary">
-        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
-        <span>Context</span>
+    <details
+      class="msg-meta"
+      @pointerenter=${previewMessageMeta}
+      @pointerleave=${closeMessageMetaPreview}
+      @focusin=${previewMessageMeta}
+      @focusout=${closeMessageMetaPreview}
+    >
+      <summary
+        class="msg-meta__summary"
+        aria-label=${`Message context for ${display.title}`}
+        @click=${pinMessageMetaPreview}
+      >
+        ${renderChatTimestamp(timestamp, true)}
       </summary>
       <span class="msg-meta__details">${parts}</span>
     </details>
@@ -1179,6 +1263,7 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   return (
+    isCanonicalInboundMediaSource(trimmed) ||
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
@@ -1186,9 +1271,28 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isCanonicalInboundMediaSource(source: string): boolean {
+  // Match the raw one-segment form first; URL parsing would erase dot segments.
+  const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const id = decodeURIComponent(match[1]);
+    return (
+      id !== "." && id !== ".." && !id.includes("/") && !id.includes("\\") && !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
   if (trimmed.startsWith("file://")) {
@@ -1241,6 +1345,9 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
+  if (isCanonicalInboundMediaSource(source)) {
+    return true;
+  }
   const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
@@ -1674,6 +1781,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
+    turnSucceeded?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -1684,6 +1792,7 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
+          turnSucceeded: opts.turnSucceeded,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
@@ -1784,6 +1893,81 @@ function renderExpandButton(
   `;
 }
 
+type MessageActionDetails = {
+  markdown: string;
+  messageId?: string;
+  shouldFetchFullMessage: boolean;
+};
+
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+  return normalizedMessage.content
+    .reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+}
+
+function resolveMessageActionDetails(
+  message: unknown,
+  onOpenSidebar?: (content: SidebarContent) => void,
+): MessageActionDetails | null {
+  const record = message as Record<string, unknown>;
+  const normalizedMessage = normalizeMessage(message);
+  if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
+    return null;
+  }
+  const markdown = stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
+  if (!markdown) {
+    return null;
+  }
+  const transcriptMeta =
+    record["__openclaw"] &&
+    typeof record["__openclaw"] === "object" &&
+    !Array.isArray(record["__openclaw"])
+      ? (record["__openclaw"] as Record<string, unknown>)
+      : null;
+  const messageId =
+    typeof transcriptMeta?.id === "string"
+      ? transcriptMeta.id
+      : typeof record.messageId === "string"
+        ? record.messageId
+        : undefined;
+  return {
+    markdown,
+    messageId,
+    shouldFetchFullMessage: Boolean(
+      onOpenSidebar &&
+      messageId &&
+      !record.openclawMessageToolMirror &&
+      (transcriptMeta?.truncated === true || markdown.includes("\n...(truncated)...")),
+    ),
+  };
+}
+
+function renderMessageActionButtons(
+  details: MessageActionDetails,
+  opts: {
+    sessionKey?: string;
+    agentId?: string;
+  },
+  onOpenSidebar?: (content: SidebarContent) => void,
+) {
+  return html`
+    ${onOpenSidebar
+      ? renderExpandButton(details.markdown, onOpenSidebar, {
+          sessionKey: opts.sessionKey,
+          agentId: opts.agentId,
+          messageId: details.shouldFetchFullMessage ? details.messageId : undefined,
+        })
+      : nothing}
+    ${renderCopyAsMarkdownButton(details.markdown)}
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -1813,13 +1997,11 @@ function renderGroupedMessage(
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
-  const normalizedRole = normalizeRoleForGrouping(role);
-  const isToolResult =
-    isToolResultMessage(message) ||
-    role.toLowerCase() === "toolresult" ||
-    role.toLowerCase() === "tool_result" ||
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string";
+  const sourceRole = normalizeRoleForGrouping(role);
+  const normalizedMessage = normalizeMessage(message);
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
+  const isToolShell = normalizedRole === "tool";
+  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
@@ -1835,16 +2017,7 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const normalizedMessage = normalizeMessage(message);
-  const extractedText = normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
+  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
@@ -1857,36 +2030,17 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
-  const hasActions = canCopyMarkdown || canExpand;
-  const transcriptMeta =
-    m["__openclaw"] && typeof m["__openclaw"] === "object" && !Array.isArray(m["__openclaw"])
-      ? (m["__openclaw"] as Record<string, unknown>)
-      : null;
-  const sidebarMessageId =
-    typeof transcriptMeta?.id === "string"
-      ? transcriptMeta.id
-      : typeof m.messageId === "string"
-        ? m.messageId
-        : undefined;
-  const shouldFetchFullMessage = Boolean(
-    sidebarMessageId &&
-    !m.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
-  );
+  const markdownRenderOptions: MarkdownRenderOptions = {
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    fileLinks: true,
+  };
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
-  const reserveActionSpace = hasActions && !isToolMessage;
   const bubbleClasses = [
     "chat-bubble",
-    isToolMessage ? "chat-bubble--tool-shell" : "",
-    hasActions ? "has-copy" : "",
-    reserveActionSpace ? "chat-bubble--has-actions" : "",
+    isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -1930,25 +2084,39 @@ function renderGroupedMessage(
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
     : singleToolDisplayDetail
-      ? singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
+      ? !markdown && !hasImages
+        ? singleToolDisplayDetail
+        : singleToolCard?.outputText?.trim()
+          ? "output"
+          : undefined
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolSummaryLabel = formatCollapsedToolSummaryText(toolSummaryLabelRaw);
-  const toolPreview =
-    markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolDisplayDetail && !markdown && !hasImages
-      ? singleToolDisplayDetail
-      : singleToolDisplay && !markdown && !hasImages
-        ? singleToolDisplay.label
-        : "Tool output";
+    : singleToolDisplay && !markdown && !hasImages
+      ? singleToolDisplay.label
+      : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
+  const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
+    toolSummaryLabelRaw,
+    toolMessageLabel,
+  );
   const toolMessageIcon = singleToolDisplay ? renderChatIcon(singleToolDisplay.icon) : icons.zap;
+  const assistantViewContent =
+    sourceRole === "assistant" && assistantViewBlocks.length > 0
+      ? html`${assistantViewBlocks.map(
+          (block) => html`${renderToolPreview(block.preview, "chat_message", {
+            onOpenSidebar,
+            rawText: block.rawText ?? null,
+            canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+          })}
+          ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+        )}`
+      : nothing;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
@@ -1959,19 +2127,7 @@ function renderGroupedMessage(
       data-message-text=${extractedText || nothing}
     >
       ${renderReplyPill(normalizedMessage.replyTarget)}
-      ${hasActions
-        ? html`<div class="chat-bubble-actions">
-            ${canExpand
-              ? renderExpandButton(markdown!, onOpenSidebar!, {
-                  sessionKey: opts.sessionKey,
-                  agentId: opts.agentId,
-                  messageId: shouldFetchFullMessage ? sidebarMessageId : undefined,
-                })
-              : nothing}
-            ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-          </div>`
-        : nothing}
-      ${isToolMessage
+      ${isStandaloneToolMessage
         ? html`
             <div
               class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
@@ -1984,7 +2140,11 @@ function renderGroupedMessage(
                   : ""}"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
-                @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
+                @click=${(event: MouseEvent) => {
+                  if (shouldToggleSelectableDisclosure(event)) {
+                    opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
+                  }
+                }}
               >
                 <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
@@ -1993,13 +2153,6 @@ function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
-                ${toolMessageHasError
-                  ? html`<span
-                      class="chat-tool-msg-summary__error-badge"
-                      aria-label="Tool returned an error"
-                      >${icons.x}<span>Error</span></span
-                    >`
-                  : nothing}
               </button>
               ${toolMessageExpanded
                 ? html`
@@ -2014,6 +2167,7 @@ function renderGroupedMessage(
                         opts.onRequestUpdate,
                         opts.onAssistantAttachmentLoaded,
                       )}
+                      ${assistantViewContent}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
                             ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
@@ -2052,6 +2206,7 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
+                              turnSucceeded: opts.turnSucceeded,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -2078,17 +2233,7 @@ function renderGroupedMessage(
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
               : nothing}
-            ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
-              ? html`${assistantViewBlocks.map(
-                  (block) => html`${renderToolPreview(block.preview, "chat_message", {
-                    onOpenSidebar,
-                    rawText: block.rawText ?? null,
-                    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                  })}
-                  ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
-                )}`
-              : nothing}
+            ${assistantViewContent}
             ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
@@ -2108,6 +2253,7 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
+                  turnSucceeded: opts.turnSucceeded,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -2129,7 +2275,7 @@ function renderGroupedMessage(
 function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
-  markdownRenderOptions?: { codeBlockChrome: "copy" | "none" },
+  markdownRenderOptions?: MarkdownRenderOptions,
 ) {
   if (isStreaming) {
     return html`

@@ -440,6 +440,83 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves configured media tools through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+          list: [
+            {
+              id: "artist",
+              tools: {
+                alsoAllow: ["video_generate"],
+                byProvider: {
+                  ollama: {
+                    alsoAllow: ["tts"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        tools: {
+          alsoAllow: ["pdf"],
+          byProvider: {
+            "ollama/qwen3.5:9b": {
+              alsoAllow: ["image_generate"],
+            },
+          },
+        },
+      },
+      agentId: "artist",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toEqual(
+      expect.arrayContaining(["image_generate", "pdf", "tts", "video_generate"]),
+    );
+  });
+
+  it("does not treat built-in profile tools as lean-mode overrides", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: {
+          profile: "coding",
+        },
+      },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toEqual(
+      expect.arrayContaining(["image_generate", "video_generate"]),
+    );
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {
@@ -520,6 +597,42 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("uses the canonical spawn workspace for follow-up task suggestions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const sandboxDir = "/sandbox/workspace";
+
+    createOpenClawCodingTools({
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: sandboxDir,
+        workspaceAccess: "ro",
+        fsBridge: createHostSandboxFsBridge(sandboxDir),
+      }),
+      workspaceDir: "/agent/workspace",
+      cwd: sandboxDir,
+      spawnWorkspaceDir: "/host/project",
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      workspaceDir: "/agent/workspace",
+      spawnWorkspaceDir: "/host/project",
+      cwd: "/host/project",
+    });
+  });
+
+  it("keeps an unsandboxed task repo as the follow-up suggestion cwd", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      workspaceDir: "/agent/workspace",
+      cwd: "/task/repo",
+      spawnWorkspaceDir: "/agent/workspace",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
   });
 
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {

@@ -15,6 +15,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -145,6 +146,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     run.queuedLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
+    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",
@@ -160,6 +162,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
+    execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,
@@ -172,9 +175,22 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
-  return run.originatingReplyToMode === "off"
-    ? undefined
-    : normalizeOptionalString(run.originatingReplyToId);
+  if (run.originatingReplyToMode === "off") {
+    return undefined;
+  }
+  const replyToId = normalizeOptionalString(run.originatingReplyToId);
+  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
+    return replyToId;
+  }
+  const threadId = run.originatingThreadId;
+  const hasRoutedThread =
+    typeof threadId === "number"
+      ? Number.isFinite(threadId)
+      : normalizeOptionalString(threadId) !== undefined;
+  // Slack standalone turns have no parent reply id, but enabled reply policies
+  // still need the message id so collect groups cannot cross independent roots.
+  // A routed thread already owns that boundary and remains collectable across turns.
+  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
@@ -243,6 +259,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
+  | "onFollowupAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -465,10 +482,14 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
     return undefined;
   }
   const resumableText = renderField("resumableText");
+  const injectedGoalContexts = [
+    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
+  ];
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
     promptJoiner: "\n\n",
+    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
 }
 
@@ -478,6 +499,11 @@ function collectRuntimeMetadata(
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const admissionWaitCallbacks = new Set(
+    items.flatMap((item) =>
+      item.onFollowupAdmissionWaitChange ? [item.onFollowupAdmissionWaitChange] : [],
+    ),
+  );
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
@@ -486,6 +512,14 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle: items.length === 1 ? items[0]?.queuedLifecycle : undefined,
+    onFollowupAdmissionWaitChange:
+      admissionWaitCallbacks.size > 0
+        ? (waiting) => {
+            for (const callback of admissionWaitCallbacks) {
+              callback(waiting);
+            }
+          }
+        : undefined,
   };
 }
 
@@ -797,6 +831,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     queuedLifecycle: source.queuedLifecycle,
+    onFollowupAdmissionWaitChange: source.onFollowupAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -856,6 +891,8 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
+    onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
+      .onFollowupAdmissionWaitChange,
     ...(params.onAdmitted
       ? {
           queuedLifecycle: {

@@ -187,6 +187,35 @@ import Testing
         #expect(managerIndex < systemIndex)
     }
 
+    @Test func `preferred paths include local user bin after system bins`() throws {
+        let home = try makeTempDirForTests()
+        let localBin = home.appendingPathComponent(".local/bin").path
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+
+        let localIndex = try #require(paths.firstIndex(of: localBin))
+        let systemIndex = try #require(paths.firstIndex(of: "/bin"))
+        #expect(localIndex > systemIndex)
+        #expect(paths.count(where: { $0 == localBin }) == 1)
+    }
+
+    @Test func `SSH environment replaces path without dropping inherited values`() {
+        let paths = ["/usr/bin", "/bin", "/Users/test/.local/bin", "/opt/homebrew/bin"]
+        let environment = CommandResolver.sshEnvironment(
+            base: [
+                "HOME": "/Users/test",
+                "PATH": "/stale/path",
+                "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+            ],
+            searchPaths: paths)
+
+        #expect(environment["PATH"] == paths.joined(separator: ":"))
+        #expect(environment["HOME"] == "/Users/test")
+        #expect(environment["SSH_AUTH_SOCK"] == "/tmp/ssh-agent.sock")
+    }
+
     @Test func `validated CLI preference expires when the app requires a newer version`() throws {
         let defaults = self.makeDefaults()
         let root = try makeTempDirForTests()

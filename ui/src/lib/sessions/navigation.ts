@@ -25,6 +25,7 @@ export type SessionNavigationInput = {
   sessionKey: string;
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
 export type SessionNavigation = {
@@ -32,7 +33,8 @@ export type SessionNavigation = {
   selectedAgentId: string;
   defaultAgentId: string;
   selectedSession?: GatewaySessionRow;
-  recentSessions: GatewaySessionRow[];
+  visibleSessions: GatewaySessionRow[];
+  activeRowKey: string | null;
 };
 
 export type SessionScopeHost = {
@@ -214,6 +216,10 @@ export function getVisibleSessionRows(
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
+  if (pinnedStateDiff !== 0) {
+    return pinnedStateDiff;
+  }
   const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
   return pinnedDiff !== 0 ? pinnedDiff : (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
@@ -237,21 +243,29 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     currentSessionKey && currentSessionKey.toLowerCase() !== "unknown"
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
-  const recentSessions = getVisibleSessionRows(input.result, {
+  const sortedSessions = getVisibleSessionRows(input.result, {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
-  })
-    .filter((row) => !matchesCurrentSession(row))
-    .toSorted(compareSessionRowsByUpdatedAt)
-    .slice(0, 9);
+  }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
+  // The sidebar is the session list, not a recent-session preview. Keep every
+  // active row in its sorted slot so selecting a session never reshuffles or
+  // hides another one behind a separate route.
+  let visibleSessions = sortedSessions;
+  let activeRow = visibleSessions.find(matchesCurrentSession);
+  if (!activeRow && activeSession) {
+    // Deep-linked and archived sessions still need a visible selected row.
+    activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
+    visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];
+  }
   return {
     currentSessionKey,
     selectedAgentId,
     defaultAgentId,
     selectedSession: activeSession,
-    recentSessions: activeSession ? [activeSession, ...recentSessions] : recentSessions,
+    visibleSessions,
+    activeRowKey: activeRow?.key ?? null,
   };
 }
 

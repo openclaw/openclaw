@@ -19,6 +19,7 @@ import type {
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -66,6 +67,8 @@ export type FollowupRun = {
   queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
+  /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
+  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -102,6 +105,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    clientCaps?: string[];
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
@@ -150,6 +154,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;

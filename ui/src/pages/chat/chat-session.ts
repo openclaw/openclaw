@@ -227,6 +227,37 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
+// Immediate-apply pickers can overlap patches for the same session. Mirror the
+// pendingModelPatches token guard in sessions/index.ts: only the latest patch
+// may re-assert or roll back the optimistic row, so a slow earlier request
+// cannot clobber a newer selection.
+const chatFastModePatchTokens = new WeakMap<object, Map<string, symbol>>();
+const chatThinkingPatchTokens = new WeakMap<object, Map<string, symbol>>();
+
+function claimChatSettingsPatch(
+  store: WeakMap<object, Map<string, symbol>>,
+  host: object,
+  sessionKey: string,
+): symbol {
+  let tokens = store.get(host);
+  if (!tokens) {
+    tokens = new Map();
+    store.set(host, tokens);
+  }
+  const token = Symbol(sessionKey);
+  tokens.set(sessionKey, token);
+  return token;
+}
+
+function isCurrentChatSettingsPatch(
+  store: WeakMap<object, Map<string, symbol>>,
+  host: object,
+  sessionKey: string,
+  token: symbol,
+): boolean {
+  return store.get(host)?.get(sessionKey) === token;
+}
+
 function patchSessionRow(
   host: ChatModelSettingsHost,
   sessionKey: string,
@@ -247,18 +278,19 @@ function patchSessionRow(
 export async function switchChatFastMode(
   host: ChatModelSettingsHost,
   nextFastMode: "" | "on" | "off" | "auto",
-) {
+  targetSessionKey = host.sessionKey,
+): Promise<boolean> {
   if (!host.client || !host.connected) {
-    return;
+    return false;
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
-    return;
+    return true;
   }
+  const token = claimChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey);
   setChatError(host, null, true);
   patchSessionRow(host, targetSessionKey, { fastMode: next });
   try {
@@ -270,16 +302,23 @@ export async function switchChatFastMode(
       scopedAgentParamsForSession(host, targetSessionKey),
     );
     await refreshCurrentChatSessionList(host);
-    patchSessionRow(host, targetSessionKey, { fastMode: next });
+    if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { fastMode: next });
+    }
+    return true;
   } catch (err) {
-    patchSessionRow(host, targetSessionKey, { fastMode: previousFastMode });
+    if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { fastMode: previousFastMode });
+    }
     setChatError(host, `Failed to set speed: ${String(err)}`, true);
+    return false;
   }
 }
 
 export async function switchChatModel(
   host: ChatModelSettingsHost,
   nextModel: string,
+  targetSessionKey = host.sessionKey,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
     return false;
@@ -287,13 +326,12 @@ export async function switchChatModel(
   const currentOverride = resolveChatModelOverrideValue({
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
-    sessionKey: host.sessionKey,
+    sessionKey: targetSessionKey,
     sessionsResult: host.sessionsResult ?? null,
   });
   if (currentOverride === nextModel) {
     return true;
   }
-  const targetSessionKey = host.sessionKey;
   const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
@@ -337,11 +375,11 @@ export async function switchChatModel(
 export async function switchChatThinkingLevel(
   host: ChatModelSettingsHost,
   nextThinkingLevel: string,
-) {
+  targetSessionKey = host.sessionKey,
+): Promise<boolean> {
   if (!host.client || !host.connected) {
-    return;
+    return false;
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
@@ -351,11 +389,14 @@ export async function switchChatThinkingLevel(
       ? (normalizeThinkLevel(previousThinkingLevel) ?? previousThinkingLevel.trim())
       : undefined;
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
-    return;
+    return true;
   }
+  const token = claimChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey);
   setChatError(host, null, true);
   patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-  host.chatThinkingLevel = normalizedNext ?? null;
+  if (host.sessionKey === targetSessionKey) {
+    host.chatThinkingLevel = normalizedNext ?? null;
+  }
   try {
     await host.sessions.patch(
       targetSessionKey,
@@ -365,11 +406,21 @@ export async function switchChatThinkingLevel(
       scopedAgentParamsForSession(host, targetSessionKey),
     );
     await refreshCurrentChatSessionList(host);
-    patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-    host.chatThinkingLevel = normalizedNext ?? null;
+    if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
+      if (host.sessionKey === targetSessionKey) {
+        host.chatThinkingLevel = normalizedNext ?? null;
+      }
+    }
+    return true;
   } catch (err) {
-    patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
-    host.chatThinkingLevel = normalizedPrev ?? null;
+    if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
+      if (host.sessionKey === targetSessionKey) {
+        host.chatThinkingLevel = normalizedPrev ?? null;
+      }
+    }
     setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
+    return false;
   }
 }

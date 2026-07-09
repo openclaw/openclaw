@@ -54,6 +54,8 @@ import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -155,6 +157,8 @@ import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
+// Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
+const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
@@ -245,9 +249,7 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
 };
 
-export type TelegramDispatchResult =
-  | { kind: "completed" }
-  | { kind: "failed-retryable"; error: unknown };
+type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
@@ -1580,9 +1582,14 @@ export const dispatchTelegramMessage = async ({
   };
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
     (await resolveCurrentTurnTranscriptFinal())?.text;
+  const normalizePromptContextTimestampText = (text: string): string =>
+    stripInlineDirectiveTagsForDelivery(text).text.trim();
   const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
     const final = await resolveCurrentTurnTranscriptFinal();
-    if (final?.text.trim() !== text.trim()) {
+    if (
+      !final ||
+      normalizePromptContextTimestampText(final.text) !== normalizePromptContextTimestampText(text)
+    ) {
       return undefined;
     }
     return final.timestamp;
@@ -2150,6 +2157,7 @@ export const dispatchTelegramMessage = async ({
       accountId: route.accountId,
       typing: {
         start: sendTyping,
+        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,
@@ -3067,7 +3075,7 @@ export const dispatchTelegramMessage = async ({
 
   // Fire-and-forget: auto-rename DM topic on first message.
   if (isDmTopic && isFirstTurnInSession) {
-    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+    const userMessage = truncateUtf16Safe(ctxPayload.RawBody ?? ctxPayload.Body ?? "", 500);
     if (userMessage.trim()) {
       const agentDir = resolveAgentDir(cfg, route.agentId);
       const directAutoTopicLabel =
