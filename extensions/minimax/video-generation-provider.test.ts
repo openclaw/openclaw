@@ -10,6 +10,7 @@ import {
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
+  executeProviderOperationWithRetryMock,
   fetchWithTimeoutMock,
   fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
@@ -260,6 +261,71 @@ describe("minimax video generation provider", () => {
     expect(result.metadata?.taskId).toBe("task-456");
     expect(result.metadata?.fileId).toBe("file-9");
     expect(result.metadata?.videoUrl).toBeUndefined();
+  });
+
+  it("retries guarded video status polling while preserving request policy", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Video-Policy": "enabled" },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        task_id: "task-retry",
+        base_resp: { status_code: 0 },
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockRejectedValueOnce(new Error("temporary poll failure"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          task_id: "task-retry",
+          status: "Success",
+          video_url: "https://example.com/retry.mp4",
+          base_resp: { status_code: 0 },
+        }),
+      )
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildMinimaxVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      prompt: "A fox sprints across snowy hills",
+      cfg: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io",
+              models: [],
+              request: requestOverrides,
+            },
+          },
+        },
+      },
+    });
+
+    const firstPoll = expectMinimaxGuardedFetchCall(
+      0,
+      "https://api.minimax.io/v1/query/video_generation?task_id=task-retry",
+    );
+    expect((firstPoll.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+    expectAllowPrivateNetworkPolicy(firstPoll.options);
+    const secondPoll = expectMinimaxGuardedFetchCall(
+      1,
+      "https://api.minimax.io/v1/query/video_generation?task_id=task-retry",
+    );
+    expect((secondPoll.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+    expectAllowPrivateNetworkPolicy(secondPoll.options);
+    expect(result.videos).toHaveLength(1);
+    expect(
+      executeProviderOperationWithRetryMock.mock.calls.map(
+        ([params]) => (params as { stage: string }).stage,
+      ),
+    ).toContain("poll");
   });
 
   it("rejects oversized file_id metadata JSON before downloading", async () => {

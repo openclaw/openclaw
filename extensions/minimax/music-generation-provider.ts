@@ -10,6 +10,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
@@ -140,15 +141,30 @@ async function downloadTrackFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedMusicAsset> {
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    { method: "GET" },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-    resolveMinimaxGuardedRequestOptions(params.policy),
-  );
+  const result = await executeProviderOperationWithRetry({
+    provider: "minimax",
+    stage: "download",
+    operation: async () => {
+      const guardedResult = await fetchWithTimeoutGuarded(
+        params.url,
+        { method: "GET" },
+        params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        params.fetchFn,
+        resolveMinimaxGuardedRequestOptions(params.policy),
+      );
+      try {
+        await assertOkOrThrowHttpError(
+          guardedResult.response,
+          "MiniMax generated music download failed",
+        );
+      } catch (error) {
+        await guardedResult.release();
+        throw error;
+      }
+      return guardedResult;
+    },
+  });
   try {
-    await assertOkOrThrowHttpError(result.response, "MiniMax generated music download failed");
     const mimeType =
       normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg";
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";

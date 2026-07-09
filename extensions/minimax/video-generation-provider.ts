@@ -7,6 +7,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
   readProviderJsonResponse,
@@ -14,7 +15,9 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
+  type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
+  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -132,27 +135,36 @@ function resolveMinimaxGuardedRequestOptions(
 }
 
 async function fetchMinimaxResponse(params: {
+  stage: ProviderOperationRetryStage;
   url: string;
   init?: RequestInit;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
+  retry?: TransientProviderRetryConfig;
 }): Promise<MinimaxResponseHandle> {
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    params.init ?? {},
-    resolveMinimaxRequestTimeoutMs(params.timeoutMs),
-    params.fetchFn,
-    resolveMinimaxGuardedRequestOptions(params.policy),
-  );
-  try {
-    await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
-  } catch (error) {
-    await result.release();
-    throw error;
-  }
-  return result;
+  return await executeProviderOperationWithRetry({
+    provider: "minimax",
+    stage: params.stage,
+    retry: params.retry,
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init ?? {},
+        resolveMinimaxRequestTimeoutMs(params.timeoutMs),
+        params.fetchFn,
+        resolveMinimaxGuardedRequestOptions(params.policy),
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+      return result;
+    },
+  });
 }
 
 function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined {
@@ -240,6 +252,7 @@ async function pollMinimaxVideo(params: {
     const url = new URL(`${params.baseUrl}/v1/query/video_generation`);
     url.searchParams.set("task_id", params.taskId);
     const { response, release } = await fetchMinimaxResponse({
+      stage: "poll",
       url: url.toString(),
       init: {
         method: "GET",
@@ -287,6 +300,7 @@ async function downloadVideoFromUrl(params: {
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
   const { response, release } = await fetchMinimaxResponse({
+    stage: "download",
     url: params.url,
     init: { method: "GET" },
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -322,6 +336,7 @@ async function downloadVideoFromFileId(params: {
   const url = new URL(`${params.baseUrl}/v1/files/retrieve`);
   url.searchParams.set("file_id", params.fileId);
   const { response: metadataResponse, release: releaseMetadata } = await fetchMinimaxResponse({
+    stage: "download",
     url: url.toString(),
     init: {
       method: "GET",
@@ -347,6 +362,7 @@ async function downloadVideoFromFileId(params: {
     throw new Error("MiniMax generated video metadata missing download_url");
   }
   const { response, release } = await fetchMinimaxResponse({
+    stage: "download",
     url: downloadUrl,
     init: { method: "GET" },
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
