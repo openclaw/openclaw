@@ -389,7 +389,7 @@ function sanitizeErrorMessage(message: string): string {
     "$1<redacted>",
   );
   return redacted.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
-    ? `${redacted.slice(0, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
+    ? `${truncateUtf16Safe(redacted, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
     : redacted;
 }
 
