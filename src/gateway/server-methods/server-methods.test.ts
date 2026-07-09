@@ -2614,6 +2614,18 @@ describe("sanitizeChatSendMessageInput", () => {
   ])("$name", ({ input, expected }) => {
     expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
+
+  it("completes within 50ms for a 1MB message without control characters", () => {
+    // Performance regression guard: the common case (clean text) must use
+    // the regex fast path, not a per-character loop that blocks the event
+    // loop for hundreds of milliseconds on large messages.
+    const text = "a".repeat(1_000_000);
+    const start = performance.now();
+    const result = sanitizeChatSendMessageInput(text);
+    const elapsed = performance.now() - start;
+    expect(result).toEqual({ ok: true as const, message: text });
+    expect(elapsed).toBeLessThan(50);
+  });
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
