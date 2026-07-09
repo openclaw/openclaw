@@ -176,7 +176,6 @@ function mergePairedNodeWithEffectiveNode(
   return {
     ...paired,
     ...effective,
-    token: paired?.token,
     createdAtMs: paired?.createdAtMs,
     lastConnectedAtMs: paired?.lastConnectedAtMs ?? effective.connectedAtMs,
     displayName: effective.displayName ?? paired?.displayName,
@@ -222,12 +221,6 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   } catch {
     return null;
   }
-}
-
-function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
-  const copy: Record<string, unknown> = { ...node };
-  delete copy.token;
-  return copy as Omit<PairedNodeListRow, "token">;
 }
 
 /** Register node status, describe, and paired-node list commands. */
@@ -548,7 +541,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
-              paired: filteredPaired.map(sanitizePairedNodeForListJson),
+              paired: filteredPaired,
             });
             return;
           }
