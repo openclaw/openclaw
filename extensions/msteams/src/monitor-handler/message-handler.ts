@@ -28,7 +28,7 @@ import {
   summarizeMSTeamsHtmlAttachments,
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
-import { isRecord } from "../attachments/shared.js";
+import { isRecord, normalizeContentType } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
@@ -56,9 +56,12 @@ import {
   summarizeParentMessage,
 } from "../thread-parent-context.js";
 
-function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+// Exported for tests asserting mixed-case HTML content-type handling.
+export function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
-    if (attachment.contentType !== "text/html") {
+    // MIME types are case-insensitive (RFC 2045); normalize before comparing so a
+    // mixed-case "TEXT/HTML" attachment still reaches the HTML body extraction.
+    if (normalizeContentType(attachment.contentType) !== "text/html") {
       continue;
     }
     const content = attachment.content;
