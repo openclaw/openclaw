@@ -3,10 +3,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveConfigSecretTargetByPath,
-  resolvePlanTargetAgainstRegistry,
-} from "openclaw/plugin-sdk/secret-ref-runtime";
+import { resolveSecretPlanTargetByPath } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
@@ -100,7 +97,6 @@ const VAULT_PROVIDER_ALIAS = "vault";
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-const AUTH_PROFILE_TARGET_TYPES = ["auth-profiles.api_key.key", "auth-profiles.token.token"];
 
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -283,16 +279,6 @@ function parseTargetSpecifier(value: string): {
   };
 }
 
-function resolveAuthProfileSecretTargetByPath(pathSegments: string[]) {
-  for (const type of AUTH_PROFILE_TARGET_TYPES) {
-    const resolved = resolvePlanTargetAgainstRegistry({ type, pathSegments });
-    if (resolved) {
-      return resolved;
-    }
-  }
-  return null;
-}
-
 function createConfigSecretTarget(params: {
   providerAlias: string;
   path: string;
@@ -308,14 +294,15 @@ function createConfigSecretTarget(params: {
   ) {
     throw new Error(`Invalid --target config path: ${params.path}`);
   }
-  const resolved = params.agentId
-    ? resolveAuthProfileSecretTargetByPath(pathSegments)
-    : resolveConfigSecretTargetByPath(pathSegments);
+  const resolved = resolveSecretPlanTargetByPath({
+    configFile: params.agentId ? "auth-profiles.json" : "openclaw.json",
+    pathSegments,
+  });
   if (!resolved) {
     throw new Error(`Unknown or unsupported Vault setup target path: ${params.path}`);
   }
   return {
-    type: resolved.entry.targetType,
+    type: resolved.targetType,
     path: normalizedPath,
     pathSegments,
     ...(params.agentId ? { agentId: params.agentId } : {}),

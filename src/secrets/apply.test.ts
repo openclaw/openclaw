@@ -1282,7 +1282,7 @@ describe("secrets apply", () => {
     );
   });
 
-  it("adds plugin-managed exec provider owners to restrictive plugin allowlists", async () => {
+  it("does not widen restrictive plugin allowlists for plugin-managed exec provider upserts", async () => {
     await writeJsonFile(fixture.configPath, {
       plugins: {
         allow: ["openai"],
@@ -1302,17 +1302,14 @@ describe("secrets apply", () => {
       targets: [],
     });
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
-      plan,
-      env: fixture.env,
-    })) as {
-      plugins?: {
-        allow?: string[];
-        entries?: Record<string, unknown>;
-      };
-    };
-    expect(nextConfig.plugins?.allow).toEqual(["openai", "vault"]);
-    expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.allow does not include "vault". Add the plugin to plugins.allow before applying this plan.',
+    );
   });
 
   it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {

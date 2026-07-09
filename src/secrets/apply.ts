@@ -249,8 +249,9 @@ function applyProviderPlanMutations(params: {
       params.config.plugins.allow.length > 0 &&
       !hasPluginPolicyId(params.config.plugins.allow, pluginId)
     ) {
-      params.config.plugins.allow = [...params.config.plugins.allow, pluginId];
-      changed = true;
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.allow does not include "${pluginId}". Add the plugin to plugins.allow before applying this plan.`,
+      );
     }
     params.config.plugins.entries ??= {};
     if (previousEntry?.enabled === true) {
