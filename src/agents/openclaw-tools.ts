@@ -74,6 +74,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -206,6 +207,8 @@ export function createOpenClawTools(
      * subagents inherit the real workspace path instead of the sandbox copy.
      */
     spawnWorkspaceDir?: string;
+    /** Current runtime directory used as the default project for follow-up suggestions. */
+    cwd?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
@@ -246,6 +249,9 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
   );
+  const runtimeCwd = resolveWorkspaceRoot(
+    options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir,
+  );
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
@@ -281,6 +287,9 @@ export function createOpenClawTools(
   const skillWorkshopRunId = normalizeOptionalString(options?.runId);
   const skillWorkshopMessageId = normalizeOptionalString(
     options?.currentMessageId === undefined ? undefined : String(options.currentMessageId),
+  );
+  const taskSuggestionSessionKey = normalizeOptionalString(
+    options?.runSessionKey ?? options?.agentSessionKey,
   );
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
@@ -477,6 +486,13 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
+    ...(!embedded && taskSuggestionSessionKey
+      ? createTaskSuggestionTools({
+          sessionKey: taskSuggestionSessionKey,
+          agentId: sessionAgentId,
+          cwd: runtimeCwd,
+        })
+      : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({

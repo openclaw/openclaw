@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cache_prefix="${RUNNER_OS}-dist-build-"
+          cache_prefix="${RUNNER_OS}-dist-build-v2-"
           declare -A seen=()
 
           resolve_tag_sha() {
@@ -150,7 +150,8 @@ jobs:
             .artifacts/build-all-cache/
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+            packages/ai/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
           restore-keys: ${{ steps.dist-cache-seeds.outputs.restore-keys }}
 
       - name: Build dist on cache miss
@@ -170,6 +171,7 @@ jobs:
 
           test -d dist
           test -d dist-runtime
+          test -f packages/ai/dist/internal/runtime.mjs
           if [[ ! -f dist/index.js && ! -f dist/index.mjs ]]; then
             echo "Missing dist/index.js or dist/index.mjs" >&2
             exit 1
@@ -185,7 +187,8 @@ jobs:
             .artifacts/build-all-cache/
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+            packages/ai/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
 
       - name: Prepare Testbox shell
         shell: bash

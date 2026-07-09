@@ -285,6 +285,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    spawn_task: {
+      emoji: "✨",
+      title: "Suggest Task",
+      detailKeys: ["title", "tldr", "cwd"],
+    },
+    dismiss_task: {
+      emoji: "🗑️",
+      title: "Dismiss Task",
+      detailKeys: ["task_id", "reason"],
+    },
     skill_workshop: {
       emoji: "🧰",
       title: "Skill Workshop",

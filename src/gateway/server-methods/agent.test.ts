@@ -3917,6 +3917,35 @@ describe("gateway agent handler", () => {
     expect(spawnedCall.cwd).toBe("/tmp/task-repo");
   });
 
+  it("uses a managed dashboard worktree as both workspace and runtime cwd", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({ spawnedCwd: "/tmp/session-worktree" });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedCwd: "/tmp/session-worktree",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "worktree run",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "worktree-workspace-forwarded",
+      },
+      { reqId: "worktree-workspace-forwarded-1" },
+    );
+    const worktreeCall = await waitForAgentCommandCall<{
+      cwd?: string;
+      workspaceDir?: string;
+    }>();
+    expect(worktreeCall.workspaceDir).toBe("/tmp/session-worktree");
+    expect(worktreeCall.cwd).toBe("/tmp/session-worktree");
+  });
+
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",

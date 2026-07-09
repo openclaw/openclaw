@@ -1,6 +1,12 @@
 import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
 import { property } from "lit/decorators.js";
+import type {
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -8,7 +14,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -137,6 +143,135 @@ class ChatPane extends LitElement {
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
+  private taskSuggestions: TaskSuggestion[] = [];
+  private readonly taskSuggestionBusyIds = new Set<string>();
+  private taskSuggestionsRequestVersion = 0;
+
+  private taskSuggestionMatchesCurrentSession(suggestion: TaskSuggestion): boolean {
+    const state = this.state;
+    return Boolean(
+      state &&
+      uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        suggestion.sessionKey,
+        suggestion.agentId,
+      ),
+    );
+  }
+
+  private async refreshTaskSuggestions(): Promise<void> {
+    const state = this.state;
+    const client = state?.client;
+    const requestVersion = ++this.taskSuggestionsRequestVersion;
+    if (
+      !state?.connected ||
+      !client ||
+      !isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.list")
+    ) {
+      this.taskSuggestions = [];
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    const agentId = resolveChatAgentId(state);
+    try {
+      const result = await client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
+        agentId,
+      });
+      if (
+        requestVersion !== this.taskSuggestionsRequestVersion ||
+        client !== this.state?.client ||
+        sessionKey !== this.state?.sessionKey
+      ) {
+        return;
+      }
+      this.taskSuggestions = result.suggestions.filter((suggestion) =>
+        this.taskSuggestionMatchesCurrentSession(suggestion),
+      );
+      this.requestUpdate();
+    } catch {
+      // Suggestions are an optional ephemeral affordance; chat remains usable
+      // when an older Gateway or a reconnect loses the process-local registry.
+      // Keep event-delivered cards when a background reconciliation fails.
+    }
+  }
+
+  private handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
+    if (event.action === "created") {
+      if (!this.taskSuggestionMatchesCurrentSession(event.suggestion)) {
+        return;
+      }
+      this.taskSuggestions = [
+        event.suggestion,
+        ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
+      ];
+    } else {
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
+      this.taskSuggestionBusyIds.delete(event.taskId);
+    }
+    this.requestUpdate();
+    // The replacement snapshot includes the event plus unrelated suggestions;
+    // its request version prevents any older snapshot from overwriting either.
+    void this.refreshTaskSuggestions();
+  }
+
+  private readonly acceptTaskSuggestion = async (suggestion: TaskSuggestion): Promise<void> => {
+    const state = this.state;
+    const client = state?.client;
+    if (
+      !state ||
+      !client ||
+      !this.taskSuggestionMatchesCurrentSession(suggestion) ||
+      this.taskSuggestionBusyIds.has(suggestion.id)
+    ) {
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    this.taskSuggestionBusyIds.add(suggestion.id);
+    this.requestUpdate();
+    try {
+      const result = await client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
+        taskId: suggestion.id,
+      });
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+      if (this.state?.sessionKey === sessionKey) {
+        this.onPaneSessionChange?.(this.paneId, result.key);
+      }
+    } catch (error) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+      state.chatError = state.lastError;
+    } finally {
+      this.taskSuggestionBusyIds.delete(suggestion.id);
+      this.requestUpdate();
+    }
+  };
+
+  private readonly dismissTaskSuggestion = async (suggestion: TaskSuggestion): Promise<void> => {
+    const state = this.state;
+    if (
+      !state?.client ||
+      !this.taskSuggestionMatchesCurrentSession(suggestion) ||
+      this.taskSuggestionBusyIds.has(suggestion.id)
+    ) {
+      return;
+    }
+    this.taskSuggestionBusyIds.add(suggestion.id);
+    this.requestUpdate();
+    try {
+      await state.client.request("taskSuggestions.dismiss", { taskId: suggestion.id });
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+    } catch (error) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+      state.chatError = state.lastError;
+    } finally {
+      this.taskSuggestionBusyIds.delete(suggestion.id);
+      this.requestUpdate();
+    }
+  };
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
@@ -196,6 +331,8 @@ class ChatPane extends LitElement {
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
     resetChatStateForRouteSession(state, nextSessionKey);
+    this.taskSuggestionsRequestVersion += 1;
+    this.taskSuggestions = [];
     this.markSessionRead(nextSessionRow);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -206,6 +343,7 @@ class ChatPane extends LitElement {
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
+    void this.refreshTaskSuggestions();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;
@@ -481,6 +619,9 @@ class ChatPane extends LitElement {
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
         if (state) {
+          if (event.event === "task.suggestion" && event.payload) {
+            this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
+          }
           handlePageGatewayEvent(state, event);
         }
       }),
@@ -715,6 +856,7 @@ class ChatPane extends LitElement {
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
+      void this.refreshTaskSuggestions();
     }
     state.requestUpdate?.();
   }
@@ -929,6 +1071,16 @@ class ChatPane extends LitElement {
         onOpenSplitView: this.onOpenSplitView,
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
+      taskSuggestions: this.taskSuggestions,
+      taskSuggestionBusyIds: this.taskSuggestionBusyIds,
+      canAcceptTaskSuggestions:
+        state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      canDismissTaskSuggestions:
+        state.connected &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
+      onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
