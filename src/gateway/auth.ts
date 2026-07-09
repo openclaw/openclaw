@@ -531,6 +531,13 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "none") {
+    // Reject non-loopback HTTP clients when auth is disabled — without this a
+    // gateway bound to lan/external with auth.mode=none exposes the full
+    // Gateway API (chat, tools, sessions, nodes) without authentication.
+    // Internal callers without a request object (local CLI, tests) are allowed.
+    if (req && !localDirect) {
+      return { ok: false, reason: "auth_none_requires_loopback" };
+    }
     return { ok: true, method: "none" };
   }
 
