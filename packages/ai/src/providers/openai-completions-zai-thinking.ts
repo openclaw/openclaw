@@ -17,11 +17,13 @@ export function resolveZaiOpenAICompletionsThinkingParams(params: {
   requestedEffort: ZaiCompletionsRequestedEffort | undefined;
 }): { thinking: { type: "enabled" | "disabled" }; reasoningEffort?: string } {
   const effort = params.requestedEffort;
-  if (!effort || effort === "off" || effort === "none" || effort === "minimal") {
+  if (!effort || effort === "off" || effort === "none") {
     return { thinking: { type: "disabled" } };
   }
-  const mapped = params.model.thinkingLevelMap?.[effort];
-  const reasoningEffort = mapped ?? (effort === "xhigh" || effort === "max" ? "max" : "high");
+  const enabledEffort = effort === "minimal" ? "low" : effort;
+  const mapped = params.model.thinkingLevelMap?.[enabledEffort];
+  const reasoningEffort =
+    mapped ?? (enabledEffort === "xhigh" || enabledEffort === "max" ? "max" : "high");
   return {
     thinking: { type: "enabled" },
     ...(isZaiOpenAICompletionsReasoningEffortSupported(params.model) ? { reasoningEffort } : {}),

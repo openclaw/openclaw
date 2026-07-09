@@ -7107,15 +7107,15 @@ describe("openai transport stream", () => {
     expect(strongest.thinking).toEqual({ type: "enabled" });
     expect(strongest.reasoning_effort).toBe("max");
     expect(strongest).not.toHaveProperty("enable_thinking");
-    expect(minimal.thinking).toEqual({ type: "disabled" });
-    expect(minimal).not.toHaveProperty("reasoning_effort");
+    expect(minimal.thinking).toEqual({ type: "enabled" });
+    expect(minimal.reasoning_effort).toBe("high");
     expect(minimal).not.toHaveProperty("enable_thinking");
     expect(none.thinking).toEqual({ type: "disabled" });
     expect(none).not.toHaveProperty("reasoning_effort");
     expect(none).not.toHaveProperty("enable_thinking");
   });
 
-  it("omits reasoning_effort for binary Z.ai thinking models in completions transport", () => {
+  it("keeps minimal thinking enabled without reasoning_effort for binary Z.ai thinking models in completions transport", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "glm-5.1",
@@ -7138,7 +7138,7 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       {
-        reasoning: "low",
+        reasoning: "minimal",
       } as never,
     ) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
 
