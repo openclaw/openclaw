@@ -22,6 +22,25 @@ import {
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (i + 1 >= s.length || next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) {
+      const prev = s.charCodeAt(i - 1);
+      if (i === 0 || prev < 0xd800 || prev > 0xdbff) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function createMessageUpdateContext(
   params: {
     onAgentEvent?: ReturnType<typeof vi.fn>;
@@ -1466,6 +1485,38 @@ describe("handleMessageEnd", () => {
     );
     expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
     expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
+  });
+
+  it("does not split UTF-16 surrogate pairs when logging skipped block reply text", () => {
+    const emitBlockReply = vi.fn();
+    // 49 ASCII chars + a 2-code-unit emoji + 10 ASCII chars puts the high
+    // surrogate of the emoji exactly at the legacy 50-code-unit cut point.
+    const longEmojiText = "a".repeat(49) + "😀" + "x".repeat(10);
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn((text: string) => (text ? { text } : null)),
+      state: {
+        blockReplyBreak: "message_end",
+        messagingToolSentTextsNormalized: ["a".repeat(49) + "x".repeat(10)],
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: longEmojiText }],
+      },
+    } as never);
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    const debugCall = (ctx.log.debug as { mock?: { calls: unknown[][] } }).mock?.calls.find(
+      (call) => String(call[0]).includes("Skipping message_end block reply"),
+    );
+    expect(debugCall).toBeDefined();
+    const logged = String(debugCall![0]);
+    expect(logged).toContain("...");
+    expect(hasLoneSurrogate(logged)).toBe(false);
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
