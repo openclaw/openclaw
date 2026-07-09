@@ -10,7 +10,7 @@ Google Chat runs as the official `@openclaw/googlechat` plugin: DMs and spaces t
 ## Install
 
 ```bash
-openclaw plugins install clawhub:@openclaw/googlechat
+openclaw plugins install npm:@openclaw/googlechat --acknowledge-non-clawhub-install
 ```
 
 Local checkout (when running from a git repo):
