@@ -697,7 +697,7 @@ enum ExecApprovalsStore {
         if self.legacyFileURLIfPending() != nil {
             return self.ensureFile()
         }
-        self.withFileLock {
+        return self.withFileLock {
             self.loadFileUnlocked()
         }
     }

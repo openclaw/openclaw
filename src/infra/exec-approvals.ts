@@ -2029,31 +2029,32 @@ export async function persistAllowAlwaysDecisionLocked(params: {
   agentId: string | undefined;
   decision: AllowAlwaysPersistenceDecision;
 }): Promise<void> {
-  if (params.decision.kind === "one-shot") {
+  const decision = params.decision;
+  if (decision.kind === "one-shot") {
     return;
   }
   await updateExecApprovals({
     update: (file) => {
       const entries =
-        params.decision.kind === "exact-command"
-          ? params.decision.commandText.trim()
+        decision.kind === "exact-command"
+          ? decision.commandText.trim()
             ? [
                 {
-                  pattern: buildDurableCommandApprovalPattern(params.decision.commandText.trim()),
+                  pattern: buildDurableCommandApprovalPattern(decision.commandText.trim()),
                   source: "allow-always" as const,
                 },
               ]
             : []
           : [
-              ...params.decision.patterns.map((pattern) => ({
+              ...decision.patterns.map((pattern) => ({
                 pattern: pattern.pattern,
                 argPattern: pattern.argPattern,
                 source: "allow-always" as const,
               })),
-              ...(params.decision.commandText?.trim()
+              ...(decision.commandText?.trim()
                 ? [
                     {
-                      pattern: buildNodeCommandApprovalPattern(params.decision.commandText.trim()),
+                      pattern: buildNodeCommandApprovalPattern(decision.commandText.trim()),
                       source: "allow-always" as const,
                     },
                   ]
