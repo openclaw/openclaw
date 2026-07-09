@@ -19867,7 +19867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 167,
+      "line": 179,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Managed by Nix",
       "surface": "apple",
@@ -19875,7 +19875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 173,
+      "line": 185,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config: \\(configPath)",
       "surface": "apple",
@@ -19883,7 +19883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 174,
+      "line": 186,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "State:  \\(stateDir)",
       "surface": "apple",
@@ -19891,7 +19891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 436,
+      "line": 470,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "General",
       "surface": "apple",
@@ -19899,7 +19899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 437,
+      "line": 471,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Connection",
       "surface": "apple",
@@ -19907,7 +19907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 438,
+      "line": 472,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -19915,7 +19915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 439,
+      "line": 473,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -19923,7 +19923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 440,
+      "line": 474,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Crestodian",
       "surface": "apple",
@@ -19931,7 +19931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 441,
+      "line": 475,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Channels",
       "surface": "apple",
@@ -19939,7 +19939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 442,
+      "line": 476,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Skills",
       "surface": "apple",
@@ -19947,7 +19947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 443,
+      "line": 477,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -19955,7 +19955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 444,
+      "line": 478,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Exec Approvals",
       "surface": "apple",
@@ -19963,7 +19963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 445,
+      "line": 479,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -19971,7 +19971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 446,
+      "line": 480,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Instances",
       "surface": "apple",
@@ -19979,7 +19979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 447,
+      "line": 481,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config",
       "surface": "apple",
@@ -19987,7 +19987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 448,
+      "line": 482,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -19995,7 +19995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 449,
+      "line": 483,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "About",
       "surface": "apple",
