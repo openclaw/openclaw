@@ -454,6 +454,10 @@ async function normalizeProviderWebFetchPayload(params: {
     params.maxChars,
     payload.truncated === true,
   );
+  const providerRawLength =
+    typeof payload.rawLength === "number" && Number.isFinite(payload.rawLength)
+      ? Math.max(0, Math.floor(payload.rawLength))
+      : wrapped.rawLength;
   const url = params.requestedUrl;
   const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const status =
@@ -486,7 +490,7 @@ async function normalizeProviderWebFetchPayload(params: {
     },
     truncated: wrapped.truncated,
     length: wrapped.wrappedLength,
-    rawLength: wrapped.rawLength,
+    rawLength: providerRawLength,
     wrappedLength: wrapped.wrappedLength,
     ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
     ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
