@@ -52,7 +52,12 @@ describe("printModelTable", () => {
     const [header, row] = runtime.log.mock.calls.map(([line]) => line);
     expect(typeof header).toBe("string");
     expect(typeof row).toBe("string");
-    expect(visibleWidth(header as string)).toBeGreaterThan(42);
-    expect(visibleWidth((row as string).slice(0, (row as string).indexOf("text")))).toBe(43);
+    const headerInputIndex = (header as string).indexOf("Input");
+    const rowInputIndex = (row as string).indexOf("text");
+    expect(headerInputIndex).toBeGreaterThan(0);
+    expect(rowInputIndex).toBeGreaterThan(0);
+    expect(visibleWidth((row as string).slice(0, rowInputIndex))).toBe(
+      visibleWidth((header as string).slice(0, headerInputIndex)),
+    );
   });
 });
