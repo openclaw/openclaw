@@ -10,17 +10,17 @@ The **Meta Model API** uses the OpenAI-compatible **Responses API** (`POST /v1/r
 for the `muse-spark-1.1` reasoning model. The provider ships as a bundled OpenClaw
 plugin.
 
-| Property          | Value                                       |
-| ----------------- | ------------------------------------------- |
-| Provider id       | `meta-model-api`                            |
-| Plugin            | bundled provider                            |
-| Auth env var      | `MODEL_API_KEY`                             |
-| Onboarding flag   | `--auth-choice meta-model-api-api-key`      |
-| Direct CLI flag   | `--meta-model-api-key <key>`                |
-| API               | Responses API (`openai-responses`)          |
-| Base URL          | `https://api.ai.meta.com/v1`                |
-| Default model     | `meta-model-api/muse-spark-1.1`             |
-| Default reasoning | `high` (`reasoning.effort`)                 |
+| Property          | Value                                  |
+| ----------------- | -------------------------------------- |
+| Provider id       | `meta-model-api`                       |
+| Plugin            | bundled provider                       |
+| Auth env var      | `MODEL_API_KEY`                        |
+| Onboarding flag   | `--auth-choice meta-model-api-api-key` |
+| Direct CLI flag   | `--meta-model-api-key <key>`           |
+| API               | Responses API (`openai-responses`)     |
+| Base URL          | `https://api.ai.meta.com/v1`           |
+| Default model     | `meta-model-api/muse-spark-1.1`        |
+| Default reasoning | `high` (`reasoning.effort`)            |
 
 ## Getting started
 
