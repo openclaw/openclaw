@@ -439,6 +439,11 @@ export const th: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "การมาเยือนของกุ้งล็อบสเตอร์",
+      lobsterVisitsOn: "แวะมาเป็นครั้งคราว",
+      lobsterVisitsOff: "ไม่เคยมาเยือน",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -599,7 +604,9 @@ export const th: TranslationMap = {
   },
   tasksPage: {
     active: "กำลังใช้งาน",
+    activeSub: "งานเบื้องหลังที่อยู่ในคิวและกำลังทำงาน",
     recent: "ล่าสุด",
+    recentSub: "งานล่าสุดที่เสร็จสมบูรณ์ ล้มเหลว และถูกยกเลิก",
     loading: "กำลังโหลดงาน…",
     empty: "ยังไม่มีงานเบื้องหลัง",
     emptyActive: "ไม่มีงานที่อยู่ในคิวหรือกำลังทำงาน",
@@ -1899,8 +1906,7 @@ export const th: TranslationMap = {
     },
     summary: {
       enabled: "เปิดใช้งาน",
-      yes: "ใช่",
-      no: "ไม่",
+      scheduler: "ตัวกำหนดเวลา",
       jobs: "งาน",
       nextWake: "ปลุกครั้งถัดไป",
       refreshing: "กำลังรีเฟรช...",

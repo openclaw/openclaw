@@ -445,6 +445,11 @@ export const nl: TranslationMap = {
     noEvents: "Nog geen gebeurtenissen.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Kreeftbezoeken",
+      lobsterVisitsOn: "Komt af en toe langs",
+      lobsterVisitsOff: "Komt nooit langs",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -605,7 +610,9 @@ export const nl: TranslationMap = {
   },
   tasksPage: {
     active: "Actief",
+    activeSub: "In wachtrij geplaatste en actieve achtergrondtaken.",
     recent: "Recent",
+    recentSub: "Meest recente voltooide, mislukte en geannuleerde taken.",
     loading: "Taken laden…",
     empty: "Nog geen achtergrondtaken.",
     emptyActive: "Geen taken in de wachtrij of actief.",
@@ -1947,8 +1954,7 @@ export const nl: TranslationMap = {
     },
     summary: {
       enabled: "Ingeschakeld",
-      yes: "Ja",
-      no: "Nee",
+      scheduler: "Planner",
       jobs: "Taken",
       nextWake: "Volgende wake",
       refreshing: "Vernieuwen...",

@@ -445,6 +445,11 @@ export const tr: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Istakoz ziyaretleri",
+      lobsterVisitsOn: "Ara sıra uğrar",
+      lobsterVisitsOff: "Asla ziyaret etmez",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -607,7 +612,9 @@ export const tr: TranslationMap = {
   },
   tasksPage: {
     active: "Etkin",
+    activeSub: "Kuyruğa alınmış ve çalışan arka plan işleri.",
     recent: "Son",
+    recentSub: "En son tamamlanan, başarısız olan ve iptal edilen görevler.",
     loading: "Görevler yükleniyor…",
     empty: "Henüz arka plan görevi yok.",
     emptyActive: "Kuyrukta veya çalışan görev yok.",
@@ -1948,8 +1955,7 @@ export const tr: TranslationMap = {
     },
     summary: {
       enabled: "Etkin",
-      yes: "Evet",
-      no: "Hayır",
+      scheduler: "Zamanlayıcı",
       jobs: "İşler",
       nextWake: "Sonraki uyandırma",
       refreshing: "Yenileniyor...",
