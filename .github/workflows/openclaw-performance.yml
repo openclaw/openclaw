@@ -372,7 +372,7 @@ jobs:
             then
               effective_status=0
               {
-                echo "Kova returned a partial release-gate verdict for filtered performance coverage, but all selected scenarios passed and no baseline regression was reported."
+                echo "Kova returned a non-zero release-gate verdict, but the trusted report adapter found only filtered coverage or profiling-affected resource thresholds with no baseline regression."
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             fi
