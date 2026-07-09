@@ -1,7 +1,9 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
@@ -70,6 +72,14 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+function createSpawnTextChild() {
+  return Object.assign(new EventEmitter(), {
+    kill: vi.fn(() => true),
+    stderr: new PassThrough(),
+    stdout: new PassThrough(),
+  });
+}
+
 async function waitForProcessExit(
   pid: number,
   timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
@@ -134,6 +144,32 @@ describe("write-cli-startup-metadata", () => {
       }),
     ).rejects.toThrow("render failed: output exceeded 1024 bytes");
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "fails command help rendering when %s emits a stream error",
+    async (streamName) => {
+      const child = createSpawnTextChild();
+      const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+
+      const render = __testing.spawnText(["--help"], {
+        cwd: process.cwd(),
+        env: process.env,
+        failureMessage: "render failed",
+        killGraceMs: 25,
+        maxOutputBytes: 1024,
+        spawnProcess,
+        timeoutMs: 5_000,
+      });
+
+      child[streamName].emit("error", new Error(`${streamName} pipe failed`));
+      child.emit("close", null, "SIGTERM");
+
+      await expect(render).rejects.toThrow(
+        `render failed: ${streamName} read error: ${streamName} pipe failed`,
+      );
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    },
+  );
 
   it("signals Windows command help render process trees with taskkill", () => {
     const childKill = vi.fn(() => true);
