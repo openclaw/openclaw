@@ -38,6 +38,25 @@ type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const codeUnit = value.charCodeAt(i);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      const previous = value.charCodeAt(i - 1);
+      if (!(previous >= 0xd800 && previous <= 0xdbff)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
 });
@@ -3804,6 +3823,28 @@ describe("gateway server chat", () => {
       const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
       const serialized = JSON.stringify(messages);
       expect(serialized).toContain("abcdefg\\n...(truncated)...");
+    });
+  });
+
+  test("chat.history keeps RPC maxChars truncation UTF-16 safe", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sourceText = `${"a".repeat(6)}😀tail`;
+      expect(hasLoneSurrogate(sourceText.slice(0, 7))).toBe(true);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: sourceText }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
+      const text = (messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text;
+      expect(text).toBe(`${"a".repeat(6)}\n...(truncated)...`);
+      expect(hasLoneSurrogate(text ?? "")).toBe(false);
     });
   });
 
