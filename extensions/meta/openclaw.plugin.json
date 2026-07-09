@@ -1,26 +1,26 @@
 {
-  "id": "meta-model-api",
+  "id": "meta",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["meta-model-api"],
+  "providers": ["meta"],
   "providerEndpoints": [
     {
-      "endpointClass": "meta-model-api-native",
+      "endpointClass": "meta-native",
       "hosts": ["api.ai.meta.com"]
     }
   ],
   "providerRequest": {
     "providers": {
-      "meta-model-api": {
-        "family": "meta-model-api"
+      "meta": {
+        "family": "meta"
       }
     }
   },
   "modelCatalog": {
     "providers": {
-      "meta-model-api": {
+      "meta": {
         "baseUrl": "https://api.ai.meta.com/v1",
         "api": "openai-responses",
         "models": [
@@ -61,13 +61,13 @@
       }
     },
     "discovery": {
-      "meta-model-api": "static"
+      "meta": "static"
     }
   },
   "setup": {
     "providers": [
       {
-        "id": "meta-model-api",
+        "id": "meta",
         "authMethods": ["api-key"],
         "envVars": ["MODEL_API_KEY"]
       }
@@ -75,20 +75,20 @@
   },
   "providerAuthChoices": [
     {
-      "provider": "meta-model-api",
+      "provider": "meta",
       "method": "api-key",
-      "choiceId": "meta-model-api-api-key",
+      "choiceId": "meta-api-key",
       "appGuidedSecret": true,
-      "choiceLabel": "Meta Model API key",
-      "choiceHint": "Meta Model API (Responses API)",
-      "groupId": "meta-model-api",
-      "groupLabel": "Meta Model API",
-      "groupHint": "Meta Model API (Responses API)",
+      "choiceLabel": "Meta API key",
+      "choiceHint": "Meta (Responses API)",
+      "groupId": "meta",
+      "groupLabel": "Meta",
+      "groupHint": "Meta (Responses API)",
       "onboardingFeatured": true,
-      "optionKey": "metaModelApiKey",
-      "cliFlag": "--meta-model-api-key",
-      "cliOption": "--meta-model-api-key <key>",
-      "cliDescription": "Meta Model API key"
+      "optionKey": "metaApiKey",
+      "cliFlag": "--meta-api-key",
+      "cliOption": "--meta-api-key <key>",
+      "cliDescription": "Meta API key"
     }
   ],
   "configSchema": {

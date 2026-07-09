@@ -1,6 +1,6 @@
-# Meta Model API provider
+# Meta provider
 
-Bundled OpenClaw provider plugin for the **Meta Model API** — an OpenAI-compatible
+Bundled OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
 **Responses API** endpoint (`POST /v1/responses`).
 
 - **Base URL:** `https://api.ai.meta.com/v1`
@@ -25,13 +25,13 @@ export MODEL_API_KEY=<key>
 {
   agents: {
     defaults: {
-      model: { primary: "meta-model-api/muse-spark-1.1" },
+      model: { primary: "meta/muse-spark-1.1" },
     },
   },
 }
 ```
 
-Or run onboarding and choose **Meta Model API**.
+Or run onboarding and choose **Meta**.
 
 ## Thinking / reasoning
 
@@ -41,15 +41,15 @@ not accept `none`.
 
 ## Docs
 
-See `docs/providers/meta-model-api.md` for setup, onboarding, and smoke tests.
+See `docs/providers/meta.md` for setup, onboarding, and smoke tests.
 
 ## Live test
 
 ```bash
 export MODEL_API_KEY=<key>
 export OPENCLAW_LIVE_TEST=1
-export META_MODEL_API_LIVE_TEST=1
-pnpm test extensions/meta-model-api/meta-model-api.live.test.ts
+export META_LIVE_TEST=1
+pnpm test extensions/meta/meta.live.test.ts
 ```
 
 Live tests call `muse-spark` on `/v1/responses`.

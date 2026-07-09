@@ -1,4 +1,4 @@
-// Meta Model API plugin module implements stream behavior.
+// Meta plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -18,11 +18,11 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
   payloadObj.store = false;
 }
 
-export function createMetaModelApiResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      if (model.provider !== "meta-model-api" || model.api !== "openai-responses") {
+      if (model.provider !== "meta" || model.api !== "openai-responses") {
         return;
       }
       if (!model.reasoning) {
@@ -32,11 +32,11 @@ export function createMetaModelApiResponsesWrapper(baseStreamFn: StreamFn | unde
     });
 }
 
-export function wrapMetaModelApiProviderStream(
+export function wrapMetaProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
-  if (ctx.provider !== "meta-model-api" || ctx.model?.api !== "openai-responses") {
+  if (ctx.provider !== "meta" || ctx.model?.api !== "openai-responses") {
     return undefined;
   }
-  return createMetaModelApiResponsesWrapper(ctx.streamFn);
+  return createMetaResponsesWrapper(ctx.streamFn);
 }

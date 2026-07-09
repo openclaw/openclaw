@@ -1,26 +1,26 @@
 ---
-summary: "Meta Model API setup (auth + muse-spark-1.1 model selection)"
-title: "Meta Model API"
+summary: "Meta setup (auth + muse-spark-1.1 model selection)"
+title: "Meta"
 read_when:
-  - You want to use the Meta Model API with OpenClaw
+  - You want to use Meta with OpenClaw
   - You need the MODEL_API_KEY env var or CLI auth choice
 ---
 
-The **Meta Model API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
+The **Meta API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
 for the `muse-spark-1.1` reasoning model. The provider ships as a bundled OpenClaw
 plugin.
 
-| Property          | Value                                  |
-| ----------------- | -------------------------------------- |
-| Provider id       | `meta-model-api`                       |
-| Plugin            | bundled provider                       |
-| Auth env var      | `MODEL_API_KEY`                        |
-| Onboarding flag   | `--auth-choice meta-model-api-api-key` |
-| Direct CLI flag   | `--meta-model-api-key <key>`           |
-| API               | Responses API (`openai-responses`)     |
-| Base URL          | `https://api.ai.meta.com/v1`           |
-| Default model     | `meta-model-api/muse-spark-1.1`        |
-| Default reasoning | `high` (`reasoning.effort`)            |
+| Property          | Value                              |
+| ----------------- | ---------------------------------- |
+| Provider id       | `meta`                             |
+| Plugin            | bundled provider                   |
+| Auth env var      | `MODEL_API_KEY`                    |
+| Onboarding flag   | `--auth-choice meta-api-key`       |
+| Direct CLI flag   | `--meta-api-key <key>`             |
+| API               | Responses API (`openai-responses`) |
+| Base URL          | `https://api.ai.meta.com/v1`       |
+| Default model     | `meta/muse-spark-1.1`              |
+| Default reasoning | `high` (`reasoning.effort`)        |
 
 ## Getting started
 
@@ -29,13 +29,13 @@ plugin.
     <CodeGroup>
 
 ```bash Onboarding
-openclaw onboard --auth-choice meta-model-api-api-key
+openclaw onboard --auth-choice meta-api-key
 ```
 
 ```bash Direct flag
 openclaw onboard --non-interactive --accept-risk \
-  --auth-choice meta-model-api-api-key \
-  --meta-model-api-key "$MODEL_API_KEY"
+  --auth-choice meta-api-key \
+  --meta-api-key "$MODEL_API_KEY"
 ```
 
 ```bash Env only
@@ -47,7 +47,7 @@ export MODEL_API_KEY=<key>
   </Step>
   <Step title="Verify models are available">
     ```bash
-    openclaw models list --provider meta-model-api
+    openclaw models list --provider meta
     ```
 
     Lists the static `muse-spark-1.1` catalog entry. If `MODEL_API_KEY` is unresolved,
@@ -62,15 +62,15 @@ export MODEL_API_KEY=<key>
 ```bash
 openclaw onboard --non-interactive --accept-risk \
   --mode local \
-  --auth-choice meta-model-api-api-key \
-  --meta-model-api-key "$MODEL_API_KEY"
+  --auth-choice meta-api-key \
+  --meta-api-key "$MODEL_API_KEY"
 ```
 
 ## Built-in catalog
 
-| Model ref                       | Name           | Reasoning | Context window | Max output |
-| ------------------------------- | -------------- | --------- | -------------- | ---------- |
-| `meta-model-api/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 128,000    |
+| Model ref             | Name           | Reasoning | Context window | Max output |
+| --------------------- | -------------- | --------- | -------------- | ---------- |
+| `meta/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 128,000    |
 
 Capabilities:
 
@@ -86,7 +86,7 @@ Capabilities:
 
 <Note>
 Until `muse-spark-1.1` is deployed, smoke tests and manual checks can use the
-deployed `muse-spark` model id: `--model meta-model-api/muse-spark`.
+deployed `muse-spark` model id: `--model meta/muse-spark`.
 </Note>
 
 ## Manual config
@@ -96,9 +96,9 @@ deployed `muse-spark` model id: `--model meta-model-api/muse-spark`.
   env: { MODEL_API_KEY: "<key>" },
   agents: {
     defaults: {
-      model: { primary: "meta-model-api/muse-spark-1.1" },
+      model: { primary: "meta/muse-spark-1.1" },
       models: {
-        "meta-model-api/muse-spark-1.1": { alias: "Muse Spark 1.1" },
+        "meta/muse-spark-1.1": { alias: "Muse Spark 1.1" },
       },
     },
   },
@@ -118,8 +118,8 @@ separately.
 ```bash
 export MODEL_API_KEY=<key>
 export OPENCLAW_LIVE_TEST=1
-export META_MODEL_API_LIVE_TEST=1
-pnpm test extensions/meta-model-api/meta-model-api.live.test.ts
+export META_LIVE_TEST=1
+pnpm test extensions/meta/meta.live.test.ts
 ```
 
 Live tests use deployed `muse-spark` against `POST /v1/responses`.
