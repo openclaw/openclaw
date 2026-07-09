@@ -280,7 +280,6 @@ class SkillsPage extends LitElement {
         </div>
       </section>
       ${renderSettingsWorkspace(
-        this.context.basePath,
         renderSkills({
           connected: this.connected,
           loading: this.skillsLoading || this.agentsLoading,
@@ -332,9 +331,6 @@ class SkillsPage extends LitElement {
           onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
             void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
         }),
-        "skills",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
       )}
     `;
   }

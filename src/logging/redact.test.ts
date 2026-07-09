@@ -73,6 +73,16 @@ describe("registered exact secret values", () => {
     expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
   });
 
+  it("masks JSON-escaped registered values", () => {
+    const secret = 'quoted-"secret\\line\nvalue';
+    registerSecretValueForRedaction(secret);
+
+    const json = JSON.stringify({ credential: secret });
+    expect(redactSensitiveText(json, { mode: "off" })).not.toContain(
+      JSON.stringify(secret).slice(1, -1),
+    );
+  });
+
   it("evicts the oldest value after 512 registrations", () => {
     const first = "exact-registry-value-000";
     registerSecretValueForRedaction(first);

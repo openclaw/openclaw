@@ -141,6 +141,7 @@ type ConnectFrame = {
     maxProtocol?: number;
     minProtocol?: number;
     scopes?: string[];
+    caps?: string[];
   };
 };
 
@@ -413,6 +414,7 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+    expect(connectFrame.params?.caps).toEqual(["tool-events", "inline-widgets"]);
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {

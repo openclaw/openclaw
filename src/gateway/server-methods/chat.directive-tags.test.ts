@@ -660,11 +660,13 @@ function createScopedCliClient(
     displayName: string;
     version: string;
   }> = {},
+  caps?: string[],
 ) {
   const id = client.id ?? "openclaw-cli";
   return {
     connect: {
       scopes,
+      caps,
       client: {
         id,
         mode: client.mode ?? "cli",
@@ -4461,6 +4463,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 
+  it("forwards gateway client capabilities into the dispatch context", async () => {
+    await createTranscriptFixture("openclaw-chat-send-gateway-client-caps-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-gateway-client-caps",
+      message: "show a widget",
+      client: createScopedCliClient([], {}, [GATEWAY_CLIENT_CAPS.INLINE_WIDGETS]),
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.GatewayClientCaps).toEqual([
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+    ]);
+  });
+
   it("normalizes missing gateway caller scopes to an empty array before dispatch", async () => {
     await createTranscriptFixture("openclaw-chat-send-missing-gateway-client-scopes-");
     mockState.finalText = "ok";
@@ -4477,6 +4499,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
+    expect(mockState.lastDispatchCtx?.GatewayClientCaps).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 

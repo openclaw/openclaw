@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
+  fetchWithSsrFGuardMock,
   readAccessTokenMock,
   resolveDelegatedAccessTokenMock,
   resolveMSTeamsCredentialsMock,
@@ -11,6 +12,13 @@ const {
   return {
     loadMSTeamsSdkWithAuthMock: vi.fn(),
     createMSTeamsTokenProviderMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(
+      async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => ({
+        response: await globalThis.fetch(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => undefined,
+      }),
+    ),
     readAccessTokenMock: vi.fn(),
     resolveDelegatedAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
@@ -35,11 +43,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../runtime-api.js")>();
   return {
     ...original,
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
@@ -48,6 +52,7 @@ import {
   deleteGraphRequest,
   escapeOData,
   fetchAllGraphPages,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   listChannelsForTeam,
   listTeamsByName,
@@ -235,6 +240,10 @@ describe("msteams graph helpers", () => {
     expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
     expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
     expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
 
     mockTextFetchResponse("forbidden", { status: 403 });
 
@@ -272,6 +281,19 @@ describe("msteams graph helpers", () => {
     ).resolves.toEqual(graphCollection(groupOne));
 
     expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("bounds absolute Graph pagination requests", async () => {
+    mockGraphCollection(groupOne);
+
+    await fetchGraphAbsoluteUrl({
+      token: graphToken,
+      url: "https://graph.microsoft.com/v1.0/groups?$skiptoken=next",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {

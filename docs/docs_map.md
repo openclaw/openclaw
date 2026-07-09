@@ -842,6 +842,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Choosing a transport
   - H3: Relay mode
+  - H3: Enterprise Grid org-wide installs
+  - H4: Socket Mode
+  - H4: HTTP Request URLs
   - H2: Install
   - H2: Quick setup
   - H2: Socket Mode transport tuning
@@ -856,6 +859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Scope (messages.ackReactionScope)
   - H2: Text streaming
   - H2: Typing reaction fallback
+  - H2: Voice input
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Interactive replies
@@ -864,7 +868,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Events and operational behavior
   - H2: Configuration reference
   - H2: Troubleshooting
-  - H2: Attachment vision reference
+  - H2: Attachment media reference
   - H3: Supported media types
   - H3: Inbound pipeline
   - H3: Thread-root attachment inheritance
@@ -1370,6 +1374,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What Crestodian shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Switching to the menu wizards
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
@@ -1728,6 +1733,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw onboard
   - H2: Examples
+  - H2: Guided flow
   - H2: Reset
   - H2: Locale
   - H2: Non-interactive setup
@@ -3604,6 +3610,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
   - H2: Presence
@@ -4701,6 +4708,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
+  - H3: Codex session catalog
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -5919,7 +5927,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Codex Supervisor plugin
   - H2: Distribution
   - H2: Surface
-  - H2: Session Listing
+  - H2: Enable the plugin
+  - H2: App Server selection
+  - H2: List sessions from the CLI
+  - H2: Use the Control UI
+  - H2: Metadata and security boundary
+  - H2: Supervisor agent session listing
 
 ## plugins/reference/codex.md
 
@@ -6781,6 +6794,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/vault.md
+
+- Route: /plugins/reference/vault
+- Headings:
+  - H1: Vault plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/venice.md
 
 - Route: /plugins/reference/venice
@@ -6975,6 +6997,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
+  - H2: Deferred delivery admission
   - H2: Compatibility dispatch
 
 ## plugins/sdk-channel-plugins.md
@@ -6988,6 +7011,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Media source params
   - H3: Native payload shaping
   - H3: Session conversation grammar
+  - H3: Account-scoped conversation binding support
   - H2: Approvals and channel capabilities
   - H3: Approval auth
   - H3: Payload lifecycle and setup guidance
@@ -7152,6 +7176,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Cannot find package 'typebox'
   - H3: Tool does not appear after install
   - H2: See also
+
+## plugins/vault.md
+
+- Route: /plugins/vault
+- Headings:
+  - H1: Vault SecretRefs
+  - H2: Before you begin
+  - H2: Store a provider key in Vault
+  - H2: Make Vault visible to the Gateway
+  - H2: Generate and apply a SecretRef plan
+  - H2: Configure more provider keys
+  - H2: SecretRef id format
+  - H2: What OpenClaw stores
+  - H2: Containers and managed deployments
+  - H2: Related
 
 ## plugins/voice-call.md
 
@@ -7378,6 +7417,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/cohere
 - Headings:
+  - H2: Built-in catalog
   - H2: Get started
   - H2: Environment-only setup
   - H2: Related
@@ -7487,6 +7527,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/github-copilot
 - Headings:
   - H2: Three ways to use Copilot in OpenClaw
+  - H2: GitHub Enterprise (data residency)
   - H2: Optional flags
   - H2: Non-interactive onboarding
   - H2: Memory search embeddings
@@ -8738,6 +8779,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Goal
   - H2: Product Model
   - H2: Architecture
+  - H2: Federated Session Catalog
   - H2: Codex App-Server Contract
   - H2: Session Registry
   - H2: MCP Surface For Codex
@@ -8923,8 +8965,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /start/wizard
 - Headings:
   - H2: Locale
-  - H2: QuickStart vs Advanced
-  - H2: What onboarding configures
+  - H2: Guided default
+  - H2: Classic wizard: QuickStart vs Advanced
+  - H2: What classic onboarding configures
   - H2: Add another agent
   - H2: Full reference
   - H2: Related docs
@@ -9584,6 +9627,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Environment variable
   - H2: Plugin config reference
   - H2: Notes
+  - H2: Related
+
+## tools/show-widget.md
+
+- Route: /tools/show-widget
+- Headings:
+  - H2: Use the tool
+  - H2: Security and storage
   - H2: Related
 
 ## tools/skill-workshop.md

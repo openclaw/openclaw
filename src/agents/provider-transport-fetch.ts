@@ -30,6 +30,7 @@ import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
+  containsSecretSentinel,
   resolveSecretSentinel,
   SECRET_SENTINEL_PATTERN,
   swapSecretSentinelsInText,
@@ -770,7 +771,7 @@ function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean
     return false;
   }
   for (const value of new Headers(headers).values()) {
-    if (value.includes("oc-sent-v1-")) {
+    if (containsSecretSentinel(value)) {
       return true;
     }
   }
@@ -778,7 +779,7 @@ function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean
 }
 
 function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
-  if (!url.includes("oc-sent-v1-")) {
+  if (!containsSecretSentinel(url)) {
     return { text: url, unknown: [] };
   }
   const unknown = new Set<string>();
@@ -798,7 +799,7 @@ function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersIn
   url: string;
   headers?: Headers;
 } {
-  if (!params.url.includes("oc-sent-v1-") && !headersContainSecretSentinel(params.headers)) {
+  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
     return { url: params.url };
   }
   const urlSwap = swapSecretSentinelsInUrl(params.url);

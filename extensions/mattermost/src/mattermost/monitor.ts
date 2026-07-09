@@ -24,6 +24,7 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   resolveMattermostAccount,
@@ -1677,7 +1678,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           agentId: route.agentId,
         });
 
-        const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
+        const previewLine = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
         logVerboseMessage(
           `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
         );

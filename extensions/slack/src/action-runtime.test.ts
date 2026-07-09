@@ -36,6 +36,16 @@ describe("handleSlackAction", () => {
     } as OpenClawConfig;
   }
 
+  it("rejects all actions before Slack API work for an enterprise org account", async () => {
+    await expect(
+      handleSlackAction(
+        { action: "readMessages", channelId: "C123" },
+        slackConfig({ enterpriseOrgInstall: true }),
+      ),
+    ).rejects.toThrow(/unavailable for Enterprise Grid org installs/);
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
     return {
       currentChannelId: "C123",

@@ -183,13 +183,7 @@ class DebugPage extends LitElement {
           <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "debug",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }

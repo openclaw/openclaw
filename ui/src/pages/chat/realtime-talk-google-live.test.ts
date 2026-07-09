@@ -21,6 +21,9 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
+const inputProcessors: Array<{
+  onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
+}> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 
 async function flushMicrotasks(): Promise<void> {
@@ -96,10 +99,21 @@ class MockAudioContext {
   }
 
   createScriptProcessor() {
-    return {
+    const processor = {
       connect: vi.fn(),
       disconnect: vi.fn(),
       onaudioprocess: null,
+    };
+    inputProcessors.push(processor);
+    return processor;
+  }
+
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
     };
   }
 
@@ -175,6 +189,14 @@ function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
+function pumpMicrophone(samples: Float32Array): void {
+  const processor = inputProcessors.at(-1);
+  if (!processor) {
+    throw new Error("missing microphone processor");
+  }
+  processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
+}
+
 function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const [call] = onTalkEvent.mock.calls;
   if (!call) {
@@ -191,6 +213,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
     createdSources.length = 0;
+    inputProcessors.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -218,6 +241,27 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("releases microphone access that resolves after stop", async () => {
+    let resolveMedia: (media: MediaStream) => void = () => undefined;
+    const pendingMedia = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    getUserMedia.mockReturnValue(pendingMedia);
+    const stopTrack = vi.fn();
+    const onInputLevel = vi.fn();
+    const transport = createTransport({ onInputLevel });
+
+    const start = transport.start();
+    transport.stop();
+    resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
+    await start;
+
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors).toHaveLength(0);
+    expect(wsInstances).toHaveLength(0);
+    expect(onInputLevel).not.toHaveBeenCalled();
+  });
+
   it("requests ArrayBuffer frames and decodes binary setup messages", async () => {
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
@@ -233,6 +277,20 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(readyEvent.type).toBe("session.ready");
     expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
     expect(readyEvent.transport).toBe("provider-websocket");
+  });
+
+  it("reports microphone activity and resets it when stopped", async () => {
+    const onInputLevel = vi.fn();
+    const transport = createTransport({ onInputLevel });
+
+    await transport.start();
+    latestWebSocket().emitOpen();
+    pumpMicrophone(new Float32Array(4096));
+    pumpMicrophone(new Float32Array(4096).fill(0.25));
+    transport.stop();
+
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
   it("decodes Blob setup messages", async () => {

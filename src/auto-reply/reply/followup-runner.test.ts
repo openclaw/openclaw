@@ -689,6 +689,39 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(context.text).not.toContain("Active goal:");
   });
 
+  it("keeps the originating client caps on queued embedded runs", async () => {
+    // Regression: the queued path built runEmbeddedAgent params inline and
+    // dropped run.clientCaps, so capability-gated tools vanished after drain.
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const storePath = "/tmp/openclaw-followup-client-caps.json";
+    const sessionEntry: SessionEntry = { sessionId: "session-client-caps", updatedAt: 1 };
+    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-client-caps",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+          clientCaps: ["tool-events", "inline-widgets"],
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
   it("notifies queued owners after admission and before model execution", async () => {
     const events: string[] = [];
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
@@ -3661,6 +3694,53 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
+    const onCommandOutput = vi.fn(async () => false as const);
+    let completedAfterEvent = false;
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        completedAfterEvent = true;
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(completedAfterEvent).toBe(true);
   });
 
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {

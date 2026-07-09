@@ -42,6 +42,7 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -685,6 +686,10 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
+    if (isPeriodicUsageLimitErrorMessage(message)) {
+      const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
+      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+    }
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
   const expiry = err.soonestCooldownExpiry;
@@ -1150,13 +1155,22 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  const failoverReason =
+    !isFallbackSummary && isFailoverError(params.err) ? params.err.reason : undefined;
+  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : failoverReason
+      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+      : isRateLimitErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(message)
+      ? formatRateLimitOrOverloadedErrorCopy(
+          failoverReason === "overloaded" ? "overloaded" : message,
+        )
       : undefined;
 
-  if (isRateLimit && !isOverloadedErrorMessage(message)) {
+  if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: buildRateLimitCooldownMessage(params.err),
@@ -2429,6 +2443,7 @@ async function runAgentTurnWithFallbackInternal(
                   emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
+                  onActivity: () => params.replyOperation?.recordActivity(),
                   onAssistantText: async (text) => {
                     const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
@@ -2754,6 +2769,7 @@ async function runAgentTurnWithFallbackInternal(
                       const commentaryTextByItem = new Map<string, string>();
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
+                        params.replyOperation?.recordActivity();
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
                         const hasLifecyclePhase =
@@ -3052,6 +3068,7 @@ async function runAgentTurnWithFallbackInternal(
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;
@@ -3441,12 +3458,18 @@ async function runAgentTurnWithFallbackInternal(
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
+      const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
+      const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : failoverReason
+          ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+          : isRateLimitErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
-          ? formatRateLimitOrOverloadedErrorCopy(message)
+          ? formatRateLimitOrOverloadedErrorCopy(
+              failoverReason === "overloaded" ? "overloaded" : message,
+            )
           : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
@@ -3454,7 +3477,7 @@ async function runAgentTurnWithFallbackInternal(
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const externalRunFailureReply =
         !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !(isRateLimit && !isOverloaded) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
@@ -3472,7 +3495,7 @@ async function runAgentTurnWithFallbackInternal(
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? resolveBillingFailureReplyText(err)
-        : isRateLimit && !isOverloadedErrorMessage(message)
+        : isRateLimit && !isOverloaded
           ? buildRateLimitCooldownMessage(err)
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy

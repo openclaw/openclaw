@@ -13,6 +13,7 @@ import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const GRAPH_REQUEST_TIMEOUT_MS = 30_000;
 
 export type GraphUser = {
   id?: string;
@@ -67,6 +68,7 @@ async function requestGraph(params: {
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
     auditContext: "msteams.graph",
+    timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
   });
   let releaseInFinally = true;
   try {
@@ -132,6 +134,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
+    timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

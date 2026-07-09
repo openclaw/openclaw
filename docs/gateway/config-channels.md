@@ -500,6 +500,20 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
+  org-wide event path. Startup verifies the bot token with `auth.test` and
+  fails when the configured mode does not match Slack's installation identity.
+  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
+  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
+  mutable names and unsupported channel prefixes fail startup. V1 handles only
+  direct Socket Mode or HTTP `message` and `app_mention` events with immediate
+  replies; relay, commands, interactions, App Home, reaction event listeners,
+  pins, action tools, native approvals, bindings, deferred delivery, and
+  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
+  status reactions remain available with `reactions:write`; inbound reaction
+  notifications and reaction action tools are unavailable. See
+  [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
+  for the least-privilege manifest, setup workflow, and complete restrictions.
 - `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior. `clientPingTimeout` defaults to `15000`; `serverPingTimeout` and `pingPongLoggingEnabled` are passed only when configured.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
