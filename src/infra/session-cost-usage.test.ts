@@ -11,6 +11,7 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import * as formatDatetime from "./format-time/format-datetime.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -646,15 +647,33 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
-      const result = await loadSessionCostSummariesFromCache({
-        sessions: sessionFiles,
-        agentId: "main",
-        startMs: Date.UTC(2026, 1, 5),
-        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-      });
+      const createDayFormatter = formatDatetime.createTimeZoneDayKeyFormatter;
+      let formatDayKeyCalls = 0;
+      const dayFormatterSpy = vi
+        .spyOn(formatDatetime, "createTimeZoneDayKeyFormatter")
+        .mockImplementation((timeZone) => {
+          const formatDayKey = createDayFormatter(timeZone);
+          return (date) => {
+            formatDayKeyCalls += 1;
+            return formatDayKey(date);
+          };
+        });
+      try {
+        const result = await loadSessionCostSummariesFromCache({
+          sessions: sessionFiles,
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+        });
 
-      expect(result.cacheStatus.status).toBe("fresh");
-      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(result.cacheStatus.status).toBe("fresh");
+        expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(dayFormatterSpy).toHaveBeenCalledTimes(1);
+        expect(formatDayKeyCalls).toBe(2);
+      } finally {
+        dayFormatterSpy.mockRestore();
+      }
     });
   });
 

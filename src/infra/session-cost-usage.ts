@@ -563,7 +563,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   sessionFile: string;
   startMs: number;
   endMs: number;
-  dayBucket?: UsageDailyBucket;
+  formatDayKey: UsageDayKeyFormatter;
 }): SessionCostSummary | null {
   if (!params.entry.transcriptEntries) {
     return null;
@@ -576,7 +576,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
-  const formatDayKey = createUsageDayKeyFormatter(params.dayBucket);
+  const formatDayKey = params.formatDayKey;
   const messageCounts: SessionMessageCounts = {
     total: 0,
     user: 0,
@@ -602,6 +602,9 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     if (ts !== undefined && ts > params.endMs) {
       continue;
     }
+    const date = ts === undefined ? undefined : new Date(ts);
+    const dayKey = date ? formatDayKey(date) : undefined;
+    const quarterBucket = date ? getUtcQuarterHourBucketKey(date) : undefined;
 
     if (ts !== undefined) {
       firstActivity = firstActivity === undefined ? ts : Math.min(firstActivity, ts);
@@ -622,9 +625,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
         const latencyMs =
           entry.durationMs ??
           (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
-        if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= maxLatencyMs) {
+        if (
+          latencyMs !== undefined &&
+          Number.isFinite(latencyMs) &&
+          latencyMs <= maxLatencyMs &&
+          dayKey !== undefined
+        ) {
           latencyValues.push(latencyMs);
-          const dayKey = formatDayKey(new Date(ts));
           const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
           dailyLatencies.push(latencyMs);
           dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -648,9 +655,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       messageCounts.errors += 1;
     }
 
-    if (ts !== undefined) {
-      const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+    if (dayKey !== undefined && quarterBucket) {
       activityDatesSet.add(dayKey);
       const daily = dailyMessageMap.get(dayKey) ?? {
         date: dayKey,
@@ -675,7 +680,6 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       }
       dailyMessageMap.set(dayKey, daily);
 
-      const quarterBucket = getUtcQuarterHourBucketKey(date);
       const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
         date: quarterBucket.date,
         quarterIndex: quarterBucket.quarterIndex,
@@ -707,9 +711,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     }
 
     addTotals(totals, usageTotals);
-    if (ts !== undefined) {
-      const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+    if (dayKey !== undefined && quarterBucket) {
       const componentTokens =
         usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
       const existingDaily = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
@@ -717,7 +719,6 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       existingDaily.cost += usageTotals.totalCost;
       dailyMap.set(dayKey, existingDaily);
 
-      const quarterBucket = getUtcQuarterHourBucketKey(date);
       const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
         date: quarterBucket.date,
         quarterIndex: quarterBucket.quarterIndex,
@@ -1621,6 +1622,7 @@ async function scanUsageFileForCache(params: {
           sessionFile: params.file.filePath,
           startMs: Number.NEGATIVE_INFINITY,
           endMs: Number.POSITIVE_INFINITY,
+          formatDayKey: createUsageDayKeyFormatter(),
         }) ?? undefined)
       : undefined;
 
@@ -1909,7 +1911,7 @@ export async function loadSessionCostSummaryFromCache(params: {
           sessionFile: params.sessionFile,
           startMs: params.startMs,
           endMs: params.endMs,
-          dayBucket: params.dayBucket,
+          formatDayKey: createUsageDayKeyFormatter(params.dayBucket),
         })
       : null;
   }
@@ -1969,6 +1971,11 @@ export async function loadSessionCostSummariesFromCache(params: {
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const requiresDailyRebucket = params.dayBucket !== undefined;
+  let sharedFormatDayKey: UsageDayKeyFormatter | undefined;
+  // IANA formatter construction is expensive; lazily share it across every
+  // session rebuilt from this cache snapshot.
+  const getFormatDayKey = () =>
+    (sharedFormatDayKey ??= createUsageDayKeyFormatter(params.dayBucket));
   const summaries = params.sessions.map((session, index) => {
     const stat = stats[index];
     const file = stat
@@ -2002,7 +2009,7 @@ export async function loadSessionCostSummariesFromCache(params: {
             sessionFile: session.sessionFile,
             startMs: params.startMs,
             endMs: params.endMs,
-            dayBucket: params.dayBucket,
+            formatDayKey: getFormatDayKey(),
           })
         : null;
     }
@@ -2286,7 +2293,8 @@ export async function loadSessionCostSummary(params: {
     config: params.config,
     resolveCost,
     onEntry: (entry) => {
-      const ts = entry.timestamp?.getTime();
+      const timestamp = entry.timestamp;
+      const ts = timestamp?.getTime();
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
@@ -2295,6 +2303,8 @@ export async function loadSessionCostSummary(params: {
       if (params.endMs !== undefined && ts !== undefined && ts > params.endMs) {
         return;
       }
+      const dayKey = timestamp ? formatDayKey(timestamp) : undefined;
+      const quarterBucket = timestamp ? getUtcQuarterHourBucketKey(timestamp) : undefined;
 
       if (ts !== undefined) {
         if (!firstActivity || ts < firstActivity) {
@@ -2308,27 +2318,24 @@ export async function loadSessionCostSummary(params: {
       if (entry.role === "user") {
         messageCounts.user += 1;
         messageCounts.total += 1;
-        if (entry.timestamp) {
-          lastUserTimestamp = entry.timestamp.getTime();
+        if (ts !== undefined) {
+          lastUserTimestamp = ts;
         }
       }
       if (entry.role === "assistant") {
         messageCounts.assistant += 1;
         messageCounts.total += 1;
-        const tsLocal = entry.timestamp?.getTime();
-        if (tsLocal !== undefined) {
+        if (ts !== undefined) {
           const latencyMs =
             entry.durationMs ??
-            (lastUserTimestamp !== undefined
-              ? Math.max(0, tsLocal - lastUserTimestamp)
-              : undefined);
+            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
-            latencyMs <= MAX_LATENCY_MS
+            latencyMs <= MAX_LATENCY_MS &&
+            dayKey !== undefined
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -2352,8 +2359,7 @@ export async function loadSessionCostSummary(params: {
         messageCounts.errors += 1;
       }
 
-      if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+      if (dayKey !== undefined && quarterBucket) {
         activityDatesSet.add(dayKey);
         const daily = dailyMessageMap.get(dayKey) ?? {
           date: dayKey,
@@ -2368,7 +2374,6 @@ export async function loadSessionCostSummary(params: {
         dailyMessageMap.set(dayKey, daily);
 
         // Per-quarter-hour message counts for precise hourly stats (UTC-based)
-        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
         const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
           date: quarterBucket.date,
           quarterIndex: quarterBucket.quarterIndex,
@@ -2394,8 +2399,7 @@ export async function loadSessionCostSummary(params: {
         applyCostTotal(totals, entry.costTotal);
       }
 
-      if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+      if (dayKey !== undefined && quarterBucket) {
         const entryTokenTotals = computeUsageTokenTotals(entry.usage);
         // Preserve the legacy dailyBreakdown token basis until daily metrics are
         // refactored separately. The precise quarter-hour bucket below uses
@@ -2410,7 +2414,6 @@ export async function loadSessionCostSummary(params: {
               (entry.costBreakdown.cacheWrite ?? 0)
             : (entry.costTotal ?? 0));
 
-        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
         const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
           date: quarterBucket.date,
           quarterIndex: quarterBucket.quarterIndex,
