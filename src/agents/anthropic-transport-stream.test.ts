@@ -3362,7 +3362,7 @@ describe("anthropic transport stream", () => {
     const imageData = Buffer.from("image").toString("base64");
 
     await runTransportStream(
-      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
       {
         messages: [
           {
@@ -3525,6 +3525,52 @@ describe("anthropic transport stream", () => {
       { type: "text", text: expect.stringContaining('{"type":"resource"') },
       { type: "text", text: "after image" },
     ]);
+    expect(toolResult.is_error).toBe(false);
+  });
+
+  it("drops image blocks from tool results for text-only models", async () => {
+    const model = makeAnthropicTransportModel({ input: ["text"] });
+    const imageData = "aW1hZ2VkYXRh";
+    await runTransportStream(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              { type: "image", data: imageData, mimeType: "image/png" },
+              { type: "text", text: "captured screen" },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
+    );
+    const blocks = Array.isArray(toolResult.content) ? toolResult.content : [];
+    const imageBlocks = blocks.filter((b: Record<string, unknown>) => b.type === "image");
+    expect(imageBlocks).toHaveLength(0);
+    // Text content is preserved as a plain string when images are dropped.
+    expect(toolResult.content).toContain("captured screen");
     expect(toolResult.is_error).toBe(false);
   });
 
