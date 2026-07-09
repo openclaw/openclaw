@@ -6,7 +6,7 @@ import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
-import { getImageMetadata } from "../media/image-ops.js";
+import { createImageProcessor, getImageMetadata } from "../media/image-ops.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
@@ -217,4 +217,42 @@ describe("tool image sanitizing", () => {
       },
     ]);
   });
+
+  // Regression for #102323: providers forward media_type verbatim and Anthropic
+  // rejects anything outside jpeg/png/gif/webp with a 400, so an unsupported but
+  // decodable, within-limit image must transcode to a supported type here.
+  it("transcodes an unsupported within-limit media_type to a supported type", async () => {
+    const supported = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+    // Real WebP bytes so the image decodes; base64 sniffing does not cover WebP,
+    // so the block's declared (unsupported) mimeType drives the code path.
+    const png = createSolidPngBuffer(64, 64, { r: 10, g: 200, b: 90 });
+    const webp = (await createImageProcessor().encode(png, { format: "webp" })).data;
+    const base64 = webp.toString("base64");
+
+    for (const mimeType of ["image/heic", "image/tiff", "image/bmp"]) {
+      const out = await sanitizeContentBlocksImages(
+        [{ type: "image" as const, data: base64, mimeType }],
+        "test",
+      );
+      const image = getImageBlock(out);
+      expect(supported.has(image.mimeType ?? "")).toBe(true);
+      expect(image.mimeType).not.toBe(mimeType);
+      expect(image.data.length).toBeGreaterThan(0);
+    }
+  }, 20_000);
+
+  it("keeps a supported within-limit media_type byte-identical", async () => {
+    // Supported types must skip the transcode ladder and pass through unchanged.
+    const png = createSolidPngBuffer(32, 32, { r: 0, g: 0, b: 255 });
+    const webp = (await createImageProcessor().encode(png, { format: "webp" })).data;
+    const base64 = webp.toString("base64");
+
+    const out = await sanitizeContentBlocksImages(
+      [{ type: "image" as const, data: base64, mimeType: "image/webp" }],
+      "test",
+    );
+    const image = getImageBlock(out);
+    expect(image.mimeType).toBe("image/webp");
+    expect(image.data).toBe(base64);
+  }, 20_000);
 });

@@ -10,6 +10,7 @@ import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildImageResizeSideGrid,
+  convertImageToPng,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
@@ -54,6 +55,24 @@ function isTextBlock(block: unknown): block is TextContentBlock {
   }
   const rec = block as Record<string, unknown>;
   return rec.type === "text" && typeof rec.text === "string";
+}
+
+// Inline image types every image-capable provider accepts. Anthropic is the
+// strictest: it rejects any other media_type (e.g. image/heic, image/tiff) with
+// a 400, so unsupported-but-decodable images must transcode to one of these
+// before reaching the provider adapters, which forward media_type verbatim.
+const SUPPORTED_INLINE_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+/** Returns the canonical supported inline mime, or null when transcode is required. */
+function normalizeSupportedImageMime(mimeType: string): string | null {
+  const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const canonical = base === "image/jpg" ? "image/jpeg" : base;
+  return SUPPORTED_INLINE_IMAGE_MIME_TYPES.has(canonical) ? canonical : null;
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
@@ -177,13 +196,26 @@ async function resizeImageBase64IfNeeded(params: {
   width?: number;
   height?: number;
 }> {
-  const buf = Buffer.from(params.base64, "base64");
+  let buf: Buffer = Buffer.from(params.base64, "base64");
+  let base64 = params.base64;
+  let mimeType = params.mimeType;
+  let transcoded = false;
+  // Unsupported-but-decodable types (HEIC, TIFF, BMP, ...) must transcode even
+  // within limits: providers forward media_type verbatim and Anthropic 400s on
+  // anything outside the supported set, so we cannot keep the original bytes.
+  if (normalizeSupportedImageMime(mimeType) === null) {
+    const png = await convertImageToPng(buf);
+    buf = png;
+    base64 = png.toString("base64");
+    mimeType = "image/png";
+    transcoded = true;
+  }
   const headerMeta = readImageMetadataFromHeader(buf);
   if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
     return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-      resized: false,
+      base64,
+      mimeType,
+      resized: transcoded,
       width: headerMeta.width,
       height: headerMeta.height,
     };
@@ -197,9 +229,9 @@ async function resizeImageBase64IfNeeded(params: {
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
     return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-      resized: false,
+      base64,
+      mimeType,
+      resized: transcoded,
       width,
       height,
     };
