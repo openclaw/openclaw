@@ -284,6 +284,7 @@ export const hi: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "चैट खोलें",
     archiveSession: "सत्र संग्रहीत करें",
     restoreSession: "सत्र बहाल करें",
     deleteSessionMenu: "Delete…",

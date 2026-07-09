@@ -288,6 +288,7 @@ export const tr: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Sohbeti aç",
     archiveSession: "Oturumu arşivle",
     restoreSession: "Oturumu geri yükle",
     deleteSessionMenu: "Delete…",

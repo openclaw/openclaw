@@ -835,6 +835,14 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectStagedGatewaySetupLink()",
             to: "private func clearStagedGatewaySetupLink()")
+        let stagedSetupClear = try Self.extract(
+            onboardingSource,
+            from: "private func clearStagedGatewaySetupLink()",
+            to: "private func applyGatewayLink(")
+        let connectionFailure = try Self.extract(
+            onboardingSource,
+            from: "private func setConnectionFailure(_ message: String)",
+            to: "var body: some View")
         let stagedValidation = try #require(stagedSetupConnect.range(of: "guard link.isValidEndpoint"))
         let stagedConsumption = try #require(stagedSetupConnect.range(of: "self.setupLinkStaging.take()"))
         let stagedReset = try #require(
@@ -871,6 +879,10 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectCurrentManualGateway(",
             to: "private func retryLastAttempt(")
+        let onboardingRetry = try Self.extract(
+            onboardingSource,
+            from: "private func retryLastAttempt(",
+            to: "private func gatewayProblemPrimaryActionTitle(")
         let settingsManualConnect = try Self.extract(
             actionsSource,
             from: "func connectManual(setupAttemptID: UUID? = nil) async",
@@ -977,6 +989,17 @@ struct RootTabsSourceGuardTests {
         #expect(stagedSetupConnect.contains(
             "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
         #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(stagedSetupConnect.contains("self.setConnectionFailure(message)"))
+        #expect(connectionFailure.contains("self.localConnectionFailure = message"))
+        #expect(!connectionFailure.contains("self.connectMessage = message"))
+        #expect(connectionFailure.contains("self.statusLine = message"))
+        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains("primaryActionTitle: allowsRetry ? \"Retry\" : nil"))
+        #expect(onboardingSource.contains("onPrimaryAction: onRetry"))
+        #expect(stagedSetupClear.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains(
+            "self.setConnectionFailure(\"No connection to retry. Check the gateway host and port.\")"))
         #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(onboardingGatewayLink.contains("self.gatewayToken = setupAuth.token"))
         #expect(onboardingGatewayLink.contains("self.gatewayPassword = setupAuth.password"))
