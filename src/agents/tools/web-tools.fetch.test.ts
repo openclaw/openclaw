@@ -452,6 +452,8 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as {
       text?: string;
       truncated?: boolean;
+      rawLength?: number;
+      wrappedLength?: number;
       fullOutputPath?: string;
       spilledChars?: number;
       spillTruncated?: boolean;
@@ -463,6 +465,8 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
     expect(details.text).toContain(`Full output: ${details.fullOutputPath}`);
     expect(details.text?.length).toBeLessThanOrEqual(500);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.wrappedLength).toBe(details.text?.length);
     expect(details.spilledChars).toBe(fullText.length);
     expect(details.spillTruncated).toBeUndefined();
     const spilledText = await readFile(details.fullOutputPath, "utf8");

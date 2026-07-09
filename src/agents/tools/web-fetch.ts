@@ -253,7 +253,7 @@ function formatWebFetchTerminalPresentation(result: unknown): { text: string } |
 
 function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedContent {
   if (maxChars <= 0) {
-    return { text: "", truncated: true, rawLength: 0, wrappedLength: 0 };
+    return { text: "", truncated: true, rawLength: value.length, wrappedLength: 0 };
   }
   const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
   const wrapperOverhead = includeWarning
@@ -267,7 +267,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     return {
       text: truncatedWrapper.text,
       truncated: true,
-      rawLength: 0,
+      rawLength: value.length,
       wrappedLength: truncatedWrapper.text.length,
     };
   }
@@ -289,7 +289,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   return {
     text: wrappedText,
     truncated: truncated.truncated,
-    rawLength: truncated.text.length,
+    rawLength: value.length,
     wrappedLength: wrappedText.length,
   };
 }
@@ -337,7 +337,7 @@ async function spillWebFetchContent(
     visible = wrapWebFetchContent(value, maxChars - footer.length);
     text = `${visible.text}${footer}`;
   } else if (compactFooter.length <= maxChars) {
-    visible = { ...wrapped, text: "", rawLength: 0, wrappedLength: 0 };
+    visible = { ...wrapped, text: "", wrappedLength: 0 };
     text = compactFooter;
   }
   return {
