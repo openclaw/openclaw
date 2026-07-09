@@ -70,46 +70,18 @@ describe("resolveSkillWorkshopToolApproval", () => {
     );
   });
 
-  it("bounds approval metadata without dropping required proposal facts", async () => {
+  it("bounds approval metadata without splitting UTF-16 surrogates", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-long-name-");
     const description = "d".repeat(160);
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "n".repeat(240),
-      description,
-      content: "# Long name\n",
-    });
-
-    const result = await resolveSkillWorkshopToolApproval({
-      toolName: "skill_workshop",
-      toolParams: { action: "apply", proposal_id: proposal.record.id },
-      workspaceDir,
-    });
-    const approvalDescription = result?.requireApproval?.description ?? "";
-
-    expect(approvalDescription.length).toBeLessThanOrEqual(512);
-    expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
-    expect(approvalDescription).toContain(`Description: ${description}`);
-    expect(approvalDescription).toContain("Support files: 0");
-    expect(approvalDescription).toContain(
-      `Body size: ${(Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1)} KB`,
-    );
-    expect(approvalDescription).toContain("Target skill: nnn");
-  });
-
-  it("keeps truncated target skill names UTF-16 safe", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-utf16-");
-    const description = "d".repeat(160);
-    const content = "# Unicode name\n";
-    const proposalIdLength = 60 + 1 + 8 + 1 + 10;
-    const fixedLines = [
-      `Proposal ID: ${"p".repeat(proposalIdLength)}`,
+    const content = "# Long name\n";
+    // Long proposal ids use a 60-character skill key, 8-character date, and 10-character suffix.
+    const fixedLength = [
+      `Proposal ID: ${"p".repeat(60)}-00000000-0000000000`,
+      "Target skill: ",
       `Description: ${description}`,
       "Support files: 0",
       `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
-    ];
-    const skillPrefix = "Target skill: ";
-    const fixedLength = fixedLines.join("\n").length + skillPrefix.length + fixedLines.length;
+    ].join("\n").length;
     const availableSkillNameLength = Math.max(
       1,
       PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH - fixedLength,
@@ -127,10 +99,23 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolParams: { action: "apply", proposal_id: proposal.record.id },
       workspaceDir,
     });
+    const approvalDescription = result?.requireApproval?.description ?? "";
+
+    expect(approvalDescription.length).toBeLessThanOrEqual(
+      PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+    );
+    expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
+    expect(approvalDescription).toContain(`Description: ${description}`);
+    expect(approvalDescription).toContain("Support files: 0");
+    expect(approvalDescription).toContain(
+      `Body size: ${(Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1)} KB`,
+    );
     const targetLine = result?.requireApproval?.description.split("\n")[1] ?? "";
 
     expect(targetLine).toBe(`Target skill: ${prefix}…`);
-    expect(targetLine).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(approvalDescription).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
   });
 
   it("renders proposal-controlled fields without approval-line injection", async () => {
