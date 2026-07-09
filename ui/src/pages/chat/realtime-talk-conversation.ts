@@ -112,7 +112,10 @@ function upsertRealtimeConversationEntry(
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
   const entry = state.entries[targetIndex];
-  const updatedText = mergeRealtimeTranscriptText(entry.text, text, isFinal);
+  const updatedText =
+    role === "assistant"
+      ? mergeAssistantTranscriptText(entry.text, text, isFinal)
+      : mergeRealtimeTranscriptText(entry.text, text, isFinal);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
       ? state.entries
@@ -199,6 +202,39 @@ function shouldStartNewRealtimeUserEntry(
     }
   }
   return true;
+}
+
+// Assistant transcripts are verbatim fragment streams (providers concatenate
+// deltas into the transcript), unlike user ASR updates that re-send or rewrite
+// utterances. The user-side word-boundary spacing heuristic must not run here:
+// model deltas split inside words, so it would mangle "ChatGPT" into "Chat G PT".
+function mergeAssistantTranscriptText(
+  existing: string,
+  incoming: string,
+  isFinal: boolean,
+): string {
+  if (existing.trim() === "") {
+    return incoming.trimStart();
+  }
+  if (!isFinal) {
+    return `${existing}${assistantFragmentSeparator(existing, incoming)}${incoming}`;
+  }
+  // Final shape differs by provider: OpenAI-style finals carry the full
+  // transcript (replace), Google Live finals carry only the last fragment
+  // (append). Replace only when incoming restates what already streamed.
+  if (incoming === existing || incoming.startsWith(existing)) {
+    return incoming;
+  }
+  if (looksLikeTranscriptReplacement(existing, incoming)) {
+    return incoming;
+  }
+  return `${existing}${assistantFragmentSeparator(existing, incoming)}${incoming}`;
+}
+
+// Space only sentence-boundary joins ("Ready." + "What next?"): TTS phrases can
+// arrive as separate fragments without whitespace. Mid-word joins stay verbatim.
+function assistantFragmentSeparator(existing: string, incoming: string): string {
+  return /[.!?…]$/.test(existing) && /^[\p{L}\p{N}]/u.test(incoming) ? " " : "";
 }
 
 function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {

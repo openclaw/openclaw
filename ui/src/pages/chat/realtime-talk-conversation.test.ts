@@ -49,6 +49,85 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
+  it("concatenates streamed assistant deltas verbatim without injecting spaces", () => {
+    let state = createRealtimeTalkConversationState();
+
+    const deltas = ["I", "'m", " Chat", "G", "PT", ",", " a", " con", "vers", "ational", " AI"];
+    for (const [index, delta] of deltas.entries()) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text: delta,
+        final: false,
+        nowMs: index + 1,
+      });
+    }
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "I'm ChatGPT, a conversational AI", isStreaming: true },
+    ]);
+  });
+
+  it("keeps per-character assistant deltas readable", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const [index, char] of "Hello there.".split("").entries()) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text: char,
+        final: false,
+        nowMs: index + 1,
+      });
+    }
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Hello there.", isStreaming: true },
+    ]);
+  });
+
+  it("replaces streamed assistant text with the authoritative final transcript", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const delta of ["I'm Chat", "GPT."]) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text: delta,
+        final: false,
+        nowMs: 1,
+      });
+    }
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "I'm ChatGPT, nice to meet you.",
+      final: true,
+      nowMs: 2,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "I'm ChatGPT, nice to meet you.", isStreaming: false },
+    ]);
+  });
+
+  it("appends a final assistant fragment that only carries the transcript tail", () => {
+    let state = createRealtimeTalkConversationState();
+
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Sure, the lights are ",
+      final: false,
+      nowMs: 1,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "off now.",
+      final: true,
+      nowMs: 2,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Sure, the lights are off now.", isStreaming: false },
+    ]);
+  });
+
   it("keeps a late final rewrite in the original user bubble", () => {
     let state = createRealtimeTalkConversationState();
 
