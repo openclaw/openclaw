@@ -50,6 +50,9 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
 const DEFAULT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+// A raw WebSocket open is not recovery. Only a provider-ready connection
+// that survives this window earns a fresh retry budget.
+const RECONNECT_STABLE_RESET_MS = 30_000;
 // Bound inbound messages before ws buffers them for JSON parsing. The 16 MiB cap
 // matches realtime voice; ws rejects larger messages with close 1009 before
 // they reach onMessage, replacing its 100 MiB client default.
@@ -81,6 +84,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private queuedAudio: Buffer[] = [];
   private queuedBytes = 0;
   private ready = false;
+  private readySinceMs: number | undefined;
   private reconnectAttempts = 0;
   private reconnecting = false;
   private suppressReconnect = false;
@@ -111,6 +115,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   async connect(): Promise<void> {
     this.closed = false;
     this.suppressReconnect = false;
+    this.readySinceMs = undefined;
     this.reconnectAttempts = 0;
     await this.doConnect();
   }
@@ -132,6 +137,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.closed = true;
     this.connected = false;
     this.ready = false;
+    this.readySinceMs = undefined;
     this.queuedAudio = [];
     this.queuedBytes = 0;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -205,6 +211,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         settled = true;
         clearConnectTimeout();
         this.ready = true;
+        this.readySinceMs = Date.now();
         this.flushQueuedAudio();
         resolve();
       };
@@ -264,7 +271,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         this.ws.on("open", () => {
           opened = true;
           this.connected = true;
-          this.reconnectAttempts = 0;
           this.captureLocalOpen();
           try {
             this.options.onOpen?.(this.transport);
@@ -303,8 +309,13 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         this.ws.on("close", (code, reasonBuffer) => {
           clearConnectTimeout();
           this.captureClose(code, reasonBuffer);
+          const readyForMs = this.readySinceMs === undefined ? 0 : Date.now() - this.readySinceMs;
           this.connected = false;
           this.ready = false;
+          this.readySinceMs = undefined;
+          if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
+            this.reconnectAttempts = 0;
+          }
           if (this.closeTimer) {
             clearTimeout(this.closeTimer);
             this.closeTimer = undefined;
@@ -422,6 +433,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     }
     this.connected = false;
     this.ready = false;
+    this.readySinceMs = undefined;
     if (this.ws) {
       this.ws.close(1000, "Transcription session closed");
       this.ws = null;
