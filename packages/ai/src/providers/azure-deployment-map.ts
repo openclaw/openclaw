@@ -24,49 +24,63 @@ export function parseAzureDeploymentNameMap(value: string | undefined): Map<stri
 }
 
 // Azure deployment maps come from a stable env var, so the resolver runs on hot paths
-// (streams, lifecycle hooks) with the same string every call. Cache the parsed lookup map
+// (streams, lifecycle hooks) with the same string every call. Cache the parsed lookups
 // per raw string to avoid re-parsing, with a small bound so memory stays flat even if a
 // caller ever varies the input.
 const MAX_CACHED_DEPLOYMENT_MAPS = 32;
-const deploymentNameMapCache = new Map<string, Map<string, string>>();
 
-/** Returns a cached, lowercased-key lookup map for a deployment-map string. */
-function getCachedDeploymentNameMap(deploymentMap: string | undefined): Map<string, string> {
+interface DeploymentNameLookup {
+  /** Exact-case keys, preserving the original deployment-map semantics. */
+  exact: Map<string, string>;
+  /** Lowercased keys, used only as a case-insensitive fallback. */
+  lower: Map<string, string>;
+}
+
+const deploymentLookupCache = new Map<string, DeploymentNameLookup>();
+
+/** Returns a cached exact + lowercased lookup pair for a deployment-map string. */
+function getCachedDeploymentLookup(deploymentMap: string | undefined): DeploymentNameLookup {
   const cacheKey = deploymentMap ?? "";
-  const cached = deploymentNameMapCache.get(cacheKey);
+  const cached = deploymentLookupCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  // Normalize keys to lowercase so lookups are case-insensitive; deployment names
-  // (the values) stay verbatim because Azure requires the exact deployment name.
-  const normalized = new Map<string, string>();
-  for (const [modelId, deploymentName] of parseAzureDeploymentNameMap(deploymentMap)) {
-    normalized.set(modelId.toLowerCase(), deploymentName);
+  const exact = parseAzureDeploymentNameMap(deploymentMap);
+  // Lowercased index for the case-insensitive fallback; deployment names (the values)
+  // stay verbatim because Azure requires the exact deployment name.
+  const lower = new Map<string, string>();
+  for (const [modelId, deploymentName] of exact) {
+    lower.set(modelId.toLowerCase(), deploymentName);
   }
-  if (deploymentNameMapCache.size >= MAX_CACHED_DEPLOYMENT_MAPS) {
-    const oldest = deploymentNameMapCache.keys().next().value;
+  if (deploymentLookupCache.size >= MAX_CACHED_DEPLOYMENT_MAPS) {
+    const oldest = deploymentLookupCache.keys().next().value;
     if (oldest !== undefined) {
-      deploymentNameMapCache.delete(oldest);
+      deploymentLookupCache.delete(oldest);
     }
   }
-  deploymentNameMapCache.set(cacheKey, normalized);
-  return normalized;
+  const lookup: DeploymentNameLookup = { exact, lower };
+  deploymentLookupCache.set(cacheKey, lookup);
+  return lookup;
 }
 
-/** Resolves the Azure deployment name for a model id, falling back to the model id. */
+/**
+ * Resolves the Azure deployment name for a model id, falling back to the model id.
+ *
+ * An exact-case match always wins, so configs that intentionally distinguish keys by
+ * case keep their exact mappings; a case-insensitive match is only used as a fallback
+ * (e.g. `GPT-4o` against a `gpt-4o=...` map) to avoid 404s from casing differences.
+ */
 export function resolveAzureDeploymentNameFromMap(params: {
   modelId: string;
   deploymentMap?: string;
 }): string {
-  return (
-    getCachedDeploymentNameMap(params.deploymentMap).get(params.modelId.toLowerCase()) ||
-    params.modelId
-  );
+  const { exact, lower } = getCachedDeploymentLookup(params.deploymentMap);
+  return exact.get(params.modelId) ?? lower.get(params.modelId.toLowerCase()) ?? params.modelId;
 }
 
 export const testing = {
-  getCachedDeploymentNameMap,
+  getCachedDeploymentLookup,
   resetDeploymentNameMapCache: (): void => {
-    deploymentNameMapCache.clear();
+    deploymentLookupCache.clear();
   },
 };

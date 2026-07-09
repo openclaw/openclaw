@@ -77,13 +77,22 @@ describe("Azure deployment name map", () => {
     ).toBe("GPT-4o");
   });
 
-  it("caches the parsed lookup map per deployment-map string", () => {
-    const first = testing.getCachedDeploymentNameMap("gpt-4o=deployment-gpt-4o");
-    const second = testing.getCachedDeploymentNameMap("gpt-4o=deployment-gpt-4o");
-    // Same input string must reuse the same parsed Map instead of re-parsing.
+  it("prefers an exact-case match over the case-insensitive fallback", () => {
+    // Keys differing only by case must keep their exact mappings (backward compatible).
+    const deploymentMap = "GPT-4o=prod-a,gpt-4o=prod-b";
+    expect(resolveAzureDeploymentNameFromMap({ modelId: "GPT-4o", deploymentMap })).toBe("prod-a");
+    expect(resolveAzureDeploymentNameFromMap({ modelId: "gpt-4o", deploymentMap })).toBe("prod-b");
+    // A request matching neither exact key falls back case-insensitively.
+    expect(resolveAzureDeploymentNameFromMap({ modelId: "Gpt-4O", deploymentMap })).toBe("prod-b");
+  });
+
+  it("caches the parsed lookup per deployment-map string", () => {
+    const first = testing.getCachedDeploymentLookup("gpt-4o=deployment-gpt-4o");
+    const second = testing.getCachedDeploymentLookup("gpt-4o=deployment-gpt-4o");
+    // Same input string must reuse the same parsed lookup instead of re-parsing.
     expect(second).toBe(first);
 
-    const other = testing.getCachedDeploymentNameMap("gpt-5=deployment-gpt-5");
+    const other = testing.getCachedDeploymentLookup("gpt-5=deployment-gpt-5");
     expect(other).not.toBe(first);
   });
 });
