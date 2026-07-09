@@ -24,6 +24,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.j
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
+import { encryptAuthProfilePayload, decryptAuthProfileStoreRaw } from "./crypto.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -103,7 +104,7 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
           .select("store_json")
           .where("store_key", "=", PRIMARY_ROW_KEY),
       );
-      return parseJsonCell(row?.store_json);
+      return decryptAuthProfileStoreRaw(parseJsonCell(row?.store_json));
     }
     const row = executeSqliteQueryTakeFirstSync(
       db,
@@ -135,7 +136,7 @@ export function readPersistedAuthProfileStoreRaw(
         .select("store_json")
         .where("store_key", "=", PRIMARY_ROW_KEY),
     );
-    return parseJsonCell(row?.store_json);
+    return decryptAuthProfileStoreRaw(parseJsonCell(row?.store_json));
   }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   if (!fs.existsSync(databasePath)) {
@@ -173,6 +174,9 @@ export function writePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
 ): void {
+  // Encrypt at the storage boundary when an encryption key is configured.
+  // Without a key the payload is stored as plaintext JSON (backward compat).
+  const storePayload = encryptAuthProfilePayload(payload) ?? payload;
   const write = (target: OpenClawAgentDatabase) => {
     const db = getAuthProfileKysely(target.db);
     executeSqliteQuerySync(
@@ -181,12 +185,12 @@ export function writePersistedAuthProfileStoreRaw(
         .insertInto("auth_profile_store")
         .values({
           store_key: PRIMARY_ROW_KEY,
-          store_json: JSON.stringify(payload),
+          store_json: JSON.stringify(storePayload),
           updated_at: Date.now(),
         })
         .onConflict((conflict) =>
           conflict.column("store_key").doUpdateSet({
-            store_json: JSON.stringify(payload),
+            store_json: JSON.stringify(storePayload),
             updated_at: Date.now(),
           }),
         ),
