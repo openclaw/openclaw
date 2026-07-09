@@ -38,7 +38,9 @@ enum MacNodeCodexThreadCatalog {
         }
 
         var isInvalidRequest: Bool {
-            if case .invalidParams = self { return true }
+            if case .invalidParams = self {
+                return true
+            }
             return false
         }
     }
@@ -242,7 +244,7 @@ enum MacNodeCodexThreadCatalog {
             guard let number = value as? NSNumber,
                   CFGetTypeID(number) != CFBooleanGetTypeID(),
                   number.doubleValue.rounded() == number.doubleValue,
-                  (1 ... 100).contains(number.intValue)
+                  (1...100).contains(number.intValue)
             else {
                 throw CatalogError.invalidParams("limit must be an integer from 1 to 100")
             }
@@ -421,17 +423,16 @@ enum MacNodeCodexThreadCatalog {
     }
 
     private static func sourceName(_ value: Any?) -> String? {
-        let raw: String?
-        if let source = self.nonEmptyString(value) {
-            raw = source
+        let raw: String? = if let source = self.nonEmptyString(value) {
+            source
         } else if let source = value as? [String: Any],
                   let custom = self.nonEmptyString(source["custom"])
         {
-            raw = "custom:\(custom)"
+            "custom:\(custom)"
         } else if let source = value as? [String: Any] {
-            raw = source.keys.sorted().first
+            source.keys.min()
         } else {
-            raw = nil
+            nil
         }
         return self.boundedString(
             raw,
@@ -441,7 +442,7 @@ enum MacNodeCodexThreadCatalog {
 }
 
 private final class CodexAppServerThreadListSession: @unchecked Sendable {
-    struct Output: Sendable {
+    struct Output {
         var listResultData: Data
     }
 
@@ -575,7 +576,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
             self.stdoutBuffer.removeSubrange(...newline)
             guard !line.isEmpty else { continue }
             self.handleLine(Data(line))
-            if self.finished { return }
+            if self.finished {
+                return
+            }
         }
     }
 
@@ -681,7 +684,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
             if count == 0 {
                 return ReadChunk(data: data, reachedEOF: true)
             }
-            if errno == EINTR { continue }
+            if errno == EINTR {
+                continue
+            }
             if errno == EAGAIN || errno == EWOULDBLOCK {
                 return ReadChunk(data: data, reachedEOF: false)
             }
@@ -695,10 +700,18 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
             let count = buffer.withUnsafeMutableBytes { bytes in
                 Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
             }
-            if count > 0 { continue }
-            if count == 0 { return true }
-            if errno == EINTR { continue }
-            if errno == EAGAIN || errno == EWOULDBLOCK { return false }
+            if count > 0 {
+                continue
+            }
+            if count == 0 {
+                return true
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                return false
+            }
             return true
         }
     }
