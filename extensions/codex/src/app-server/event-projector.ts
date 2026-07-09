@@ -69,6 +69,30 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
+// Rate-limited diagnostics for protocol drift at the Codex projector boundary.
+// Codex pin bumps can introduce new statuses, methods, or correlation shapes;
+// per-key cooldowns prevent log floods from a mismatched binary while still
+// surfacing each distinct drift shape at least once.
+const UNKNOWN_STATUS_LOG_COOLDOWN_MS = 5_000;
+const UNKNOWN_METHOD_LOG_COOLDOWN_MS = 5_000;
+const MISMATCHED_NOTIFICATION_LOG_COOLDOWN_MS = 5_000;
+
+function createLogCooldown(intervalMs: number) {
+  const lastLogMsByKey = new Map<string, number>();
+  return (key: string, now = Date.now()): boolean => {
+    const lastLogMs = lastLogMsByKey.get(key) ?? 0;
+    if (now - lastLogMs < intervalMs) {
+      return false;
+    }
+    lastLogMsByKey.set(key, now);
+    return true;
+  };
+}
+
+const unknownStatusCooldown = createLogCooldown(UNKNOWN_STATUS_LOG_COOLDOWN_MS);
+const unknownMethodCooldown = createLogCooldown(UNKNOWN_METHOD_LOG_COOLDOWN_MS);
+const mismatchedNotificationCooldown = createLogCooldown(MISMATCHED_NOTIFICATION_LOG_COOLDOWN_MS);
+
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
@@ -668,6 +692,21 @@ export class CodexAppServerEventProjector {
         return;
       }
     } else if (!this.isNotificationForTurn(params)) {
+      const actualThreadId = readCodexNotificationThreadId(params);
+      const actualTurnId = readCodexNotificationTurnId(params);
+      if (
+        mismatchedNotificationCooldown(
+          `${notification.method}:${actualThreadId ?? "none"}:${actualTurnId ?? "none"}`,
+        )
+      ) {
+        embeddedAgentLog.warn("codex app-server notification does not match active turn", {
+          method: notification.method,
+          expectedThreadId: this.threadId,
+          expectedTurnId: this.turnId,
+          actualThreadId,
+          actualTurnId,
+        });
+      }
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -723,6 +762,13 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        if (unknownMethodCooldown(notification.method)) {
+          embeddedAgentLog.warn("codex app-server unknown notification method", {
+            method: notification.method,
+            threadId: this.threadId,
+            turnId: this.turnId,
+          });
+        }
         break;
     }
   }
@@ -2538,7 +2584,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
   return isJsonObject(error) ? readString(error, "message") : undefined;
@@ -2685,7 +2730,24 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
-  return "completed";
+  if (status === "completed") {
+    return "completed";
+  }
+  // Some Codex item types (e.g. webSearch completions) legitimately omit the
+  // status field. Treat a missing status as completed; only fail closed and log
+  // when an explicit status value is unrecognized, so future pin bumps remain
+  // diagnosable without breaking valid statusless items.
+  if (status === undefined) {
+    return "completed";
+  }
+  if (unknownStatusCooldown(status)) {
+    embeddedAgentLog.warn("codex app-server unknown item status treated as failed", {
+      itemId: item.id,
+      itemType: item.type,
+      rawStatus: status,
+    });
+  }
+  return "failed";
 }
 
 function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
