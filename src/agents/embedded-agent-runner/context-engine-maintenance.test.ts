@@ -9,10 +9,7 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import {
-  getTaskFlowById,
-  resetTaskFlowRegistryForTests,
-} from "../../tasks/task-flow-registry.js";
+import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
   getTaskById,
   listTasksForOwnerKey,
