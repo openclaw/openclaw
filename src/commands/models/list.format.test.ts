@@ -43,6 +43,10 @@ describe("truncate", () => {
     expect(result).toBe("");
     expect(hasLoneSurrogate(result)).toBe(false);
   });
+
+  it("sanitizes terminal controls before measuring visible width", () => {
+    expect(truncate("ab\u001B]2;hidden\u0007cd", 6)).toBe("abcd");
+  });
 });
 
 describe("pad", () => {

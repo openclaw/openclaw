@@ -1,5 +1,6 @@
 /** Formatting helpers for model-list terminal tables. */
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
 
 const TRUNCATED_SUFFIX = "...";
@@ -45,11 +46,12 @@ export const formatTag = (tag: string, rich: boolean) => {
 
 /** Truncates model-list cells to terminal visible width with an ASCII ellipsis. */
 export const truncate = (value: string, max: number) => {
-  if (visibleWidth(value) <= max) {
-    return value;
+  const sanitized = sanitizeTerminalText(value);
+  if (visibleWidth(sanitized) <= max) {
+    return sanitized;
   }
   if (max <= TRUNCATED_SUFFIX.length) {
-    return truncateToVisibleWidth(value, max);
+    return truncateToVisibleWidth(sanitized, max);
   }
-  return `${truncateToVisibleWidth(value, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+  return `${truncateToVisibleWidth(sanitized, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };
