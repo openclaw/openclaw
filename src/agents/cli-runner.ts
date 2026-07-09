@@ -1116,8 +1116,8 @@ export async function runPreparedCliAgent(
         // A stateless backend may use the live transport for the current process,
         // but its emitted id must not become durable continuity.
         const skipTranscriptProbe =
-          context.preparedBackend.backend.sessionMode !== "none" &&
-          shouldUseClaudeLiveSession(context);
+          shouldUseClaudeLiveSession(context) &&
+          context.preparedBackend.backend.sessionMode !== "none";
         const bindingFlushOk = await isCliBindingFlushed(
           effectiveCliSessionId,
           params.provider,
