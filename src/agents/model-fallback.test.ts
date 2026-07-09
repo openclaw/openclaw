@@ -637,13 +637,13 @@ describe("runWithModelFallback", () => {
     if (!expectError) {
       run.mockResolvedValueOnce("ok");
     }
-    let result: string | undefined;
+    let result: unknown;
     let thrown: unknown;
 
     try {
       result = (
         await runWithModelFallback({
-          cfg: makeDiagnosticFallbackConfig([...refs.slice(1)]),
+          cfg: makeDiagnosticFallbackConfig(refs.slice(1)),
           ...candidates[0]!,
           sessionId: "session:failover-diagnostics",
           sessionKey: "agent:test:failover-diagnostics",
