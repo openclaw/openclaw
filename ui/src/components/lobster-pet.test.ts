@@ -5,7 +5,9 @@ import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
   createLobsterPetLook,
+  isLobsterMoltLoad,
   isLobsterNightTime,
+  isLobsterTwinLoad,
   lobsterPetName,
   lobsterPetSeed,
   resolveLobsterPetMode,
@@ -392,6 +394,94 @@ describe("lobster pet element", () => {
       }
     }
     expect(seen.has("nap") || seen.has("bubble")).toBe(true);
+  });
+
+  it("molt loads shed a fading shell and size up one tier", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    // Seed 2 plans a molt (and no twin); probed via the pure planners.
+    expect(isLobsterMoltLoad(2)).toBe(true);
+    expect(isLobsterTwinLoad(2)).toBe(false);
+    const preScale = createLobsterPetLook(2).scale;
+    const element = createPet(2);
+    await arrive(element);
+
+    const act = await advanceUntilAct(element, 30_000);
+    expect(act).toBe("molt");
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.molt + 100);
+    await element.updateComplete;
+
+    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
+    const mainStyle =
+      element.querySelector(".lobster-pet:not(.lobster-pet--shell)")?.getAttribute("style") ?? "";
+    const tiers = [1.7, 2, 2.5];
+    const expected = tiers[Math.min(tiers.indexOf(preScale) + 1, tiers.length - 1)];
+    expect(mainStyle).toContain(`--lob-scale:${expected}`);
+
+    // The shell fades out after a minute; only one molt per load.
+    await vi.advanceTimersByTimeAsync(61_000);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
+    const nextAct = await advanceUntilAct(element, 30_000);
+    expect(nextAct).not.toBe("molt");
+  });
+
+  it("shooing the pet also clears a fading molt shell", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(2);
+    await arrive(element);
+    await advanceUntilAct(element, 30_000);
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.molt + 100);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
+
+    element
+      .querySelector(".lobster-pet:not(.lobster-pet--shell)")
+      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
+  });
+
+  it("twin loads bring a mini copycat that leaves with the visit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    expect(isLobsterTwinLoad(21)).toBe(true);
+    const element = createPet(21);
+    await arrive(element);
+
+    const sprites = element.querySelectorAll(".lobster-pet:not(.lobster-pet--shell)");
+    expect(sprites.length).toBe(2);
+    const twin = element.querySelector(".lobster-pet--twin");
+    expect(twin).not.toBeNull();
+    expect(twin?.getAttribute("title")).toMatch(/ Jr\.$/);
+
+    const departed = await advanceUntil(
+      element,
+      () => element.querySelectorAll(".lobster-pet").length === 0,
+      400_000,
+    );
+    expect(departed).toBe(true);
+  });
+
+  it("plain loads stay solo and never molt", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    expect(isLobsterMoltLoad(4)).toBe(false);
+    expect(isLobsterTwinLoad(4)).toBe(false);
+    const element = createPet(4);
+    await arrive(element);
+
+    expect(element.querySelectorAll(".lobster-pet").length).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      const act = await advanceUntilAct(element, 30_000);
+      expect(act).not.toBe("molt");
+      if (act) {
+        await vi.advanceTimersByTimeAsync(
+          LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
+        );
+      }
+    }
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {
