@@ -1461,6 +1461,7 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      config: {},
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
@@ -1527,7 +1528,10 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({ githubToken: sourceSecret });
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: {},
+    });
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
     expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
