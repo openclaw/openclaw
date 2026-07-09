@@ -57,6 +57,7 @@ describe("secret ref resolver", () => {
   let execPlainScriptPath = "";
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
+  let execInheritedErrorScriptPath = "";
   let execInvalidJsonScriptPath = "";
   let execFastExitScriptPath = "";
 
@@ -161,6 +162,16 @@ describe("secret ref resolver", () => {
     await writeSecureFile(
       execMissingIdScriptPath,
       ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{}}\''].join("\n"),
+      0o700,
+    );
+
+    execInheritedErrorScriptPath = path.join(sharedExecDir, "resolver-inherited-error.sh");
+    await writeSecureFile(
+      execInheritedErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}\'',
+      ].join("\n"),
       0o700,
     );
 
@@ -443,6 +454,23 @@ describe("secret ref resolver", () => {
         },
       ),
     ).rejects.toThrow('response missing id "toString"');
+  });
+
+  itPosix("ignores inherited exec response errors", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execInheritedErrorScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).resolves.toBe("resolved");
   });
 
   itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
