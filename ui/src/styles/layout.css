@@ -5,7 +5,8 @@
 .shell {
   --shell-pad: 16px;
   --shell-gap: 16px;
-  --shell-nav-width: 258px;
+  --shell-nav-expanded-width: 258px;
+  --shell-nav-width: var(--shell-nav-expanded-width);
   --shell-nav-rail-width: 78px;
   --shell-topbar-height: 44px;
   --shell-focus-duration: 200ms;
@@ -348,6 +349,19 @@
 
 .shell-nav-backdrop {
   display: none;
+}
+
+.sidebar-resizer {
+  grid-area: nav;
+  align-self: stretch;
+  justify-self: end;
+  z-index: 20;
+  width: 1px;
+  background: transparent;
+}
+
+.shell:has(.sidebar-resizer.dragging) {
+  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {

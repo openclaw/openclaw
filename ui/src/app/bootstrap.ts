@@ -158,6 +158,7 @@ function createApplicationNavigationPreferences(
   let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
+    navWidth: settings.navWidth,
     sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
     sidebarMoreExpanded: settings.sidebarMoreExpanded,
   };
@@ -171,6 +172,7 @@ function createApplicationNavigationPreferences(
       const nextSnapshot = { ...snapshot, ...patch };
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
+        nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
         nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
       ) {
@@ -178,6 +180,7 @@ function createApplicationNavigationPreferences(
       }
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
+        navWidth: nextSnapshot.navWidth,
         sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
         sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
       });
