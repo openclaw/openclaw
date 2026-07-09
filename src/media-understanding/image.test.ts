@@ -265,7 +265,7 @@ describe("describeImageWithModel", () => {
 
   it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
     getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "oc-sent-v1-0123456789abcdef01234567",
+      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
       source: "test",
       mode: "api-key",
     });
@@ -283,7 +283,7 @@ describe("describeImageWithModel", () => {
     });
 
     expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
-      "oc-sent-v1-0123456789abcdef01234567",
+      "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
       "MiniMax VLM request",
     );
     const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
