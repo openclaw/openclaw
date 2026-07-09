@@ -67,6 +67,7 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("❤️")).toBe(2);
     expect(visibleWidth("✈")).toBe(1);
     expect(visibleWidth("✈️")).toBe(2);
+    expect(visibleWidth("⌚\uFE0E")).toBe(2);
     expect(visibleWidth("📸\uFE0E")).toBe(2);
     expect(visibleWidth("1️")).toBe(1);
     expect(visibleWidth("1⃣")).toBe(2);
