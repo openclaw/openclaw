@@ -454,6 +454,7 @@ describe("models.authStatus", () => {
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.displayName).toBe("Claude");
     expect(result.providers[0]?.usage).toEqual({
+      providerId: "anthropic",
       windows: [{ label: "5h", usedPercent: 22 }],
       plan: "Max (20x)",
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
@@ -490,6 +491,7 @@ describe("models.authStatus", () => {
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.usage).toEqual({
+      providerId: "deepseek",
       windows: [],
       summary: "Balance ¥42.50",
     });

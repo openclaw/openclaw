@@ -39,6 +39,7 @@ describe("collectProviderQuotaGroups", () => {
 
   it("collapses providers sharing identical usage into one group", () => {
     const usage: ModelAuthStatusProvider["usage"] = {
+      providerId: "anthropic",
       plan: "Max (20x)",
       windows: [
         { label: "5h", usedPercent: 21.6, resetAt: 1_800_000_000_000 },
@@ -73,8 +74,9 @@ describe("collectProviderQuotaGroups", () => {
       {
         ts: 1,
         providers: [
-          providerWithUsage("anthropic", { windows: [] }),
+          providerWithUsage("anthropic", { providerId: "anthropic", windows: [] }),
           providerWithUsage("openrouter", {
+            providerId: "openrouter",
             windows: [],
             billing: [
               { type: "balance", amount: 10, unit: "USD" },
@@ -82,6 +84,7 @@ describe("collectProviderQuotaGroups", () => {
             ],
           }),
           providerWithUsage("openai", {
+            providerId: "openai",
             windows: [{ label: "Week", usedPercent: 140 }],
           }),
         ],
@@ -100,7 +103,7 @@ describe("collectProviderQuotaGroups", () => {
   });
 
   it("applies the provider filter", () => {
-    const usage = { windows: [{ label: "5h", usedPercent: 10 }] };
+    const usage = { providerId: "anthropic", windows: [{ label: "5h", usedPercent: 10 }] };
     const groups = collectProviderQuotaGroups(
       { ts: 1, providers: [providerWithUsage("anthropic", usage)] },
       () => false,

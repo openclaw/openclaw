@@ -472,11 +472,18 @@ export function formatClaudePlanLabel(
   return tier ? `${label} (${tier})` : label;
 }
 
-// Best-effort plan label from the local Claude CLI login. The usage endpoint
-// does not report the plan, and when multiple Claude accounts are in play the
-// CLI login may differ from the profile that fetched usage; a mislabeled plan
-// chip is acceptable, a second network call is not.
-function resolveClaudeCliPlanLabel(): string | undefined {
+// Best-effort plan label. Preferred source is plan metadata on the resolved
+// auth profile (captured when the external CLI login was synced — the only
+// prompt-free source on keychain-backed macOS installs). Fallback reads the
+// Claude CLI credential file without keychain prompts for file-based logins.
+// When multiple Claude accounts are in play the CLI login may differ from the
+// profile that fetched usage; a mislabeled plan chip is acceptable, a second
+// network call is not.
+function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
+  const fromAuth = formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
+  if (fromAuth) {
+    return fromAuth;
+  }
   const credential = readClaudeCliCredentialsCached({
     allowKeychainPrompt: false,
     ttlMs: 5 * 60_000,
@@ -502,6 +509,6 @@ export async function fetchAnthropicUsage(
   if (snapshot.error || snapshot.plan || snapshot.windows.length === 0) {
     return snapshot;
   }
-  const plan = resolveClaudeCliPlanLabel();
+  const plan = resolveClaudePlanLabel(ctx);
   return plan ? { ...snapshot, plan } : snapshot;
 }

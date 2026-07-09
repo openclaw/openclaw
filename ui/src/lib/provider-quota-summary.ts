@@ -129,16 +129,25 @@ export function collectProviderQuotaGroups(
     if (windows.length === 0 && budgets.length === 0) {
       continue;
     }
+    // Session rows report canonical model providers while auth rows may use
+    // CLI aliases (claude-cli vs anthropic); expose both ids for matching.
+    const providerIds = [
+      ...new Set([provider.provider, usage.providerId].filter((id): id is string => Boolean(id))),
+    ];
     const identity = JSON.stringify([provider.displayName, windows, budgets]);
     const existing = groups.find((group) => group.identity === identity);
     if (existing) {
-      existing.group.providers.push(provider.provider);
+      for (const id of providerIds) {
+        if (!existing.group.providers.includes(id)) {
+          existing.group.providers.push(id);
+        }
+      }
       continue;
     }
     groups.push({
       identity,
       group: {
-        providers: [provider.provider],
+        providers: providerIds,
         displayName: provider.displayName,
         ...(usage.plan ? { plan: usage.plan } : {}),
         windows,

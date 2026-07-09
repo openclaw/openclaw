@@ -180,6 +180,23 @@ describe("Anthropic provider usage", () => {
     expect(formatClaudePlanLabel(subscription, tier)).toBe(expected);
   });
 
+  it("prefers plan metadata from the resolved auth profile over CLI reads", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: "oauth-token",
+      subscriptionType: "pro",
+      rateLimitTier: "default_pro",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.plan).toBe("Pro");
+  });
+
   it("labels OAuth usage snapshots with the local Claude CLI plan", async () => {
     const fetchFn = vi.fn(
       async () =>

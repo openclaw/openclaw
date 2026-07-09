@@ -79,6 +79,12 @@ export type ModelAuthStatusProvider = {
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
   usage?: {
+    /**
+     * Normalized usage provider id this payload was fetched under (e.g.
+     * "anthropic" for a claude-cli auth row). Session rows report canonical
+     * model providers, so consumers must match against both ids.
+     */
+    providerId: UsageProviderId;
     windows: UsageWindow[];
     summary?: string;
     plan?: string;
@@ -293,14 +299,16 @@ function mapProvider(
       reasonCode: prof.reasonCode,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
     })),
-    usage: usage
-      ? {
-          windows: usage.windows,
-          ...(usage.summary ? { summary: usage.summary } : {}),
-          ...(usage.plan ? { plan: usage.plan } : {}),
-          ...(usage.billing?.length ? { billing: usage.billing } : {}),
-        }
-      : undefined,
+    usage:
+      usage && usageKey
+        ? {
+            providerId: usageKey,
+            windows: usage.windows,
+            ...(usage.summary ? { summary: usage.summary } : {}),
+            ...(usage.plan ? { plan: usage.plan } : {}),
+            ...(usage.billing?.length ? { billing: usage.billing } : {}),
+          }
+        : undefined,
   };
 }
 

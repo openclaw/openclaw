@@ -476,7 +476,7 @@ describe("context notice", () => {
                 displayName: "OpenAI",
                 status: "ok",
                 profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-                usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+                usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
               },
             ],
           },
@@ -516,6 +516,7 @@ describe("context notice", () => {
           status: "ok",
           profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
           usage: {
+            providerId: "anthropic",
             plan: "Max (20x)",
             windows: [
               { label: "5h", usedPercent: 22, resetAt: Date.now() + 2 * 3_600_000 },
@@ -531,6 +532,7 @@ describe("context notice", () => {
           status: "ok",
           profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
           usage: {
+            providerId: "anthropic",
             plan: "Max (20x)",
             windows: [
               { label: "5h", usedPercent: 22, resetAt: Date.now() + 2 * 3_600_000 },
@@ -552,19 +554,16 @@ describe("context notice", () => {
       contextTokens: 1_000_000,
       estimatedCostUsd: 0.02,
       model: "claude-fable-5",
-      modelProvider: "claude-cli",
+      // sessions.list canonicalizes CLI aliases (claude-cli -> anthropic); the
+      // popover must match plan usage through usage.providerId, not the auth
+      // row's provider id.
+      modelProvider: "anthropic",
     };
     const container = document.createElement("div");
     render(
       renderContextNotice(session, 1_000_000, {
-        messages: [
-          {
-            role: "assistant",
-            provider: "claude-cli",
-            model: "claude-fable-5",
-            cost: { input: 0.01, output: 0.01 },
-          },
-        ],
+        // Trailing user turn: no assistant cost stats to fall back on.
+        messages: [{ role: "user", content: "hi" }],
         providerUsage: { modelAuthStatusResult: authStatus },
       }),
       container,

@@ -27,6 +27,7 @@ const authStatusWithUsage = {
       status: "ok",
       profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
       usage: {
+        providerId: "openai",
         windows: [
           { label: "5h", usedPercent: 42, resetAt: Date.now() + 3 * 3_600_000 },
           { label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 },
@@ -45,6 +46,7 @@ const claudeSubscriptionAuthStatus = {
       status: "ok",
       profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
       usage: {
+        providerId: "anthropic",
         plan: "Max (20x)",
         windows: [
           { label: "5h", usedPercent: 22, resetAt: Date.now() + 4 * 3_600_000 + 48 * 60_000 },
@@ -62,7 +64,7 @@ const claudeSubscriptionSessions = {
   defaults: {
     contextTokens: 1_000_000,
     model: "claude-fable-5",
-    modelProvider: "claude-cli",
+    modelProvider: "anthropic",
   },
   path: "",
   sessions: [
@@ -76,7 +78,9 @@ const claudeSubscriptionSessions = {
       kind: "direct",
       label: "Main",
       model: "claude-fable-5",
-      modelProvider: "claude-cli",
+      // sessions.list canonicalizes CLI aliases; plan matching goes through
+      // the auth row's usage.providerId.
+      modelProvider: "anthropic",
       outputTokens: 830,
       status: "done",
       totalTokens: 78_700,
