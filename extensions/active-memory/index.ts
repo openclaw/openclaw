@@ -3760,7 +3760,6 @@ export default definePluginEntry({
 });
 
 const testing = {
-  buildQuery,
   buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,

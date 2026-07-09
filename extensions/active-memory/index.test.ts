@@ -71,27 +71,6 @@ describe("active-memory plugin", () => {
     expect(query).not.toContain("\uD83D");
   });
 
-  it("keeps recent recall query turn snippets UTF-16 well-formed", () => {
-    const query = testing.buildQuery({
-      latestUserMessage: "what now?",
-      recentTurns: [
-        { role: "user", text: `${"u".repeat(39)}🚀 user tail` },
-        { role: "assistant", text: `${"a".repeat(39)}🚀 assistant tail` },
-      ],
-      config: testing.normalizePluginConfig({
-        queryMode: "recent",
-        recentUserTurns: 1,
-        recentAssistantTurns: 1,
-        recentUserChars: 40,
-        recentAssistantChars: 40,
-      }),
-    });
-
-    expect(query).toContain(`user: ${"u".repeat(39)}`);
-    expect(query).toContain(`assistant: ${"a".repeat(39)}`);
-    expect(query).not.toContain("\uD83D");
-  });
-
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
@@ -5116,6 +5095,48 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("keeps recent conversation context UTF-16 well-formed", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+      recentUserTurns: 1,
+      recentAssistantTurns: 1,
+      recentUserChars: 40,
+      recentAssistantChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what now?",
+        messages: [
+          { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
+          { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain(
+      [
+        "Conversation context:",
+        "Recent conversation tail:",
+        `user: ${"u".repeat(39)}`,
+        `assistant: ${"a".repeat(39)}`,
+        "",
+        "Latest user message:",
+        "what now?",
+      ].join("\n"),
+    );
+    expect(prompt).not.toContain("\uD83D");
   });
 
   it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
