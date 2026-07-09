@@ -415,14 +415,24 @@ describe("parseAt", () => {
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+  it("lists 'last' plus bundled channel types even with no plugins loaded", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+    const options = getCronChannelOptions();
+    // The thin CLI client never loads channel plugin runtimes, so the bundled
+    // channel catalog is the source that keeps help/validation truthful there.
+    expect(options.startsWith("last|")).toBe(true);
+    for (const type of ["slack", "telegram", "discord"]) {
+      expect(options.split("|")).toContain(type);
+    }
+    expect(options).not.toContain("<channel-id>");
   });
 
-  it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
-    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
+  it("appends loaded external channel plugin ids without duplicating bundled ones", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "acme" }, { id: "slack" }]);
+    const parts = getCronChannelOptions().split("|");
+    expect(parts).toContain("acme");
+    // "slack" is bundled, so a loaded plugin with the same id must not duplicate.
+    expect(parts.filter((part) => part === "slack")).toHaveLength(1);
   });
 });
 

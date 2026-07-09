@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { CHANNEL_IDS, normalizeChatChannelId } from "../../channels/ids.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -63,13 +64,72 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
   return env;
 }
 
-export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
-  const pluginIds = listChannelPlugins()
-    .map((plugin) => plugin.id)
-    .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
-};
+// Delivery/failure-alert `--channel` flags name a channel plugin TYPE (slack,
+// telegram, ...) plus the synthetic "last", never a channel id. Slack calls an
+// id like "C0BFYTH0BSP" a "channel ID", so users pass it here by mistake; the id
+// belongs in --to. Known types come from the generated bundled-channel catalog
+// (CHANNEL_IDS, available even in the thin CLI client that never loads channel
+// plugin runtimes) plus any loaded channel plugins (populated in the Gateway /
+// in-process contexts). The `cron` CLI deliberately skips plugin/config load, so
+// this set can miss an installed custom channel; it is a hint source only, never
+// a hard gate (the Gateway stays authoritative for routing).
+function listKnownCronChannelTypes(): string[] {
+  const types: string[] = ["last"];
+  const seen = new Set(types);
+  for (const id of [...CHANNEL_IDS, ...listChannelPlugins().map((plugin) => plugin.id)]) {
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      types.push(id);
+    }
+  }
+  return types;
+}
+
+export const getCronChannelOptions = () => listKnownCronChannelTypes().join("|");
+
+// Recognizes bundled channel ids/aliases and any loaded plugin id. Returns false
+// for a value that no known channel type matches (e.g. a Slack channel id).
+function isRecognizedCronChannelType(value: string): boolean {
+  if (value.toLowerCase() === "last") {
+    return true;
+  }
+  // Bundled channel ids and their aliases resolve without any plugin runtime.
+  if (normalizeChatChannelId(value)) {
+    return true;
+  }
+  const normalized = value.toLowerCase();
+  return listChannelPlugins().some((plugin) => (plugin.id ?? "").toLowerCase() === normalized);
+}
+
+/**
+ * Warns (without blocking) when a `--channel` / `--failure-alert-channel` value
+ * looks like a channel id rather than a channel type, so the likely mistake
+ * surfaces immediately at `cron add/edit` instead of only as a runtime
+ * `channel_not_found` delivery failure.
+ *
+ * This is a hint, not a gate: the `cron` CLI does not load plugin/config state,
+ * so an installed custom channel may be unrecognized here. We never reject the
+ * value - the Gateway remains authoritative for whether the channel can route.
+ */
+export function warnUnrecognizedCronChannelType(
+  rawValue: unknown,
+  flags: { option: string; dest: string },
+  runtime: RuntimeEnv = defaultRuntime,
+): void {
+  const value = normalizeOptionalString(rawValue);
+  if (!value || isRecognizedCronChannelType(value)) {
+    return;
+  }
+  runtime.error(
+    theme.warn(
+      `warning: "${value}" is not a recognized channel type for ${flags.option} ` +
+        `(known: ${listKnownCronChannelTypes().join("|")}). ` +
+        `If you meant a channel id, pass it with ${flags.dest} instead ` +
+        `(e.g. a Slack "C0..." id goes in ${flags.dest}, not ${flags.option}). ` +
+        `Proceeding; delivery will fail if the channel cannot route.`,
+    ),
+  );
+}
 
 function toLocalIsoTime(value: unknown): string | undefined {
   return typeof value === "number" && Number.isFinite(value)

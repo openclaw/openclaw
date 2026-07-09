@@ -14,6 +14,7 @@ import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  warnUnrecognizedCronChannelType,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
@@ -142,7 +143,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
       .option("--no-deliver", "Disable runner fallback delivery")
       .option("--webhook <url>", "POST the finished payload to a webhook URL")
-      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
+      .option(
+        "--channel <type>",
+        `Delivery channel type (${getCronChannelOptions()}); the channel id goes in --to`,
+        "last",
+      )
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
@@ -189,6 +194,12 @@ export function registerCronAddCommand(cron: Command) {
               typeof cmd?.getOptionValueSource === "function"
                 ? (name: string) => cmd.getOptionValueSource(name)
                 : () => undefined;
+
+            // Hint (non-blocking) when a channel id was passed as a channel type;
+            // only for user-supplied values, not the "last" default.
+            if (optionSource("channel") === "cli") {
+              warnUnrecognizedCronChannelType(opts.channel, { option: "--channel", dest: "--to" });
+            }
 
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;

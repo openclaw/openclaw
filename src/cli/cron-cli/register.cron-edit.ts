@@ -16,6 +16,7 @@ import {
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  warnUnrecognizedCronChannelType,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronFallbacks,
@@ -161,7 +162,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
       .option("--no-deliver", "Disable runner fallback delivery")
       .option("--webhook <url>", "POST the finished payload to a webhook URL")
-      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
+      .option(
+        "--channel <type>",
+        `Delivery channel type (${getCronChannelOptions()}); the channel id goes in --to`,
+      )
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
@@ -181,8 +185,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--no-failure-alert", "Disable failure alerts for this job")
       .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
       .option(
-        "--failure-alert-channel <channel>",
-        `Failure alert channel (${getCronChannelOptions()})`,
+        "--failure-alert-channel <type>",
+        `Failure alert channel type (${getCronChannelOptions()}); the channel id goes in --failure-alert-to`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
@@ -225,6 +229,18 @@ export function registerCronEditCommand(cron: Command) {
           ].filter(Boolean).length;
           if (deliveryModeFlagCount > 1) {
             throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
+          }
+          // Hint (non-blocking) when a channel id was passed as a channel type, so
+          // it surfaces here instead of only as a runtime channel_not_found
+          // delivery error. --clear-* flags leave these unset.
+          if (typeof opts.channel === "string") {
+            warnUnrecognizedCronChannelType(opts.channel, { option: "--channel", dest: "--to" });
+          }
+          if (typeof opts.failureAlertChannel === "string") {
+            warnUnrecognizedCronChannelType(opts.failureAlertChannel, {
+              option: "--failure-alert-channel",
+              dest: "--failure-alert-to",
+            });
           }
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
