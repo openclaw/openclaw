@@ -523,6 +523,16 @@ struct GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
     }
 
+    @Test func `gateway url validation copy matches trusted plaintext hosts`() {
+        let message = GatewayRemoteConfig.directGatewayUrlValidationMessage
+        #expect(message.contains("public hosts"))
+        #expect(message.contains("localhost"))
+        #expect(message.contains("LAN"))
+        #expect(message.contains(".local"))
+        #expect(message.contains("Tailnet"))
+        #expect(!message.contains("only for localhost"))
+    }
+
     @Test func `missing transport infers direct from private remote URL`() {
         let root: [String: Any] = [
             "gateway": [
