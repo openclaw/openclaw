@@ -246,7 +246,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "222222222222222222": { allow: true, requireMention: false },
+                    "222222222222222222": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -256,7 +256,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "333333333333333333": { allow: true, requireMention: false },
+                    "333333333333333333": { enabled: true, requireMention: false },
                   },
                 },
               },
