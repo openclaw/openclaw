@@ -382,6 +382,8 @@ function createPreparedSlackMessage(params?: {
       runtime: {},
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock, update: chatUpdateMock } } },
+      // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+      client: { chat: { postMessage: postMessageMock, update: chatUpdateMock } },
       teamId: "T1",
       botUserId: "U_OPENCLAW",
       botId: "B_OPENCLAW",

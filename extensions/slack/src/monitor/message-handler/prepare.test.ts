@@ -4286,6 +4286,8 @@ describe("prepareSlackMessage sender prefix", () => {
       accountId: "default",
       botToken: "xoxb",
       app: { client: {} },
+      // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+      client: {},
       runtime: {
         log: vi.fn(),
         error: vi.fn(),

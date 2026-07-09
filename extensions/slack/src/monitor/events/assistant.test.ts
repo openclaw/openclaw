@@ -29,6 +29,11 @@ function createHarness(overrides?: {
         handlers[name] = handler;
       },
     } as unknown as App,
+    // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+    client: {
+      conversations: { replies },
+      chat: { update },
+    },
     runtime: { error: vi.fn() },
     botToken: "xoxb-test",
     botUserId: "B1",

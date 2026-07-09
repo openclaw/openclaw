@@ -4,12 +4,14 @@ import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { resetSlackSharedSocketGroupsForTests } from "./monitor/shared-socket-group.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
 type SlackProviderMonitor = (params: {
   botToken: string;
   appToken: string;
+  accountId?: string;
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
   channelRuntime?: ChannelRuntimeSurface;
@@ -85,52 +87,110 @@ export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 
 export const getSlackClient = () => ensureSlackTestRuntime().client;
 
+// Default bot token used by startSlackMonitor() when a test doesn't pass its
+// own. Every per-account WebClient the code under test constructs (via
+// createSlackWebClient) is keyed by the token it was constructed with, so a
+// second account started with a different botToken gets its own, independent
+// mock client — see getSlackClientForToken.
+export const DEFAULT_SLACK_TEST_BOT_TOKEN = "bot-token";
+
+// Get-or-create a mock client dedicated to `token`, for tests that need a
+// SECOND, genuinely distinct account identity (e.g. shared-app-token
+// multi-account tests). Call this to register/configure the second account's
+// client BEFORE starting its monitor. Tokens nobody explicitly registers this
+// way keep resolving to the single default client (see
+// resolveSlackClientForToken) so every pre-existing test that passes a custom
+// botToken without expecting a distinct mock keeps working unchanged.
+export const getSlackClientForToken = (token: string): SlackClient =>
+  ensureSlackClientForToken(token);
+
+function resolveSlackClientForToken(token: string): SlackClient {
+  const { clientsByToken, client } = ensureSlackTestRuntime();
+  return clientsByToken.get(token) ?? client;
+}
+
+function createMockSlackClient(): SlackClient {
+  return {
+    auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
+    conversations: {
+      info: vi.fn().mockResolvedValue({
+        channel: { name: "dm", is_im: true },
+      }),
+      replies: vi.fn().mockResolvedValue({ messages: [] }),
+      history: vi.fn().mockResolvedValue({ messages: [] }),
+    },
+    users: {
+      info: vi.fn().mockResolvedValue({
+        user: { profile: { display_name: "Ada" } },
+      }),
+    },
+    assistant: {
+      threads: {
+        setStatus: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    },
+    reactions: {
+      add: (...args: unknown[]) => {
+        slackTestState.reactionAddMock(...args);
+        return slackTestState.reactMock(...args);
+      },
+      remove: (...args: unknown[]) => {
+        slackTestState.reactionRemoveMock(...args);
+        return slackTestState.reactMock(...args);
+      },
+    },
+  };
+}
+
+function ensureSlackClientForToken(token: string): SlackClient {
+  const { clientsByToken } = ensureSlackTestRuntime();
+  let client = clientsByToken.get(token);
+  if (!client) {
+    client = createMockSlackClient();
+    clientsByToken.set(token, client);
+  }
+  return client;
+}
+
 function ensureSlackTestRuntime(): {
   handlers: Map<string, SlackHandler>;
+  // Raw per-event registrations, in registration order, keyed by event name.
+  // Real Bolt invokes every listener registered for a matching event (this is
+  // exactly what makes sharing one App across accounts work); `handlers`
+  // above stores one composed function per name so getSlackHandlerOrThrow()
+  // keeps its existing single-handler contract while still invoking all of
+  // them.
+  rawEventHandlersByName: Map<string, SlackHandler[]>;
   client: SlackClient;
+  clientsByToken: Map<string, SlackClient>;
 } {
   const globalState = globalThis as {
     __slackHandlers?: Map<string, SlackHandler>;
+    __slackRawEventHandlersByName?: Map<string, SlackHandler[]>;
     __slackClient?: SlackClient;
+    __slackClientsByToken?: Map<string, SlackClient>;
   };
   if (!globalState["__slackHandlers"]) {
     globalState["__slackHandlers"] = new Map<string, SlackHandler>();
   }
+  if (!globalState["__slackRawEventHandlersByName"]) {
+    globalState["__slackRawEventHandlersByName"] = new Map<string, SlackHandler[]>();
+  }
+  if (!globalState["__slackClientsByToken"]) {
+    globalState["__slackClientsByToken"] = new Map<string, SlackClient>();
+  }
   if (!globalState["__slackClient"]) {
-    globalState["__slackClient"] = {
-      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
-      conversations: {
-        info: vi.fn().mockResolvedValue({
-          channel: { name: "dm", is_im: true },
-        }),
-        replies: vi.fn().mockResolvedValue({ messages: [] }),
-        history: vi.fn().mockResolvedValue({ messages: [] }),
-      },
-      users: {
-        info: vi.fn().mockResolvedValue({
-          user: { profile: { display_name: "Ada" } },
-        }),
-      },
-      assistant: {
-        threads: {
-          setStatus: vi.fn().mockResolvedValue({ ok: true }),
-        },
-      },
-      reactions: {
-        add: (...args: unknown[]) => {
-          slackTestState.reactionAddMock(...args);
-          return slackTestState.reactMock(...args);
-        },
-        remove: (...args: unknown[]) => {
-          slackTestState.reactionRemoveMock(...args);
-          return slackTestState.reactMock(...args);
-        },
-      },
-    };
+    globalState["__slackClient"] = createMockSlackClient();
+    globalState["__slackClientsByToken"].set(
+      DEFAULT_SLACK_TEST_BOT_TOKEN,
+      globalState["__slackClient"],
+    );
   }
   return {
     handlers: globalState["__slackHandlers"],
+    rawEventHandlersByName: globalState["__slackRawEventHandlersByName"],
     client: globalState["__slackClient"],
+    clientsByToken: globalState["__slackClientsByToken"],
   };
 }
 
@@ -153,16 +213,19 @@ export function startSlackMonitor(
   opts?: {
     botToken?: string;
     appToken?: string;
+    accountId?: string;
+    config?: Record<string, unknown>;
     channelRuntime?: ChannelRuntimeSurface;
     runtime?: RuntimeEnv;
   },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
-    botToken: opts?.botToken ?? "bot-token",
+    botToken: opts?.botToken ?? DEFAULT_SLACK_TEST_BOT_TOKEN,
     appToken: opts?.appToken ?? "app-token",
+    accountId: opts?.accountId,
     abortSignal: controller.signal,
-    config: slackTestState.config,
+    config: opts?.config ?? slackTestState.config,
     channelRuntime: opts?.channelRuntime,
     runtime: opts?.runtime,
   });
@@ -260,7 +323,15 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     user: { profile: { display_name: "Ada" } },
   });
   client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
+  const { clientsByToken, rawEventHandlersByName } = ensureSlackTestRuntime();
   getSlackHandlers()?.clear();
+  rawEventHandlersByName.clear();
+  // Any per-token WebClient created by a previous test (e.g. a second
+  // account in a shared-app-token test) must not leak into the next test;
+  // only the default token's client (reset above) survives.
+  clientsByToken.clear();
+  clientsByToken.set(DEFAULT_SLACK_TEST_BOT_TOKEN, client);
+  resetSlackSharedSocketGroupsForTests();
 }
 
 vi.mock("./monitor/config.runtime.js", async () => {
@@ -328,7 +399,7 @@ vi.mock("./monitor/conversation.runtime.js", async () => {
 });
 
 vi.mock("@slack/bolt", () => {
-  const { handlers, client: slackClient } = ensureSlackTestRuntime();
+  const { handlers, rawEventHandlersByName, client: slackClient } = ensureSlackTestRuntime();
   class App {
     client = slackClient;
     receiver: unknown;
@@ -341,6 +412,14 @@ vi.mock("@slack/bolt", () => {
       this.middlewares.push(middleware);
     }
     event(name: string, handler: SlackHandler) {
+      // Real Bolt invokes every listener registered for a matching event —
+      // this is the mechanism a shared App relies on to demux multiple
+      // accounts' handlers. Track all registrations for `name` and, on
+      // dispatch, run every one of them (each account's own
+      // shouldDropMismatchedSlackEvent filter decides whether it acts).
+      const registered = rawEventHandlersByName.get(name) ?? [];
+      registered.push(handler);
+      rawEventHandlersByName.set(name, registered);
       handlers.set(name, async (args: unknown) => {
         const eventArgs =
           args && typeof args === "object" && !Array.isArray(args)
@@ -349,7 +428,9 @@ vi.mock("@slack/bolt", () => {
         const run = async (index: number): Promise<void> => {
           const middleware = this.middlewares[index];
           if (!middleware) {
-            await handler(args);
+            for (const registeredHandler of rawEventHandlersByName.get(name) ?? []) {
+              await registeredHandler(args);
+            }
             return;
           }
           await middleware({
@@ -386,4 +467,16 @@ vi.mock("@slack/bolt", () => {
     SocketModeReceiver,
     default: { App, HTTPReceiver, SocketModeReceiver },
   };
+});
+
+// createSlackWebClient()/createSlackWriteClient() construct a real
+// `new WebClient(token, options)`. Route that through the same per-token
+// mock registry as app.client so provider.ts's per-account client (used for
+// auth.test() and ctx.client) resolves to the SAME mock object tests already
+// assert against — for the default token this is literally getSlackClient().
+vi.mock("@slack/web-api", () => {
+  const WebClient = vi.fn(function WebClientMock(token: string) {
+    return resolveSlackClientForToken(token);
+  });
+  return { WebClient };
 });

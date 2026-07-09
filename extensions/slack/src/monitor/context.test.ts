@@ -1,5 +1,6 @@
 // Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
@@ -20,6 +21,9 @@ function createTestContext(params?: {
     accountId: "default",
     botToken: "xoxb-test",
     app: { client: params?.appClient ?? {} } as App,
+    // Source reads ctx.client (per-account WebClient), not ctx.app.client;
+    // reuse the same mock so existing appClient assertions keep observing it.
+    client: (params?.appClient ?? {}) as WebClient,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
     botId: "B_BOT",

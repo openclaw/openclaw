@@ -447,6 +447,9 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       runtime: { log: () => {}, error: () => {} },
       botToken: "xoxb-trace",
       app: { client },
+      // Source reads ctx.client (per-account WebClient), not ctx.app.client;
+      // reuse the same recording client so all wire calls stay captured.
+      client,
       teamId: TEAM_ID,
       botUserId: "UBOT",
       botId: "BBOT",
