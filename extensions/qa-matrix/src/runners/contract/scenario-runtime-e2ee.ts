@@ -1017,7 +1017,8 @@ async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext)
   result: MatrixQaE2eeBootstrapResult;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(context.driverAccessToken)],
   });
   try {
@@ -1053,7 +1054,8 @@ async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
   verification: Awaited<ReturnType<MatrixQaE2eeScenarioClient["verifyWithRecoveryKey"]>>;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: params.context.baseUrl,
+    targetBaseUrl: params.context.faultProxyTargetBaseUrl ?? params.context.baseUrl,
+    ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
   const recoveryClient = await createMatrixQaE2eeScenarioClient({
@@ -1386,7 +1388,8 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
     configPath,
   });
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
   });
   let gatewayPatched = false;
@@ -2236,7 +2239,8 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     throw new Error("Matrix E2EE CLI bootstrap-failure login did not return a device id");
   }
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(cliDevice.accessToken)],
   });
   const cli = await createMatrixQaCliE2eeSetupRuntime({

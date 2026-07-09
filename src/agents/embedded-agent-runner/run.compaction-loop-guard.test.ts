@@ -27,6 +27,7 @@ import {
   mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -99,6 +100,7 @@ async function executeWrappedToolOutcome(
 describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
     // Re-import after the harness reset so we share module instances with
     // the runner. The runner imports both modules through its own graph.
     ({ diagnosticSessionStates, getDiagnosticSessionState } =

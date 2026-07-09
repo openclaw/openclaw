@@ -9,6 +9,7 @@ import {
   formatSessionGoalStatus,
   getSessionEntry,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -31,6 +32,7 @@ const GOAL_ACTIONS = new Set([
   "complete",
   "create",
   "done",
+  "edit",
   "pause",
   "resume",
   "set",
@@ -195,6 +197,20 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
+      case "edit": {
+        const objective = normalizeOptionalString(parsed.text);
+        if (!objective) {
+          return goalReply("Usage: /goal edit <objective>");
+        }
+        const goal = await updateSessionGoalObjective({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          objective,
+        });
+        syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
+        return goalReply(`Goal updated: ${goal.objective}`);
+      }
       case "pause": {
         const goal = await updateSessionGoalStatus({
           sessionKey: params.sessionKey,
@@ -256,7 +272,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
       }
       default:
         return goalReply(
-          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         );
     }
   } catch (error) {

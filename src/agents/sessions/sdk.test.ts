@@ -3,6 +3,10 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
+import {
+  createUserTurnTranscriptRecorder,
+  takeRuntimeUserTurnTranscriptContext,
+} from "../../sessions/user-turn-transcript.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -188,6 +192,39 @@ describe("AgentSession getLastAssistantText", () => {
   });
 });
 
+describe("AgentSession queued user turns", () => {
+  it("carries prepared transcript context on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "visible group prompt",
+        sender: { id: "user-42", name: "Ada" },
+      },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+
+    await session.steer("runtime group prompt", undefined, recorder);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "runtime group prompt" }],
+    });
+    if (!runtimeMessage) {
+      throw new Error("expected queued runtime message");
+    }
+    expect(takeRuntimeUserTurnTranscriptContext(runtimeMessage)).toMatchObject({
+      message: {
+        role: "user",
+        content: "visible group prompt",
+        __openclaw: { senderId: "user-42", senderName: "Ada" },
+      },
+      recorder,
+    });
+  });
+});
+
 describe("createAgentSession attribution headers", () => {
   it("tolerates Bedrock models that do not expose baseUrl", async () => {
     const options = await createSessionAndStreamModel(
@@ -296,6 +333,37 @@ describe("createAgentSession tool defaults", () => {
     session.setActiveToolsByName(["bash", "custom_lookup"]);
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+  });
+
+  it("preserves channel-progress visibility for custom tools", async () => {
+    const hiddenTool: ToolDefinition = {
+      name: "internal_wait",
+      label: "Internal Wait",
+      hideFromChannelProgress: true,
+      description: "Waits for internal work.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [hiddenTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.agent.state.tools).toEqual([
+      expect.objectContaining({
+        name: "internal_wait",
+        hideFromChannelProgress: true,
+      }),
+    ]);
   });
 
   it("preserves an exact base system prompt when active tools change", async () => {

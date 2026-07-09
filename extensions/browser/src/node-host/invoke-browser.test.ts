@@ -289,11 +289,16 @@ describe("runBrowserProxyCommand", () => {
     await result;
   });
 
-  it("keeps non-timeout browser errors intact", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 500,
-      body: { error: "tab not found" },
-    });
+  it.each([
+    { status: 500, body: { error: "tab not found" }, expected: "500: tab not found" },
+    {
+      status: 404,
+      body: { error: 'tab not found: browser tab "abc"' },
+      expected: "404: tab not found",
+    },
+    { status: 503, body: { error: "" }, expected: "HTTP 503" },
+  ])("preserves legacy node errors without envelope opt-in: $expected", async (response) => {
+    dispatcherMocks.dispatch.mockResolvedValue(response);
 
     await expect(
       runBrowserProxyCommand(
@@ -304,7 +309,52 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow("tab not found");
+    ).rejects.toThrow(response.expected);
+  });
+
+  it("preserves only validated browser error metadata in the proxy envelope", async () => {
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 409,
+      body: {
+        error: "headed mode needs a display",
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "config",
+          displayPresent: false,
+          remediation: "untrusted",
+        },
+        untrusted: "drop me",
+      },
+    });
+
+    const result = JSON.parse(
+      await runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/start",
+          profile: "openclaw",
+          errorEnvelope: "browser-v1",
+        }),
+      ),
+    );
+
+    expect(result).toEqual({
+      error: {
+        status: 409,
+        body: {
+          error: "headed mode needs a display",
+          reason: "no_display_for_headed_profile",
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "config",
+            displayPresent: false,
+          },
+        },
+      },
+    });
   });
 
   it("rejects unauthorized query.profile when allowProfiles is configured", async () => {

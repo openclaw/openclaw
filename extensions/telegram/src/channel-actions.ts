@@ -11,6 +11,7 @@ import type {
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectTelegramAccount } from "./account-inspect.js";
@@ -22,12 +23,7 @@ import {
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
 
-let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
-
-async function loadTelegramActionRuntime() {
-  telegramActionRuntimePromise ??= import("./action-runtime.js");
-  return await telegramActionRuntimePromise;
-}
+const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
 export const telegramMessageActionRuntime = {
   handleTelegramAction: async (

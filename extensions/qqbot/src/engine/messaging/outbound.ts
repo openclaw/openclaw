@@ -33,6 +33,7 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -53,6 +54,7 @@ import {
   buildMediaTarget,
   parseTarget,
   resolveOutboundMediaPath,
+  sendAutoDetectedMedia,
   sendDocument,
   sendPhoto,
   sendVideoMsg,
@@ -78,6 +80,7 @@ import {
 
 const isImageFile = coreIsImageFile;
 const isVideoFile = coreIsVideoFile;
+
 const mediaPathDecodeLog = {
   info: (message: string) => debugLog(`[qqbot] sendText: ${message}`),
   error: (message: string) => debugError(`[qqbot] sendText: ${message}`),
@@ -99,7 +102,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
-      { to, text: text?.slice(0, 50), replyToId, accountId: account.accountId },
+      { to, text: truncateUtf16Safe(text, 50), replyToId, accountId: account.accountId },
       null,
       2,
     ),
@@ -198,7 +201,14 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
     debugLog(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-    const mediaTarget = buildMediaTarget({ to, account, replyToId });
+    const mediaTarget = buildMediaTarget({
+      to,
+      account,
+      replyToId,
+      mediaAccess: ctx.mediaAccess,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      mediaReadFile: ctx.mediaReadFile,
+    });
     let lastResult: OutboundResult = { channel: "qqbot" };
 
     for (const item of sendQueue) {
@@ -222,7 +232,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             timestamp: result.timestamp,
             refIdx: result.ext_info?.ref_idx,
           };
-          debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+          debugLog(`[qqbot] sendText: Sent text part: ${truncateUtf16Safe(item.content, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
         } else if (item.type === "voice") {
@@ -244,6 +254,9 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             accountId: account.accountId,
             replyToId,
             account,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
           });
         }
       } catch (err) {
@@ -317,15 +330,26 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
 
-  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
-    allowMissingLocalPath: true,
+  const target = buildMediaTarget({
+    to,
+    account,
+    replyToId,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
   });
+  const shouldResolveLocalMediaPath = !ctx.mediaAccess?.readFile && !ctx.mediaReadFile;
+  const resolvedMediaPath = shouldResolveLocalMediaPath
+    ? resolveOutboundMediaPath(ctx.mediaUrl, "media", {
+        allowMissingLocalPath: true,
+        extraLocalRoots: target.mediaLocalRoots ? [...target.mediaLocalRoots] : undefined,
+        workspaceDir: target.mediaAccess?.workspaceDir,
+      })
+    : { ok: true as const, mediaPath: ctx.mediaUrl };
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaUrl = resolvedMediaPath.mediaPath;
-
-  const target = buildMediaTarget({ to, account, replyToId });
 
   if (isAudioFile(mediaUrl, mimeType)) {
     const formats =
@@ -364,7 +388,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isAudioFile(mediaUrl, mimeType) &&
     !isVideoFile(mediaUrl, mimeType)
   ) {
-    const result = await sendDocument(target, mediaUrl);
+    const result = await sendAutoDetectedMedia(target, mediaUrl);
     if (!result.error && text?.trim()) {
       await sendTextAfterMedia(target, text);
     }

@@ -8,10 +8,11 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type {
-  ContextEngine,
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
+import {
+  resolveCompactionSuccessorTranscript,
+  type ContextEngine,
+  type ContextEngineRuntimeContext,
+  type ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -44,7 +45,6 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
@@ -441,8 +441,9 @@ export async function compactEmbeddedAgentSession(
             reason: formatErrorMessage(compactErr),
           };
         }
-        const delegatedSessionId = result.result?.sessionId;
-        const delegatedSessionFile = result.result?.sessionFile;
+        const delegatedSuccessor = resolveCompactionSuccessorTranscript(result);
+        const delegatedSessionId = delegatedSuccessor.sessionId;
+        const delegatedSessionFile = delegatedSuccessor.sessionFile;
         const delegatedRotatedTranscript =
           (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
           (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
@@ -537,6 +538,9 @@ export async function compactEmbeddedAgentSession(
                 compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: postCompactionSessionFile,
+                ...(postCompactionSessionId !== params.sessionId
+                  ? { previousSessionId: params.sessionId }
+                  : {}),
               },
               afterHookCtx,
             );
@@ -554,22 +558,19 @@ export async function compactEmbeddedAgentSession(
           attemptNativeHarnessCompaction
         ) {
           try {
-            secondaryNativeHarnessCompaction = await compactWithSafetyTimeout(
-              (compactAbortSignal) =>
-                maybeCompactAgentHarnessSession(
-                  {
-                    ...params,
-                    sessionId: postCompactionSessionId,
-                    sessionFile: postCompactionSessionFile,
-                    contextEngine,
-                    contextTokenBudget,
-                    contextEngineRuntimeContext,
-                    abortSignal: compactAbortSignal,
-                  },
-                  { nativeCompactionRequest: "after_context_engine" },
-                ),
-              resolveCompactionTimeoutMs(params.config),
-              params.abortSignal ? { abortSignal: params.abortSignal } : undefined,
+            // The native bridge owns its terminal-event watchdog. Keep this lane held until
+            // that bridge settles; an outer timeout would release transcript ownership while
+            // the harness could still be compacting the same session.
+            secondaryNativeHarnessCompaction = await maybeCompactAgentHarnessSession(
+              {
+                ...params,
+                sessionId: postCompactionSessionId,
+                sessionFile: postCompactionSessionFile,
+                contextEngine,
+                contextTokenBudget,
+                contextEngineRuntimeContext,
+              },
+              { nativeCompactionRequest: "after_context_engine" },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
               log.warn(

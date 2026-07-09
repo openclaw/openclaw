@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -792,9 +793,12 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
   const activeBundleTools = applyFinalEffectiveToolPolicy({
     bundledTools: params.bundleRuntime.tools,
     config: params.cfg,
-    agentId: params.agentId,
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: params.cfg,
+      agentId: params.agentId,
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+    }),
     warn: () => {},
     toolPolicyAuditLogLevel: "debug",
   });
@@ -1002,9 +1006,12 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
     applyFinalEffectiveToolPolicy({
       bundledTools: collectBundleMcpDiagnosticSentinels(params),
       config: params.cfg,
-      agentId: params.agentId,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: params.cfg,
+        agentId: params.agentId,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
       warn: () => {},
       toolPolicyAuditLogLevel: "debug",
     }).length > 0

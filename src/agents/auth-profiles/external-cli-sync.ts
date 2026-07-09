@@ -174,8 +174,21 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+function hasManagedProviderOAuth(
+  store: AuthProfileStore,
+  providerConfig: ExternalCliSyncProvider,
+): boolean {
+  return Object.values(store.profiles).some(
+    (credential) =>
+      credential?.type === "oauth" &&
+      listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
+      hasInlineOAuthTokenMaterial(credential),
+  );
+}
+
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
+  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   allowInlineOAuthTokenMaterial?: boolean;
@@ -185,31 +198,14 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
+  if (provider.bootstrapOnly && hasManagedProviderOAuth(params.store, provider)) {
+    return null;
+  }
   if (
     provider.bootstrapOnly &&
     !params.allowInlineOAuthTokenMaterial &&
     hasInlineOAuthTokenMaterial(params.credential)
   ) {
-    return null;
-  }
-  return normalizeExternalCliCredentialProvider(
-    provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
-    params.credential.provider,
-  );
-}
-
-/** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
-export function readExternalCliFallbackCredential(params: {
-  profileId: string;
-  credential: OAuthCredential;
-  allowKeychainPrompt?: boolean;
-}): OAuthCredential | null {
-  const provider =
-    resolveExternalCliSyncProvider(params) ??
-    EXTERNAL_CLI_SYNC_PROVIDERS.find((entry) =>
-      listExternalCliProviderIds(entry).includes(params.credential.provider),
-    );
-  if (!provider) {
     return null;
   }
   return normalizeExternalCliCredentialProvider(
@@ -278,6 +274,12 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, providerConfig, store } = params;
+  // Bootstrap-only CLI state must not enter any sibling slot once OpenClaw
+  // owns OAuth for the provider, regardless of how discovery was scoped.
+  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth(store, providerConfig)) {
+    return [];
+  }
+
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectNativeI18nEntries,
+  isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
   syncNativeLocale,
@@ -11,6 +12,14 @@ import {
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
+  it("detects conditional branch identifiers without regex backtracking", () => {
+    expect(isConditionalBranchIdentifier("isEnabled")).toBe(true);
+    expect(isConditionalBranchIdentifier("hasFA2Enabled")).toBe(true);
+    expect(isConditionalBranchIdentifier("abc123A")).toBe(false);
+    expect(isConditionalBranchIdentifier("already_lowercase")).toBe(false);
+    expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -41,16 +50,84 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(entries.some((entry) => entry.source === "Request ID: \\(value)")).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
-    expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Preview · $domain")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Pairing required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "Scan QR code")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Test connection")).toBe(true);
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search OpenClaw",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Message actions",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Reply",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-chooser" &&
+          entry.source === "Share message",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Check OpenClaw status")).toBe(true);
+    expect(entries.some((entry) => entry.source === "What can I control here?")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Help me start voice chat")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Summarize the current OpenClaw status and tell me what needs attention.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Show me which phone controls and device capabilities are available right now.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.source === "Help me start a realtime voice session from this phone.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
@@ -74,7 +151,7 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Don’t show this again")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
     expect(

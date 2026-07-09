@@ -26,7 +26,8 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
-    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
+    addNotificationHandler: vi.fn(() => () => undefined),
+    addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
@@ -79,6 +80,20 @@ function mockCallArg(mockFn: { mock: { calls: unknown[][] } }, callIndex: number
 }
 
 describe("codex provider", () => {
+  it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+    "classifies %s as a modern Codex model",
+    (modelId) => {
+      const provider = buildCodexProvider();
+
+      expect(
+        provider.isModernModelRef?.({
+          provider: "openai",
+          modelId,
+        } as never),
+      ).toBe(true);
+    },
+  );
+
   it("maps Codex app-server models to a Codex provider catalog", async () => {
     const listModels = vi.fn(async () => ({
       models: [
@@ -404,6 +419,22 @@ describe("codex provider", () => {
         ?.levels.map((level) => level.id),
     ).toEqual(["off", "medium", "high", "xhigh"]);
   });
+
+  it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+    "uses the known %s effort profile when app-server metadata is absent",
+    (modelId) => {
+      const provider = buildCodexProvider();
+
+      expect(
+        provider
+          .resolveThinkingProfile?.({
+            provider: "codex",
+            modelId,
+          } as never)
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "medium", "high", "xhigh"]);
+    },
+  );
 
   it("declares synthetic auth because the harness owns Codex credentials", () => {
     const provider = buildCodexProvider();

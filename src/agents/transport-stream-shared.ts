@@ -3,15 +3,18 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
+import type { ContextUsage } from "./usage.js";
 
 type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  contextUsage?: ContextUsage;
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
@@ -46,10 +49,7 @@ export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
   }
-  return text.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
-  );
+  return sanitizeSurrogates(text);
 }
 
 export function sanitizeNonEmptyTransportPayloadText(

@@ -28,10 +28,7 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import {
-  readExternalCliBootstrapCredential,
-  readExternalCliFallbackCredential,
-} from "./external-cli-sync.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -234,19 +231,12 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ profileId, credential }) =>
+  readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
+      store,
       profileId,
       credential,
     }),
-  readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai"
-      ? readExternalCliFallbackCredential({
-          profileId,
-          credential,
-          allowKeychainPrompt: false,
-        })
-      : null,
   isRefreshTokenReusedError,
 });
 
@@ -459,10 +449,6 @@ export async function resolveApiKeyForProfile(
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
-    const surfacedMessageError =
-      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
-        ? error
-        : surfacedCause;
     if (isRefreshTokenReusedError(surfacedCause)) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -512,7 +498,7 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(surfacedMessageError);
+    const message = extractErrorMessage(surfacedCause);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
@@ -521,6 +507,7 @@ export async function resolveApiKeyForProfile(
     });
     throw new OAuthRefreshFailureError({
       provider: cred.provider,
+      profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +

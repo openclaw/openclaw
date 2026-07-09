@@ -166,7 +166,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
           role: "assistant",
           content: [
             { type: "text", text: "Earlier assistant reply" },
-            { type: "tool_use", name: "Bash" },
+            { type: "toolcall", name: "Bash" },
           ],
         },
         {
@@ -269,7 +269,10 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
           message: {
             role: "assistant",
             model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "prior answer about blue-green" }],
+            content: [
+              { type: "text", text: "prior answer about blue-green" },
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } },
+            ],
           },
         },
       ];
@@ -285,6 +288,7 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
       expect(prelude).toContain("## Prior session context (from claude-cli)");
       expect(prelude).toContain("user: prior question about deploys");
       expect(prelude).toContain("assistant: prior answer about blue-green");
+      expect(prelude).toContain("(tool call: Bash)");
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }

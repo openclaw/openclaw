@@ -698,12 +698,11 @@ describe("commitment extraction runtime", () => {
     await vi.waitFor(() => {
       expect(extractBatch).toHaveBeenCalledTimes(2);
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(async () => {
+      const store = await loadCommitmentStore();
+      expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
     });
 
-    const store = await loadCommitmentStore();
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
     // The successful drain empties the queue, so no further retry is armed.
     expect(scheduled).toHaveLength(2);
   });

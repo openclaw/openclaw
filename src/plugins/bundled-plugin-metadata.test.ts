@@ -36,6 +36,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
+  "codex-supervisor",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -45,7 +46,9 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "google-meet",
   "llm-task",
   "lobster",
+  "logbook",
   "memory-wiki",
+  "ollama",
   "openshell",
   "phone-control",
   "policy",
@@ -62,6 +65,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "device-pair",
   "file-transfer",
   "memory-core",
+  "ollama",
   "phone-control",
   "talk-voice",
 ] as const;
@@ -573,6 +577,14 @@ describe("bundled plugin metadata", () => {
 
     expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
+  });
+
+  it("scopes Codex Supervisor CLI activation to the codex command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "codex-supervisor",
+    );
+
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {

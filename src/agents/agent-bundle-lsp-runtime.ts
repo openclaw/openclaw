@@ -30,6 +30,9 @@ type LspSession = {
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
+  // Preserve a terminal process/transport failure so later requests reject immediately
+  // instead of waiting for the per-request timeout.
+  failure?: Error;
 };
 
 type PendingLspRequest = {
@@ -48,7 +51,7 @@ type LspServerCapabilities = {
 };
 
 /** Materialized LSP tools plus session capabilities and cleanup handle. */
-export type BundleLspToolRuntime = {
+type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
   dispose: () => Promise<void>;
@@ -107,15 +110,55 @@ function registerActiveLspSession(session: LspSession): void {
   activeBundleLspSessions.add(session);
 }
 
+function rememberLspFailure(session: LspSession, error: Error): void {
+  session.failure ??= error;
+}
+
+function failLspSession(session: LspSession, error: Error): void {
+  rememberLspFailure(session, error);
+  for (const pending of session.pendingRequests.values()) {
+    clearTimeout(pending.timeout);
+    pending.reject(session.failure ?? error);
+  }
+  session.pendingRequests.clear();
+}
+
+function lspProcessExitError(
+  session: LspSession,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+) {
+  return new Error(`LSP server "${session.serverName}" exited (${signal ?? code ?? "unknown"})`);
+}
+
 function attachLspProcessHandlers(session: LspSession): void {
+  session.process.on("error", (error) => {
+    failLspSession(session, error);
+  });
+  session.process.on("exit", (code, signal) => {
+    // Block new requests immediately, but let stdout drain any final response before close.
+    rememberLspFailure(session, lspProcessExitError(session, code, signal));
+  });
+  session.process.on("close", (code, signal) => {
+    failLspSession(session, lspProcessExitError(session, code, signal));
+  });
   session.process.stdout?.on("data", (chunk: Buffer | string) =>
     handleIncomingData(session, chunk),
   );
+  session.process.stdout?.on("error", (error) => {
+    failLspSession(session, error);
+  });
+  session.process.stdin?.on("error", (error) => {
+    failLspSession(session, error);
+  });
   session.process.stderr?.setEncoding("utf-8");
   session.process.stderr?.on("data", (chunk: string) => {
     for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
       logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
     }
+  });
+  session.process.stderr?.on("error", (error) => {
+    logWarn(`bundle-lsp:${session.serverName}: stderr failed: ${String(error)}`);
   });
 }
 
@@ -163,6 +206,9 @@ function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buf
 }
 
 function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
+  if (session.failure) {
+    return Promise.reject(session.failure);
+  }
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {

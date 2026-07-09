@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements jsonl replay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   runRuntimeParityScenario,
   type RuntimeId,
@@ -50,10 +51,6 @@ export type JsonlReplayMarkdownReport = {
   runtimePair: JsonlReplayInput["runtimePair"];
   transcripts: JsonlReplayResult["transcripts"];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;

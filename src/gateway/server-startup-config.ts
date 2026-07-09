@@ -5,6 +5,7 @@ import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -34,6 +35,7 @@ import {
   getLiveSecretsRuntimeAuthStores,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -119,7 +121,8 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
-    throw new Error(
+    throw createInvalidConfigError(
+      configSnapshot.path,
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
     );
   }
@@ -183,19 +186,14 @@ export function createRuntimeSecretsActivator(params: {
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
-  let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
-  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
+  const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
+    cacheRejections: true,
+  });
+  const loadAuthProfiles = createLazyPromise(() => import("../agents/auth-profiles.js"), {
+    cacheRejections: true,
+  });
   const startupManifestRegistry =
     params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  const loadSecretsRuntime = () => {
-    secretsRuntimePromise ??= import("../secrets/runtime.js");
-    return secretsRuntimePromise;
-  };
-  const loadAuthProfiles = () => {
-    authProfilesPromise ??= import("../agents/auth-profiles.js");
-    return authProfilesPromise;
-  };
-
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     // Secret refresh mutates process-wide active snapshot state, so activation
     // requests are serialized even when reload and startup probes overlap.
@@ -410,7 +408,7 @@ export function createRuntimeSecretsActivator(params: {
 }
 
 /** Throw a formatted startup error when the loaded config snapshot is invalid. */
-export function assertValidGatewayStartupConfigSnapshot(
+function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
 ): void {
@@ -427,7 +425,7 @@ export function assertValidGatewayStartupConfigSnapshot(
       : options.includeDoctorHint
         ? `\n${formatInvalidConfigRecoveryHint()}`
         : "";
-  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${recoveryHint}`);
+  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`);
 }
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */

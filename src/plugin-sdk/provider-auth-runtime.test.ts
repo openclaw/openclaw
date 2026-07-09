@@ -1,28 +1,12 @@
 // Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { getFreePort } from "../test-utils/ports.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Failed to allocate a local port")));
-        return;
-      }
-      const { port } = address;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
 
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {

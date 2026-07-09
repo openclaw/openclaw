@@ -70,7 +70,7 @@ async function startLoopbackTokenGateway(token: string) {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
-    deferStartupSidecars: true,
+    sidecarStartup: "defer",
   });
   return { port, server };
 }
@@ -206,6 +206,9 @@ describe("gateway e2e", () => {
               },
             },
           },
+          // The request below runs sessionKey "agent:dev:mock-openai"; the
+          // gateway rejects session keys whose agent id is not declared.
+          list: [{ id: "dev", default: true }],
         },
         models: {
           mode: "replace",
