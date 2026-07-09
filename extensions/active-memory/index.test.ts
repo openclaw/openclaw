@@ -15,6 +15,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Match only lone surrogates so valid supplementary-plane characters remain allowed.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -68,7 +72,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(query).toBe(`${"x".repeat(119)} why?`);
-    expect(query).not.toContain("\uD83D");
+    expect(query).not.toMatch(UNPAIRED_SURROGATE_RE);
   });
 
   const hooks: Record<string, Function> = {};
@@ -5136,7 +5140,7 @@ describe("active-memory plugin", () => {
         "what now?",
       ].join("\n"),
     );
-    expect(prompt).not.toContain("\uD83D");
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
   });
 
   it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
