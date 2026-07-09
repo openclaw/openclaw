@@ -171,6 +171,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
   });
 
+  it("applies a timeout to the model discovery request", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+
+    await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    expect(firstDiscoveryRequest().timeoutMs).toBe(30_000);
+  });
+
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
     mockDiscoveryResponse({
       ok: true,
