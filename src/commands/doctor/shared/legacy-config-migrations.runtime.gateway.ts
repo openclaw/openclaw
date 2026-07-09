@@ -104,6 +104,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (
         hasConfiguredControlUiAllowedOrigins({
           allowedOrigins: controlUi.allowedOrigins,
+          allowedOriginPatterns: controlUi.allowedOriginPatterns,
           dangerouslyAllowHostHeaderOriginFallback:
             controlUi.dangerouslyAllowHostHeaderOriginFallback,
         })

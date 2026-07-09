@@ -136,6 +136,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
     .filter(Boolean);
+  const controlUiAllowedOriginPatterns = params.cfg.gateway?.controlUi?.allowedOriginPatterns ?? [];
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -160,12 +161,13 @@ export async function resolveGatewayRuntimeConfig(params: {
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
     controlUiAllowedOrigins.length === 0 &&
+    controlUiAllowedOriginPatterns.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
     // Host-header fallback; otherwise any reachable host name can become a browser origin.
     throw new Error(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins or allowedOriginPatterns (set explicit origins/patterns), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
 

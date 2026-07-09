@@ -327,7 +327,7 @@ If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue 
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">
     - `device identity required` → non-secure context or missing device auth.
-    - `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins` (or you are connecting from a non-loopback browser origin without an explicit allowlist).
+    - `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins` or does not match `gateway.controlUi.allowedOriginPatterns` (or you are connecting from a non-loopback browser origin without an explicit allowlist or patterns). For WebView clients with dynamic local ports, prefer `allowedOriginPatterns` over `["*"]`.
     - `device nonce required` / `device nonce mismatch` → client is not completing the challenge-based device auth flow (`connect.challenge` + `device.nonce`).
     - `device signature invalid` / `device signature expired` → client signed the wrong payload (or stale timestamp) for the current handshake.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.

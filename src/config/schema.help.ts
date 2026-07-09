@@ -578,7 +578,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.chatMessageMaxWidth":
     'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
   "gateway.controlUi.allowedOrigins":
-    'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
+    'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing. For browser-hosted node clients with dynamic loopback ports, use gateway.controlUi.allowedOriginPatterns instead.',
+  "gateway.controlUi.allowedOriginPatterns":
+    'Constrained origin patterns for browser-hosted node clients that use dynamic loopback ports (e.g. http://127.0.0.1:*). Only http: and https: protocols with loopback hostnames (127.0.0.1, localhost, [::1]) and port-level * wildcards are accepted. Patterns are evaluated alongside allowedOrigins; either match is sufficient for WebSocket access. A safer alternative to ["*"] for WebView/phone apps. Non-loopback hosts still require explicit allowedOrigins entries.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
   "gateway.controlUi.allowInsecureAuth":

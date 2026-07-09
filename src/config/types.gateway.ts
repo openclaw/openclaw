@@ -147,6 +147,12 @@ export type GatewayControlUiConfig = {
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
+   * Constrained origin patterns for browser-hosted node clients with dynamic
+   * loopback ports (e.g. http://127.0.0.1:*). Only loopback hostnames and
+   * port-level wildcards are accepted. A safer alternative to ["*"].
+   */
+  allowedOriginPatterns?: string[];
+  /**
    * DANGEROUS: Keep Host-header origin fallback behavior.
    * Supported long-term for deployments that intentionally rely on this policy.
    */

@@ -247,7 +247,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     broadcast,
     buildRequestContext,
   } = params;
-  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
+  const originCheckMetrics: WsOriginCheckMetrics = {
+    hostHeaderFallbackAccepted: 0,
+    originPatternAccepted: 0,
+  };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;

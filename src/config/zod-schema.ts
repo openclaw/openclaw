@@ -1118,6 +1118,48 @@ export const OpenClawSchema = z
               })
               .optional(),
             allowedOrigins: z.array(z.string()).optional(),
+            allowedOriginPatterns: z
+              .array(
+                z
+                  .string()
+                  .trim()
+                  .refine(
+                    (value) => {
+                      // Manual parse — new URL rejects * as invalid port.
+                      const match = value.match(/^(https?):\/\/(\[?[^\]]+\]?|[^:/]+):\*$/);
+                      if (!match) {
+                        return false;
+                      }
+                      const protocol = match[1];
+                      const hostname = match[2].toLowerCase();
+                      // Must have explicit protocol (http: or https:)
+                      if (protocol !== "http" && protocol !== "https") {
+                        return false;
+                      }
+                      // No wildcard in hostname
+                      if (hostname.includes("*")) {
+                        return false;
+                      }
+                      // Hostname must be a known loopback literal (with trailing-dot normalization)
+                      const clean = hostname.replace(/\.+$/, "");
+                      if (clean !== "localhost" && clean !== "127.0.0.1" && clean !== "[::1]") {
+                        return false;
+                      }
+                      return true;
+                    },
+                    {
+                      message:
+                        "Each allowedOriginPattern must be scheme://loopback-host:* (e.g. http://127.0.0.1:*). Only http: and https: protocols, only 127.0.0.1/localhost/::1 hostnames, and only port-level * wildcards are accepted.",
+                    },
+                  ),
+              )
+              .describe(
+                "Constrained loopback origin patterns with port wildcards. " +
+                  "Accepts only scheme://loopback-host:* format (e.g. http://127.0.0.1:*). " +
+                  "Evaluated alongside allowedOrigins; either match grants WebSocket access. " +
+                  "Safer alternative to the global '*' wildcard for WebView and local embedded clients.",
+              )
+              .optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),

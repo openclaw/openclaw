@@ -152,6 +152,21 @@ describe("security audit gateway exposure findings", () => {
       },
       expectedNoFinding: "gateway.control_ui.allowed_origins_required",
     },
+    {
+      name: "does not flag non-loopback Control UI with allowedOriginPatterns",
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+          controlUi: { allowedOriginPatterns: ["http://127.0.0.1:*"] },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.auth_no_rate_limit",
+        severity: "warn",
+      },
+      expectedNoFinding: "gateway.control_ui.allowed_origins_required",
+    },
   ])("$name", ({ cfg, expectedFinding, expectedNoFinding }) => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
     const finding = requireFinding(findings, expectedFinding.checkId, expectedFinding.checkId);

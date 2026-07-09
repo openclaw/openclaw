@@ -91,7 +91,7 @@ read_when:
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins` or `gateway.controlUi.allowedOriginPatterns`.
 </Warning>
 
 ### Configuration reference
@@ -157,7 +157,7 @@ Behavior:
 - When the header is present but empty, the request declares **no** operator scopes.
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set (`operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`, `operator.talk.secrets`).
 - Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write` only.
-- Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
+- Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` or `gateway.controlUi.allowedOriginPatterns` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
 
 Practical rule: send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to be narrower than the defaults, or when a gateway-auth plugin route needs something stronger than write scope.
 
@@ -350,7 +350,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
-- [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
+- [ ] **allowedOrigins or allowedOriginPatterns is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins` or `gateway.controlUi.allowedOriginPatterns`.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
 - [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
@@ -432,7 +432,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Check:
 
-    - `gateway.controlUi.allowedOrigins` includes the exact browser origin.
+    - `gateway.controlUi.allowedOrigins` includes the exact browser origin, or `gateway.controlUi.allowedOriginPatterns` matches the origin (for dynamic loopback ports).
     - You are not relying on wildcard origins unless you intentionally want allow-all behavior.
     - If you intentionally use Host-header fallback mode, `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` is set deliberately.
 

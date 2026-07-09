@@ -323,6 +323,7 @@ async function requestNodePairingFromConnect(params: {
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
+  originPatternAccepted: number;
 };
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
@@ -885,12 +886,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             requestHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
+            allowedOriginPatterns: configSnapshot.gateway?.controlUi?.allowedOriginPatterns,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
           });
           if (!originCheck.ok) {
             const errorMessage =
-              "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+              "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins or allowedOriginPatterns)";
             markHandshakeFailure("origin-mismatch", {
               origin: requestOrigin ?? "n/a",
               host: requestHost ?? "n/a",
@@ -904,6 +906,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
             close(1008, truncateCloseReason(errorMessage));
             return;
+          }
+          if (originCheck.matchedBy === "origin-pattern") {
+            originCheckMetrics.originPatternAccepted += 1;
+            logWsControl.info(
+              `websocket origin accepted via origin-pattern conn=${connId} matchedPattern=${originCheck.matchedPattern ?? "n/a"} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+            );
           }
           if (originCheck.matchedBy === "host-header-fallback") {
             originCheckMetrics.hostHeaderFallbackAccepted += 1;

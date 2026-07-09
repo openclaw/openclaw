@@ -86,6 +86,7 @@ export type AuthorizeGatewayConnectParams = {
     requestHost?: string;
     origin?: string;
     allowedOrigins?: string[];
+    allowedOriginPatterns?: string[];
     allowHostHeaderOriginFallback?: boolean;
   };
 };
@@ -377,6 +378,7 @@ function authorizeTrustedProxyBrowserOrigin(params: {
     requestHost: params.browserOriginPolicy?.requestHost,
     origin,
     allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
+    allowedOriginPatterns: params.browserOriginPolicy?.allowedOriginPatterns,
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: false,
   });
