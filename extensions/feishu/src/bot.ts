@@ -198,6 +198,10 @@ export async function resolveGroupName(params: {
   return resolvedName;
 }
 
+function isFeishuAudioContentType(contentType: string | undefined): boolean {
+  return contentType?.toLowerCase().startsWith("audio/") === true;
+}
+
 async function resolveFeishuAudioPreflightTranscript(params: {
   cfg: ClawdbotConfig;
   mediaList: FeishuMediaInfo[];
@@ -208,7 +212,9 @@ async function resolveFeishuAudioPreflightTranscript(params: {
   if (params.content.trim() !== "<media:audio>") {
     return undefined;
   }
-  const audioMedia = params.mediaList.filter((media) => media.contentType?.startsWith("audio/"));
+  const audioMedia = params.mediaList.filter((media) =>
+    isFeishuAudioContentType(media.contentType),
+  );
   if (audioMedia.length === 0) {
     return undefined;
   }
@@ -1090,7 +1096,7 @@ export async function handleFeishuMessage(params: {
     const preflightAudioIndex =
       audioTranscript === undefined
         ? -1
-        : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+        : mediaList.findIndex((media) => isFeishuAudioContentType(media.contentType));
     const inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });

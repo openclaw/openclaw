@@ -2577,14 +2577,14 @@ describe("handleFeishuMessage command authorization", () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
       buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
+      contentType: "Audio/Ogg",
       fileName: "voice.ogg",
     });
     mockSaveMediaBuffer.mockResolvedValueOnce({
       id: "inbound-voice.ogg",
       path: "/tmp/inbound-voice.ogg",
       size: Buffer.byteLength("voice"),
-      contentType: "audio/ogg",
+      contentType: "Audio/Ogg",
     });
     mockTranscribeFirstAudio.mockResolvedValueOnce("voice transcript");
 
@@ -2629,7 +2629,7 @@ describe("handleFeishuMessage command authorization", () => {
       ctx?: { ChatType?: string; MediaPaths?: string[]; MediaTypes?: string[] };
     }>(mockTranscribeFirstAudio, 0, 0);
     expect(transcribeRequest.ctx?.MediaPaths).toEqual(["/tmp/inbound-voice.ogg"]);
-    expect(transcribeRequest.ctx?.MediaTypes).toEqual(["audio/ogg"]);
+    expect(transcribeRequest.ctx?.MediaTypes).toEqual(["Audio/Ogg"]);
     expect(transcribeRequest.ctx?.ChatType).toBe("direct");
     expect(transcribeRequest.cfg?.channels?.feishu?.dmPolicy).toBe("open");
     const finalized = mockCallArg<{
@@ -2648,7 +2648,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(finalized.CommandBody).toBe("voice transcript");
     expect(finalized.Transcript).toBe("voice transcript");
     expect(finalized.MediaPaths).toEqual(["/tmp/inbound-voice.ogg"]);
-    expect(finalized.MediaTypes).toEqual(["audio/ogg"]);
+    expect(finalized.MediaTypes).toEqual(["Audio/Ogg"]);
     expect(finalized.MediaTranscribedIndexes).toEqual([0]);
     expect(finalized.BodyForAgent).not.toContain("file_audio_payload");
   });
