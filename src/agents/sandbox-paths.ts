@@ -37,7 +37,9 @@ function normalizeContainerWorkdir(containerWorkdir?: string): string {
   if (!trimmed) {
     return SANDBOX_CONTAINER_WORKDIR;
   }
-  return trimmed.replace(TRAILING_SLASH_RE, "");
+  // A root-only value like "/" strips to "" — fall back to the default rather
+  // than producing an empty prefix that would match every absolute path inward.
+  return trimmed.replace(TRAILING_SLASH_RE, "") || SANDBOX_CONTAINER_WORKDIR;
 }
 
 function normalizeUnicodeSpaces(str: string): string {

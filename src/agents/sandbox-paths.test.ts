@@ -294,6 +294,20 @@ describe("resolveSandboxedMediaSource", () => {
         ).rejects.toThrow(/escapes sandbox root|Invalid file:\/\/ URL/i);
       });
     });
+
+    it("falls back to the default workdir when containerWorkdir is root-only (/)", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        // "/" strips to an empty prefix; it must fall back to /workspace rather
+        // than matching every absolute path inward, so /sandbox paths still escape.
+        await expect(
+          resolveSandboxedMediaSource({
+            media: "/sandbox/out/photo.png",
+            sandboxRoot: sandboxDir,
+            containerWorkdir: "/",
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+      });
+    });
   });
 
   it("preserves remote mxc:// media sources", async () => {
