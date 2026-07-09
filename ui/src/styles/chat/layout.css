@@ -2252,6 +2252,17 @@ openclaw-chat-page {
   }
 }
 
+/* Errored Talk session: the meter is gone, so the stop glyph stays visible
+   and the glow calms down; the alert row above owns the error message. */
+.chat-send-btn--voice-error .chat-send-btn__voice-stop-glyph {
+  opacity: 1;
+}
+
+.chat-send-btn--voice-error::after {
+  animation: none;
+  opacity: 0.25;
+}
+
 /* Filled square + soft danger fill so Stop generating reads as the one
    destructive control; the outline-only square was ambiguous next to other
    36px icon buttons. */

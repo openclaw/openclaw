@@ -1778,29 +1778,42 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
       `
     : nothing;
 
+  // Transports keep the session active while reporting status "error"; the
+  // alert row above the composer owns the error message, so the control keeps
+  // only its stop affordance instead of a fake listening meter plus a
+  // duplicate announcement.
+  const voiceErrored = props.voiceStatus === "error";
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
           <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
             <button
-              class="chat-send-btn chat-send-btn--voice-live"
+              class="chat-send-btn chat-send-btn--voice-live${voiceErrored
+                ? " chat-send-btn--voice-error"
+                : ""}"
               @click=${props.onToggleVoice}
               aria-label=${t("chat.composer.stopVoiceInput")}
             >
-              ${renderMicrophoneActivity({
-                status: props.voiceStatus,
-                inputLevel: props.voiceInputLevel,
-              })}
+              ${voiceErrored
+                ? nothing
+                : renderMicrophoneActivity({
+                    status: props.voiceStatus,
+                    inputLevel: props.voiceInputLevel,
+                  })}
               <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
             </button>
           </openclaw-tooltip>
-          <span
-            class="agent-chat__sr-only agent-chat__voice-status"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
-          >
+          ${voiceErrored
+            ? nothing
+            : html`
+                <span
+                  class="agent-chat__sr-only agent-chat__voice-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
+                >
+              `}
           ${abortAction}
         `
       : props.canAbort
