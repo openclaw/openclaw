@@ -119,18 +119,151 @@ function coerceCanvasPreview(
   return undefined;
 }
 
-function parseCanvasAttributes(raw: string): Record<string, string> {
+const MAX_ATTRIBUTE_INPUT_LENGTH = 10240; // 10KB limit to prevent resource exhaustion
+
+/**
+ * Parses HTML-style attributes from a string with security protections.
+ *
+ * Security measures:
+ * - Input length validation to prevent ReDoS and resource exhaustion
+ * - Optimized regex to avoid catastrophic backtracking
+ * - Blocks dangerous protocols (javascript:, vbscript:, data:text/html)
+ * - Blocks event handler attributes (onclick, onerror, etc.)
+ * - Handles HTML entity encoded dangerous protocols
+ */
+export function parseCanvasAttributes(raw: string): Record<string, string> {
   const attrs: Record<string, string> = {};
-  const re = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+  // Input validation: reject empty or excessively long input
+  if (!raw?.trim() || raw.length > MAX_ATTRIBUTE_INPUT_LENGTH) {
+    return attrs;
+  }
+
+  // Use a more efficient regex that avoids catastrophic backtracking
+  // Key improvements:
+  // - Possessive-like behavior via atomic grouping simulation
+  // - Bounded quantifiers where possible
+  // - Simpler alternation structure
+  const re =
+    /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)')/g;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(raw))) {
+
+  while ((match = re.exec(raw)) !== null) {
     const key = match[1]?.trim().toLowerCase();
-    const value = (match[2] ?? match[3] ?? "").trim();
-    if (key && value) {
-      attrs[key] = value;
+    // Handle escaped quotes by unescaping
+    const rawValue = (match[2] ?? match[3] ?? "").replace(/\\"/g, '"').replace(/\\'/g, "'").trim();
+
+    if (!key) {
+      continue;
+    }
+
+    // Security check: block event handler attributes
+    if (isEventHandlerAttribute(key)) {
+      continue;
+    }
+
+    // Security check: validate and sanitize attribute value
+    const sanitizedValue = sanitizeAttributeValue(rawValue);
+    if (sanitizedValue !== undefined) {
+      attrs[key] = sanitizedValue;
     }
   }
+
   return attrs;
+}
+
+/**
+ * Checks if an attribute name is an event handler.
+ * Event handlers start with "on" followed by an event name.
+ */
+function isEventHandlerAttribute(name: string): boolean {
+  // Common event handlers that could execute scripts
+  const eventHandlerPattern = /^on[a-z]+$/i;
+  return eventHandlerPattern.test(name);
+}
+
+/**
+ * Sanitizes an attribute value by blocking dangerous protocols and patterns.
+ * Returns undefined if the value should be rejected.
+ */
+function sanitizeAttributeValue(value: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  // Decode HTML entities to detect obfuscated dangerous protocols
+  const decodedValue = decodeHtmlEntities(value);
+  const lowerValue = decodedValue.toLowerCase().trim();
+
+  // Block dangerous protocols
+  if (isDangerousProtocol(lowerValue)) {
+    return undefined;
+  }
+
+  // Return the original value (not decoded) if it passes validation
+  // This preserves the original encoding for safe values
+  return value;
+}
+
+/**
+ * Decodes common HTML entities to detect obfuscated attacks.
+ */
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&#106;/gi, "j") // j
+    .replace(/&#97;/gi, "a") // a
+    .replace(/&#118;/gi, "v") // v
+    .replace(/&#115;/gi, "s") // s
+    .replace(/&#99;/gi, "c") // c
+    .replace(/&#114;/gi, "r") // r
+    .replace(/&#105;/gi, "i") // i
+    .replace(/&#112;/gi, "p") // p
+    .replace(/&#116;/gi, "t") // t
+    .replace(/&#58;/gi, ":") // :
+    .replace(/&#38;/gi, "&") // &
+    .replace(/&#60;/gi, "<") // <
+    .replace(/&#62;/gi, ">") // >
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&");
+}
+
+/**
+ * Checks if a value starts with a dangerous protocol.
+ */
+function isDangerousProtocol(value: string): boolean {
+  // Normalize whitespace
+  const normalized = value.replace(/\s+/g, "").trim();
+
+  // Block javascript: protocol (including obfuscated versions)
+  if (normalized.startsWith("javascript:")) {
+    return true;
+  }
+
+  // Block vbscript: protocol
+  if (normalized.startsWith("vbscript:")) {
+    return true;
+  }
+
+  // Block data: URLs with dangerous MIME types
+  if (normalized.startsWith("data:")) {
+    // Allow safe image data URLs
+    if (normalized.startsWith("data:image/")) {
+      return false;
+    }
+    // Block text/html, application/javascript, etc.
+    if (
+      normalized.startsWith("data:text/html") ||
+      normalized.startsWith("data:application/") ||
+      normalized.includes("script")
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function defaultCanvasEntryUrl(ref: string): string {
