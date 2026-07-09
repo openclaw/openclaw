@@ -5,12 +5,14 @@ import {
   asSafeIntegerInRange,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -34,6 +36,7 @@ const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
 const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
 const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 const MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -85,6 +88,10 @@ function normalizeOAuthAuthorizationExpires(expiredIn: unknown): number | undefi
   return asSafeIntegerInRange(expiredIn, { min: 1, max: MAX_DATE_TIMESTAMP_MS });
 }
 
+function resolveMiniMaxOAuthFetchTimeoutMs(value: unknown): number {
+  return resolveTimerTimeoutMs(value, MINIMAX_OAUTH_FETCH_TIMEOUT_MS);
+}
+
 function generatePkce(): { verifier: string; challenge: string; state: string } {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
@@ -95,6 +102,7 @@ async function requestOAuthCode(params: {
   challenge: string;
   state: string;
   region: MiniMaxRegion;
+  requestTimeoutMs: number;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -114,7 +122,9 @@ async function requestOAuthCode(params: {
         code_challenge_method: "S256",
         state: params.state,
       }),
+      signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
     },
+    timeoutMs: params.requestTimeoutMs,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.code",
   });
@@ -151,6 +161,7 @@ async function pollOAuthToken(params: {
   userCode: string;
   verifier: string;
   region: MiniMaxRegion;
+  requestTimeoutMs: number;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -167,7 +178,9 @@ async function pollOAuthToken(params: {
         user_code: params.userCode,
         code_verifier: params.verifier,
       }),
+      signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
     },
+    timeoutMs: params.requestTimeoutMs,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.token",
   });
@@ -249,13 +262,15 @@ export async function loginMiniMaxPortalOAuth(params: {
   note: (message: string, title?: string) => Promise<void>;
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
+  requestTimeoutMs?: number;
 }): Promise<MiniMaxOAuthToken> {
   // Ensure env-based proxy dispatcher is active before any outbound fetch calls.
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
   const region = params.region ?? "global";
+  const requestTimeoutMs = resolveMiniMaxOAuthFetchTimeoutMs(params.requestTimeoutMs);
   const { verifier, challenge, state } = generatePkce();
-  const oauth = await requestOAuthCode({ challenge, state, region });
+  const oauth = await requestOAuthCode({ challenge, state, region, requestTimeoutMs });
   const verificationUrl = oauth.verification_uri;
 
   const noteLines = [
@@ -281,6 +296,7 @@ export async function loginMiniMaxPortalOAuth(params: {
       userCode: oauth.user_code,
       verifier,
       region,
+      requestTimeoutMs,
     });
 
     if (result.status === "success") {
