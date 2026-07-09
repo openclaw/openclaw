@@ -23,6 +23,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private let webView: WKWebView
     private(set) var currentURL: URL
     private var auth: DashboardWindowAuth
+    private var backButton: NSButton?
+    private var forwardButton: NSButton?
+    private var canGoBackObservation: NSKeyValueObservation?
+    private var canGoForwardObservation: NSKeyValueObservation?
 
     init(url: URL, auth: DashboardWindowAuth) {
         self.currentURL = url
@@ -39,6 +43,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             frame: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
             configuration: config)
         self.webView.setValue(true, forKey: "drawsBackground")
+        // The Control UI routes via pushState, so WKWebView's back-forward list
+        // carries in-app navigation; without this (and the titlebar buttons
+        // below) the dashboard window has no way back.
+        self.webView.allowsBackForwardNavigationGestures = true
 
         let window = Self.makeWindow(contentView: self.webView)
         super.init(window: window)
@@ -46,6 +54,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         self.window?.delegate = self
+        self.installNavigationControls()
     }
 
     // MARK: - WKUIDelegate
@@ -147,6 +156,84 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
+    /// Back/forward buttons next to the traffic lights. The window has no
+    /// native toolbar (full-size content view with the web UI's own chrome), so
+    /// a leading titlebar accessory is the only native slot for them.
+    private func installNavigationControls() {
+        guard let window = self.window else { return }
+        let back = Self.makeNavigationButton(
+            symbolName: "chevron.left",
+            label: "Back",
+            action: #selector(self.navigateBack(_:)),
+            target: self)
+        let forward = Self.makeNavigationButton(
+            symbolName: "chevron.right",
+            label: "Forward",
+            action: #selector(self.navigateForward(_:)),
+            target: self)
+        self.backButton = back
+        self.forwardButton = forward
+
+        let stack = NSStackView(views: [back, forward])
+        stack.orientation = .horizontal
+        stack.spacing = 4
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
+        stack.setFrameSize(NSSize(width: 68, height: 28))
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = stack
+        accessory.layoutAttribute = .leading
+        window.addTitlebarAccessoryViewController(accessory)
+
+        self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
+            .initial,
+            .new,
+        ]) { [weak self] webView, _ in
+            let canGoBack = webView.canGoBack
+            Task { @MainActor in
+                self?.backButton?.isEnabled = canGoBack
+            }
+        }
+        self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
+            .initial,
+            .new,
+        ]) { [weak self] webView, _ in
+            let canGoForward = webView.canGoForward
+            Task { @MainActor in
+                self?.forwardButton?.isEnabled = canGoForward
+            }
+        }
+    }
+
+    private static func makeNavigationButton(
+        symbolName: String,
+        label: String,
+        action: Selector,
+        target: AnyObject) -> NSButton
+    {
+        let button = NSButton()
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: label)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        button.target = target
+        button.action = action
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.isEnabled = false
+        return button
+    }
+
+    @objc private func navigateBack(_: Any?) {
+        self.webView.goBack()
+    }
+
+    @objc private func navigateForward(_: Any?) {
+        self.webView.goForward()
+    }
+
     private static func makeWindow(contentView: NSView) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
@@ -173,7 +260,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             topDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -380),
             topDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            topDragRegion.heightAnchor.constraint(equalToConstant: 28),
+            // Thin edge strip only: the web UI has no desktop topbar row, so a
+            // taller region would swallow clicks meant for the top of the
+            // content column (chat thread, page headers). The sidebar region
+            // below stays the primary drag surface — it floats over the 50px
+            // strip the native chrome CSS reserves in the web sidebar.
+            topDragRegion.heightAnchor.constraint(equalToConstant: 12),
             topRightDragRegion.leadingAnchor.constraint(equalTo: topDragRegion.trailingAnchor),
             topRightDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
@@ -206,12 +298,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
           --openclaw-native-titlebar-height: 50px;
         }
         @media (min-width: 700px) {
-          html.openclaw-native-macos .sidebar-shell {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
             padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
-          }
-          html.openclaw-native-macos .sidebar-shell__header {
-            padding-left: 10px !important;
-            padding-right: 8px !important;
           }
         }
         """
@@ -307,6 +398,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             decisionHandler(.allow)
             return
         }
+        // Back/forward can reach entries from a previous gateway endpoint after
+        // a tunnel/port swap; opening those externally would launch a dead URL
+        // in the browser, so swallow the traversal instead.
+        if navigationAction.navigationType == .backForward {
+            decisionHandler(.cancel)
+            return
+        }
         NSWorkspace.shared.open(url)
         decisionHandler(.cancel)
     }
@@ -321,7 +419,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     static func shouldAllowNavigation(to url: URL, dashboardURL: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased() else { return true }
-        if scheme == "about" || scheme == "blob" || scheme == "data" { return true }
+        if scheme == "about" || scheme == "blob" || scheme == "data" {
+            return true
+        }
         guard scheme == "http" || scheme == "https" else { return false }
         return url.scheme?.lowercased() == dashboardURL.scheme?.lowercased() &&
             url.host?.lowercased() == dashboardURL.host?.lowercased() &&
@@ -334,7 +434,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return
+        }
         dashboardWindowLogger.error(
             "dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         let html = Self.failureHTML(
@@ -458,6 +560,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 extension DashboardWindowController {
     var _testUserScripts: [WKUserScript] {
         self.webView.configuration.userContentController.userScripts
+    }
+
+    var _testAllowsBackForwardGestures: Bool {
+        self.webView.allowsBackForwardNavigationGestures
     }
 }
 #endif

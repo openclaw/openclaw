@@ -69,7 +69,7 @@ describe("OpenAI Responses provider", () => {
         baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
       }),
       context,
-      { apiKey: "oc-sent-v1-0123456789abcdef01234567" },
+      { apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end" },
     ).result();
 
     const config = openAiMockState.configs[0] as {
@@ -77,9 +77,9 @@ describe("OpenAI Responses provider", () => {
       defaultHeaders?: Record<string, string | null>;
       fetch?: unknown;
     };
-    expect(config.apiKey).toBe("oc-sent-v1-0123456789abcdef01234567");
+    expect(config.apiKey).toBe("oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end");
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe(
-      "Bearer oc-sent-v1-0123456789abcdef01234567",
+      "Bearer oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
     );
     expect(config.fetch).toBe(hostFetch);
   });

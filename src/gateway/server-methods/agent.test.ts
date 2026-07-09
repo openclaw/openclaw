@@ -583,16 +583,28 @@ async function invokeAgent(
   },
 ) {
   const respond = options?.respond ?? vi.fn();
-  await agentHandlers.agent({
-    params,
-    respond: respond as never,
-    context: options?.context ?? makeContext(),
-    req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-    client: options?.client ?? null,
-    isWebchatConnect: options?.isWebchatConnect ?? (() => false),
-  });
-  if (options?.flushDispatch !== false) {
-    await waitForAcceptedRunDispatch(respond);
+  // Most cases only need to cross the accepted-ack timer; keep tests that own
+  // timer semantics on their explicit clock while avoiding a real sleep here.
+  const ownsDispatchTimers = options?.flushDispatch !== false && !vi.isFakeTimers();
+  if (ownsDispatchTimers) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  }
+  try {
+    await agentHandlers.agent({
+      params,
+      respond: respond as never,
+      context: options?.context ?? makeContext(),
+      req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
+      client: options?.client ?? null,
+      isWebchatConnect: options?.isWebchatConnect ?? (() => false),
+    });
+    if (options?.flushDispatch !== false) {
+      await waitForAcceptedRunDispatch(respond);
+    }
+  } finally {
+    if (ownsDispatchTimers) {
+      vi.useRealTimers();
+    }
   }
   return respond;
 }
@@ -3666,6 +3678,35 @@ describe("gateway agent handler", () => {
     const spawnedCall = await waitForAgentCommandCall<{ cwd?: string; workspaceDir?: string }>();
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
     expect(spawnedCall.cwd).toBe("/tmp/task-repo");
+  });
+
+  it("uses a managed dashboard worktree as both workspace and runtime cwd", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({ spawnedCwd: "/tmp/session-worktree" });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedCwd: "/tmp/session-worktree",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "worktree run",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "worktree-workspace-forwarded",
+      },
+      { reqId: "worktree-workspace-forwarded-1" },
+    );
+    const worktreeCall = await waitForAgentCommandCall<{
+      cwd?: string;
+      workspaceDir?: string;
+    }>();
+    expect(worktreeCall.workspaceDir).toBe("/tmp/session-worktree");
+    expect(worktreeCall.cwd).toBe("/tmp/session-worktree");
   });
 
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {

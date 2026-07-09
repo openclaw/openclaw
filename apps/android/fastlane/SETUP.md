@@ -68,13 +68,14 @@ path after `pnpm android:release:upload` fails.
 Generate deterministic Google Play screenshots:
 
 ```bash
-ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
+pnpm android:screenshots
 ```
 
-If exactly one ADB device is already connected, `pnpm android:screenshots`
-uses it. With `ANDROID_SCREENSHOT_AVD` or `--avd <name>`, the script can boot a
-headless emulator, wait for boot completion, stabilize animation settings,
-capture screenshots, and shut down only the emulator it started.
+The script creates and boots a retained `OpenClaw_Screenshots_API36` AVD from
+Android's no-cutout Pixel 2 profile when needed. The API 36 Google APIs system
+image must be installed. Use `ANDROID_SCREENSHOT_AVD` or `--avd <name>` to
+select another AVD, or `--device <adb-serial>` to explicitly capture from a
+connected emulator.
 
 Upload metadata, release notes, and the Play AAB to the configured Google Play track:
 
