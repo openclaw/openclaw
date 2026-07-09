@@ -33,6 +33,12 @@ You need:
 The resolver talks to Vault over HTTP from Node. The Gateway does not need the
 Vault CLI to resolve SecretRefs.
 
+Enable the bundled plugin before running the `openclaw vault` commands:
+
+```bash
+openclaw plugins enable vault
+```
+
 ## Store a provider key in Vault
 
 OpenClaw defaults to KV v2 mounted at `secret`, matching Vault dev-server
