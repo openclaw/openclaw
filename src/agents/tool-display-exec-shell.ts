@@ -252,8 +252,8 @@ export function scanTopLevelChars(
 
     if (heredocDelimiter !== undefined && heredocBodyStartIndex !== undefined && i >= heredocBodyStartIndex) {
       const newlineAfterHeredoc = command.indexOf("\n", i);
-      let lineEnd = newlineAfterHeredoc !== -1 ? newlineAfterHeredoc : command.length;
-      let lineContent = command.slice(i, lineEnd).trimEnd();
+      const lineEnd = newlineAfterHeredoc !== -1 ? newlineAfterHeredoc : command.length;
+      const lineContent = command.slice(i, lineEnd).trimEnd();
 
       if (lineContent === heredocDelimiter) {
         heredocDelimiter = undefined;

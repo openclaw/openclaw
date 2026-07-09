@@ -12,7 +12,6 @@ import {
   firstPositional,
   optionValue,
   positionalArgs,
-  scanTopLevelChars,
   splitShellWords,
   splitTopLevelPipes,
   splitTopLevelStages,
