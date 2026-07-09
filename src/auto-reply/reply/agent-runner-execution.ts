@@ -1150,7 +1150,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  // Use the typed FailoverError.reason for rate_limit/overloaded classification
+  // instead of re-deriving from message text. This fixes periodic usage-limit
+  // messages (e.g., "weekly limit") that are classified as rate_limit by the
+  // failover layer but not matched by isRateLimitErrorMessage patterns.
+  // Fall back to message-pattern matching for non-FailoverError errors.
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : isFailoverError(params.err)
+      ? params.err.reason === "rate_limit" || params.err.reason === "overloaded"
+      : isRateLimitErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(message)
@@ -3444,9 +3453,16 @@ async function runAgentTurnWithFallbackInternal(
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
+      // Use the typed FailoverError.reason for rate_limit/overloaded classification
+      // instead of re-deriving from message text. This fixes periodic usage-limit
+      // messages (e.g., "weekly limit") that are classified as rate_limit by the
+      // failover layer but not matched by isRateLimitErrorMessage patterns.
+      // Fall back to message-pattern matching for non-FailoverError errors.
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : isFailoverError(err)
+          ? err.reason === "rate_limit" || err.reason === "overloaded"
+          : isRateLimitErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
           ? formatRateLimitOrOverloadedErrorCopy(message)
