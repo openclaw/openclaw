@@ -296,14 +296,9 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 function findHeredocBodyEnd(
   command: string,
   marker: HeredocMarker,
-  operatorIndex: number,
+  bodyStart: number,
 ): number | undefined {
-  const bodyStart = command.indexOf("\n", operatorIndex);
-  if (bodyStart === -1) {
-    return undefined;
-  }
-
-  let lineStart = bodyStart + 1;
+  let lineStart = bodyStart;
   while (lineStart <= command.length) {
     const lineEnd = command.indexOf("\n", lineStart);
     const end = lineEnd === -1 ? command.length : lineEnd;
@@ -327,6 +322,7 @@ export function scanTopLevelChars(
 ): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
+  let pendingHeredocs: HeredocMarker[] = [];
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i];
@@ -354,7 +350,20 @@ export function scanTopLevelChars(
 
     const heredoc = parseHeredocMarker(command, i);
     if (heredoc) {
-      const bodyEnd = findHeredocBodyEnd(command, heredoc, i);
+      pendingHeredocs.push(heredoc);
+    }
+
+    if (char === "\n" && pendingHeredocs.length > 0) {
+      let bodyStart = i + 1;
+      let bodyEnd: number | undefined;
+      for (const marker of pendingHeredocs) {
+        bodyEnd = findHeredocBodyEnd(command, marker, bodyStart);
+        if (bodyEnd === undefined) {
+          break;
+        }
+        bodyStart = bodyEnd + 1;
+      }
+      pendingHeredocs = [];
       if (bodyEnd !== undefined) {
         i = bodyEnd - 1;
         continue;

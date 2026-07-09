@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { splitTopLevelStages } from "./tool-display-exec-shell.js";
+import { splitTopLevelPipes, splitTopLevelStages } from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
@@ -566,6 +566,49 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe("show > → run email_preview_new → run email_preview_new");
+  });
+
+  it("consumes same-line heredocs in declaration order before splitting later stages", () => {
+    const stages = splitTopLevelStages(
+      [
+        "cat <<'FIRST' <<-\"SECOND\"",
+        "first; body && body || body | body",
+        "FIRST",
+        "\tsecond; body && body || body | body",
+        "\tSECOND",
+        "printf done && npm test",
+      ].join("\n"),
+    );
+
+    expect(stages).toEqual([
+      [
+        "cat <<'FIRST' <<-\"SECOND\"",
+        "first; body && body || body | body",
+        "FIRST",
+        "\tsecond; body && body || body | body",
+        "\tSECOND",
+        "printf done",
+      ].join("\n"),
+      "npm test",
+    ]);
+  });
+
+  it("splits a real pipe after the final same-line heredoc terminator", () => {
+    const command = [
+      "cat <<ONE <<-'TWO'",
+      "one | body",
+      "ONE",
+      "\ttwo && body",
+      "\tTWO",
+      "cat result | wc -l",
+    ].join("\n");
+
+    expect(splitTopLevelPipes(command)).toEqual([
+      ["cat <<ONE <<-'TWO'", "one | body", "ONE", "\ttwo && body", "\tTWO", "cat result"].join(
+        "\n",
+      ),
+      "wc -l",
+    ]);
   });
 
   it("appends node name to exec detail when node is set", () => {
