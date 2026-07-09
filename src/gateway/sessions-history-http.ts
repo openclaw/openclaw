@@ -52,7 +52,12 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
     return null;
   }
   try {
-    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
+    const decoded = decodeURIComponent(match[1] ?? "");
+    // Reject path traversal sequences that survive URL decoding (e.g. %2e%2e%2f → ../).
+    if (/\.\./.test(decoded) || decoded.includes("\0")) {
+      return null;
+    }
+    return normalizeOptionalString(decoded) ?? null;
   } catch {
     return "";
   }
