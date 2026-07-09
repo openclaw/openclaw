@@ -1729,10 +1729,8 @@ export const en: TranslationMap = {
       retryQueuedMessage: "Retry queued message",
     },
     modelPicker: {
-      discard: "Discard",
       faster: "Faster",
       smarter: "Smarter",
-      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",

@@ -1748,10 +1748,8 @@ export const pl: TranslationMap = {
       retryQueuedMessage: "Ponów wiadomość w kolejce",
     },
     modelPicker: {
-      discard: "Odrzuć",
       faster: "Szybciej",
       smarter: "Inteligentniej",
-      useDefaultModel: "Użyj modelu domyślnego",
     },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",

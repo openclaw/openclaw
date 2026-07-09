@@ -1733,10 +1733,8 @@ export const vi: TranslationMap = {
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
     },
     modelPicker: {
-      discard: "Bỏ",
       faster: "Nhanh hơn",
       smarter: "Thông minh hơn",
-      useDefaultModel: "Dùng mô hình mặc định",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",

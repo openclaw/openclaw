@@ -1764,10 +1764,8 @@ export const fr: TranslationMap = {
       retryQueuedMessage: "Réessayer le message en file d’attente",
     },
     modelPicker: {
-      discard: "Abandonner",
       faster: "Plus rapide",
       smarter: "Plus intelligent",
-      useDefaultModel: "Utiliser le modèle par défaut",
     },
     pairingQrExpired: {
       title: "QR d'appairage expiré",

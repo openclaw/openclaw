@@ -1724,10 +1724,8 @@ export const hi: TranslationMap = {
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
     },
     modelPicker: {
-      discard: "त्यागें",
       faster: "तेज़",
       smarter: "अधिक बुद्धिमान",
-      useDefaultModel: "डिफ़ॉल्ट मॉडल का उपयोग करें",
     },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",

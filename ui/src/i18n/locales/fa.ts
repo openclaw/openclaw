@@ -1742,10 +1742,8 @@ export const fa: TranslationMap = {
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
     },
     modelPicker: {
-      discard: "رد کردن",
       faster: "سریع‌تر",
       smarter: "هوشمندتر",
-      useDefaultModel: "استفاده از مدل پیش‌فرض",
     },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",

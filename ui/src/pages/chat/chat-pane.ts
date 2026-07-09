@@ -1027,7 +1027,6 @@ class ChatPane extends OpenClawLightDomElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
-          draftScope: state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,

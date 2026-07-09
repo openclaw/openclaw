@@ -1748,10 +1748,8 @@ export const nl: TranslationMap = {
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
     },
     modelPicker: {
-      discard: "Verwerpen",
       faster: "Sneller",
       smarter: "Slimmer",
-      useDefaultModel: "Standaardmodel gebruiken",
     },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",
