@@ -7,6 +7,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
@@ -88,7 +89,7 @@ async function resolveRevisionSessionKey(
 
   const createdKey = await context.sessions.create({
     agentId,
-    label: `Skill Workshop: ${proposal.slug || proposal.key}`.slice(0, 80),
+    label: truncateUtf16Safe(`Skill Workshop: ${proposal.slug || proposal.key}`, 80),
   });
   const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
   if (!sessionKey) {
