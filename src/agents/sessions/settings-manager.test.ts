@@ -29,6 +29,22 @@ describe("SettingsManager runtime overrides", () => {
     });
   });
 
+  it("merges nested retry.provider fields from global and overrides (deepMergeSettings recursion)", () => {
+    const settingsManager = SettingsManager.inMemory({
+      retry: { provider: { timeoutMs: 30_000, maxRetries: 5 } },
+    });
+
+    settingsManager.applyOverrides({
+      retry: { provider: { maxRetryDelayMs: 5_000 } },
+    });
+
+    expect(settingsManager.getProviderRetrySettings()).toEqual({
+      timeoutMs: 30_000,
+      maxRetries: 5,
+      maxRetryDelayMs: 5_000,
+    });
+  });
+
   it("preserves runtime overrides after project setting writes", async () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { reserveTokens: 16_384 },

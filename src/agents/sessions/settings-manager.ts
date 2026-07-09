@@ -142,7 +142,10 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
       baseValue !== null &&
       !Array.isArray(baseValue)
     ) {
-      (result as Record<string, unknown>)[key] = { ...baseValue, ...overrideValue };
+      (result as Record<string, unknown>)[key] = deepMergeSettings(
+        baseValue as Record<string, unknown>,
+        overrideValue as Record<string, unknown>,
+      );
     } else {
       // For primitives and arrays, override value wins
       (result as Record<string, unknown>)[key] = overrideValue;
