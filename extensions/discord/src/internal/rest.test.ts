@@ -877,6 +877,52 @@ describe("RequestClient", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects multipart uploads that exceed the aggregate body limit before fetch", async () => {
+    const arrayBufferSpy = vi.spyOn(Blob.prototype, "arrayBuffer");
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "msg" }));
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      multipartBodyMaxBytes: 256,
+      queueRequests: false,
+    });
+
+    try {
+      await expect(
+        client.post("/channels/c1/messages", {
+          body: {
+            content: "file",
+            files: [{ name: "large.txt", data: new Uint8Array(300), contentType: "text/plain" }],
+          },
+        }),
+      ).rejects.toThrow(/Discord REST multipart body exceeds 256 bytes/);
+
+      expect(arrayBufferSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      arrayBufferSpy.mockRestore();
+    }
+  });
+
+  it("rejects oversized multipart string fields before fetch", async () => {
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "msg" }));
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      multipartBodyMaxBytes: 256,
+      queueRequests: false,
+    });
+
+    await expect(
+      client.post("/channels/c1/messages", {
+        body: {
+          content: "x".repeat(300),
+          files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
+        },
+      }),
+    ).rejects.toThrow(/Discord REST multipart body exceeds 256 bytes/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("dispatches multipart uploads through undici fetch with a multipart/form-data content type", async () => {
     const server = await new Promise<Server>((resolve) => {
       const srv = createServer((req, res) => {

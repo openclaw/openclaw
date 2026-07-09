@@ -45,6 +45,7 @@ export type RequestClientOptions = {
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
+  multipartBodyMaxBytes?: number;
   runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -53,6 +54,7 @@ export type RequestClientOptions = {
 type NormalizedRequestClientOptions = RequestClientOptions & {
   apiVersion: number;
   maxQueueSize: number;
+  multipartBodyMaxBytes: number;
   timeout: number;
 };
 
@@ -95,6 +97,7 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
 // (bulk message/member fetches stay in the low hundreds of KB) so a controlled
 // or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
 const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const DEFAULT_DISCORD_MULTIPART_BODY_MAX_BYTES = 100 * 1024 * 1024;
 const GZIP_MAGIC = [0x1f, 0x8b] as const;
 
 function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
@@ -155,18 +158,39 @@ function escapeMultipartQuotedValue(value: string): string {
   return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
 }
 
-async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
+function createMultipartBodyOverflowError(maxBytes: number): Error {
+  return new Error(`Discord REST multipart body exceeds ${maxBytes} bytes`);
+}
+
+async function formDataToMultipartBody(
+  body: FormData,
+  headers: Headers,
+  maxBytes: number,
+): Promise<BodyInit> {
   const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
   headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
   const chunks: Buffer[] = [];
+  const closingBoundaryBytes = Buffer.byteLength(`--${boundary}--\r\n`);
+  let totalBytes = 0;
   const push = (value: string | Buffer) => {
+    const byteLength = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+    totalBytes += byteLength;
+    if (totalBytes > maxBytes) {
+      throw createMultipartBodyOverflowError(maxBytes);
+    }
     chunks.push(typeof value === "string" ? Buffer.from(value) : value);
+  };
+  const reserve = (size: number) => {
+    if (totalBytes + size > maxBytes) {
+      throw createMultipartBodyOverflowError(maxBytes);
+    }
   };
   for (const [key, value] of body.entries()) {
     push(`--${boundary}\r\n`);
     const escapedKey = escapeMultipartQuotedValue(key);
     if (typeof value === "string") {
       push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
+      reserve(Buffer.byteLength(value) + Buffer.byteLength("\r\n") + closingBoundaryBytes);
       push(value);
       push("\r\n");
       continue;
@@ -180,6 +204,7 @@ async function formDataToMultipartBody(body: FormData, headers: Headers): Promis
       push(`Content-Type: ${value.type}\r\n`);
     }
     push("\r\n");
+    reserve(value.size + Buffer.byteLength("\r\n") + closingBoundaryBytes);
     push(Buffer.from(await value.arrayBuffer()));
     push("\r\n");
   }
@@ -190,9 +215,10 @@ async function formDataToMultipartBody(body: FormData, headers: Headers): Promis
 async function normalizeFetchBody(
   body: BodyInit | undefined,
   headers: Headers,
+  maxMultipartBodyBytes: number,
 ): Promise<BodyInit | undefined> {
   if (body instanceof FormData) {
-    return await formDataToMultipartBody(body, headers);
+    return await formDataToMultipartBody(body, headers, maxMultipartBodyBytes);
   }
   return body;
 }
@@ -297,7 +323,7 @@ export class RequestClient {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
-        body: await normalizeFetchBody(body, headers),
+        body: await normalizeFetchBody(body, headers, this.options.multipartBodyMaxBytes),
         signal,
       });
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
@@ -375,6 +401,11 @@ function normalizeRequestClientOptions(
     maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
       min: 1,
     }),
+    multipartBodyMaxBytes: normalizeIntegerOption(
+      merged.multipartBodyMaxBytes,
+      DEFAULT_DISCORD_MULTIPART_BODY_MAX_BYTES,
+      { min: 1 },
+    ),
   };
 }
 
