@@ -39,10 +39,6 @@ type GoogleOauthTokenResponsePayload = {
   error_description?: unknown;
 };
 
-type GoogleVertexAuthorizedUserHeadersOptions = {
-  tokenRefreshTimeoutMs?: number;
-};
-
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
@@ -224,7 +220,6 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   credentialsPath: string;
   credentials: GoogleAuthorizedUserCredentials;
   fetchImpl?: typeof fetch;
-  timeoutMs?: number;
 }): Promise<string> {
   const clientId = normalizeOptionalString(params.credentials.client_id);
   const clientSecret = normalizeOptionalString(params.credentials.client_secret);
@@ -251,11 +246,12 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     grant_type: "refresh_token",
   });
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs: params.timeoutMs ?? GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
+    timeoutMs: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
     operation: "google-vertex-adc-token-refresh",
     url: GOOGLE_OAUTH_TOKEN_URL,
   });
   let response: Response;
+  let payload: GoogleOauthTokenResponsePayload | undefined;
   try {
     response = await (params.fetchImpl ?? fetch)(GOOGLE_OAUTH_TOKEN_URL, {
       method: "POST",
@@ -263,10 +259,12 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
       body,
       signal,
     });
+    // Keep the request deadline active through body consumption. Fetch resolves
+    // at headers, so cleanup here would leave a stalled token body unbounded.
+    payload = await readGoogleOauthTokenResponsePayload(response);
   } finally {
     cleanup();
   }
-  const payload = await readGoogleOauthTokenResponsePayload(response);
   if (!response.ok) {
     const description = normalizeOptionalString(payload?.error_description);
     const code = normalizeOptionalString(payload?.error);
@@ -413,7 +411,6 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
  */
 export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
-  options: GoogleVertexAuthorizedUserHeadersOptions = {},
 ): Promise<Record<string, string>> {
   const credentialsPath = resolveGoogleApplicationCredentialsPath();
   if (credentialsPath) {
@@ -423,7 +420,6 @@ export async function resolveGoogleVertexAuthorizedUserHeaders(
         credentialsPath,
         credentials,
         fetchImpl,
-        timeoutMs: options.tokenRefreshTimeoutMs,
       });
       return { Authorization: `Bearer ${token}` };
     }

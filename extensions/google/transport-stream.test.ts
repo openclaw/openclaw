@@ -1314,6 +1314,53 @@ describe("google transport stream", () => {
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
   });
 
+  it("times out an authorized_user ADC token refresh", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-timeout-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "timeout-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.useFakeTimers();
+
+    let observedSignal: AbortSignal | undefined;
+    const tokenFetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("expected token refresh deadline signal");
+      }
+      observedSignal = signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock);
+    await vi.waitFor(() => expect(tokenFetchMock).toHaveBeenCalledOnce());
+    const signal = observedSignal;
+    if (!signal) {
+      throw new Error("expected token refresh deadline signal");
+    }
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(signal.aborted).toBe(true);
+    await expect(pendingRefresh).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+  });
+
   it("refreshes authorized_user ADC from a compressed token response", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
