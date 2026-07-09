@@ -20,6 +20,7 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { testing as slackRoutingTesting } from "./prepare-routing.js";
@@ -243,6 +244,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared, "open-policy Slack DM");
     expect(prepared.ctxPayload.RawBody).toContain("hello");
     expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
+  it("uses the validated event workspace as the standardized conversation space", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.teamId = "";
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true,
+      teamId: "T_ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack DM");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
   });
 
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {

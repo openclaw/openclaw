@@ -568,6 +568,60 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
   });
 
+  it.each(["configured", "profile", "environment"] as const)(
+    "explains how auth precedence affects a rejected %s API key",
+    async (source) => {
+      if (source === "profile") {
+        resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("sk-profile"); // pragma: allowlist secret
+      } else if (source === "environment") {
+        vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
+      }
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: createJsonResponse(
+          { error: { message: "Incorrect API key provided: sk-proj-***" } },
+          { status: 401 },
+        ),
+        release: vi.fn(async () => undefined),
+      });
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      if (!provider.createBrowserSession) {
+        throw new Error("expected OpenAI realtime provider to support browser sessions");
+      }
+
+      await expect(
+        provider.createBrowserSession({
+          providerConfig:
+            source === "configured"
+              ? { apiKey: "sk-stale" } // pragma: allowlist secret
+              : {},
+        }),
+      ).rejects.toThrow(
+        "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source; Codex OAuth is used only when no API-key source is configured",
+      );
+    },
+  );
+
+  it("preserves the provider detail when Codex OAuth is rejected", async () => {
+    resolveProviderAuthProfileApiKeyMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse(
+        { error: { message: "OAuth token expired" } },
+        { status: 401 },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expect(provider.createBrowserSession({ providerConfig: {} })).rejects.toThrow(
+      "OAuth token expired",
+    );
+  });
+
   it("omits unsupported OpenAI tool names from browser sessions", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: createJsonResponse({ client_secret: { value: "client-secret-123" } }),
