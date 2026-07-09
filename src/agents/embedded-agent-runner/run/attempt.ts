@@ -4507,6 +4507,10 @@ export async function runEmbeddedAttempt(
               runtimeContextChars: promptSubmission.runtimeOnly
                 ? (runtimeSystemContext?.length ?? 0)
                 : (runtimeContextForHook?.length ?? 0),
+              // promptForSession is what persists to the transcript; hook
+              // prepend/append context reaches only the model, so record the
+              // delta or transcript-based context accounting undercounts it.
+              modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
             };
           }
           const systemPromptForHook = systemPromptText;
