@@ -1200,6 +1200,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        guestShare: z
+          .object({
+            joinUrlBase: HttpUrlSchema.optional(),
+          })
+          .strict()
+          .optional(),
         terminal: z
           .object({
             enabled: z.boolean().optional(),

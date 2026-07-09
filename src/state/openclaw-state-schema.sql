@@ -1268,6 +1268,45 @@ CREATE TABLE IF NOT EXISTS tui_last_sessions (
 CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
   ON tui_last_sessions(session_key, updated_at DESC, scope_key);
 
+CREATE TABLE IF NOT EXISTS guest_grants (
+  grant_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode = 'viewer'),
+  audience TEXT NOT NULL CHECK (audience IN ('open', 'deva-user')),
+  invited_principal_json TEXT,
+  code_hash TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  revoked_at_ms INTEGER,
+  replay_policy TEXT NOT NULL CHECK (replay_policy IN ('share-start', 'full')),
+  max_concurrent_guests INTEGER,
+  next_guest_number INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_grants_session_created
+  ON guest_grants(session_key, created_at_ms DESC, grant_id);
+
+CREATE INDEX IF NOT EXISTS idx_guest_grants_active_expiry
+  ON guest_grants(expires_at_ms, grant_id)
+  WHERE revoked_at_ms IS NULL;
+
+CREATE TABLE IF NOT EXISTS guest_joins (
+  guest_id TEXT NOT NULL PRIMARY KEY,
+  grant_id TEXT NOT NULL,
+  guest_number INTEGER NOT NULL,
+  deva_user_id TEXT,
+  display_name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at_ms INTEGER NOT NULL,
+  last_seen_ms INTEGER NOT NULL,
+  UNIQUE (grant_id, guest_number),
+  FOREIGN KEY (grant_id) REFERENCES guest_grants(grant_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_joins_grant_created
+  ON guest_joins(grant_id, created_at_ms, guest_number);
+
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,

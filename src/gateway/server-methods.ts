@@ -198,6 +198,10 @@ const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
 );
+const loadGuestShareHandlers = lazyHandlerModule(
+  () => import("./guest/share-rpc.js"),
+  (module) => module.guestShareHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -593,6 +597,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.compact",
     ],
     loadHandlers: loadSessionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.share.create", "sessions.share.list", "sessions.share.revoke"],
+    loadHandlers: loadGuestShareHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

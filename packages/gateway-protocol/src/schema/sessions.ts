@@ -289,6 +289,49 @@ export const SessionsCreateResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Deva identity bound to an invite-only guest grant. */
+export const GuestInvitedPrincipalSchema = Type.Object(
+  {
+    issuer: Type.Literal("deva"),
+    subject: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Creates one durable guest-viewer grant for a session. */
+export const SessionsShareCreateParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    access: Type.Union([Type.Literal("link"), Type.Literal("invite")]),
+    invitedPrincipal: Type.Optional(GuestInvitedPrincipalSchema),
+    expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    replayPolicy: Type.Optional(Type.Union([Type.Literal("share-start"), Type.Literal("full")])),
+  },
+  { additionalProperties: false },
+);
+
+/** One-time share creation response; connection credentials are minted only on redemption. */
+export const SessionsShareCreateResultSchema = Type.Object(
+  {
+    grantId: NonEmptyString,
+    code: NonEmptyString,
+    joinUrl: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Lists guest grants, optionally narrowed to one session. */
+export const SessionsShareListParamsSchema = Type.Object(
+  { sessionKey: Type.Optional(NonEmptyString) },
+  { additionalProperties: false },
+);
+
+/** Revokes one guest grant while preserving its durable tombstone. */
+export const SessionsShareRevokeParamsSchema = Type.Object(
+  { grantId: NonEmptyString },
+  { additionalProperties: false },
+);
+
 /** Sends one message into an existing session. */
 export const SessionsSendParamsSchema = Type.Object(
   {

@@ -130,5 +130,42 @@ describe("GuestGrantStore", () => {
       displayName: "Guest 2",
     });
     expect(store.listJoins(created.grant.grantId)).toEqual([first, second]);
+
+    const invited = store.createGrant({
+      sessionKey: "agent:main:guest-demo",
+      audience: "deva-user",
+      invitedPrincipal: { issuer: "deva", subject: "deva-user-42" },
+      createdBy: "device:test-host",
+      expiresAtMs: now + 60_000,
+    });
+    expect(() =>
+      store.createJoin({ grantId: invited.grant.grantId, token: "missing-principal" }),
+    ).toThrow("guest identity does not match invite");
+    expect(() =>
+      store.createJoin({
+        grantId: invited.grant.grantId,
+        token: "wrong-principal",
+        devaUserId: "deva-user-7",
+      }),
+    ).toThrow("guest identity does not match invite");
+    expect(
+      store.createJoin({
+        grantId: invited.grant.grantId,
+        token: "matching-principal",
+        devaUserId: "deva-user-42",
+      }),
+    ).toMatchObject({ devaUserId: "deva-user-42", displayName: "Guest 1" });
+
+    const capped = store.createGrant({
+      sessionKey: "agent:main:guest-demo",
+      audience: "open",
+      createdBy: "device:test-host",
+      expiresAtMs: now + 60_000,
+      maxConcurrentGuests: 1,
+    });
+    store.createJoin({ grantId: capped.grant.grantId, token: "capped-one" });
+    expect(() => store.createJoin({ grantId: capped.grant.grantId, token: "capped-two" })).toThrow(
+      "guest grant has reached its guest limit",
+    );
   });
 });

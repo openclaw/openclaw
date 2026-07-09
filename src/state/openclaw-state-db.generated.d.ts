@@ -594,6 +594,33 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface GuestGrants {
+  audience: string;
+  code_hash: string;
+  created_at_ms: number;
+  created_by: string;
+  expires_at_ms: number;
+  grant_id: string;
+  invited_principal_json: string | null;
+  max_concurrent_guests: number | null;
+  mode: string;
+  next_guest_number: Generated<number>;
+  replay_policy: string;
+  revoked_at_ms: number | null;
+  session_key: string;
+}
+
+export interface GuestJoins {
+  created_at_ms: number;
+  deva_user_id: string | null;
+  display_name: string;
+  grant_id: string;
+  guest_id: string;
+  guest_number: number;
+  last_seen_ms: number;
+  token_hash: string;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -1098,6 +1125,8 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  guest_grants: GuestGrants;
+  guest_joins: GuestJoins;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;

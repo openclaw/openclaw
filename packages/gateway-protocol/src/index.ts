@@ -415,6 +415,14 @@ import {
   SessionsCreateParamsSchema,
   type SessionsCreateResult,
   SessionsCreateResultSchema,
+  type SessionsShareCreateParams,
+  SessionsShareCreateParamsSchema,
+  type SessionsShareCreateResult,
+  SessionsShareCreateResultSchema,
+  type SessionsShareListParams,
+  SessionsShareListParamsSchema,
+  type SessionsShareRevokeParams,
+  SessionsShareRevokeParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
@@ -818,6 +826,15 @@ export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams
 );
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
+);
+export const validateSessionsShareCreateParams = lazyCompile<SessionsShareCreateParams>(
+  SessionsShareCreateParamsSchema,
+);
+export const validateSessionsShareListParams = lazyCompile<SessionsShareListParams>(
+  SessionsShareListParamsSchema,
+);
+export const validateSessionsShareRevokeParams = lazyCompile<SessionsShareRevokeParams>(
+  SessionsShareRevokeParamsSchema,
 );
 export const validateSessionsSendParams = lazyCompile<SessionsSendParams>(SessionsSendParamsSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile<SessionsMessagesSubscribeParams>(
@@ -1261,6 +1278,10 @@ export {
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsShareCreateParamsSchema,
+  SessionsShareCreateResultSchema,
+  SessionsShareListParamsSchema,
+  SessionsShareRevokeParamsSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1667,6 +1688,10 @@ export type {
   SessionOperationEvent,
   SessionWorktreeInfo,
   SessionsCreateResult,
+  SessionsShareCreateParams,
+  SessionsShareCreateResult,
+  SessionsShareListParams,
+  SessionsShareRevokeParams,
   SessionsPatchParams,
   SessionsPatchResult,
   SessionsResetParams,

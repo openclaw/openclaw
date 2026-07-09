@@ -161,6 +161,11 @@ export type GatewayControlUiConfig = {
   dangerouslyDisableDeviceAuth?: boolean;
 };
 
+export type GatewayGuestShareConfig = {
+  /** Browser join page base used when sessions.share.create returns a share URL. */
+  joinUrlBase?: string;
+};
+
 /** Gateway authentication strategy for WebSocket and HTTP clients. */
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
@@ -519,6 +524,7 @@ export type GatewayConfig = {
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  guestShare?: GatewayGuestShareConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
