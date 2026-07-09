@@ -196,6 +196,13 @@ export async function fetchChatUsers(
 
           if (result.success) {
             const users = result.data?.users ?? [];
+            // Evict stale entries so a hostile caller that rotates through
+            // many webhook URLs cannot grow the Map without bound.
+            for (const [key, entry] of chatUserCache) {
+              if (now - entry.cachedAt >= CACHE_TTL_MS) {
+                chatUserCache.delete(key);
+              }
+            }
             chatUserCache.set(listUrl, {
               users,
               cachedAt: now,
