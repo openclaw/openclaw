@@ -292,41 +292,16 @@ function applyOAuthCallbackCorsHeaders(
   res: import("node:http").ServerResponse,
   resolveOrigin?: (originHeader: string | string[] | undefined) => string | undefined,
 ): void {
-  const origin =
-    resolveOrigin === undefined
-      ? typeof req.headers.origin === "string" && isHttpOrigin(req.headers.origin)
-        ? req.headers.origin
-        : undefined
-      : resolveOrigin(req.headers.origin);
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
-  }
-  if (resolveOrigin !== undefined && !origin) {
-    // With an allowlist present, untrusted origins receive a bare 204 preflight
-    // response so browser navigation still works but scripts cannot read it.
+  const origin = resolveOrigin !== undefined ? resolveOrigin(req.headers.origin) : undefined;
+  if (!origin) {
     return;
   }
-
-  const requestedHeaders = req.headers["access-control-request-headers"];
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    typeof requestedHeaders === "string" && requestedHeaders.trim().length > 0
-      ? requestedHeaders
-      : "content-type",
-  );
+  res.setHeader("Access-Control-Allow-Headers", "content-type");
   res.setHeader("Access-Control-Allow-Private-Network", "true");
   res.setHeader("Access-Control-Max-Age", "600");
-}
-
-function isHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
-  } catch {
-    return false;
-  }
 }
 
 function escapeHtmlText(value: string): string {
