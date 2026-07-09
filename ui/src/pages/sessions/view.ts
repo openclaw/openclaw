@@ -19,7 +19,7 @@ import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
 } from "../../lib/chat/thinking.ts";
-import { formatRelativeTimestamp, parseSessionKeyParts } from "../../lib/format.ts";
+import { formatRelativeTimestamp, formatTokens, parseSessionKeyParts } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
@@ -242,6 +242,168 @@ function renderSessionStatusBadge(row: GatewaySessionRow) {
       </span>
     </openclaw-tooltip>
   `;
+}
+
+const SESSION_KIND_ICONS = {
+  cron: icons.clock,
+  direct: icons.messageSquare,
+  group: icons.users,
+  global: icons.globe,
+  unknown: icons.circle,
+} satisfies Record<GatewaySessionRow["kind"], unknown>;
+
+// Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
+// state also reads at the identity anchor while scanning the key column.
+function renderSessionAvatar(row: GatewaySessionRow) {
+  return html`
+    <span class="session-avatar session-avatar--${row.kind}" aria-hidden="true">
+      ${SESSION_KIND_ICONS[row.kind] ?? icons.circle}
+      ${isSessionRunActive(row) ? html`<span class="session-avatar__status"></span>` : nothing}
+    </span>
+  `;
+}
+
+const CONTEXT_METER_WARN_PERCENT = 65;
+const CONTEXT_METER_DANGER_PERCENT = 85;
+
+function hasKnownTokenTotal(row: GatewaySessionRow): boolean {
+  return typeof row.totalTokens === "number" && Number.isFinite(row.totalTokens);
+}
+
+function renderTokensCell(row: GatewaySessionRow) {
+  const total = row.totalTokens;
+  if (typeof total !== "number" || !Number.isFinite(total)) {
+    return html`<span class="muted">${t("common.na")}</span>`;
+  }
+  // Stale snapshots (post-compaction, incomplete usage reporting) stay visible
+  // as "~" orientation but must not drive warn/danger tones; mirrors the chat
+  // composer's context-usage convention.
+  const fresh = row.totalTokensFresh !== false;
+  const totalLabel = `${fresh ? "" : "~"}${formatTokens(total)}`;
+  const context =
+    typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
+  if (!context) {
+    return html`<span class="session-tokens__value">${totalLabel}</span>`;
+  }
+  const percent = Math.min(100, Math.round((total / context) * 100));
+  const tone = !fresh
+    ? "stale"
+    : percent >= CONTEXT_METER_DANGER_PERCENT
+      ? "danger"
+      : percent >= CONTEXT_METER_WARN_PERCENT
+        ? "warn"
+        : "ok";
+  const title = t(fresh ? "sessionsView.contextUsage" : "sessionsView.contextUsageApprox", {
+    percent: String(percent),
+    used: total.toLocaleString(),
+    context: context.toLocaleString(),
+  });
+  return html`
+    <openclaw-tooltip .content=${title}>
+      <div class="session-tokens">
+        <span class="session-tokens__value">${totalLabel} / ${formatTokens(context)}</span>
+        <span
+          class="session-context-meter session-context-meter--${tone}"
+          role="img"
+          aria-label=${title}
+        >
+          <span class="session-context-meter__fill" style=${`width: ${percent}%`}></span>
+        </span>
+      </div>
+    </openclaw-tooltip>
+  `;
+}
+
+function renderSessionsOverview(rows: GatewaySessionRow[], liveCount: number) {
+  const unreadCount = rows.filter((row) => row.unread === true).length;
+  // Sum only known token totals; "~" marks the sum as partial/approximate when
+  // rows lack a snapshot or carry a stale one, and no snapshot at all is n/a
+  // rather than a fabricated 0.
+  const rowsWithTokens = rows.filter(hasKnownTokenTotal);
+  const totalTokens = rowsWithTokens.reduce((sum, row) => sum + (row.totalTokens ?? 0), 0);
+  const tokensApproximate =
+    rowsWithTokens.length < rows.length ||
+    rowsWithTokens.some((row) => row.totalTokensFresh === false);
+  const tokensValue =
+    rowsWithTokens.length === 0
+      ? t("common.na")
+      : `${tokensApproximate ? "~" : ""}${formatTokens(totalTokens)}`;
+  const tiles = [
+    {
+      id: "sessions",
+      icon: icons.messageSquare,
+      label: t("sessionsView.title"),
+      value: String(rows.length),
+      active: false,
+    },
+    {
+      id: "live",
+      icon: icons.zap,
+      label: t("sessionsView.statusLive"),
+      value: String(liveCount),
+      active: liveCount > 0,
+    },
+    {
+      id: "unread",
+      icon: icons.eye,
+      label: t("sessionsView.unread"),
+      value: String(unreadCount),
+      active: unreadCount > 0,
+    },
+    {
+      id: "tokens",
+      icon: icons.barChart,
+      label: t("sessionsView.tokens"),
+      value: tokensValue,
+      active: false,
+    },
+  ];
+  return html`
+    <div class="sessions-overview">
+      ${tiles.map((tile) => {
+        const tileClass = [
+          "sessions-overview__tile",
+          `sessions-overview__tile--${tile.id}`,
+          tile.active ? "sessions-overview__tile--active" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return html`
+          <div class=${tileClass}>
+            <span class="sessions-overview__icon" aria-hidden="true">${tile.icon}</span>
+            <span class="sessions-overview__meta">
+              <span class="sessions-overview__value">${tile.value}</span>
+              <span class="sessions-overview__label">${tile.label}</span>
+            </span>
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
+const SKELETON_ROW_COUNT = 4;
+
+// Initial load renders shimmer rows instead of flashing the empty state
+// before the first sessions.list result arrives.
+function renderSkeletonRows(columnCount: number) {
+  return Array.from(
+    { length: SKELETON_ROW_COUNT },
+    (_, rowIndex) => html`
+      <tr class="session-skeleton-row" aria-hidden="true">
+        ${Array.from({ length: columnCount }, (_cell, columnIndex) =>
+          columnIndex === 0
+            ? html`<td class="data-table-checkbox-col"></td>`
+            : html`<td>
+                <span
+                  class="session-skeleton ${columnIndex === 1 ? "session-skeleton--key" : ""}"
+                  style=${`animation-delay: ${rowIndex * 120}ms`}
+                ></span>
+              </td>`,
+        )}
+      </tr>
+    `,
+  );
 }
 
 function resolveThinkLevelPatchValue(value: string): string | null {
@@ -721,10 +883,6 @@ export function renderSessions(props: SessionsProps) {
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
-  const loadedLabel =
-    rawRows.length === 1
-      ? t("sessionsView.groupRowCountOne", { count: "1" })
-      : t("sessionsView.groupRowCount", { count: String(rawRows.length) });
   const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
@@ -758,32 +916,23 @@ export function renderSessions(props: SessionsProps) {
           <div class="card-title sessions-header__title">
             ${t("sessionsView.title")}
             ${props.result
-              ? html`<span class="sessions-header__count">${rawRows.length}</span>`
+              ? html`
+                  <openclaw-tooltip
+                    .content=${t("sessionsView.store", { path: props.result.path })}
+                  >
+                    <span class="sessions-header__count">${rawRows.length}</span>
+                  </openclaw-tooltip>
+                `
               : nothing}
           </div>
-          ${props.result
-            ? html`
-                <openclaw-tooltip .content=${t("sessionsView.store", { path: props.result.path })}>
-                  <div class="card-sub sessions-header__meta">
-                    <span>${loadedLabel}</span>
-                    ${liveCount > 0
-                      ? html`
-                          <span class="sessions-header__live">
-                            <span class="sessions-header__live-dot" aria-hidden="true"></span>
-                            ${t("sessionsView.liveCount", { count: String(liveCount) })}
-                          </span>
-                        `
-                      : nothing}
-                  </div>
-                </openclaw-tooltip>
-              `
-            : html`<div class="card-sub">${t("sessionsView.subtitle")}</div>`}
+          <div class="card-sub">${t("sessionsView.subtitle")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
 
+      ${props.result ? renderSessionsOverview(rawRows, liveCount) : nothing}
       ${props.error
         ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
         : nothing}
@@ -968,30 +1117,53 @@ export function renderSessions(props: SessionsProps) {
               </tr>
             </thead>
             <tbody>
-              ${paginated.length === 0
-                ? html`
-                    <tr>
-                      <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
-                        ${emptyBecauseFiltered
-                          ? html`
-                              <div class="data-table-empty-state" role="status" aria-live="polite">
-                                <div>${t("sessionsView.noSessionsMatchFilters")}</div>
-                                <button class="btn btn--sm" @click=${props.onClearFilters}>
-                                  ${t("sessionsView.showAll")}
-                                </button>
-                              </div>
-                            `
-                          : t("sessionsView.noSessions")}
-                      </td>
-                    </tr>
-                  `
-                : groups
-                  ? groups.flatMap((group) => {
-                      const section = group.rows.flatMap((row) => renderRows(row, props));
-                      section.unshift(renderGroupHeaderRow(group, props));
-                      return section;
-                    })
-                  : paginated.flatMap((row) => renderRows(row, props))}
+              ${props.loading && !props.result
+                ? renderSkeletonRows(sessionsTableColumnCount(props))
+                : paginated.length === 0
+                  ? html`
+                      <tr>
+                        <td
+                          colspan=${sessionsTableColumnCount(props)}
+                          class="data-table-empty-cell"
+                        >
+                          ${emptyBecauseFiltered
+                            ? html`
+                                <div
+                                  class="data-table-empty-state"
+                                  role="status"
+                                  aria-live="polite"
+                                >
+                                  <div class="data-table-empty-state__message">
+                                    ${icons.search}
+                                    <span>${t("sessionsView.noSessionsMatchFilters")}</span>
+                                  </div>
+                                  <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                    ${t("sessionsView.showAll")}
+                                  </button>
+                                </div>
+                              `
+                            : html`
+                                <div
+                                  class="data-table-empty-state"
+                                  role="status"
+                                  aria-live="polite"
+                                >
+                                  <div class="data-table-empty-state__message">
+                                    ${icons.messageSquare}
+                                    <span>${t("sessionsView.noSessions")}</span>
+                                  </div>
+                                </div>
+                              `}
+                        </td>
+                      </tr>
+                    `
+                  : groups
+                    ? groups.flatMap((group) => {
+                        const section = group.rows.flatMap((row) => renderRows(row, props));
+                        section.unshift(renderGroupHeaderRow(group, props));
+                        return section;
+                      })
+                    : paginated.flatMap((row) => renderRows(row, props))}
             </tbody>
           </table>
         </div>
@@ -1134,46 +1306,49 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <openclaw-tooltip .content=${keyCellTitle}>
           <div class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}>
-            <span class="session-key-cell__primary">
-              ${row.unread === true
-                ? html`<span
-                    class="session-unread-dot"
-                    role="img"
-                    aria-label=${t("sessionsView.unread")}
-                  ></span>`
+            ${renderSessionAvatar(row)}
+            <div class="session-key-cell__text">
+              <span class="session-key-cell__primary">
+                ${row.unread === true
+                  ? html`<span
+                      class="session-unread-dot"
+                      role="img"
+                      aria-label=${t("sessionsView.unread")}
+                    ></span>`
+                  : nothing}
+                ${canLink
+                  ? html`<a
+                      href=${chatUrl}
+                      class="session-link"
+                      @click=${(e: MouseEvent) => {
+                        if (
+                          e.defaultPrevented ||
+                          e.button !== 0 ||
+                          e.metaKey ||
+                          e.ctrlKey ||
+                          e.shiftKey ||
+                          e.altKey
+                        ) {
+                          return;
+                        }
+                        if (props.onNavigateToChat) {
+                          e.preventDefault();
+                          props.onNavigateToChat(row.key);
+                        }
+                      }}
+                      >${friendlyKeyLabel ?? row.key}</a
+                    >`
+                  : html`<span>${friendlyKeyLabel ?? row.key}</span>`}
+                ${trimmedLabel
+                  ? html`<span class="session-label-chip" title=${trimmedLabel}
+                      >${trimmedLabel}</span
+                    >`
+                  : nothing}
+              </span>
+              ${showDisplayName
+                ? html`<span class="muted session-key-display-name">${displayName}</span>`
                 : nothing}
-              ${canLink
-                ? html`<a
-                    href=${chatUrl}
-                    class="session-link"
-                    @click=${(e: MouseEvent) => {
-                      if (
-                        e.defaultPrevented ||
-                        e.button !== 0 ||
-                        e.metaKey ||
-                        e.ctrlKey ||
-                        e.shiftKey ||
-                        e.altKey
-                      ) {
-                        return;
-                      }
-                      if (props.onNavigateToChat) {
-                        e.preventDefault();
-                        props.onNavigateToChat(row.key);
-                      }
-                    }}
-                    >${friendlyKeyLabel ?? row.key}</a
-                  >`
-                : html`<span>${friendlyKeyLabel ?? row.key}</span>`}
-              ${trimmedLabel
-                ? html`<span class="session-label-chip" title=${trimmedLabel}
-                    >${trimmedLabel}</span
-                  >`
-                : nothing}
-            </span>
-            ${showDisplayName
-              ? html`<span class="muted session-key-display-name">${displayName}</span>`
-              : nothing}
+            </div>
           </div>
         </openclaw-tooltip>
       </td>
@@ -1190,7 +1365,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
       </td>
       <td>${updated}</td>
-      <td class="session-token-cell">${formatSessionTokens(row)}</td>
+      <td class="session-token-cell">${renderTokensCell(row)}</td>
       <td class="session-actions-cell">
         <div class="session-actions">
           <button

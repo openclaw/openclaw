@@ -207,7 +207,6 @@ export const nl: TranslationMap = {
     globalTooltip: "Globale sessies opnemen.",
     unknownTooltip: "Onbekende sessies opnemen.",
     archivedOnlyTooltip: "Toon alleen gearchiveerde sessies.",
-    liveCount: "{count} live",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter op sleutel, agent, label, type…",
     selected: "{count} geselecteerd",
@@ -249,6 +248,9 @@ export const nl: TranslationMap = {
     tokenRange: "{before} to {after} tokens",
     tokensBefore: "{count} tokens ervoor",
     tokenDeltaUnavailable: "tokenverschil niet beschikbaar",
+    contextUsage: "{percent}% van context gebruikt ({used} / {context} tokens)",
+    contextUsageApprox:
+      "~{percent}% van context gebruikt ({used} / {context} tokens, bij benadering)",
     checkpoints: "{count} controlepunten",
     checkpoint: "{count} controlepunt",
     showSessionDetails: "Sessiedetails tonen voor {count}",
