@@ -1710,10 +1710,6 @@ export const th: TranslationMap = {
       retrySend: "ลองส่งอีกครั้ง",
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
     },
-    modelPicker: {
-      faster: "เร็วขึ้น",
-      smarter: "ฉลาดขึ้น",
-    },
     pairingQrExpired: {
       title: "QR การจับคู่หมดอายุ",
       reason: "เรียกใช้ /pair qr อีกครั้งเพื่อสร้างรหัสตั้งค่าใหม่",

@@ -1729,10 +1729,6 @@ export const hi: TranslationMap = {
       retrySend: "भेजने का पुनः प्रयास करें",
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
     },
-    modelPicker: {
-      faster: "तेज़",
-      smarter: "अधिक बुद्धिमान",
-    },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",
       reason: "नया सेटअप कोड जनरेट करने के लिए /pair qr फिर से चलाएँ।",

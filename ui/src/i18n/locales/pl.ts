@@ -1753,10 +1753,6 @@ export const pl: TranslationMap = {
       retrySend: "Ponów wysłanie",
       retryQueuedMessage: "Ponów wiadomość w kolejce",
     },
-    modelPicker: {
-      faster: "Szybciej",
-      smarter: "Inteligentniej",
-    },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",
       reason: "Uruchom ponownie /pair qr, aby wygenerować nowy kod konfiguracyjny.",

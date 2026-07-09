@@ -1734,10 +1734,6 @@ export const en: TranslationMap = {
       retrySend: "Retry send",
       retryQueuedMessage: "Retry queued message",
     },
-    modelPicker: {
-      faster: "Faster",
-      smarter: "Smarter",
-    },
     pairingQrExpired: {
       title: "Pairing QR expired",
       reason: "Run /pair qr again to generate a fresh setup code.",

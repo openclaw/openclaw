@@ -1749,10 +1749,6 @@ export const pt_BR: TranslationMap = {
       retrySend: "Tentar enviar novamente",
       retryQueuedMessage: "Tentar novamente mensagem na fila",
     },
-    modelPicker: {
-      faster: "Mais rápido",
-      smarter: "Mais inteligente",
-    },
     pairingQrExpired: {
       title: "QR de pareamento expirado",
       reason: "Execute /pair qr novamente para gerar um novo código de configuração.",

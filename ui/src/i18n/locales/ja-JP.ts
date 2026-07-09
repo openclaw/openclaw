@@ -1754,10 +1754,6 @@ export const ja_JP: TranslationMap = {
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
     },
-    modelPicker: {
-      faster: "より速く",
-      smarter: "より賢く",
-    },
     pairingQrExpired: {
       title: "ペアリングQRの有効期限が切れました",
       reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",

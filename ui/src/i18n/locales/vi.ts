@@ -1738,10 +1738,6 @@ export const vi: TranslationMap = {
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
     },
-    modelPicker: {
-      faster: "Nhanh hơn",
-      smarter: "Thông minh hơn",
-    },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",
       reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",

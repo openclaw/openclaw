@@ -1760,10 +1760,6 @@ export const it: TranslationMap = {
       retrySend: "Riprova invio",
       retryQueuedMessage: "Riprova messaggio in coda",
     },
-    modelPicker: {
-      faster: "Più veloce",
-      smarter: "Più intelligente",
-    },
     pairingQrExpired: {
       title: "QR di pairing scaduto",
       reason: "Esegui di nuovo /pair qr per generare un nuovo codice di configurazione.",
