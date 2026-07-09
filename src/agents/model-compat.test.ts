@@ -619,7 +619,8 @@ describe("isHighSignalLiveModelRef", () => {
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
       false,
@@ -676,7 +677,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
-      { provider: "xai", id: "grok-4.3" },
+      { provider: "xai", id: "grok-4.5" },
       { provider: "zai", id: "glm-5.1" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "minimax-portal", id: "minimax-m3" },

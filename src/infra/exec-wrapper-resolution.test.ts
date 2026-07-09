@@ -316,6 +316,23 @@ describe("resolveDispatchWrapperTrustPlan", () => {
   });
 
   test.each([
+    ["npm", "install"],
+    ["pnpm", "install"],
+    ["pnpm", "run", "build"],
+  ])(
+    "does not classify ordinary package-manager subcommands as dispatch wrappers: %s %s",
+    (executable, ...args) => {
+      const argv = [executable, ...args];
+      expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({ kind: "not-wrapper" });
+      expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
+        argv,
+        wrappers: [],
+        policyBlocked: false,
+      });
+    },
+  );
+
+  test.each([
     {
       argv: ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
       wrapper: "caffeinate",

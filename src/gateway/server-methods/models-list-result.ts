@@ -8,7 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -170,10 +170,10 @@ function createModelsListProviderAuthChecker(params: {
   workspaceDir: string;
 }): ModelsListProviderAuthChecker {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+  // Auth refreshes can be persisted by another CLI process while the gateway
+  // keeps an older execution snapshot, so browse availability reads SQLite.
+  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: false,
-    readOnly: true,
-    syncExternalCli: false,
   });
   return createInFlightProviderAuthChecker(
     (provider, modelApi) =>
