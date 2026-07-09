@@ -28,7 +28,7 @@ function completeUtf8PrefixLength(bytes: Buffer, maxBytes: number): number {
     // ASCII byte at leadIndex; everything up to end is complete.
     return end;
   }
-  let expected = 1;
+  let expected: number;
   if (lead >= 0xc0 && lead < 0xe0) {
     expected = 2;
   } else if (lead < 0xf0) {

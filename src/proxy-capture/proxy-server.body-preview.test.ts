@@ -29,7 +29,7 @@ describe("finishBodyPreviewCapture UTF-8 boundary", () => {
 
   it("marks the preview truncated and records total body bytes when the budget is exceeded", () => {
     const capture = createBodyPreviewCapture();
-    const big = `${"a".repeat(20000)}`;
+    const big = "a".repeat(20000);
     appendBodyPreviewCapture(capture, big);
     const { dataText, metaJson } = finishBodyPreviewCapture(capture);
     expect(dataText.endsWith("\uFFFD")).toBe(false);
