@@ -230,7 +230,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func openExternal(_ url: URL) {
-        guard Self.isExternalURL(url) else { return }
+        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -279,6 +279,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return allowedPath == "/" || sourceURL.path.hasPrefix(allowedPath)
     }
 
+    static func shouldAllowEditorURLLaunch(
+        from sourceURL: URL?,
+        isMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
+    }
+
     private static func isHTTPURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
@@ -295,6 +303,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return self.isHTTPURL(url)
         }
         return scheme == "mailto" || scheme == "tel"
+    }
+
+    private static func isEditorURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              url.host?.lowercased() == "file",
+              !url.path.isEmpty
+        else {
+            return false
+        }
+        return scheme == "cursor" || scheme == "vscode" || scheme == "windsurf" || scheme == "zed"
     }
 
     private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
@@ -497,6 +515,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                     url,
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber,
+                    allowEditorURLs: false,
                     decisionHandler: decisionHandler)
                 return
             }
@@ -509,10 +528,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         if navigationAction.targetFrame == nil {
+            let allowEditorURLs = Self.shouldAllowEditorURLLaunch(
+                from: navigationAction.sourceFrame.request.url,
+                isMainFrame: navigationAction.sourceFrame.isMainFrame,
+                dashboardURL: self.currentURL)
             self.decideTargetlessNavigation(
                 url,
                 navigationType: navigationAction.navigationType,
                 buttonNumber: navigationAction.buttonNumber,
+                allowEditorURLs: allowEditorURLs,
                 decisionHandler: decisionHandler)
             return
         }
@@ -591,10 +615,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     static func targetlessNavigationAction(
         for url: URL,
         navigationType: WKNavigationType,
-        buttonNumber: Int) -> DashboardTargetlessNavigationAction
+        buttonNumber: Int,
+        allowEditorURLs: Bool) -> DashboardTargetlessNavigationAction
     {
         if self.isHTTPURL(url) {
             return .allow
+        }
+        // The trusted Control UI's file sidebar opens these explicit editor URLs
+        // with window.open(); never grant the same synthetic-launch path to web content.
+        if allowEditorURLs, self.isEditorURL(url) {
+            return .openExternal
         }
         if self.shouldOpenExternalDashboardNavigation(
             url,
@@ -610,12 +640,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         _ url: URL,
         navigationType: WKNavigationType,
         buttonNumber: Int,
+        allowEditorURLs: Bool,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
         switch Self.targetlessNavigationAction(
             for: url,
             navigationType: navigationType,
-            buttonNumber: buttonNumber)
+            buttonNumber: buttonNumber,
+            allowEditorURLs: allowEditorURLs)
         {
         case .allow:
             decisionHandler(.allow)

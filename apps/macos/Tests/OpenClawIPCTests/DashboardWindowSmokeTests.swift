@@ -92,6 +92,21 @@ struct DashboardWindowSmokeTests {
         #expect(!DashboardWindowController.isTrustedLinkSource(wrongPath, dashboardURL: dashboard))
         #expect(!DashboardWindowController.isTrustedLinkSource(wrongPort, dashboardURL: dashboard))
         #expect(!DashboardWindowController.isTrustedLinkSource(nil, dashboardURL: dashboard))
+        #expect(DashboardWindowController.shouldAllowEditorURLLaunch(
+            from: trusted,
+            isMainFrame: true,
+            dashboardURL: dashboard
+        ))
+        #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
+            from: wrongPath,
+            isMainFrame: true,
+            dashboardURL: dashboard
+        ))
+        #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
+            from: trusted,
+            isMainFrame: false,
+            dashboardURL: dashboard
+        ))
     }
 
     @Test func `dashboard link browser is isolated collapsed and width persistent`() throws {
@@ -153,17 +168,34 @@ struct DashboardWindowSmokeTests {
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: webURL,
             navigationType: .linkActivated,
-            buttonNumber: 1
+            buttonNumber: 1,
+            allowEditorURLs: false
         ) == .allow)
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
-            buttonNumber: 1
+            buttonNumber: 1,
+            allowEditorURLs: false
         ) == .openExternal)
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
-            buttonNumber: 0
+            buttonNumber: 0,
+            allowEditorURLs: false
+        ) == .cancel)
+
+        let editorURL = try #require(URL(string: "vscode://file/workspace/src/foo.ts"))
+        #expect(DashboardWindowController.targetlessNavigationAction(
+            for: editorURL,
+            navigationType: .other,
+            buttonNumber: 0,
+            allowEditorURLs: true
+        ) == .openExternal)
+        #expect(DashboardWindowController.targetlessNavigationAction(
+            for: editorURL,
+            navigationType: .other,
+            buttonNumber: 0,
+            allowEditorURLs: false
         ) == .cancel)
     }
 
