@@ -909,6 +909,31 @@ describe("connectCodexAppServerEndpoint", () => {
     await expect(waitForFile(marker)).resolves.toBe("closed");
   });
 
+  it("keeps stdio close errors UTF-16 safe at the stderr tail boundary", async () => {
+    const prefix = "x".repeat(1_199);
+    const script = `
+      process.stderr.write(${JSON.stringify(`${prefix}😀`)});
+      process.exit(0);
+    `;
+    let closeError: unknown;
+
+    try {
+      await connectCodexAppServerEndpoint({
+        id: "exits",
+        transport: "stdio-proxy",
+        command: process.execPath,
+        args: ["-e", script],
+      });
+    } catch (error) {
+      closeError = error;
+    }
+
+    expect(closeError).toBeInstanceOf(Error);
+    expect((closeError as Error).message).toBe(
+      `Codex app-server stdio transport closed. stderr_tail=${prefix}`,
+    );
+  });
+
   it("fails a cached stdio connection cleanly after the child exits", async () => {
     const script = `
       const readline = require("node:readline");
