@@ -285,6 +285,7 @@ export const uk: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Відкрити чат",
     archiveSession: "Архівувати сеанс",
     restoreSession: "Відновити сеанс",
     deleteSessionMenu: "Delete…",
