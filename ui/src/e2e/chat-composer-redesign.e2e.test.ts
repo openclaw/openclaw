@@ -626,9 +626,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      const defaultOption = composer.locator('[data-chat-model-option=""]');
-      await expect.poll(() => defaultOption.count()).toBe(1);
-      await expect.poll(() => defaultOption.textContent()).toContain("Default");
+      // The default model is advertised as unavailable, so the pinned default
+      // option must not be offered.
+      await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     } finally {
       await context.close();
       await browser.close();
