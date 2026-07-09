@@ -89,6 +89,14 @@ function postPayload(client: EnterpriseTestClient, index = 0): Record<string, un
   return payload as Record<string, unknown>;
 }
 
+function deferredPostMessage(ts: string) {
+  let release!: () => void;
+  const promise = new Promise<{ ok: true; ts: string; channel: string }>((resolve) => {
+    release = () => resolve({ ok: true, ts, channel: "C123" });
+  });
+  return { promise, release };
+}
+
 describe("sendMessageSlack Enterprise listener scope", () => {
   beforeEach(() => {
     clearSlackThreadParticipationCache();
@@ -179,31 +187,18 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   it("workspace-qualifies the send queue", async () => {
     const firstClient = createEnterpriseClient();
     const secondClient = createEnterpriseClient();
-    let releaseFirst: (() => void) | undefined;
-    let releaseSecond: (() => void) | undefined;
-    firstClient.chat.postMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseFirst = () => resolve({ ok: true, ts: "1.000", channel: "C123" });
-        }),
-    );
-    secondClient.chat.postMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseSecond = () => resolve({ ok: true, ts: "2.000", channel: "C123" });
-        }),
-    );
+    const firstDeferred = deferredPostMessage("1.000");
+    const secondDeferred = deferredPostMessage("2.000");
+    firstClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
+    secondClient.chat.postMessage.mockReturnValueOnce(secondDeferred.promise);
 
     const first = sendMessageSlack("C123", "first", enterpriseOptions(firstClient, "T1"));
     await vi.waitFor(() => expect(firstClient.chat.postMessage).toHaveBeenCalledOnce());
     const second = sendMessageSlack("C123", "second", enterpriseOptions(secondClient, "T2"));
     await vi.waitFor(() => expect(secondClient.chat.postMessage).toHaveBeenCalledOnce());
 
-    if (!releaseFirst || !releaseSecond) {
-      throw new Error("Expected both workspace-scoped sends to start independently");
-    }
-    releaseFirst();
-    releaseSecond();
+    firstDeferred.release();
+    secondDeferred.release();
     await Promise.all([first, second]);
   });
 
@@ -211,13 +206,8 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     const firstClient = createEnterpriseClient();
     const secondClient = createEnterpriseClient();
     const replacementClient = createEnterpriseClient();
-    let releaseFirst: (() => void) | undefined;
-    firstClient.chat.postMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseFirst = () => resolve({ ok: true, ts: "1.000", channel: "C123" });
-        }),
-    );
+    const firstDeferred = deferredPostMessage("1.000");
+    firstClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
     const secondScope = enterpriseEventScope(secondClient, "T1");
     const secondOptions = {
       cfg: ENTERPRISE_CFG,
@@ -233,10 +223,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
 
     secondOptions.client = replacementClient;
     secondScope.client = replacementClient;
-    if (!releaseFirst) {
-      throw new Error("Expected first workspace-scoped send to be waiting");
-    }
-    releaseFirst();
+    firstDeferred.release();
     await Promise.all([first, second]);
 
     expect(secondClient.chat.postMessage).toHaveBeenCalledOnce();

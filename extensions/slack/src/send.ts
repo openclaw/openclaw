@@ -346,7 +346,7 @@ function resolveEnterpriseEventScope(params: {
     throw new Error("unexpected_enterprise_slack_listener_scope");
   }
   if (
-    scope.isEnterpriseInstall !== true ||
+    !scope.isEnterpriseInstall ||
     !normalizeOptionalString(scope.apiAppId) ||
     !normalizeOptionalString(scope.enterpriseId) ||
     !/^T[A-Z0-9]+$/i.test(scope.teamId) ||
