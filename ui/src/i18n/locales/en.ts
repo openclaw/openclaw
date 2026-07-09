@@ -469,6 +469,11 @@ export const en: TranslationMap = {
   nav: {
     chat: "Chat",
     settings: "Settings",
+    settingsGeneral: "General",
+    settingsGroupConnections: "Connections",
+    settingsGroupAgents: "Agents & Tools",
+    settingsGroupSystem: "System",
+    exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",

@@ -207,13 +207,7 @@ class WorktreesPage extends LitElement {
           <div class="page-sub">${subtitleForRoute("worktrees")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "worktrees",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }

@@ -1094,6 +1094,7 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onActivity: () => replyOperation?.recordActivity(),
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
@@ -1346,6 +1347,7 @@ export function createFollowupRunner(params: {
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
+                  replyOperation?.recordActivity();
                   lifecycleBackstop.note(evt);
                   return enqueueProgressDelivery(async () => {
                     const visible = await forwardFollowupProgressEvent({

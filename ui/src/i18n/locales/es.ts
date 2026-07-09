@@ -472,6 +472,11 @@ export const es: TranslationMap = {
   nav: {
     chat: "Chat",
     settings: "Ajustes",
+    settingsGeneral: "General",
+    settingsGroupConnections: "Conexiones",
+    settingsGroupAgents: "Agentes y herramientas",
+    settingsGroupSystem: "Sistema",
+    exitSettings: "Volver a la aplicación",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
     resize: "Redimensionar la barra lateral",

@@ -469,6 +469,11 @@ export const th: TranslationMap = {
   nav: {
     chat: "แชต",
     settings: "การตั้งค่า",
+    settingsGeneral: "ทั่วไป",
+    settingsGroupConnections: "การเชื่อมต่อ",
+    settingsGroupAgents: "เอเจนต์และเครื่องมือ",
+    settingsGroupSystem: "ระบบ",
+    exitSettings: "กลับไปที่แอป",
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
     resize: "ปรับขนาดแถบด้านข้าง",

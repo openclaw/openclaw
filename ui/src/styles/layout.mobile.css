@@ -152,6 +152,11 @@
     pointer-events: auto;
   }
 
+  /* Inside the drawer there is no Escape key to hint at. */
+  .settings-sidebar__esc {
+    display: none;
+  }
+
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
      the desktop rail toggle makes no sense once the sidebar is a drawer. */
   .topbar .topbar-nav-toggle {
