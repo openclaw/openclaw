@@ -75,7 +75,7 @@ public enum CameraCapturePipelineSupport {
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
         prepared.session.startRunning()
-        await self.warmUpCaptureSession()
+        try await self.warmUpCaptureSession()
         return prepared
     }
 
@@ -137,9 +137,9 @@ public enum CameraCapturePipelineSupport {
         return rawData
     }
 
-    public static func warmUpCaptureSession() async {
+    public static func warmUpCaptureSession() async throws {
         // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+        try await Task.sleep(nanoseconds: 150_000_000) // 150ms
     }
 
     public static func positionLabel(_ position: AVCaptureDevice.Position) -> String {

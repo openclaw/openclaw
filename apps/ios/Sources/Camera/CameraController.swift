@@ -68,8 +68,8 @@ actor CameraController {
 
         session.startRunning()
         defer { session.stopRunning() }
-        await CameraCapturePipelineSupport.warmUpCaptureSession()
-        await Self.sleepDelayMs(delayMs)
+        try await CameraCapturePipelineSupport.warmUpCaptureSession()
+        try await Self.sleepDelayMs(delayMs)
 
         let rawData = try await CameraCapturePipelineSupport.capturePhotoData(output: output) { continuation in
             PhotoCaptureDelegate(continuation)
@@ -124,10 +124,14 @@ actor CameraController {
             mapSetupError: Self.mapMovieSetupError,
             operation: { output in
                 var delegate: MovieFileDelegate?
-                let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
-                    let d = MovieFileDelegate(cont)
-                    delegate = d
-                    output.startRecording(to: movURL, recordingDelegate: d)
+                let recordedURL: URL = try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { cont in
+                        let d = MovieFileDelegate(cont)
+                        delegate = d
+                        output.startRecording(to: movURL, recordingDelegate: d)
+                    }
+                } onCancel: {
+                    output.stopRecording()
                 }
                 withExtendedLifetime(delegate) {}
                 // Transcode .mov -> .mp4 for easier downstream handling.
@@ -232,10 +236,14 @@ actor CameraController {
             exporter.outputURL = outputURL
             exporter.outputFileType = .mp4
 
-            try await withCheckedThrowingContinuation(isolation: nil) { (cont: CheckedContinuation<Void, Error>) in
-                exporter.exportAsynchronously {
-                    cont.resume(returning: ())
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation(isolation: nil) { (cont: CheckedContinuation<Void, Error>) in
+                    exporter.exportAsynchronously {
+                        cont.resume(returning: ())
+                    }
                 }
+            } onCancel: {
+                exporter.cancelExport()
             }
 
             switch exporter.status {
@@ -251,11 +259,11 @@ actor CameraController {
         }
     }
 
-    private nonisolated static func sleepDelayMs(_ delayMs: Int) async {
+    private nonisolated static func sleepDelayMs(_ delayMs: Int) async throws {
         guard delayMs > 0 else { return }
         let maxDelayMs = 10 * 1000
         let ns = UInt64(min(delayMs, maxDelayMs)) * UInt64(NSEC_PER_MSEC)
-        try? await Task.sleep(nanoseconds: ns)
+        try await Task.sleep(nanoseconds: ns)
     }
 }
 
