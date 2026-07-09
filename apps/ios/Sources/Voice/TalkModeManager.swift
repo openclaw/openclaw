@@ -2433,7 +2433,6 @@ final class TalkModeManager: NSObject {
         }
     }
 
-
     private func speakIncrementalSegment(
         _ text: String,
         context preferredContext: IncrementalSpeechContext? = nil,
