@@ -5401,6 +5401,7 @@ describe("syncPluginsForUpdateChannel", () => {
     "migrates already-externalized records to prototype-named plugin id %s",
     async (targetPluginId) => {
       const legacyPluginId = `legacy-${targetPluginId}`;
+      const npmPackageName = `openclaw-plugin-${targetPluginId}`;
       resolveBundledPluginSourcesMock.mockReturnValue(new Map());
 
       const result = await syncPluginsForUpdateChannel({
@@ -5409,7 +5410,7 @@ describe("syncPluginsForUpdateChannel", () => {
           {
             bundledPluginId: legacyPluginId,
             pluginId: targetPluginId,
-            npmSpec: targetPluginId,
+            npmSpec: npmPackageName,
             channelIds: [],
           },
         ],
@@ -5421,7 +5422,7 @@ describe("syncPluginsForUpdateChannel", () => {
             installs: {
               [legacyPluginId]: {
                 source: "npm",
-                spec: targetPluginId,
+                spec: npmPackageName,
                 installPath: `/tmp/${targetPluginId}`,
               },
             },
@@ -5438,7 +5439,7 @@ describe("syncPluginsForUpdateChannel", () => {
       expect(Object.getPrototypeOf(result.config.plugins?.installs ?? {})).toBe(Object.prototype);
       expectRecordFields(result.config.plugins?.installs?.[targetPluginId], {
         source: "npm",
-        spec: targetPluginId,
+        spec: npmPackageName,
         installPath: `/tmp/${targetPluginId}`,
       });
       expect(result.config.plugins?.entries?.[legacyPluginId]).toBeUndefined();
