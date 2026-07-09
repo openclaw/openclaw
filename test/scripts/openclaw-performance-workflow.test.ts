@@ -18,7 +18,7 @@ type WorkflowJob = {
   steps?: WorkflowStep[];
   strategy?: {
     matrix?: {
-      include?: Array<{ include_filters?: string }>;
+      include?: Array<Record<string, string>>;
     };
   };
 };
@@ -36,6 +36,10 @@ function findStep(name: string): WorkflowStep {
   const step = steps.find((candidate) => candidate.name === name);
   expect(step).toBeDefined();
   return step as WorkflowStep;
+}
+
+function kovaMatrixEntries(): Array<Record<string, string>> {
+  return readWorkflow().jobs?.kova?.strategy?.matrix?.include ?? [];
 }
 
 describe("OpenClaw performance workflow", () => {
@@ -112,20 +116,56 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("passes every configured scenario through one Kova include flag", () => {
-    const workflow = readWorkflow();
-    const includeFilters = workflow.jobs?.kova?.strategy?.matrix?.include?.map(
-      (lane) => lane.include_filters,
-    );
+  it("passes one comma-delimited include set to the lane plan and run", () => {
+    const plan = findStep("Kova version and plan sanity");
     const runKova = findStep("Run Kova");
+    const includeFilters = kovaMatrixEntries().map((entry) => entry.include_filters);
 
     expect(includeFilters).toEqual([
       "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message",
       "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
       "scenario:agent-cold-warm-message",
     ]);
-    expect(runKova.run).toContain('args+=(--include "$INCLUDE_FILTERS")');
+    expect(includeFilters.every((filters) => !filters.includes(" "))).toBe(true);
+    expect(plan.run).toContain('plan_dir="${RUNNER_TEMP}/kova-plans"');
+    expect(plan.run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(plan.run).toContain('--repeat "$repeat"');
+    expect(plan.run).toContain('echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"');
+    expect(plan.run).not.toContain("$REPORT_DIR");
+    expect(runKova.run).toContain('--include "$INCLUDE_FILTERS"');
     expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
+  });
+
+  it("makes the live lane honor explicit live auth in the ephemeral Kova checkout", () => {
+    const override = findStep("Allow live auth for OpenAI candidate state");
+
+    expect(override.if).toContain("matrix.live == 'true'");
+    expect(override.run).toContain("states/mock-openai-provider.json");
+    expect(override.run).toContain('state.auth?.mode !== "mock"');
+    expect(override.run).toContain('state.auth.mode = "default"');
+    expect(override.run).toContain(
+      "This ephemeral checkout must honor the lane's explicit --auth live selection.",
+    );
+    expect(override.run).toContain(
+      'state.auth.reason = "Honor the workflow lane\'s explicit run-level auth selection."',
+    );
+  });
+
+  it("runs the trusted lane evidence validator before tolerating gate failures", () => {
+    const runKova = findStep("Run Kova");
+    const run = runKova.run ?? "";
+    const evidenceValidator = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
+    const trustedGateAdapter = run.indexOf("scripts/lib/kova-report-gate.mjs");
+
+    expect(evidenceValidator).toBeGreaterThan(-1);
+    expect(trustedGateAdapter).toBeGreaterThan(evidenceValidator);
+    expect(run).toContain('--plan "$KOVA_PLAN_JSON"');
+    expect(run).toContain('--report "$report_json"');
+    expect(run).toContain('--profile "$PROFILE"');
+    expect(run).toContain('--target "local-build:${GITHUB_WORKSPACE}"');
+    expect(run).toContain('--repeat "$repeat"');
+    expect(run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(run).toContain('--auth "$AUTH_MODE"');
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {

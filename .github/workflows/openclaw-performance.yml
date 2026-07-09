@@ -247,6 +247,27 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Allow live auth for OpenAI candidate state
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const file = path.join(process.env.KOVA_SRC, "states/mock-openai-provider.json");
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          if (state.auth?.mode !== "mock") {
+            throw new Error(`expected mock-openai-provider auth.mode=mock, got ${state.auth?.mode}`);
+          }
+
+          // The release profile pairs the live agent scenario with this otherwise mock-only state.
+          // This ephemeral checkout must honor the lane's explicit --auth live selection.
+          state.auth.mode = "default";
+          state.auth.reason = "Honor the workflow lane's explicit run-level auth selection.";
+          fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+          NODE
+
       - name: Configure OCM local workspace dependencies
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -292,12 +313,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          repeat="$REQUESTED_REPEAT"
+          if [[ "$MATRIX_REPEAT" != "input" ]]; then
+            repeat="$MATRIX_REPEAT"
+          fi
+          plan_dir="${RUNNER_TEMP}/kova-plans"
+          plan_json="${plan_dir}/${LANE_ID}.json"
+          mkdir -p "$plan_dir"
+
           kova version --json
           kova matrix plan \
             --profile "$PROFILE" \
             --target "local-build:${GITHUB_WORKSPACE}" \
-            --include scenario:fresh-install \
-            --json >/tmp/kova-plan.json
+            --include "$INCLUDE_FILTERS" \
+            --parallel 1 \
+            --repeat "$repeat" \
+            --json >"$plan_json"
+          echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"
+          echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
 
       - name: Configure live OpenAI auth
         if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
@@ -326,15 +359,13 @@ jobs:
           set -euo pipefail
           mkdir -p "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
 
-          repeat="$REQUESTED_REPEAT"
-          if [[ "$MATRIX_REPEAT" != "input" ]]; then
-            repeat="$MATRIX_REPEAT"
-          fi
+          repeat="$KOVA_LANE_REPEAT"
 
           args=(
             matrix run
             --profile "$PROFILE"
             --target "local-build:${GITHUB_WORKSPACE}"
+            --include "$INCLUDE_FILTERS"
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
@@ -343,8 +374,6 @@ jobs:
             --execute
             --json
           )
-
-          args+=(--include "$INCLUDE_FILTERS")
 
           if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
             args+=(--deep-profile)
@@ -365,6 +394,15 @@ jobs:
             exit 1
           fi
           report_md="${report_json%.json}.md"
+          node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
+            --plan "$KOVA_PLAN_JSON" \
+            --report "$report_json" \
+            --profile "$PROFILE" \
+            --target "local-build:${GITHUB_WORKSPACE}" \
+            --repeat "$repeat" \
+            --include "$INCLUDE_FILTERS" \
+            --auth "$AUTH_MODE"
+
           effective_status="$status"
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
             if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
