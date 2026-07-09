@@ -9,9 +9,11 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
-    // Injectable so tests can pin the gate instead of racing on process-global
-    // OPENCLAW_CONFIG_PATH; config parsing is covered by OpenClawConfigFileTests.
+    /// Injectable so tests can pin the gate instead of racing on process-global
+    /// OPENCLAW_CONFIG_PATH; config parsing is covered by OpenClawConfigFileTests.
     private let browserControlEnabled: @Sendable () -> Bool
+    // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
+    private let computerControlEnabled: @Sendable () -> Bool
     private let canvasSurfaceUrl: @Sendable () async -> String?
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
@@ -36,6 +38,9 @@ actor MacNodeRuntime {
         browserControlEnabled: @escaping @Sendable () -> Bool = {
             OpenClawConfigFile.browserControlEnabled()
         },
+        computerControlEnabled: @escaping @Sendable () -> Bool = {
+            MacNodeRuntime.computerControlEnabledDefault()
+        },
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
@@ -59,6 +64,7 @@ actor MacNodeRuntime {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
         self.browserControlEnabled = browserControlEnabled
+        self.computerControlEnabled = computerControlEnabled
         self.canvasSurfaceUrl = canvasSurfaceUrl
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
@@ -111,6 +117,8 @@ actor MacNodeRuntime {
                 return try await self.handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawComputerCommand.act.rawValue:
+                return try await self.handleComputerActInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -378,6 +386,51 @@ actor MacNodeRuntime {
         }
     }
 
+    private func handleComputerActInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard self.computerControlEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
+        }
+        let params: OpenClawComputerActParams
+        do {
+            params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: invalid computer.act params")
+        }
+        let services = await self.mainActorServices()
+        do {
+            let result = try await services.performComputerAct(params)
+            let payload = try Self.encodePayload(result)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        } catch let error as ComputerActionService.ComputerActionError {
+            switch error {
+            case .accessibilityNotTrusted:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+            case .noDisplays, .invalidScreenIndex, .missingCoordinate, .coordinateOutOfBounds,
+                 .invalidReferenceWidth, .missingKeys, .emptyText, .invalidScroll, .invalidModifier:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: \(error.localizedDescription)")
+            case .eventCreationFailed:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
             MacNodeScreenRecordParams()
@@ -496,6 +549,14 @@ actor MacNodeRuntime {
         let services = await self.makeMainActorServices()
         self.cachedMainActorServices = services
         return services
+    }
+
+    /// Releases any synthetic input the computer.act service is still holding
+    /// (a left_mouse_down without its matching up) on lifecycle transitions:
+    /// node disconnect, node stop, or Computer Control disabled. Uses the cached
+    /// services directly so it never spins up services just to release nothing.
+    func releaseHeldComputerInput() async {
+        await self.cachedMainActorServices?.releaseHeldInput()
     }
 
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -1229,6 +1290,10 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+    }
+
+    nonisolated static func computerControlEnabledDefault() -> Bool {
+        UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {
