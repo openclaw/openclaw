@@ -736,9 +736,31 @@ describe("ci workflow guards", () => {
     expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
     expect(restoreStep.with.path).toContain("dist/");
     expect(restoreStep.with.path).toContain("dist-runtime/");
+    expect(restoreStep.with.path).toContain("packages/ai/dist/");
+    expect(saveStep.with.path).toContain("packages/ai/dist/");
+    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(
+      buildArtifactSteps.find((step) => step.name === "Pack built runtime artifacts").run,
+    ).toContain("packages/ai/dist");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
+  });
+
+  it("keeps the AI runtime in Testbox build artifact caches", () => {
+    const workflow = readBuildArtifactsTestboxWorkflow();
+    const steps = workflow.jobs["build-artifacts"].steps;
+    const resolveSeedsStep = steps.find((step) => step.name === "Resolve release dist cache seeds");
+    const restoreStep = steps.find((step) => step.name === "Restore dist build cache");
+    const verifyStep = steps.find((step) => step.name === "Verify build artifacts");
+    const saveStep = steps.find((step) => step.name === "Save dist build cache");
+
+    expect(resolveSeedsStep.run).toContain('cache_prefix="${RUNNER_OS}-dist-build-v2-"');
+    expect(restoreStep.with.path).toContain("packages/ai/dist/");
+    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(verifyStep.run).toContain("test -f packages/ai/dist/internal/runtime.mjs");
+    expect(saveStep.with.path).toContain("packages/ai/dist/");
+    expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
   it("runs gateway watch after parallel built artifact checks", () => {

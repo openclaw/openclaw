@@ -256,6 +256,13 @@ export const SessionsCreateParamsSchema = Type.Object(
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
     worktree: Type.Optional(Type.Boolean()),
+    cwd: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

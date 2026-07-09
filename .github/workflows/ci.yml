@@ -672,9 +672,10 @@ jobs:
           path: |
             dist/
             dist-runtime/
+            packages/ai/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
-          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
+          key: ${{ runner.os }}-dist-build-v2-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Build dist
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
@@ -687,7 +688,7 @@ jobs:
         run: pnpm ui:i18n:check
 
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
+        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/ai/dist
 
       - name: Upload built runtime artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -833,6 +834,7 @@ jobs:
           path: |
             dist/
             dist-runtime/
+            packages/ai/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
           key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
