@@ -2274,6 +2274,7 @@ async function runEmbeddedAgentInternal(
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            silentReplyPromptMode: params.silentReplyPromptMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
