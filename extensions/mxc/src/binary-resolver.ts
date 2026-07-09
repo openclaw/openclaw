@@ -53,7 +53,9 @@ function findBinary(searchPaths: string[]): string | null {
  */
 export function resolveMxcBinaryPath(configOverride?: string): string {
   if (configOverride) {
-    const resolvedOverride = path.resolve(configOverride);
+    const resolvedOverride = path.win32.isAbsolute(configOverride)
+      ? configOverride
+      : path.resolve(configOverride);
     if (!fs.existsSync(resolvedOverride)) {
       throw new Error(`MXC binary not found at configured path: ${configOverride}`);
     }
