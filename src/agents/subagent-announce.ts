@@ -257,6 +257,66 @@ function waitForRequesterSettleWakeRetry(ms: number): Promise<void> {
   });
 }
 
+// Delete-cleanup removes a child's registry row in the same cleanup pass that
+// schedules the settle wake, and earlier delete-mode siblings vanished at
+// their own settles — so a drained delete-mode wave cannot be reconstructed
+// from registry rows alone (empty batch, no wake). Settled records whose row
+// is already gone are remembered here until their wave's wake delivers (or
+// fails terminally), keeping the batch and its idempotency key identical to
+// the keep-mode outcome. In-memory only: after a restart the wake falls back
+// to whichever rows survive, and entries expire so a requester that never
+// drains does not accumulate rows forever.
+const REQUESTER_SETTLE_LEDGER_TTL_MS = 24 * 60 * 60 * 1000;
+const settledRunLedger = new Map<
+  string,
+  Map<string, { entry: SubagentRunRecord; recordedAt: number }>
+>();
+
+function pruneSettledRunLedger(nowMs: number): void {
+  for (const [requesterKey, runs] of settledRunLedger) {
+    for (const [runId, record] of runs) {
+      if (nowMs - record.recordedAt > REQUESTER_SETTLE_LEDGER_TTL_MS) {
+        runs.delete(runId);
+      }
+    }
+    if (runs.size === 0) {
+      settledRunLedger.delete(requesterKey);
+    }
+  }
+}
+
+function recordSettledRunWithoutRegistryRow(
+  requesterSessionKey: string,
+  entry: SubagentRunRecord,
+): void {
+  let runs = settledRunLedger.get(requesterSessionKey);
+  if (!runs) {
+    runs = new Map();
+    settledRunLedger.set(requesterSessionKey, runs);
+  }
+  runs.set(entry.runId, { entry, recordedAt: Date.now() });
+}
+
+function clearSettledRunLedgerEntries(
+  requesterSessionKey: string,
+  batch: readonly SubagentRunRecord[],
+): void {
+  const runs = settledRunLedger.get(requesterSessionKey);
+  if (!runs) {
+    return;
+  }
+  for (const entry of batch) {
+    runs.delete(entry.runId);
+  }
+  if (runs.size === 0) {
+    settledRunLedger.delete(requesterSessionKey);
+  }
+}
+
+export function resetRequesterSettleLedgerForTests(): void {
+  settledRunLedger.clear();
+}
+
 // Two runs are part of the same parallel wave when their lifetimes overlap.
 // A strictly sequential child (spawned after its predecessor ended) never
 // overlaps, which keeps the settle wake away from one-at-a-time usage.
@@ -294,7 +354,15 @@ function buildRequesterSettleWakeMessage(params: { findings?: string }): string 
 export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
-  settledEntry: SettledRunSummary;
+  settledEntry: SubagentRunRecord;
+  /**
+   * Set by cleanup paths that retire the settling run's registry row in the
+   * same pass that schedules this wake (cleanup="delete" and the reconciled
+   * killed-row retire). The row is ledgered before the first await so every
+   * concurrent last-sibling settle computes the same batch and idempotency
+   * key — the guarantee keep-mode gets from rows persisting in the registry.
+   */
+  settledRowRetired?: boolean;
   signal?: AbortSignal;
 }): Promise<boolean> {
   if (params.signal?.aborted) {
@@ -306,6 +374,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   }
   if (isCronSessionKey(requesterSessionKey)) {
     return false;
+  }
+  pruneSettledRunLedger(Date.now());
+  if (params.settledRowRetired === true) {
+    recordSettledRunWithoutRegistryRow(requesterSessionKey, params.settledEntry);
   }
 
   // This runs on every child-run settle fleet-wide, so the in-memory registry
@@ -323,6 +395,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   ) {
     return false;
   }
+  const requesterRuns = registryRuntime.listSubagentRunsForRequester(requesterSessionKey);
+  const listedRuns = Array.isArray(requesterRuns) ? requesterRuns : [];
+  // Fallback for rows that vanished without the retire hint (e.g. swept
+  // between settle and wake): ledger the in-hand record so a non-last
+  // sibling's settle (which returns at the drain gate below) still
+  // contributes its row to the eventual wave batch.
+  if (
+    !settledRunLedger.get(requesterSessionKey)?.has(params.settledEntry.runId) &&
+    !listedRuns.some((entry) => entry.runId === params.settledEntry.runId)
+  ) {
+    recordSettledRunWithoutRegistryRow(requesterSessionKey, params.settledEntry);
+  }
+
   // Race-safe drain check: exclude the settling run itself — its terminal
   // bookkeeping may not be visible yet when this fires from the finalize path.
   if (
@@ -331,7 +416,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const requesterRuns = registryRuntime.listSubagentRunsForRequester(requesterSessionKey);
   // The wake batch is the parallel wave the settling child belonged to: the
   // connected component of lifetime overlaps seeded at the settling run.
   // Membership is transitive, not direct-overlap-only — in a staggered
@@ -344,11 +428,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   // settling run itself in the batch even when its own recorded timestamps
   // are inconsistent (endedAt before startedAt), where self-overlap would be
   // false.
-  const unclaimed = new Set(
-    (Array.isArray(requesterRuns) ? requesterRuns : []).filter((entry) =>
-      hasSubagentRunEnded(entry),
-    ),
-  );
+  // Candidates: ended registry rows plus ledgered records whose rows were
+  // already deleted. A registry row wins over a ledgered copy of the same run.
+  const candidatesByRunId = new Map<string, SubagentRunRecord>();
+  const ledgeredRuns = settledRunLedger.get(requesterSessionKey);
+  for (const record of ledgeredRuns?.values() ?? []) {
+    candidatesByRunId.set(record.entry.runId, record.entry);
+  }
+  for (const entry of listedRuns) {
+    if (hasSubagentRunEnded(entry)) {
+      candidatesByRunId.set(entry.runId, entry);
+    }
+  }
+  const unclaimed = new Set(candidatesByRunId.values());
   const settledBatch: SubagentRunRecord[] = [];
   const frontier: SettledRunSummary[] = [params.settledEntry];
   for (const entry of unclaimed) {
@@ -391,11 +483,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
 
   // Scope guard: nested orchestrators (depth >= 1) are owned by the
   // descendant-settle wake; this wake is only for the registry-less top level.
+  // Their ledgered rows are dropped here — this wake never fires for them, so
+  // holding the records for the TTL would only accumulate memory fleet-wide.
   if (getSubagentDepthFromSessionStore(requesterSessionKey) >= 1) {
+    clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
     return false;
   }
   const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
   if (!hasUsableSessionEntry(requesterEntry)) {
+    clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
     return false;
   }
 
@@ -443,12 +539,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       signal: params.signal,
     });
     if (delivery.delivered) {
+      clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
       return true;
     }
     // A legitimately silent wake reply counts as delivered above; only real
     // delivery failures reach here. Terminal failures and an abandoned
-    // requester will not improve on retry.
+    // requester will not improve on retry. Transient exhaustion (below) keeps
+    // the ledgered rows so a later sibling settle can re-attempt the wake.
     if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
+      clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
       return false;
     }
     const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attempt];

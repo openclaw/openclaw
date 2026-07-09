@@ -3435,6 +3435,7 @@ describe("requester settle wake trigger", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: undefined,
       settledEntry: entry,
+      settledRowRetired: false,
     });
   });
 
@@ -3457,10 +3458,43 @@ describe("requester settle wake trigger", () => {
 
     expect(runs.has(entry.runId)).toBe(false);
     expect(settleWake).toHaveBeenCalledTimes(1);
+    // The retired-row hint lets the wake ledger this row before its first
+    // await — the registry row is already gone at this point.
     expect(settleWake).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSessionKey: "agent:main:main",
         settledEntry: entry,
+        settledRowRetired: true,
+      }),
+    );
+  });
+
+  it("fires the settle wake with the retired-row hint when a reconciled killed row is retired", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: "subagent-killed",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledEntry: entry,
+        settledRowRetired: true,
       }),
     );
   });

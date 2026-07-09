@@ -760,7 +760,11 @@ export function createSubagentRegistryLifecycleController(params: {
   // layer decide whether its requester's batch has fully drained and, if so,
   // wake the registry-less top-level requester to synthesize. Failures are
   // logged only — settle bookkeeping must never block on the wake.
-  const scheduleRequesterSettleWake = (runId: string, entry: SubagentRunRecord) => {
+  const scheduleRequesterSettleWake = (
+    runId: string,
+    entry: SubagentRunRecord,
+    options?: { rowRetired?: boolean },
+  ) => {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
     if (!requesterSessionKey) {
       return;
@@ -770,6 +774,7 @@ export function createSubagentRegistryLifecycleController(params: {
         requesterSessionKey,
         requesterOrigin: entry.requesterOrigin,
         settledEntry: entry,
+        settledRowRetired: options?.rowRetired === true,
       })
       .catch((error: unknown) => {
         params.warn("requester settle wake failed", {
@@ -1049,7 +1054,7 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       if (!cleanupParams.skipRequesterSettleWake) {
-        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
+        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry, { rowRetired: true });
       }
       return;
     }
@@ -1074,7 +1079,7 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       if (!cleanupParams.skipRequesterSettleWake) {
-        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
+        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry, { rowRetired: true });
       }
       return;
     }
