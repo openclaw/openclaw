@@ -390,6 +390,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
 
+        #if DEBUG
+        // Screenshot/demo helper: show the pairing panel with sample requests.
+        if ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                DebugActions.showPairingPanelDemo()
+            }
+        }
+        #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")

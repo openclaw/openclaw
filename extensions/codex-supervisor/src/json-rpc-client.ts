@@ -8,6 +8,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import WebSocket from "ws";
 import type { CodexJsonRpcConnection, CodexSupervisorEndpoint } from "./types.js";
 
@@ -199,7 +200,7 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
     this.proc.once("close", () =>
       this.fail(
         new Error(
-          `Codex app-server stdio transport closed. stderr_tail=${this.stderrTail.join("\n").slice(0, 1200)}`,
+          `Codex app-server stdio transport closed. stderr_tail=${truncateUtf16Safe(this.stderrTail.join("\n"), 1200)}`,
         ),
       ),
     );
