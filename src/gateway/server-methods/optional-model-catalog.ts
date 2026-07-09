@@ -1,6 +1,7 @@
 // Optional model-catalog loading gives session/tool methods metadata when fast
 // while never blocking their primary response path on catalog discovery.
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /**
@@ -56,7 +57,11 @@ export async function loadOptionalServerMethodModelCatalog(
 ): Promise<ModelCatalogEntry[] | undefined> {
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("server-method-model-catalog-timeout");
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(
+    options?.timeoutMs,
+    DEFAULT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
+    0,
+  );
   const catalogLoad = options?.startedLoad ?? startOptionalServerMethodModelCatalogLoad(context);
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => resolve(timedOut), timeoutMs);
