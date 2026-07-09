@@ -279,22 +279,37 @@ function parseImageDataUrl(
   if (!trimmed.startsWith("data:")) {
     return { kind: "not-data-url" };
   }
-  const match = /^data:([^;,]+)(?:;[^,]*)*;base64,([A-Za-z0-9+/=\s]+)$/i.exec(trimmed);
-  if (!match) {
+
+  const afterPrefix = trimmed.slice("data:".length);
+  const commaIdx = afterPrefix.indexOf(",");
+  if (commaIdx < 0 || !/;base64$/i.test(afterPrefix.slice(0, commaIdx))) {
     throw new Error("Invalid image data URL");
   }
-  const contentType = match[1]?.trim().toLowerCase() ?? "";
+
+  const mimeAndParams = afterPrefix.slice(0, commaIdx);
+  const semicolonIdx = mimeAndParams.indexOf(";");
+  const contentType = (semicolonIdx < 0 ? mimeAndParams : mimeAndParams.slice(0, semicolonIdx))
+    .trim()
+    .toLowerCase();
+
+  const base64Part = afterPrefix.slice(commaIdx + 1);
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64Part)) {
+    throw new Error("Invalid image data URL");
+  }
+
   if (!contentType.startsWith("image/")) {
     return { kind: "non-image-data-url" };
   }
-  if (estimateBase64DecodedByteLength(match[2]) > limits.maxBytes) {
+
+  if (estimateBase64DecodedByteLength(base64Part) > limits.maxBytes) {
     throw createManagedImageAttachmentError(
       `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
     );
   }
+
   return {
     kind: "image-data-url",
-    buffer: Buffer.from(match[2].replace(/\s+/g, ""), "base64"),
+    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
     contentType,
   };
 }

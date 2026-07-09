@@ -586,6 +586,31 @@ describe("createManagedOutgoingImageBlocks", () => {
     await expectPathMissing(path.join(stateDir, "media", "outgoing", "records"));
   });
 
+  it("rejects semicolon-heavy malformed data urls in bounded time (ReDoS regression)", async () => {
+    const semicolons = ";".repeat(64);
+    const malformed = `data:image/png${semicolons}`;
+
+    const start = performance.now();
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [malformed],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
+    expect(performance.now() - start).toBeLessThan(100);
+  });
+
+  it("rejects malformed data urls with a later ;base64, marker after a payload comma", async () => {
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: ["data:image/png;base64,garbage;base64,iVBORw0KGgo="],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
+  });
+
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
     const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
