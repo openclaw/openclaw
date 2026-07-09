@@ -6977,6 +6977,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
+  - H2: Deferred delivery admission
   - H2: Compatibility dispatch
 
 ## plugins/sdk-channel-plugins.md
@@ -6990,6 +6991,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Media source params
   - H3: Native payload shaping
   - H3: Session conversation grammar
+  - H3: Account-scoped conversation binding support
   - H2: Approvals and channel capabilities
   - H3: Approval auth
   - H3: Payload lifecycle and setup guidance
