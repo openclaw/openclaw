@@ -568,12 +568,9 @@ describe("tool display details", () => {
     ].join("\n");
 
     expect(splitTopLevelStages(command)).toEqual([
-      [
-        "cat <<\\EOF",
-        "body; not a stage && not a stage || not a stage",
-        "EOF",
-        "printf done",
-      ].join("\n"),
+      ["cat <<\\EOF", "body; not a stage && not a stage || not a stage", "EOF", "printf done"].join(
+        "\n",
+      ),
       "npm test",
     ]);
   });
