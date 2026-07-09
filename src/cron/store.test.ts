@@ -10,6 +10,7 @@ import {
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  compareAndSwapCronJobRunningAtMs,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreSync,
   loadCronQuarantineFile,
@@ -17,7 +18,9 @@ import {
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,
+  saveCronJobsStore,
   saveCronStore,
+  updateCronJobDeliveryTargets,
 } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
@@ -505,6 +508,114 @@ describe("cron store", () => {
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-state-only", "job-added-concurrently"]);
     expect(loaded.jobs[0]?.name).toBe("Job current");
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(stale.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("atomically updates one run marker without replacing concurrent config or state", async () => {
+    const store = await makeStorePath();
+    const initial = makeStore("job-run-marker-cas", true);
+    initial.jobs[0].state = {
+      nextRunAtMs: initial.jobs[0].createdAtMs + 60_000,
+      runningAtMs: 100,
+    };
+    initial.jobs[0].delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "@legacy-target",
+    };
+    await saveCronStore(store.storePath, initial);
+
+    const concurrent = await loadCronStore(store.storePath);
+    const staleTarget = concurrent.jobs[0].delivery?.to;
+    concurrent.jobs[0].name = "Concurrent config";
+    concurrent.jobs[0].state.lastError = "concurrent runtime state";
+    await saveCronStore(store.storePath, concurrent);
+
+    await expect(
+      compareAndSwapCronJobRunningAtMs({
+        storePath: store.storePath,
+        jobId: initial.jobs[0].id,
+        expectedMs: 100,
+        nextMs: 200,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      updateCronJobDeliveryTargets(store.storePath, (delivery) =>
+        delivery.to === staleTarget ? "-100123456" : undefined,
+      ),
+    ).resolves.toEqual({ updatedJobs: 1 });
+
+    let loaded = await loadCronStore(store.storePath);
+    expect(loaded.jobs[0]?.name).toBe("Concurrent config");
+    expect(loaded.jobs[0]?.state.lastError).toBe("concurrent runtime state");
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(initial.jobs[0].createdAtMs + 60_000);
+    expect(loaded.jobs[0]?.state.runningAtMs).toBe(200);
+    expect(loaded.jobs[0]?.delivery?.to).toBe("-100123456");
+
+    await expect(
+      compareAndSwapCronJobRunningAtMs({
+        storePath: store.storePath,
+        jobId: initial.jobs[0].id,
+        expectedMs: 100,
+        nextMs: 300,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      compareAndSwapCronJobRunningAtMs({
+        storePath: store.storePath,
+        jobId: initial.jobs[0].id,
+        expectedMs: 200,
+      }),
+    ).resolves.toBe(true);
+
+    loaded = await loadCronStore(store.storePath);
+    expect(loaded.jobs[0]?.state.runningAtMs).toBeUndefined();
+    expect(loaded.jobs[0]?.state.lastError).toBe("concurrent runtime state");
+    expect(loaded.jobs[0]?.delivery?.to).toBe("-100123456");
+  });
+
+  it("does not merge a concurrent target across delivery route changes", async () => {
+    const store = await makeStorePath();
+    const base = makeStore("job-route-conflict", true);
+    base.jobs[0].delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "@legacy-target",
+    };
+    await saveCronStore(store.storePath, base);
+
+    const concurrentRoute = structuredClone(base);
+    concurrentRoute.jobs[0].delivery = {
+      mode: "announce",
+      channel: "slack",
+      to: "C123",
+    };
+    await saveCronStore(store.storePath, concurrentRoute);
+
+    const unrelatedUpdate = structuredClone(base);
+    unrelatedUpdate.jobs[0].name = "Unrelated update";
+    let persisted = await saveCronJobsStore(store.storePath, unrelatedUpdate, {
+      baseStore: base,
+    });
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      channel: "telegram",
+      to: "@legacy-target",
+    });
+
+    await saveCronStore(store.storePath, base);
+    await updateCronJobDeliveryTargets(store.storePath, () => "-100123456");
+    const desiredRoute = structuredClone(base);
+    if (!desiredRoute.jobs[0].delivery) {
+      throw new Error("expected delivery");
+    }
+    desiredRoute.jobs[0].delivery.channel = "slack";
+    persisted = await saveCronJobsStore(store.storePath, desiredRoute, { baseStore: base });
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      channel: "slack",
+      to: "@legacy-target",
+    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.delivery).toEqual(
+      persisted.jobs[0]?.delivery,
+    );
   });
 
   it("round-trips agent-turn external content provenance through SQLite", async () => {

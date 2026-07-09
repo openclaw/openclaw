@@ -5,14 +5,119 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
-  loadCronJobsStoreWithConfigJobs,
+  compareAndSwapCronJobRunningAtMs,
+  getCronJobStoreRevision,
+  getCronJobStoreRevisionAfterOwnWrite,
+  loadCronJobsStoreSync,
+  loadCronJobsStoreWithConfigJobsSync,
   saveCronQuarantineFile,
-  saveCronJobsStore,
+  saveCronJobsStoreSync,
   type QuarantinedCronConfigJob,
 } from "../store.js";
-import type { CronJob } from "../types.js";
+import type { CronDelivery, CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
+
+const loadedStoreRevisionByState = new WeakMap<CronServiceState, string>();
+const persistedDeliveryTargetSnapshotByState = new WeakMap<
+  CronServiceState,
+  { revision: string; deliveriesByJobId: ReadonlyMap<string, CronDelivery> }
+>();
+
+function snapshotPersistedDeliveryTargets(
+  revision: string,
+  store: CronStoreFile,
+): { revision: string; deliveriesByJobId: ReadonlyMap<string, CronDelivery> } {
+  const deliveriesByJobId = new Map<string, CronDelivery>();
+  for (const job of store.jobs) {
+    if (job.delivery) {
+      deliveriesByJobId.set(job.id, { ...job.delivery });
+    }
+  }
+  return {
+    revision,
+    deliveriesByJobId,
+  };
+}
+
+function hasSameDeliveryTargetRoute(left: CronDelivery, right: CronDelivery): boolean {
+  return (
+    left.mode === right.mode &&
+    left.channel === right.channel &&
+    left.accountId === right.accountId &&
+    left.threadId === right.threadId
+  );
+}
+
+function reconcilePersistedDeliveryTargets(
+  state: CronServiceState,
+  persistedStore: CronStoreFile,
+): void {
+  const persistedJobsById = new Map(persistedStore.jobs.map((job) => [job.id, job]));
+  for (const job of state.store?.jobs ?? []) {
+    const persistedJob = persistedJobsById.get(job.id);
+    if (
+      !job.delivery ||
+      !persistedJob?.delivery ||
+      !hasSameDeliveryTargetRoute(job.delivery, persistedJob.delivery) ||
+      job.delivery.to === persistedJob.delivery.to
+    ) {
+      continue;
+    }
+    if (persistedJob.delivery.to === undefined) {
+      delete job.delivery.to;
+    } else {
+      job.delivery.to = persistedJob.delivery.to;
+    }
+  }
+}
+
+function withPersistedDeliveryTarget(
+  job: CronJob,
+  persistedDelivery: CronDelivery | undefined,
+): CronJob {
+  if (
+    !job.delivery ||
+    !persistedDelivery ||
+    !hasSameDeliveryTargetRoute(job.delivery, persistedDelivery) ||
+    job.delivery.to === persistedDelivery.to
+  ) {
+    return job;
+  }
+  const delivery = { ...job.delivery };
+  if (persistedDelivery.to === undefined) {
+    delete delivery.to;
+  } else {
+    delivery.to = persistedDelivery.to;
+  }
+  return { ...job, delivery };
+}
+
+/** Reads the latest delivery target without mutating shared service state outside its lock. */
+export function getCronJobWithLatestDeliveryTarget(
+  state: CronServiceState,
+  jobId: string,
+): CronJob | undefined {
+  const job = state.store?.jobs.find((entry) => entry.id === jobId);
+  if (!job) {
+    return undefined;
+  }
+  try {
+    const revision = getCronJobStoreRevision(state.deps.storePath);
+    let snapshot = persistedDeliveryTargetSnapshotByState.get(state);
+    if (snapshot?.revision !== revision) {
+      snapshot = snapshotPersistedDeliveryTargets(
+        revision,
+        loadCronJobsStoreSync(state.deps.storePath),
+      );
+      persistedDeliveryTargetSnapshotByState.set(state, snapshot);
+    }
+    return withPersistedDeliveryTarget(job, snapshot.deliveriesByJobId.get(jobId));
+  } catch {
+    // getJob historically remained a cache-only, non-throwing read.
+    return job;
+  }
+}
 
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
@@ -94,16 +199,21 @@ export async function ensureLoaded(
     skipRecompute?: boolean;
   },
 ) {
-  // Fast path: store is already in memory. Other callers (add, list, run, …)
-  // trust the in-memory copy to avoid a stat syscall on every operation.
-  if (state.store && !opts?.forceReload) {
+  const storeRevision = getCronJobStoreRevision(state.deps.storePath);
+  // Fast path: trust the in-memory copy unless this process or another SQLite
+  // connection advanced the store revision.
+  if (
+    state.store &&
+    !opts?.forceReload &&
+    loadedStoreRevisionByState.get(state) === storeRevision
+  ) {
     return;
   }
   const previousJobsById = new Map<string, CronJob>();
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
+  const loaded = loadCronJobsStoreWithConfigJobsSync(state.deps.storePath);
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
@@ -163,6 +273,11 @@ export async function ensureLoaded(
     version: 1,
     jobs,
   };
+  loadedStoreRevisionByState.set(state, storeRevision);
+  persistedDeliveryTargetSnapshotByState.set(
+    state,
+    snapshotPersistedDeliveryTargets(storeRevision, state.store),
+  );
   state.storeLoadedAtMs = state.deps.nowMs();
 
   if (quarantinedConfigJobs.length > 0) {
@@ -170,7 +285,7 @@ export async function ensureLoaded(
     const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
     if (quarantinePath) {
       try {
-        await saveCronJobsStore(state.deps.storePath, state.store);
+        await persist(state);
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -212,21 +327,38 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
 }
 
 /** Persists the in-memory cron store, flushing pending quarantine records first. */
-export async function persist(state: CronServiceState, opts?: { stateOnly?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: {
+    baseStore?: CronStoreFile | null;
+    deliveryTargetWriteJobIds?: ReadonlySet<string>;
+  },
+) {
   if (!state.store) {
     return;
   }
-  let flushedPendingQuarantine = false;
   if (state.pendingQuarantineConfigJobs.length > 0) {
     const quarantinePath = await flushPendingQuarantine(state, state.deps.nowMs());
     if (!quarantinePath) {
       return;
     }
-    flushedPendingQuarantine = true;
   }
-  await saveCronJobsStore(
+  const saveOpts = {
+    baseStore: opts?.baseStore ?? state.store,
+    deliveryTargetWriteJobIds: opts?.deliveryTargetWriteJobIds,
+  };
+  const storeRevision = getCronJobStoreRevision(state.deps.storePath);
+  const persistedStore = saveCronJobsStoreSync(state.deps.storePath, state.store, saveOpts);
+  const ownWriteRevision = getCronJobStoreRevisionAfterOwnWrite(
     state.deps.storePath,
-    state.store,
-    flushedPendingQuarantine ? undefined : opts,
+    storeRevision,
+  );
+  loadedStoreRevisionByState.set(state, ownWriteRevision);
+  reconcilePersistedDeliveryTargets(state, persistedStore);
+  persistedDeliveryTargetSnapshotByState.set(
+    state,
+    snapshotPersistedDeliveryTargets(ownWriteRevision, persistedStore),
   );
 }
+
+export { compareAndSwapCronJobRunningAtMs };

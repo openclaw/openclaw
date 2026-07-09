@@ -13,6 +13,7 @@ import {
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
+import { getCronJobWithLatestDeliveryTarget } from "./service/store.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
@@ -84,7 +85,7 @@ export class CronService implements CronServiceContract {
   }
 
   getJob(id: string): CronJob | undefined {
-    return this.state.store?.jobs.find((job) => job.id === id);
+    return getCronJobWithLatestDeliveryTarget(this.state, id);
   }
 
   async readJob(id: string): Promise<CronJob | undefined> {

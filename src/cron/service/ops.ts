@@ -258,8 +258,8 @@ export async function start(state: CronServiceState) {
         markedAnyInterruptedRun = true;
       }
     }
-    if (markedAnyInterruptedRun || jobs.length > 0) {
-      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
+    if (markedAnyInterruptedRun) {
+      await persist(state);
     }
   });
 
@@ -501,9 +501,13 @@ async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
   postPersistAutoDisableNotifications: Array<() => void> = [],
+  opts?: { deliveryTargetWriteJobIds?: ReadonlySet<string> },
 ) {
   try {
-    await persist(state);
+    await persist(state, {
+      baseStore: snapshot.store,
+      deliveryTargetWriteJobIds: opts?.deliveryTargetWriteJobIds,
+    });
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
@@ -586,6 +590,7 @@ async function persistUpdatedJob(params: {
   state: CronServiceState;
   snapshot: CronRollbackSnapshot;
   nextJob: CronJob;
+  deliveryTargetWriteIntent?: boolean;
 }) {
   const { state, snapshot, nextJob } = params;
   if (state.store) {
@@ -595,14 +600,18 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot);
-  armTimer(state);
-  emit(state, {
-    jobId: nextJob.id,
-    action: "updated",
-    job: nextJob,
-    nextRunAtMs: nextJob.state.nextRunAtMs,
+  await persistOrRestore(state, snapshot, [], {
+    deliveryTargetWriteJobIds: params.deliveryTargetWriteIntent ? new Set([nextJob.id]) : undefined,
   });
+  armTimer(state);
+  const persistedJob = state.store?.jobs.find((entry) => entry.id === nextJob.id) ?? nextJob;
+  emit(state, {
+    jobId: persistedJob.id,
+    action: "updated",
+    job: persistedJob,
+    nextRunAtMs: persistedJob.state.nextRunAtMs,
+  });
+  return persistedJob;
 }
 
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
@@ -650,13 +659,22 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         cronConfig: state.deps.cronConfig,
       });
       const includeEnabled = opts?.enabledExplicit === true;
+      const hasExplicitDeliveryTarget =
+        normalizedInput.delivery !== undefined && Object.hasOwn(normalizedInput.delivery, "to");
       if (
         isDeepStrictEqual(
           declarativeFields(existing, includeEnabled),
           declarativeFields(nextJob, includeEnabled),
         )
       ) {
-        return { ...existing, created: false, updated: false, job: existing };
+        if (hasExplicitDeliveryTarget) {
+          const snapshot = snapshotStoreForRollback(state);
+          await persistOrRestore(state, snapshot, [], {
+            deliveryTargetWriteJobIds: new Set([existing.id]),
+          });
+        }
+        const persistedJob = state.store?.jobs.find((job) => job.id === existing.id) ?? existing;
+        return { ...persistedJob, created: false, updated: false, job: persistedJob };
       }
       const snapshot = snapshotStoreForRollback(state);
       finalizeUpdatedJob({
@@ -666,8 +684,13 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
-      await persistUpdatedJob({ state, snapshot, nextJob });
-      return { ...nextJob, created: false, updated: true, job: nextJob };
+      const persistedJob = await persistUpdatedJob({
+        state,
+        snapshot,
+        nextJob,
+        deliveryTargetWriteIntent: hasExplicitDeliveryTarget,
+      });
+      return { ...persistedJob, created: false, updated: true, job: persistedJob };
     }
 
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
@@ -736,8 +759,12 @@ async function updateLoadedJob(params: {
       patch.schedule !== undefined || patch.enabled !== undefined || patch.trigger !== undefined,
     scheduleChanged: patch.schedule !== undefined,
   });
-  await persistUpdatedJob({ state, snapshot, nextJob });
-  return nextJob;
+  return await persistUpdatedJob({
+    state,
+    snapshot,
+    nextJob,
+    deliveryTargetWriteIntent: patch.delivery !== undefined && Object.hasOwn(patch.delivery, "to"),
+  });
 }
 
 /** Updates a cron job patch in-place, recomputes affected schedule state, and persists it. */

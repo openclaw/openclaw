@@ -139,6 +139,11 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   );
 }
 
+/** Returns the current process-lifecycle generation for scheduler plan admission. */
+export function getCronActiveJobGeneration() {
+  return getCronActiveJobState().generation;
+}
+
 /** Returns whether any cron run is active in this process. */
 export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
