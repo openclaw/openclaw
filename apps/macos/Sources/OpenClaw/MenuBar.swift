@@ -356,6 +356,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        // Prevent AppKit automatic termination. The menu bar app has no
+        // persistent visible window, so AppKit may terminate the process
+        // ~0.5s after launch in remote mode when no window is opened.
+        NSProcessInfo.processInfo.disableAutomaticTermination("Menu bar app stays resident")
         self.state = AppStateStore.shared
         if let state {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
