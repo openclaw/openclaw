@@ -12,7 +12,6 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -122,7 +121,6 @@ async function requestOAuthCode(params: {
         code_challenge_method: "S256",
         state: params.state,
       }),
-      signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
     },
     timeoutMs: params.requestTimeoutMs,
     policy: { allowedHostnames: [endpoints.hostname] },
@@ -178,7 +176,6 @@ async function pollOAuthToken(params: {
         user_code: params.userCode,
         code_verifier: params.verifier,
       }),
-      signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
     },
     timeoutMs: params.requestTimeoutMs,
     policy: { allowedHostnames: [endpoints.hostname] },
