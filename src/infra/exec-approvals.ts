@@ -9,7 +9,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { sha256Hex, sha256HexPrefix } from "./crypto-digest.js";
 import {
@@ -275,7 +275,6 @@ export type ExecApprovalsSnapshot = {
   exists: boolean;
   raw: string | null;
   file: ExecApprovalsFile;
-  hash: string;
 };
 
 export type ExecApprovalsResolved = {
@@ -314,7 +313,7 @@ const EXEC_APPROVALS_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
-const EXEC_APPROVALS_WRITE_QUEUE = resolveProcessScopedMap<Promise<unknown>>(
+const EXEC_APPROVALS_WRITE_QUEUE = resolveGlobalMap<string, Promise<unknown>>(
   Symbol.for("openclaw.execApprovalsWriteQueue"),
 );
 
@@ -1210,7 +1209,6 @@ export async function resolveExecApprovals(
     path: resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
-    hash: snapshot.hash,
   });
 }
 
@@ -1221,7 +1219,6 @@ export function resolveExecApprovalsFromFile(params: {
   path?: string;
   socketPath?: string;
   token?: string;
-  hash?: string;
 }): ExecApprovalsResolved {
   const rawFile = params.file;
   const file = normalizeExecApprovals(params.file);
@@ -1290,7 +1287,6 @@ export function resolveExecApprovalsFromFile(params: {
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",
-    hash: params.hash ?? hashExecApprovalsFile(file),
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     agentSources: {
@@ -1528,14 +1524,12 @@ export async function recordAllowlistMatchesUse(params: {
   agentId: string | undefined;
   matches: readonly ExecAllowlistEntry[];
   command: string;
-  baseHash: string;
   resolvedPath?: string;
 }): Promise<void> {
   if (params.matches.length === 0) {
     return;
   }
   await updateExecApprovals({
-    baseHash: params.baseHash,
     update: (file) => applyRecordedAllowlistUse({ ...params, file }),
   });
 }
@@ -1650,7 +1644,6 @@ export async function persistAllowAlwaysPatterns(params: {
   platform?: string | null;
   commandText?: string;
   strictInlineEval?: boolean;
-  baseHash: string;
 }): Promise<ReturnType<typeof resolveAllowAlwaysPatternEntries>> {
   const coverage = resolveAllowAlwaysPatternCoverage({
     segments: params.segments,
@@ -1663,7 +1656,6 @@ export async function persistAllowAlwaysPatterns(params: {
   const normalizedCommand = params.commandText?.trim();
   await persistAllowAlwaysDecision({
     agentId: params.agentId,
-    baseHash: params.baseHash,
     decision: {
       kind: "patterns",
       patterns,
@@ -1792,13 +1784,11 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
 export async function persistAllowAlwaysDecision(params: {
   agentId: string | undefined;
   decision: AllowAlwaysPersistenceDecision;
-  baseHash: string;
 }): Promise<void> {
   if (params.decision.kind === "one-shot") {
     return;
   }
   await updateExecApprovals({
-    baseHash: params.baseHash,
     update: (file) => {
       const entries =
         params.decision.kind === "exact-command"

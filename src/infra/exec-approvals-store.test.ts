@@ -697,7 +697,6 @@ describe("exec approvals store helpers", () => {
         kind: "exact-command",
         commandText: 'printenv API_KEY="secret-value"',
       },
-      baseHash: readExecApprovalsSnapshot().hash,
     });
 
     const allowlist = allowlistEntries(dir, "worker");
@@ -708,6 +707,30 @@ describe("exec approvals store helpers", () => {
     });
     expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
     expect(allowlist[0]).not.toHaveProperty("commandText");
+  });
+
+  it("applies allow-always grants to the latest file after a concurrent policy write", async () => {
+    const dir = createHomeDir();
+    await ensureExecApprovals();
+    const snapshot = readExecApprovalsSnapshot();
+
+    const policyWrite = updateExecApprovals({
+      baseHash: snapshot.hash,
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, security: "deny" },
+      }),
+    });
+    const grantWrite = persistAllowAlwaysDecision({
+      agentId: "worker",
+      decision: { kind: "exact-command", commandText: "echo approved" },
+    });
+    await Promise.all([policyWrite, grantWrite]);
+
+    expect(readApprovalsFile(dir).defaults?.security).toBe("deny");
+    expect(allowlistEntries(dir, "worker")).toEqual([
+      expect.objectContaining({ source: "allow-always" }),
+    ]);
   });
 
   it("strips legacy plaintext command text during normalization", () => {
@@ -747,7 +770,6 @@ describe("exec approvals store helpers", () => {
           { pattern: "/usr/bin/python3", argPattern: "^other\\.py\x00$" },
         ],
       },
-      baseHash: readExecApprovalsSnapshot().hash,
     });
 
     const allowlist = allowlistEntries(dir, "worker");
@@ -785,7 +807,6 @@ describe("exec approvals store helpers", () => {
       agentId: undefined,
       matches: [{ pattern: "/usr/bin/rg" }],
       command: "rg needle",
-      baseHash: readExecApprovalsSnapshot().hash,
       resolvedPath: "/opt/homebrew/bin/rg",
     });
 
@@ -827,7 +848,6 @@ describe("exec approvals store helpers", () => {
         { pattern: "/usr/bin/python3", argPattern: "^b\\.py\x00$" },
       ],
       command: "python3 a.py",
-      baseHash: readExecApprovalsSnapshot().hash,
       resolvedPath: "/usr/bin/python3",
     });
 
@@ -884,7 +904,6 @@ describe("exec approvals store helpers", () => {
       agentId: "main",
       matches: [{ pattern: "/usr/bin/rg", id: "rg-id" }],
       command: "rg needle",
-      baseHash: stale.hash,
     });
 
     await Promise.all([revoke, ensure, usage]);
@@ -902,7 +921,6 @@ describe("exec approvals store helpers", () => {
     const patterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       platform: "win32",
-      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "/usr/bin/custom-tool.exe a.py",
@@ -947,7 +965,6 @@ describe("exec approvals store helpers", () => {
     const completePatterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
-      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "/usr/bin/tool ok",
@@ -979,7 +996,6 @@ describe("exec approvals store helpers", () => {
     const partialPatterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       commandText: "sh -c '/bin/echo ok && missingcmd'",
-      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "sh -c '/bin/echo ok && missingcmd'",

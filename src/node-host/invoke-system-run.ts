@@ -850,7 +850,6 @@ async function executeSystemRunPhase(
         authorizationPlan: phase.authorizationPlan,
         runtimePayload: phase.inlineEvalHit !== null,
       }),
-      baseHash: phase.approvals.hash,
     });
   }
 
@@ -858,7 +857,6 @@ async function executeSystemRunPhase(
     agentId: phase.agentId,
     matches: phase.allowlistMatches,
     command: phase.commandText,
-    baseHash: phase.approvals.hash,
     resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
   });
 

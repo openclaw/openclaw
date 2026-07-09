@@ -532,7 +532,6 @@ export async function processGatewayAllowlist(
       agentId: params.agentId,
       matches: allowlistMatches,
       command: params.command,
-      baseHash: approvals.hash,
       resolvedPath,
     });
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -883,7 +882,6 @@ export async function processGatewayAllowlist(
         await persistAllowAlwaysDecision({
           agentId: params.agentId,
           decision: effectiveAllowAlwaysPersistence,
-          baseHash: approvals.hash,
         });
       }
 
