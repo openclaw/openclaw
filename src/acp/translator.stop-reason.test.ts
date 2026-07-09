@@ -620,6 +620,173 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
+  it("emits the full revised text on a replace delta, not a byte-offset slice", async () => {
+    const sessionUpdate = vi.fn(() => Promise.resolve());
+    const connection = createAcpConnection();
+    connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
+    const sessionStore = createInMemorySessionStore();
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:main";
+    sessionStore.createSession({
+      sessionId,
+      sessionKey,
+      cwd: "/tmp",
+    });
+
+    let runId: string | undefined;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        runId = params?.idempotencyKey as string | undefined;
+        return new Promise<never>(() => {});
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+    const promptPromise = promptAgent(agent, sessionId);
+    await vi.waitFor(() => {
+      expect(runId).toBeTypeOf("string");
+    });
+
+    // Append delta: "Hello world"
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 1,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      }),
+    );
+    await Promise.resolve();
+
+    const appendChunks = sessionUpdate.mock.calls
+      .map((call) => call[0])
+      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    expect(appendChunks).toHaveLength(1);
+    expect(appendChunks[0].update.content.text).toBe("Hello world");
+
+    // Replace delta: "Hello world" → "Goodbye world" (non-append revision)
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 2,
+        state: "delta",
+        replace: true,
+        message: {
+          content: [{ type: "text", text: "Goodbye world" }],
+        },
+      }),
+    );
+    await Promise.resolve();
+
+    const allChunks = sessionUpdate.mock.calls
+      .map((call) => call[0])
+      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    expect(allChunks).toHaveLength(2);
+    // The replace delta must emit the FULL new text, not a byte-offset slice.
+    // "Goodbye world".slice(11) would be "d" (corrupted), but the fix emits all 13 chars.
+    expect(allChunks[1].update.content.text).toBe("Goodbye world");
+
+    // Cleanup: send a final event to settle the prompt.
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 3,
+        state: "final",
+      }),
+    );
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("emits the full revised text on a replace delta for a shorter revision", async () => {
+    const sessionUpdate = vi.fn(() => Promise.resolve());
+    const connection = createAcpConnection();
+    connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
+    const sessionStore = createInMemorySessionStore();
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:main";
+    sessionStore.createSession({
+      sessionId,
+      sessionKey,
+      cwd: "/tmp",
+    });
+
+    let runId: string | undefined;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        runId = params?.idempotencyKey as string | undefined;
+        return new Promise<never>(() => {});
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+    const promptPromise = promptAgent(agent, sessionId);
+    await vi.waitFor(() => {
+      expect(runId).toBeTypeOf("string");
+    });
+
+    // Append delta: "Hello world!" (12 chars)
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 1,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello world!" }],
+        },
+      }),
+    );
+    await Promise.resolve();
+
+    const appendChunks = sessionUpdate.mock.calls
+      .map((call) => call[0])
+      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    expect(appendChunks).toHaveLength(1);
+    expect(appendChunks[0].update.content.text).toBe("Hello world!");
+
+    // Replace delta: "Hello world!" → "Hi" (shorter revision)
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 2,
+        state: "delta",
+        replace: true,
+        message: {
+          content: [{ type: "text", text: "Hi" }],
+        },
+      }),
+    );
+    await Promise.resolve();
+
+    const allChunks = sessionUpdate.mock.calls
+      .map((call) => call[0])
+      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    expect(allChunks).toHaveLength(2);
+    // Before the fix, "Hi".length (2) <= sentSoFar (12) would return early and
+    // emit nothing. After the fix, the full "Hi" is emitted.
+    expect(allChunks[1].update.content.text).toBe("Hi");
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey,
+        seq: 3,
+        state: "final",
+      }),
+    );
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
   it("does not let a stale disconnect deadline reject a newer prompt on the same session", async () => {
     vi.useFakeTimers();
     try {

@@ -1141,7 +1141,10 @@ export class AcpGatewayAgent implements Agent {
       // Gateway chat events can carry the latest full assistant snapshot on both
       // incremental updates and the terminal final event. Process the snapshot
       // first so ACP clients never drop the last visible assistant text.
-      await this.handleDeltaEvent(pending.sessionId, messageData);
+      // When the Gateway signals a non-append revision (replace), the delta
+      // must be the full new text, not a byte-offset slice of the prior text.
+      const replace = state === "delta" ? (payload.replace as boolean | undefined) : undefined;
+      await this.handleDeltaEvent(pending.sessionId, messageData, replace);
       if (state === "delta") {
         return;
       }
@@ -1167,6 +1170,7 @@ export class AcpGatewayAgent implements Agent {
   private async handleDeltaEvent(
     sessionId: string,
     messageData: Record<string, unknown>,
+    replace?: boolean,
   ): Promise<void> {
     const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const pending = this.pendingPrompts.get(sessionId);
@@ -1179,7 +1183,7 @@ export class AcpGatewayAgent implements Agent {
       .map((block) => block.thinking ?? "")
       .join("\n")
       .trimEnd();
-    const sentThoughtSoFar = pending.sentThoughtLength ?? 0;
+    const sentThoughtSoFar = replace ? 0 : (pending.sentThoughtLength ?? 0);
     if (fullThought && fullThought.length > sentThoughtSoFar) {
       const newThought = fullThought.slice(sentThoughtSoFar);
       pending.sentThoughtLength = fullThought.length;
@@ -1202,7 +1206,7 @@ export class AcpGatewayAgent implements Agent {
       .map((block) => block.text ?? "")
       .join("\n")
       .trimEnd();
-    const sentSoFar = pending.sentTextLength ?? 0;
+    const sentSoFar = replace ? 0 : (pending.sentTextLength ?? 0);
     if (!fullText || fullText.length <= sentSoFar) {
       return;
     }
