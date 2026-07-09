@@ -47,6 +47,7 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
@@ -268,18 +269,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
-  const runBestEffortCallback = (label: string, callback: () => void | Promise<void>) => {
-    try {
-      const result = callback();
-      if (isPromiseLike<void>(result)) {
-        void Promise.resolve(result).catch((error: unknown) => {
-          log.warn(`${label} callback failed: ${String(error)}`);
-        });
-      }
-    } catch (error) {
-      log.warn(`${label} callback failed: ${String(error)}`);
-    }
-  };
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitAssistantStreamDataSafely = (
@@ -292,15 +281,21 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       data,
     });
     if (params.onAgentEvent) {
-      runBestEffortCallback("assistant agent event", () =>
-        params.onAgentEvent?.({
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () => params.onAgentEvent?.({
           stream: "assistant",
           data,
         }),
-      );
+      });
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      runBestEffortCallback("assistant partial reply", () => params.onPartialReply?.(data));
+      runBestEffortCallback({
+        label: "assistant partial reply",
+        log,
+        callback: () => params.onPartialReply?.(data),
+      });
     }
   };
   const emitAssistantStreamData = (
@@ -746,13 +741,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     try {
-      runBestEffortCallback("tool result", () =>
-        params.onToolResult?.({
+      runBestEffortCallback({
+        label: "tool result",
+        log,
+        callback: () => params.onToolResult?.({
           text: parsed.text,
           mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
           ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
         }),
-      );
+      });
     } catch {
       // ignore tool result delivery failures
     }
@@ -1228,12 +1225,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
-      runBestEffortCallback("reasoning stream", () =>
-        params.onReasoningStream?.({
+      runBestEffortCallback({
+        label: "reasoning stream",
+        log,
+        callback: () => params.onReasoningStream?.({
           text: trimmed,
           ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
         }),
-      );
+      });
     }
   };
 
