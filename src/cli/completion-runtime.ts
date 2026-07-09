@@ -274,7 +274,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       sourceLine = formatCompletionSourceLine("powershell", cachePath);
       break;
     default:
-      throw new Error(`Unsupported shell: ${shell}`);
+      throw new Error(`Unsupported shell: ${String(shell)}`);
   }
 
   try {

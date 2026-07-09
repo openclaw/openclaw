@@ -339,7 +339,11 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
       );
       break;
     default:
-      logVerbose(core, runtime, `[${account.accountId}] Unknown Zalo event type: ${event_name}`);
+      logVerbose(
+        core,
+        runtime,
+        `[${account.accountId}] Unknown Zalo event type: ${String(event_name)}`,
+      );
       break;
   }
 }

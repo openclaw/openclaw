@@ -278,7 +278,7 @@ export class MediaStreamHandler {
           case "mark":
             break;
           default:
-            console.warn(`[MediaStream] Unknown Twilio event: ${message.event}`);
+            console.warn(`[MediaStream] Unknown Twilio event: ${String(message.event)}`);
             break;
         }
       } catch (error) {
