@@ -354,16 +354,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }),
     });
     ({ app, receiver, socketModeLogger } = sharedGroup.appBundle);
-    if (sharedGroup.justBecameShared) {
-      const sharedAccountCount = countEnabledSlackSocketAccountsSharingAppToken({
-        cfg,
-        appToken: appToken ?? "",
-      });
-      runtime.log?.(
-        `slack: sharing socket for ${sharedAccountCount} accounts on app ` +
-          `${expectedApiAppIdFromAppToken ?? "unknown"} (multi-workspace)`,
-      );
-    }
   } else {
     ({ app, receiver, socketModeLogger } = createSlackBoltApp({
       interop: await getSlackBoltInterop(),
@@ -402,14 +392,28 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
-  // From here on any thrown error must release the shared group reservation
-  // (see the finally at the end of this function): a creator that throws
-  // before its connection task exists tears the whole group down so members
-  // are never left waiting on a stopSignal nobody will fire, and a member
-  // that throws simply leaves.
+  // Everything between joining the shared group (above; only non-throwing
+  // statements may sit in between) and this try runs under the finally at the
+  // end of this function, so any thrown error releases the group
+  // reservation: a creator that throws before its connection task exists
+  // tears the whole group down so members are never left waiting on a
+  // stopSignal nobody will fire, and a member that throws simply leaves.
   let unregisterHttpHandler: (() => void) | null = null;
   let unregisterSocketModeConnectionDiagnostics: () => void = () => {};
   try {
+    if (sharedGroup?.justBecameShared) {
+      // Deliberately inside the try: runtime.log is caller-supplied and may
+      // throw, and a member that dies here must still leave the group.
+      const sharedAccountCount = countEnabledSlackSocketAccountsSharingAppToken({
+        cfg,
+        appToken: appToken ?? "",
+      });
+      runtime.log?.(
+        `slack: sharing socket for ${sharedAccountCount} accounts on app ` +
+          `${expectedApiAppIdFromAppToken ?? "unknown"} (multi-workspace)`,
+      );
+    }
+
     const slackHttpHandler =
       slackMode === "http" && receiver
         ? async (req: IncomingMessage, res: ServerResponse) => {

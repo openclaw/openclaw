@@ -393,6 +393,72 @@ describe("monitorSlackProvider shared Socket Mode group", () => {
     }
   });
 
+  it("leaves the group cleanly when the second account throws on the sharing log", async () => {
+    mockHealthyTeamAuth();
+
+    const config = sharedGroupConfig();
+    const controller1 = new AbortController();
+    const controller2 = new AbortController();
+    const setStatus1 = vi.fn();
+    const run1 = monitorSlackProvider({
+      accountId: "team1",
+      config,
+      abortSignal: controller1.signal,
+      setStatus: setStatus1,
+    });
+    // The second joiner is the account that emits the one-time
+    // "sharing socket" info log — the last remaining statement between
+    // joining the group and any handler registration. If runtime.log throws
+    // there, the member must still leave the group instead of lingering as a
+    // handler-less refcount entry that keeps the group alive forever.
+    const run2 = monitorSlackProvider({
+      accountId: "team2",
+      config,
+      abortSignal: controller2.signal,
+      runtime: {
+        log: (...args: unknown[]) => {
+          if (typeof args[0] === "string" && args[0].includes("sharing socket")) {
+            throw new Error("boom-sharing-log");
+          }
+        },
+        error: vi.fn(),
+        exit: vi.fn() as never,
+      },
+    });
+
+    await expect(run2).rejects.toThrow("boom-sharing-log");
+
+    // The surviving creator keeps serving its own workspace.
+    const handler = await getSlackHandlerOrThrow("message");
+    await flush();
+    await flush();
+    setStatus1.mockClear();
+    await handler({
+      event: makeDirectMessageEvent({ channel: "C_T1", ts: "999.009", text: "still fine" }),
+      body: { api_app_id: "A0SHARED", team_id: "T1" },
+    });
+    expect(setStatus1).toHaveBeenCalled();
+
+    // The failed member's refcount entry must be gone: stopping the creator
+    // (now the only member) must fully dissolve the group so a fresh pair
+    // creates a NEW group whose creator starts a second socket. A lingering
+    // ghost member would keep the old group alive, making the fresh pair
+    // join it as members and never start another App.
+    controller1.abort();
+    await run1;
+    await flush();
+
+    const fresh = startBothTeamAccounts(config);
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+      expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(2);
+    } finally {
+      await stopBothTeamAccounts(fresh);
+    }
+  });
+
   it("propagates a fatal socket error to every sharing account and leaves no abort listeners behind", async () => {
     mockHealthyTeamAuth();
     // First socket start dies with a non-recoverable auth error: the
