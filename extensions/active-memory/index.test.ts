@@ -3201,6 +3201,47 @@ describe("active-memory plugin", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `${"a".repeat(38)}🎉TAILWORD`,
+        },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(38));
+  });
+
+  it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "joined-surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: { role: "assistant", content: "a".repeat(37) },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "🎉TAILWORD" },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(37));
+  });
+
   it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
     const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });

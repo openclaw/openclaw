@@ -2251,20 +2251,20 @@ async function readPartialAssistantText(
         if (remaining <= 0) {
           return true;
         }
-        const nextText = text.slice(0, remaining);
+        const nextText = truncateUtf16Safe(text, remaining);
+        if (!nextText) {
+          return true;
+        }
         texts.push(nextText);
         collectedChars += separatorChars + nextText.length;
-        return collectedChars >= resolvedLimits.maxChars;
+        // A surrogate backoff leaves spare code units; stop instead of skipping ahead.
+        return nextText.length < text.length || collectedChars >= resolvedLimits.maxChars;
       }
       return false;
     },
   });
-  const joined = texts
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, resolvedLimits.maxChars)
-    .trim();
+  // Accepted chunks and separators are charged before append, so the join is already bounded.
+  const joined = texts.join("\n").trim();
   return joined || null;
 }
 
