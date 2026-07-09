@@ -1,0 +1,99 @@
+{
+  "id": "meta-model-api",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["meta-model-api"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "meta-model-api-native",
+      "hosts": ["api.ai.meta.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "meta-model-api": {
+        "family": "meta-model-api"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "meta-model-api": {
+        "baseUrl": "https://api.ai.meta.com/v1",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "muse-spark-1.1",
+            "name": "Muse Spark 1.1",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "off": "minimal",
+              "minimal": "minimal",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh"
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            },
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "meta-model-api": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "meta-model-api",
+        "authMethods": ["api-key"],
+        "envVars": ["MODEL_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "meta-model-api",
+      "method": "api-key",
+      "choiceId": "meta-model-api-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Meta Model API key",
+      "choiceHint": "Meta Model API (Responses API)",
+      "groupId": "meta-model-api",
+      "groupLabel": "Meta Model API",
+      "groupHint": "Meta Model API (Responses API)",
+      "onboardingFeatured": true,
+      "optionKey": "metaModelApiKey",
+      "cliFlag": "--meta-model-api-key",
+      "cliOption": "--meta-model-api-key <key>",
+      "cliDescription": "Meta Model API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

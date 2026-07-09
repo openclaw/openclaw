@@ -7689,6 +7689,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## providers/meta-model-api.md
+
+- Route: /providers/meta-model-api
+- Headings:
+  - H2: Getting started
+  - H2: Non-interactive setup
+  - H2: Built-in catalog
+  - H2: Manual config
+  - H2: Smoke test
+  - H2: Related
+
 ## providers/minimax.md
 
 - Route: /providers/minimax
