@@ -947,6 +947,23 @@ describe("formatGatewayLiveAgentWaitFailure", () => {
   });
 });
 
+describe("isGatewayAgentWaitCompletedWithoutReply", () => {
+  it("accepts the malformed completion envelope used by tool-only turns", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: " completed " })).toBe(
+      true,
+    );
+  });
+
+  it("rejects genuine agent errors and non-error completion envelopes", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: "aborted" })).toBe(
+      false,
+    );
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "ok", error: "completed" })).toBe(
+      false,
+    );
+  });
+});
+
 describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   it("allows all-skip runs when no timeout skip was involved", () => {
     expect(() =>
@@ -2878,11 +2895,21 @@ function formatGatewayLiveAgentWaitFailure(params: {
   );
 }
 
+function isGatewayAgentWaitCompletedWithoutReply(result: unknown): boolean {
+  const value = result as { status?: unknown; error?: unknown } | null | undefined;
+  return (
+    value?.status === "error" &&
+    typeof value.error === "string" &&
+    value.error.trim().toLowerCase() === "completed"
+  );
+}
+
 async function waitForGatewayAgentRun(params: {
   client: GatewayClient;
   runId: string;
   context: string;
   timeoutMs?: number;
+  allowCompletedWithoutReply?: boolean;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
   const result = await params.client.request(
@@ -2895,7 +2922,10 @@ async function waitForGatewayAgentRun(params: {
       timeoutMs: timeoutMs + 5_000,
     },
   );
-  if ((result as { status?: unknown } | undefined)?.status === "ok") {
+  if (
+    (result as { status?: unknown } | undefined)?.status === "ok" ||
+    (params.allowCompletedWithoutReply && isGatewayAgentWaitCompletedWithoutReply(result))
+  ) {
     return;
   }
   throw formatGatewayLiveAgentWaitFailure({
@@ -2947,6 +2977,7 @@ async function requestGatewayAgentText(params: {
       runId,
       context: `${params.context}: agent-wait`,
       timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+      allowCompletedWithoutReply: true,
     });
     const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     return assistantTexts.length > baselineAssistantCount ? (assistantTexts.at(-1) ?? "") : "";
