@@ -145,10 +145,19 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
   }
 }
 
+/** Converts image bytes into JPEG through the shared image processor. */
+export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
+  try {
+    return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
+  } catch (error) {
+    return wrapRastermillUnavailable("convertImageToJpeg", error);
+  }
+}
+
 /** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   try {
-    return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
+    return await convertImageToJpeg(buffer);
   } catch (error) {
     return wrapRastermillUnavailable("convertHeicToJpeg", error);
   }

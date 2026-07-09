@@ -3220,6 +3220,71 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
+  it("normalizes unsupported user image blocks to jpeg before Anthropic transport payloads", async () => {
+    // JPEG magic bytes mislabeled as HEIC: normalizer must rewrite media_type.
+    const imageData = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+    ]).toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", data: imageData, mimeType: "image/heic" },
+            ],
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const imageBlock = findRecord(userMessage.content, (record) => record.type === "image");
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/jpeg",
+        data: imageData,
+      },
+    });
+  });
+
+  it("keeps non-vision transport downgrade behavior without decoding dropped images", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", data: "not-base64", mimeType: "image/heic" },
+            ],
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    expect(userMessage.content).toMatchObject([{ type: "text", text: "look" }]);
+  });
+
   it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
     const controller = new AbortController();
     const abortReason = new Error("anthropic test abort");

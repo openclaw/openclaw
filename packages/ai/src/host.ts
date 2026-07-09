@@ -11,6 +11,10 @@ export interface OpenAIStrictToolSettingOptions {
   supportsStrictMode?: boolean;
 }
 
+export type AiInlineTextBlock = { type: "text"; text: string };
+export type AiInlineImageBlock = { type: "image"; data: string; mimeType: string };
+export type AiInlineContentBlock = AiInlineTextBlock | AiInlineImageBlock;
+
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
   /**
@@ -28,6 +32,13 @@ export interface AiTransportHost {
   redactSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
   redactToolPayloadText(text: string): string;
+  /**
+   * Normalizes Anthropic inline image blocks before provider payload construction.
+   * Host owns media decode/transcode so the package stays free of image backends.
+   */
+  normalizeAnthropicInlineContentBlocks(
+    content: readonly AiInlineContentBlock[],
+  ): Promise<AiInlineContentBlock[]>;
   /**
    * Resolves the host strict-tool default for OpenAI-compatible routes.
    * undefined lets the request omit the strict flag entirely.
@@ -51,6 +62,8 @@ const inertAiTransportHost: AiTransportHost = {
   resolveSecretSentinel: (value) => value,
   redactSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
+  // Without a host media stack, pass blocks through; OpenClaw installs a real normalizer.
+  normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>
     options?.supportsStrictMode ? false : undefined,
   logDebug: () => {},

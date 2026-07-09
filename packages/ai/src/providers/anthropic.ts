@@ -18,6 +18,7 @@ import type {
   AssistantMessageEvent,
   CacheRetention,
   Context,
+  ImageContent,
   Message,
   Model,
   ModelThinkingLevel,
@@ -95,6 +96,16 @@ import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
+const ANTHROPIC_IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+type AnthropicImageMediaType = (typeof ANTHROPIC_IMAGE_MEDIA_TYPES)[number];
+const ANTHROPIC_IMAGE_MEDIA_TYPE_SET = new Set<string>(ANTHROPIC_IMAGE_MEDIA_TYPES);
+
+function resolveAnthropicImageMediaType(value: string): AnthropicImageMediaType {
+  if (ANTHROPIC_IMAGE_MEDIA_TYPE_SET.has(value)) {
+    return value as AnthropicImageMediaType;
+  }
+  throw new Error(`Unsupported Anthropic image media type after normalization: ${value}`);
+}
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -144,13 +155,22 @@ const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
 // Convert tool name to CC canonical casing if it matches (case-insensitive)
 const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) ?? name;
 
+async function normalizeInlineContentBlocks(
+  content: readonly (TextContent | ImageContent)[],
+): Promise<Array<TextContent | ImageContent>> {
+  if (!content.some((block) => block.type === "image")) {
+    return content.filter((block): block is TextContent => block.type === "text");
+  }
+  return await getAiTransportHost().normalizeAnthropicInlineContentBlocks(content);
+}
+
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(
+async function convertContentBlocks(
   content: readonly unknown[],
   isError: boolean,
-):
+): Promise<
   | string
   | Array<
       | { type: "text"; text: string }
@@ -162,7 +182,8 @@ function convertContentBlocks(
             data: string;
           };
         }
-    > {
+    >
+> {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
@@ -205,16 +226,22 @@ function convertContentBlocks(
     if (record.type !== "image") {
       continue;
     }
+    const [normalizedImage] = await normalizeInlineContentBlocks([
+      {
+        type: "image" as const,
+        data: typeof record.data === "string" ? record.data : "",
+        mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/jpeg",
+      },
+    ]);
+    if (normalizedImage?.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp",
-        data: typeof record.data === "string" ? record.data : "",
+        media_type: resolveAnthropicImageMediaType(normalizedImage.mimeType),
+        data: normalizedImage.data,
       },
     });
   }
@@ -578,7 +605,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
       }
-      const builtParams = buildParams(
+      const builtParams = await buildParams(
         model,
         requestContext,
         isOAuth,
@@ -1291,16 +1318,16 @@ function createClient(
   return { client, isOAuthToken: false, serverSideFallback };
 }
 
-function buildParams(
+async function buildParams(
   model: Model<"anthropic-messages">,
   context: Context,
   isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
   serverSideFallback = false,
-): {
+): Promise<{
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
-} {
+}> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
@@ -1325,7 +1352,7 @@ function buildParams(
   );
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(
+    messages: await convertMessages(
       context.messages,
       model,
       isOAuthTokenResult,
@@ -1428,14 +1455,14 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertMessages(
+async function convertMessages(
   messages: Message[],
   model: Model<"anthropic-messages">,
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
   replayThinkingEnabled = true,
-): MessageParam[] {
+): Promise<MessageParam[]> {
   const params: MessageParam[] = [];
   // Param indexes for transient runtime-context carriers — excluded from
   // cache_control breakpoint selection so the deepest breakpoint anchors on the
@@ -1464,7 +1491,8 @@ function convertMessages(
           });
         }
       } else {
-        const blocks: ContentBlockParam[] = msg.content.map((item) => {
+        const normalizedContent = await normalizeInlineContentBlocks(msg.content);
+        const blocks: ContentBlockParam[] = normalizedContent.map((item) => {
           if (item.type === "text") {
             return {
               type: "text",
@@ -1475,7 +1503,7 @@ function convertMessages(
             type: "image",
             source: {
               type: "base64",
-              media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+              media_type: resolveAnthropicImageMediaType(item.mimeType),
               data: item.data,
             },
           };
@@ -1574,7 +1602,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content, msg.isError),
+        content: await convertContentBlocks(msg.content, msg.isError),
         is_error: msg.isError,
       });
 
@@ -1584,7 +1612,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content, nextMsg.isError),
+          content: await convertContentBlocks(nextMsg.content, nextMsg.isError),
           is_error: nextMsg.isError,
         });
         j++;

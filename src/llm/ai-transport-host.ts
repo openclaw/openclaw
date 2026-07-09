@@ -6,6 +6,7 @@ import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-set
 import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
@@ -33,6 +34,7 @@ configureAiTransportHost({
   },
   redactSecrets,
   redactToolPayloadText,
+  normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
