@@ -660,6 +660,57 @@ export const nl: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
+  codexSessions: {
+    eyebrow: "Codex fleet",
+    title: "Sessions across your computers",
+    subtitle:
+      "A read-only view of Codex sessions on this gateway and every connected computer that shares them.",
+    summaryLabel: "Codex session summary",
+    summary: {
+      sessions: "sessions",
+      onlineHosts: "online",
+      hosts: "hosts",
+    },
+    searchLabel: "Search Codex sessions",
+    searchPlaceholder: "Search session titles",
+    scopeLabel: "Session archive filter",
+    scope: {
+      active: "Active",
+      archived: "Archived",
+    },
+    refresh: "Refresh",
+    disconnected: "Reconnect to the gateway to refresh Codex sessions.",
+    partial: "Unavailable hosts: {count}. Other hosts remain available.",
+    loading: "Loading Codex sessions…",
+    loadMore: "Load more",
+    loadingMore: "Loading…",
+    untitled: "Untitled Codex session",
+    threadId: "Thread",
+    status: {
+      active: "Active",
+      idle: "Idle",
+      archived: "Archived",
+      notLoaded: "Stored",
+      systemError: "System error",
+      unknown: "Onbekend",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Node",
+      connected: "Connected",
+      offline: "Offline",
+      unavailable: "Session catalog unavailable",
+      sessionCount: "{count} getoond",
+    },
+    empty: {
+      title: "No Codex hosts found",
+      subtitle:
+        "Enable Codex session sharing on the gateway or a paired computer, then refresh this view.",
+      search: "No sessions on this host match your search.",
+      active: "No active sessions on this host.",
+      archived: "No archived sessions on this host.",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
