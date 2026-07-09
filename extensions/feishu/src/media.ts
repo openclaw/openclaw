@@ -398,7 +398,7 @@ export async function saveMessageResourceFeishu(params: {
   }
 }
 
-type UploadImageResult = {
+export type UploadImageResult = {
   imageKey: string;
 };
 
@@ -417,7 +417,7 @@ export type SendMediaResult = {
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
  */
-async function uploadImageFeishu(params: {
+export async function uploadImageFeishu(params: {
   cfg: ClawdbotConfig;
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
@@ -450,6 +450,33 @@ async function uploadImageFeishu(params: {
       errorPrefix: "Feishu image upload failed",
     }),
   };
+}
+
+export async function uploadImageMediaFeishu(params: {
+  cfg: ClawdbotConfig;
+  mediaUrl: string;
+  accountId?: string;
+  /** Allowed roots for local path reads; required for local filePath to work. */
+  mediaLocalRoots?: readonly string[];
+}): Promise<UploadImageResult> {
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
+  const loaded = await getFeishuRuntime().media.loadWebMedia(params.mediaUrl, {
+    maxBytes: mediaMaxBytes,
+    optimizeImages: false,
+    localRoots: params.mediaLocalRoots?.length ? params.mediaLocalRoots : undefined,
+  });
+  const fileName = loaded.fileName ?? "image";
+  const routing = resolveFeishuOutboundMediaKind({ fileName, contentType: loaded.contentType });
+  if (routing.msgType !== "image") {
+    throw new Error("Feishu card media only supports image attachments.");
+  }
+
+  return uploadImageFeishu({ cfg: params.cfg, image: loaded.buffer, accountId: params.accountId });
 }
 
 /**

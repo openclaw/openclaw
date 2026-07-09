@@ -98,6 +98,29 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
   return media.trim() ? media : undefined;
 }
 
+function appendFeishuCardImage(
+  card: Record<string, unknown>,
+  imageKey: string,
+): Record<string, unknown> {
+  const body = isRecord(card.body) ? { ...card.body } : {};
+  const elements = Array.isArray(body.elements) ? [...body.elements] : [];
+  return {
+    ...card,
+    body: {
+      ...body,
+      elements: [
+        ...elements,
+        {
+          tag: "img",
+          img_key: imageKey,
+          alt: { tag: "plain_text", content: "image" },
+          mode: "fit_horizontal",
+        },
+      ],
+    },
+  };
+}
+
 function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
   for (const key of keys) {
     const value = params[key];
@@ -845,9 +868,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                     : resolveInteractiveTextFallback({ text, interactive }),
                 })
               : textCard;
-            if (card && mediaUrl) {
-              throw new Error(`Feishu ${ctx.action} does not support card with media.`);
-            }
             if (!card && !text && !mediaUrl) {
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
@@ -864,10 +884,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
                 );
               }
+              let cardToSend = card;
+              if (mediaUrl) {
+                const { imageKey } = await runtime.uploadImageMediaFeishu({
+                  cfg: ctx.cfg,
+                  mediaUrl,
+                  accountId: ctx.accountId ?? undefined,
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                });
+                cardToSend = appendFeishuCardImage(card, imageKey);
+              }
               result = await runtime.sendCardFeishu({
                 cfg: ctx.cfg,
                 to,
-                card,
+                card: cardToSend,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
                 replyInThread,
