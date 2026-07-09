@@ -167,7 +167,7 @@ class ChatLinkPreviewTest {
   @Test
   fun metadataTruncationPreservesUtf16Boundaries() {
     val titlePrefix = "t".repeat(LINK_PREVIEW_TITLE_MAX_CHARS - 1)
-    val descriptionPrefix = "d".repeat(LINK_PREVIEW_DESCRIPTION_MAX_CHARS - 1)
+    val descriptionPrefix = "d".repeat(LINK_PREVIEW_DESCRIPTION_MAX_CHARS - 2)
     val result =
       parseOpenGraph(
         "<meta property='og:title' content='$titlePrefix\uD83D\uDE80 trailing'>" +
@@ -176,7 +176,7 @@ class ChatLinkPreviewTest {
       ) as LinkPreviewResult.Loaded
 
     assertEquals(titlePrefix, result.metadata.title)
-    assertEquals(descriptionPrefix, result.metadata.description)
+    assertEquals("$descriptionPrefix\uD83D\uDE80", result.metadata.description)
   }
 
   @Test

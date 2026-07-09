@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.takeUtf16Safe
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
@@ -525,17 +526,6 @@ private fun sanitizeMetadataText(
       .replace(Regex("\\s+"), " ")
       .trim()
   return sanitized.takeUtf16Safe(maxChars).takeIf(String::isNotEmpty)
-}
-
-private fun String.takeUtf16Safe(maxChars: Int): String {
-  if (length <= maxChars) return this
-  val end =
-    if (maxChars > 0 && Character.isHighSurrogate(this[maxChars - 1])) {
-      maxChars - 1
-    } else {
-      maxChars
-    }
-  return take(end)
 }
 
 private fun findTitle(html: String): String? =
