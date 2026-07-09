@@ -313,7 +313,7 @@ export function parseCronRunScopeSuffix(
     return { baseSessionKey: raw, runId: undefined };
   }
   const runMarker = ":run:";
-  const markerIndex = raw.lastIndexOf(runMarker);
+  const markerIndex = raw.toLowerCase().lastIndexOf(runMarker);
   return {
     baseSessionKey: raw.slice(0, markerIndex),
     runId: raw.slice(markerIndex + runMarker.length),

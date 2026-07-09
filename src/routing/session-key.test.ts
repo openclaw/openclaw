@@ -211,6 +211,13 @@ describe("cron run scope suffix parsing", () => {
     });
   });
 
+  it("parses mixed-case run markers without lowercasing the stored key", () => {
+    expect(parseCronRunScopeSuffix("AGENT:Work:CRON:Nightly-Job:RUN:ABC-123")).toEqual({
+      baseSessionKey: "AGENT:Work:CRON:Nightly-Job",
+      runId: "ABC-123",
+    });
+  });
+
   it("leaves keys without a run scope untouched", () => {
     expect(parseCronRunScopeSuffix("agent:main:main")).toEqual({
       baseSessionKey: "agent:main:main",
