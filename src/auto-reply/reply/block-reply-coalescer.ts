@@ -17,8 +17,9 @@ export function createBlockReplyCoalescer(params: {
   config: BlockStreamingCoalescing;
   shouldAbort: () => boolean;
   onFlush: (payload: ReplyPayload) => Promise<void> | void;
+  logVerbose?: (message: string) => void;
 }): BlockReplyCoalescer {
-  const { config, shouldAbort, onFlush } = params;
+  const { config, shouldAbort, onFlush, logVerbose } = params;
   const minChars = Math.max(1, Math.floor(config.minChars));
   const maxChars = Math.max(minChars, Math.floor(config.maxChars));
   const idleMs = Math.max(0, Math.floor(config.idleMs));
@@ -80,6 +81,14 @@ export function createBlockReplyCoalescer(params: {
   const flush = async (options?: { force?: boolean }) => {
     clearIdleTimer();
     if (shouldAbort()) {
+      // Prior block aborted — buffered tail cannot be sent in order. Surface the
+      // drop instead of losing it silently; finals fallback re-delivers the full reply.
+      // This discard was silent before adding this log — no error, no telemetry.
+      if (bufferText) {
+        logVerbose?.(
+          `block reply coalescer dropped ${bufferText.length} buffered chars after abort; final reply falls back to non-streamed delivery`,
+        );
+      }
       resetBuffer();
       return;
     }

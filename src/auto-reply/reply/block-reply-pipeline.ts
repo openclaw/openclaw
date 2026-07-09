@@ -228,6 +228,7 @@ export function createBlockReplyPipeline(params: {
     ? createBlockReplyCoalescer({
         config: coalescing,
         shouldAbort: () => aborted,
+        logVerbose,
         onFlush: (payload) => {
           bufferedAssistantMessageIndex = undefined;
           bufferedKeys.clear();
