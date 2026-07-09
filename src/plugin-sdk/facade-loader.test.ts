@@ -9,6 +9,7 @@ import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
+  MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
   setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
@@ -243,7 +244,21 @@ describe("plugin-sdk facade loader", () => {
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
-    ).toThrow("Unable to resolve bundled plugin public surface browser/browser-maintenance.js");
+    ).toThrow(MissingPublicSurfaceError);
+  });
+
+  it("MissingPublicSurfaceError is distinguishable from generic Error", () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    try {
+      loadBundledPluginPublicSurfaceModuleSync({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      });
+    } catch (err) {
+      expect(err instanceof MissingPublicSurfaceError).toBe(true);
+      expect(err instanceof Error).toBe(true);
+    }
   });
 
   it("shares loaded facade ids with facade-runtime", () => {
