@@ -13,6 +13,7 @@ import {
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -214,7 +215,7 @@ export function buildCliSessionHistoryPrompt(params: {
       0,
       maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
     );
-    const summaryTruncated = renderedSummary.slice(0, summaryBudget).trimEnd();
+    const summaryTruncated = truncateUtf16Safe(renderedSummary, summaryBudget).trimEnd();
     const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
     return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
   };
