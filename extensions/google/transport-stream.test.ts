@@ -1347,6 +1347,9 @@ describe("google transport stream", () => {
     });
 
     const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock);
+    // Attach the rejection handler before advancing fake time so the expected
+    // timeout cannot surface as an unhandled rejection between timer ticks.
+    const refreshError = pendingRefresh.catch((error: unknown) => error);
     await vi.waitFor(() => expect(tokenFetchMock).toHaveBeenCalledOnce());
     const signal = observedSignal;
     if (!signal) {
@@ -1356,7 +1359,7 @@ describe("google transport stream", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(signal.aborted).toBe(true);
-    await expect(pendingRefresh).rejects.toMatchObject({
+    await expect(refreshError).resolves.toMatchObject({
       name: "TimeoutError",
       message: "request timed out",
     });
