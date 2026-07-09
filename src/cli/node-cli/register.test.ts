@@ -139,13 +139,34 @@ describe("registerNodeCli", () => {
     daemonMocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,
       nodeId: "node-existing",
-      gateway: { host: "10.0.0.2", port: 19001, tls: true },
+      gateway: {
+        host: "10.0.0.2",
+        port: 19001,
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+      },
     });
 
     await createProgram().parseAsync(["node", "run", "--no-tls"], { from: "user" });
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewayTls: false }),
+      expect.objectContaining({
+        gatewayTls: false,
+        gatewayTlsFingerprint: undefined,
+      }),
     );
+  });
+
+  it("rejects a TLS fingerprint with an explicit plaintext selection", async () => {
+    await createProgram().parseAsync(
+      ["node", "run", "--no-tls", "--tls-fingerprint", "sha256:fingerprint"],
+      { from: "user" },
+    );
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      "--no-tls cannot be combined with --tls-fingerprint",
+    );
+    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 });
