@@ -3,6 +3,7 @@
  *
  * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
  */
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
@@ -217,11 +218,10 @@ function responseContentType(res: Response): string | null {
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
   const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
-  const options = truncated ? { stream: true } : undefined;
   try {
-    return new TextDecoder(charset ?? "utf-8").decode(bytes, options);
+    return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
-    return new TextDecoder("utf-8").decode(bytes, options);
+    return decodeTextPrefix(bytes, { encoding: "utf-8", truncated });
   }
 }
 

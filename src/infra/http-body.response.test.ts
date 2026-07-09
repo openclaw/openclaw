@@ -1,7 +1,11 @@
 // Tests bounded HTTP response reads and cleanup behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import {
+  readResponseTextPrefix,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "./http-body.js";
 
 function makeStream(chunks: Uint8Array[], delayMs?: number) {
   return new ReadableStream<Uint8Array>({
@@ -257,6 +261,18 @@ describe("readResponseTextSnippet", () => {
         maxBytes: Number.NaN,
       }),
     ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
+  });
+
+  it("cancels immediately when a diagnostic prefix fills the byte budget", async () => {
+    const cancel = vi.fn();
+    const response = new Response(makeStallingStream([new TextEncoder().encode("exact")], cancel));
+
+    await expect(readResponseTextPrefix(response, 5)).resolves.toEqual({
+      text: "exact",
+      size: 5,
+      truncated: true,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it.each([
