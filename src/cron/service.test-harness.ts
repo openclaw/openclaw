@@ -236,6 +236,7 @@ export function createMockCronStateForJobs(params: {
     stopped: false,
     restartRecoveryPending: false,
     pendingCatchupDeferralJobIds: new Set<string>(),
+    lastSyncedCatchupDeferralKey: "",
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     timer: null,
