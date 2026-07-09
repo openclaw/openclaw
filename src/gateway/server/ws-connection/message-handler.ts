@@ -1518,19 +1518,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
-                } else {
-                  // Best-effort retirement of stale silent siblings; a prune
-                  // failure must never fail the fresh device's handshake.
-                  try {
-                    await pruneSupersededSilentPairingsAfterApproval({
-                      deviceId: approved.device.deviceId,
-                      context,
-                    });
-                  } catch (error) {
-                    logGateway.warn(
-                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
-                    );
-                  }
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -1545,6 +1532,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   },
                   { dropIfSlow: true },
                 );
+                if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+                  // Best-effort retirement of stale silent siblings; a prune
+                  // failure must never fail the fresh device's handshake.
+                  try {
+                    await pruneSupersededSilentPairingsAfterApproval({
+                      deviceId: approved.device.deviceId,
+                      context,
+                    });
+                  } catch (error) {
+                    logGateway.warn(
+                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
+                    );
+                  }
+                }
               } else {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
