@@ -333,13 +333,27 @@ export async function status(state: CronServiceState) {
   });
 }
 
+/**
+ * Hides internal scheduler markers from public cron list/get views so returned
+ * job.state stays within CronJobStateSchema (additionalProperties: false).
+ */
+function toPublicCronJob(job: CronJob): CronJob {
+  if (job.state.pendingCatchupDeferral === undefined) {
+    return job;
+  }
+  const { pendingCatchupDeferral: _pendingCatchupDeferral, ...publicState } = job.state;
+  return { ...job, state: publicState };
+}
+
 /** Lists cron jobs sorted by next run time, excluding disabled jobs unless requested. */
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return jobs
+      .toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0))
+      .map(toPublicCronJob);
   });
 }
 
@@ -347,7 +361,8 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
 export async function readJob(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
-    return state.store?.jobs.find((job) => job.id === id);
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    return job ? toPublicCronJob(job) : undefined;
   });
 }
 
@@ -473,7 +488,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = sorted.slice(offset, offset + limit);
+    const jobs = sorted.slice(offset, offset + limit).map(toPublicCronJob);
     const nextOffset = offset + jobs.length;
     return {
       jobs,
@@ -488,7 +503,6 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
 
 type CronRollbackSnapshot = {
   store: CronStoreFile | null;
-  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 // Rolls the live scheduler state back to its pre-mutation snapshot when the
@@ -506,7 +520,6 @@ async function persistOrRestore(
     await persist(state);
   } catch (err) {
     state.store = snapshot.store;
-    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
   for (const notify of postPersistAutoDisableNotifications) {
@@ -517,7 +530,6 @@ async function persistOrRestore(
 function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
   return {
     store: state.store ? structuredClone(state.store) : null,
-    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
   };
 }
 

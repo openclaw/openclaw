@@ -1139,7 +1139,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
       endedAt: result.endedAt,
       triggerEval: result.triggerEval,
     });
-    state.pendingCatchupDeferralJobIds.delete(job.id);
+    job.state.pendingCatchupDeferral = undefined;
     return;
   }
 
@@ -1153,7 +1153,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     endedAt: result.endedAt,
   });
   applyTriggerRunResult(job, result);
-  state.pendingCatchupDeferralJobIds.delete(job.id);
+  job.state.pendingCatchupDeferral = undefined;
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -1997,12 +1997,13 @@ async function applyStartupCatchupOutcomes(
           }
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
-            state.pendingCatchupDeferralJobIds.add(jobId);
+            // Persist with nextRunAtMs so a second restart still protects the slot.
+            job.state.pendingCatchupDeferral = true;
             offset += staggerMs;
             continue;
           }
           job.state.nextRunAtMs = baseNow + offset;
-          state.pendingCatchupDeferralJobIds.add(jobId);
+          job.state.pendingCatchupDeferral = true;
           offset += staggerMs;
         }
       }
