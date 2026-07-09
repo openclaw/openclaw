@@ -338,6 +338,12 @@ function fingerprintInventoryCacheKey(key: string): string {
   return hash.toString(16).padStart(8, "0");
 }
 
+function truncateSerializedErrorText(value: string): string {
+  return value.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
+    ? `${truncateUtf16Safe(value, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
+    : value;
+}
+
 function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
   if (value === undefined) {
     return undefined;
@@ -360,11 +366,8 @@ function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
     }
     return redacted;
   }
-  if (typeof value === "string" && value.length > 500) {
-    return `${truncateUtf16Safe(value, 500)}...`;
-  }
   if (typeof value === "string") {
-    return value;
+    return truncateSerializedErrorText(value);
   }
   if (typeof value === "bigint") {
     return value.toString();
@@ -388,9 +391,7 @@ function sanitizeErrorMessage(message: string): string {
     /([?&][^=\s"'<>]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token|tk)[^=\s"'<>]*=)[^&\s"'<>]+/gi,
     "$1<redacted>",
   );
-  return redacted.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
-    ? `${redacted.slice(0, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
-    : redacted;
+  return truncateSerializedErrorText(redacted);
 }
 
 function isSensitiveErrorDataKey(key: string): boolean {
