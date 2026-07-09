@@ -54,4 +54,52 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not retry permanent model-not-found errors", () => {
+    expect(isRetryableAssistantError(errorMessage("model gpt-5.5-preview-0429 not found"))).toBe(
+      false,
+    );
+    expect(isRetryableAssistantError(errorMessage("404 model not found: openai/gpt-unknown"))).toBe(
+      false,
+    );
+  });
+
+  it("does not retry permanent image-dimension errors", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage(
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1.image: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not retry permanent auth errors", () => {
+    expect(isRetryableAssistantError(errorMessage("invalid api key sk-proj-abc502xyz"))).toBe(
+      false,
+    );
+    expect(isRetryableAssistantError(errorMessage("api key has been revoked"))).toBe(false);
+  });
+
+  it("does not retry long-window rate limits", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage("429 You exceeded your daily request limit. Please try again in 24 hours."),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableAssistantError(errorMessage("rate limit reached for requests. Retry after 6h.")),
+    ).toBe(false);
+  });
+
+  it("does not match bare status-code substrings inside ids, dimensions, or keys", () => {
+    // "0429" inside a model id should not match \b429\b.
+    expect(isRetryableAssistantError(errorMessage("model xyz-0429 is loading"))).toBe(false);
+    // "1504" inside image dimensions should not match \b504\b.
+    expect(
+      isRetryableAssistantError(errorMessage("Image dimensions 1504x1504 are unsupported")),
+    ).toBe(false);
+    // "502" inside an api key should not match \b502\b.
+    expect(isRetryableAssistantError(errorMessage("using key sk-xyz502abc")), "502").toBe(false);
+  });
 });
