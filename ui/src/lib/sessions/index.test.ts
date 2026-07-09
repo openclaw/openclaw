@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 
@@ -22,7 +21,162 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createGatewayHarness(client: GatewayBrowserClient) {
+  let snapshot: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    sessionKey: string;
+    assistantAgentId: string | null;
+    hello: GatewayHelloOk | null;
+  } = {
+    client,
+    connected: true,
+    sessionKey: "agent:main:main",
+    assistantAgentId: "main",
+    hello: null,
+  };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+    },
+    emitEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
+    publish: (connected: boolean) => {
+      snapshot = { ...snapshot, connected };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
+
+function sessionChangedEvent(key: string): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      session: {
+        key,
+        kind: "direct",
+        updatedAt: 2,
+        sessionId: "hidden-session",
+        label: "Hidden",
+      },
+    },
+  };
+}
+
 describe("createSessionCapability", () => {
+  it("starts a fresh list epoch when the same client reconnects", async () => {
+    const staleList = deferred<SessionsListResult>();
+    const currentList = deferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        listCalls += 1;
+        return await (listCalls === 1 ? staleList.promise : currentList.promise);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    const staleRefresh = sessions.refresh({ force: true });
+    publish(false);
+    publish(true);
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    staleList.resolve(sessionsResult([{ key: "stale", kind: "direct", updatedAt: 1 }], 1));
+    await staleRefresh;
+    expect(sessions.state.result).toBeNull();
+
+    currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
+    await vi.waitFor(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
+    sessions.dispose();
+  });
+
+  it("does not publish a created session from a retired same-client epoch", async () => {
+    const staleCreate = deferred<{ key: string }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return await staleCreate.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const created = vi.fn();
+    sessions.subscribeCreated(created);
+
+    const operation = sessions.create({ agentId: "main" });
+    publish(false);
+    publish(true);
+    staleCreate.resolve({ key: "agent:main:stale" });
+
+    await expect(operation).resolves.toBeNull();
+    expect(created).not.toHaveBeenCalled();
+    sessions.dispose();
+  });
+
+  it("rolls back an optimistic model patch when its connection epoch retires", async () => {
+    const stalePatch = deferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return await stalePatch.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const key = "agent:main:main";
+    sessions.setModelOverride(key, "openai/gpt-old");
+
+    const operation = sessions.patch(key, { model: "openai/gpt-new" });
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+
+    publish(false);
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    publish(true);
+    stalePatch.resolve({});
+
+    await expect(operation).resolves.toBeNull();
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    sessions.dispose();
+  });
+
   it("passes transcript fork parameters to sessions.create", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {
@@ -249,6 +403,72 @@ describe("createSessionCapability", () => {
         endedAt: 160,
       }),
     ).toBe(result);
+  });
+
+  it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
+    const visibleKey = "agent:main:main";
+    const hiddenKey = "agent:local:hidden";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(
+        [
+          {
+            key: visibleKey,
+            kind: "direct",
+            updatedAt: 1,
+            sessionId: "visible-session",
+          },
+        ],
+        1,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ force: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ configuredAgentsOnly: true }),
+    );
+
+    emitEvent(sessionChangedEvent(hiddenKey));
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    sessions.dispose();
+  });
+
+  it("reconciles broad events when configured-agent filtering is explicitly disabled", async () => {
+    const visibleKey = "agent:main:main";
+    const hiddenKey = "agent:local:hidden";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ configuredAgentsOnly: false, force: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        configuredAgentsOnly: false,
+        includeGlobal: true,
+        includeUnknown: true,
+      }),
+    );
+
+    emitEvent(sessionChangedEvent(hiddenKey));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(hiddenKey);
+    sessions.dispose();
   });
 
   it("refreshes stale active rows after a terminal session message", async () => {

@@ -29,6 +29,12 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import {
+  containsSecretSentinel,
+  resolveSecretSentinel,
+  SECRET_SENTINEL_PATTERN,
+  swapSecretSentinelsInText,
+} from "../secrets/sentinel.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
@@ -103,25 +109,42 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
   if (!source) {
     return response;
   }
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let total = 0;
-  const capped = source.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        const nextTotal = total + chunk.byteLength;
-        if (nextTotal > maxBytes) {
-          const remaining = maxBytes - total;
-          if (remaining > 0) {
-            controller.enqueue(chunk.subarray(0, remaining));
-          }
-          total = maxBytes;
-          controller.terminate();
+  // Own the reader: Node can leak an internal pipeThrough writer rejection when
+  // downstream cancellation races the cap terminating the transform.
+  const capped = new ReadableStream<Uint8Array>({
+    start() {
+      reader = source.getReader();
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader?.read();
+        if (!chunk || chunk.done) {
+          controller.close();
           return;
         }
-        total = nextTotal;
-        controller.enqueue(chunk);
-      },
-    }),
-  );
+        const remaining = maxBytes - total;
+        if (chunk.value.byteLength > remaining) {
+          if (remaining > 0) {
+            controller.enqueue(chunk.value.subarray(0, remaining));
+          }
+          total = maxBytes;
+          controller.close();
+          void reader?.cancel().catch(() => undefined);
+          return;
+        }
+        total += chunk.value.byteLength;
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        void reader?.cancel(error).catch(() => undefined);
+      }
+    },
+    async cancel(reason) {
+      await reader?.cancel(reason).catch(() => undefined);
+    },
+  });
   return new Response(capped, response);
 }
 
@@ -743,6 +766,63 @@ export function resolveProviderTransportSsrFPolicy(params: {
   );
 }
 
+function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
+  if (!headers) {
+    return false;
+  }
+  for (const value of new Headers(headers).values()) {
+    if (containsSecretSentinel(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
+  if (!containsSecretSentinel(url)) {
+    return { text: url, unknown: [] };
+  }
+  const unknown = new Set<string>();
+  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
+    const value = resolveSecretSentinel(sentinel);
+    if (value === undefined) {
+      unknown.add(sentinel);
+      return sentinel;
+    }
+    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
+    return encodeURIComponent(value);
+  });
+  return { text, unknown: [...unknown] };
+}
+
+function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
+  url: string;
+  headers?: Headers;
+} {
+  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
+    return { url: params.url };
+  }
+  const urlSwap = swapSecretSentinelsInUrl(params.url);
+  const headers = params.headers ? new Headers(params.headers) : undefined;
+  const unknown = new Set(urlSwap.unknown);
+  if (headers) {
+    for (const [name, value] of headers.entries()) {
+      const swapped = swapSecretSentinelsInText(value);
+      headers.set(name, swapped.text);
+      for (const sentinel of swapped.unknown) {
+        unknown.add(sentinel);
+      }
+    }
+  }
+  const unresolved = unknown.values().next().value;
+  if (unresolved) {
+    throw new Error(
+      `Secret sentinel ${unresolved} is not registered in this process; refusing to send request`,
+    );
+  }
+  return { url: urlSwap.text, ...(headers ? { headers } : {}) };
+}
+
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
@@ -772,7 +852,7 @@ export function buildGuardedModelFetch(
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
-    const url =
+    const rawUrl =
       request?.url ??
       (input instanceof URL
         ? input.toString()
@@ -781,6 +861,12 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    const rawHeaders = request?.headers ?? init?.headers;
+    const swappedEgress = swapSecretSentinelsForEgress({
+      url: rawUrl,
+      headers: rawHeaders,
+    });
+    const url = swappedEgress.url;
     const policy = resolveProviderTransportSsrFPolicy({
       baseUrl: model.baseUrl,
       url,
@@ -796,13 +882,15 @@ export function buildGuardedModelFetch(
       request &&
       ({
         method: request.method,
-        headers: request.headers,
+        headers: swappedEgress.headers ?? request.headers,
         body: request.body ?? undefined,
         redirect: request.redirect,
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const baseInit = requestInit ?? init;
+    const baseInit =
+      requestInit ??
+      (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
     const baseSignal = baseInit?.signal ?? undefined;
     const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
@@ -830,14 +918,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        // Log the pre-swap URL: the swapped URL can carry an injected credential in its path.
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(rawUrl)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        baseInit?.headers,
+        rawHeaders,
         localServiceSignal,
       );
       result = await fetchWithSsrFGuard(

@@ -113,6 +113,7 @@ import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
@@ -157,7 +158,7 @@ import {
   incrementPresenceVersion,
 } from "../health-state.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
-import type { GatewayWsClient } from "../ws-types.js";
+import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
@@ -493,6 +494,7 @@ export type GatewayWsMessageHandlerParams = {
   getClient: () => GatewayWsClient | null;
   setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
+  advanceHandshakePhase: (phase: WsHandshakePhase) => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
   originCheckMetrics: WsOriginCheckMetrics;
@@ -538,6 +540,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     getClient,
     setClient,
     setHandshakeState,
+    advanceHandshakePhase,
     setCloseCause,
     setLastFrameMeta,
     originCheckMetrics,
@@ -928,6 +931,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
+        const hasRawHandshakeCredentials =
+          hasSharedAuth ||
+          Boolean(connectParams.auth?.bootstrapToken) ||
+          Boolean(connectParams.auth?.deviceToken) ||
+          Boolean(device);
+        if (hasRawHandshakeCredentials) {
+          advanceHandshakePhase("auth_credentials_received");
+        }
         const connectAuthState = await resolveConnectAuthState({
           resolvedAuth,
           connectAuth: connectParams.auth,
@@ -1272,6 +1283,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
+        advanceHandshakePhase("auth_validated");
         const usesSharedGatewayAuth =
           authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
@@ -1501,6 +1513,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
                       accessMetadata: clientAccessMetadata,
+                      // Same-host local approvals are prune-eligible "silent";
+                      // trusted-CIDR approvals cross hosts and must never be
+                      // auto-pruned, so they carry their own provenance.
+                      approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
                     });
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
@@ -1519,6 +1535,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   },
                   { dropIfSlow: true },
                 );
+                if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+                  // Best-effort retirement of stale silent siblings; a prune
+                  // failure must never fail the fresh device's handshake.
+                  try {
+                    await pruneSupersededSilentPairingsAfterApproval({
+                      deviceId: approved.device.deviceId,
+                      context,
+                    });
+                  } catch (error) {
+                    logGateway.warn(
+                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
+                    );
+                  }
+                }
               } else {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
@@ -2051,6 +2081,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
         setHandshakeState("connected");
+        advanceHandshakePhase("session_attached");
         logWs("in", "connect", {
           connId,
           client: connectParams.client.id,
@@ -2105,6 +2136,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
+            connId: nodeSession.connId,
             displayName: nodeSession.displayName,
             platform: nodeSession.platform,
             deviceFamily: nodeSession.deviceFamily,
@@ -2117,6 +2149,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             deviceFamily: nodeSession.deviceFamily,
             commands: nodeSession.commands,
             cfg: getRuntimeConfig(),
+            // The node socket is registered before macOS app command handlers finish warming.
+            // Delay only the connect-time probe; later skill refreshes use the live session.
+            readinessDelayMs: 5_000,
           }).catch((err: unknown) =>
             logGateway.warn(
               `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
@@ -2190,6 +2225,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             tickIntervalMs: TICK_INTERVAL_MS,
           },
         };
+        advanceHandshakePhase("hello_payload_prepared");
 
         let revokedBootstrapTokenRecord:
           | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
@@ -2257,6 +2293,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMode: connectParams.client.mode,
           deviceId: device?.id,
         });
+        advanceHandshakePhase("ready");
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;

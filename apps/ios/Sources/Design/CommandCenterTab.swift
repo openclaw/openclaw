@@ -519,7 +519,7 @@ struct CommandCenterTab: View {
         defaultSessionKey: String) -> [OpenClawChatSessionEntry]
     {
         sessions.filter {
-            Self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
+            self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
         }
     }
 

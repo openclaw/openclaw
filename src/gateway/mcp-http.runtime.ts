@@ -1,6 +1,9 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -32,6 +35,7 @@ type McpLoopbackScopeParams = {
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
+  clientCaps?: string[];
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
@@ -39,6 +43,7 @@ type McpLoopbackScopeParams = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
 };
@@ -64,11 +69,14 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+    // Callers differing only in capabilities must not share cached tool lists.
+    const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
       params.sessionKey,
       params.sessionId ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
+      clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",
@@ -76,6 +84,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
       params.senderIsOwner === true
         ? "owner"

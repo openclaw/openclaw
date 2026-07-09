@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./chat-pane.ts", () => {
-  if (!customElements.get("openclaw-chat-pane")) {
-    customElements.define("openclaw-chat-pane", class extends HTMLElement {});
-  }
-  return {};
-});
+// The dedicated jsdom context keeps this host-only mock from sharing the
+// production tag registry with component tests.
+vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
 import type { ResizableDivider } from "../../components/resizable-divider.ts";
@@ -22,7 +20,6 @@ type RenderedPane = HTMLElement & {
   paneId: string;
   sessionKey: string;
   active: boolean;
-  chrome: "none" | "pane";
 };
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -97,8 +94,8 @@ describe("chat page split layout host", () => {
     expect(panes[0].paneId).toBe("single");
     expect(panes[0].sessionKey).toBe("main");
     expect(panes[0].active).toBe(true);
-    expect(panes[0].chrome).toBe("none");
     expect(page.querySelector("resizable-divider")).toBeNull();
+    expect(page.querySelector(".chat-open-split-view")).toBeInstanceOf(HTMLButtonElement);
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {
@@ -123,10 +120,13 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     const dividers = page.querySelectorAll<ResizableDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
-    expect(panes.map((pane) => pane.chrome)).toEqual(["pane", "pane"]);
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
+    expect(page.querySelector(".chat-split-view__pane--active")).toBe(panes[1]);
+    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(2);
+    expect(page.querySelector(".chat-split-toolbar__pane--active")).not.toBeNull();
+    expect(page.querySelector(".chat-open-split-view")).toBeNull();
   });
 
   it("renders only the active pane from a preserved split on narrow viewports", async () => {
@@ -140,8 +140,96 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(panes[0].active).toBe(true);
-    expect(panes[0].chrome).toBe("pane");
+    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(1);
     expect(page.querySelector("resizable-divider")).toBeNull();
+  });
+
+  it("refreshes split toolbar titles after the shared list loads", async () => {
+    const page = new ChatPage();
+    const cleanup = vi.fn();
+    const sessionsState: {
+      result: { sessions: Array<{ key: string; displayName?: string }> } | null;
+    } = {
+      result: null,
+    };
+    let notify = () => {};
+    (page as unknown as { context: unknown }).context = {
+      sessions: {
+        state: sessionsState,
+        subscribe: (listener: () => void) => {
+          notify = listener;
+          return cleanup;
+        },
+      },
+    };
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const titlesBefore = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titlesBefore.map((title) => title.textContent?.trim())).toEqual([
+      "Main Session",
+      "Main Session",
+    ]);
+    // The pane header is intentionally a static, non-interactive title: the
+    // strip doubles as the Mac app titlebar drag area, so no form control may
+    // sit there. Sessions change via the sidebar or drag-and-drop instead.
+    expect(page.querySelector(".chat-split-toolbar select")).toBeNull();
+
+    sessionsState.result = {
+      sessions: [{ key: "main", displayName: "Main desk" }],
+    };
+    notify();
+    await page.updateComplete;
+
+    const titles = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titles.map((title) => title.textContent?.trim())).toEqual(["Main desk", "Main desk"]);
+
+    page.remove();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("moves session updates to a replacement context source", async () => {
+    const firstCleanup = vi.fn();
+    const secondCleanup = vi.fn();
+    let notifyFirst = () => {};
+    let notifySecond = () => {};
+    const firstSessions = {
+      state: { result: null },
+      subscribe: vi.fn((listener: () => void) => {
+        notifyFirst = listener;
+        return firstCleanup;
+      }),
+    };
+    const secondSessions = {
+      state: { result: null },
+      subscribe: vi.fn((listener: () => void) => {
+        notifySecond = listener;
+        return secondCleanup;
+      }),
+    };
+    const page = new ChatPage();
+    (page as unknown as { context: unknown }).context = { sessions: firstSessions };
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(firstSessions.subscribe).toHaveBeenCalledOnce();
+    (page as unknown as { context: unknown }).context = { sessions: secondSessions };
+    page.requestUpdate();
+    await page.updateComplete;
+
+    expect(firstCleanup).toHaveBeenCalledOnce();
+    expect(secondSessions.subscribe).toHaveBeenCalledOnce();
+
+    const requestUpdate = vi.spyOn(page, "requestUpdate");
+    notifyFirst();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    notifySecond();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    page.remove();
+    expect(secondCleanup).toHaveBeenCalledOnce();
   });
 
   it("routes a classic-mode center drop without creating a layout", () => {

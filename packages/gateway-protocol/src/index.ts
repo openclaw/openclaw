@@ -349,10 +349,6 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
-  type NodePairRequestParams,
-  NodePairRequestParamsSchema,
-  type NodePairVerifyParams,
-  NodePairVerifyParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -447,6 +443,28 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  TaskSuggestionEventSchema,
+  type TaskSuggestionResolution,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  type TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptParamsSchema,
+  type TaskSuggestionsAcceptResult,
+  TaskSuggestionsAcceptResultSchema,
+  type TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateParamsSchema,
+  type TaskSuggestionsCreateResult,
+  TaskSuggestionsCreateResultSchema,
+  type TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissParamsSchema,
+  type TaskSuggestionsDismissResult,
+  TaskSuggestionsDismissResultSchema,
+  type TaskSuggestionsListParams,
+  TaskSuggestionsListParamsSchema,
+  type TaskSuggestionsListResult,
+  TaskSuggestionsListResultSchema,
   type TaskSummary,
   TaskSummarySchema,
   type TasksCancelParams,
@@ -760,9 +778,6 @@ export const validateArtifactsGetParams = lazyCompile<ArtifactsGetParams>(Artifa
 export const validateArtifactsDownloadParams = lazyCompile<ArtifactsDownloadParams>(
   ArtifactsDownloadParamsSchema,
 );
-export const validateNodePairRequestParams = lazyCompile<NodePairRequestParams>(
-  NodePairRequestParamsSchema,
-);
 export const validateNodePairListParams = lazyCompile<NodePairListParams>(NodePairListParamsSchema);
 export const validateNodePairApproveParams = lazyCompile<NodePairApproveParams>(
   NodePairApproveParamsSchema,
@@ -772,9 +787,6 @@ export const validateNodePairRejectParams = lazyCompile<NodePairRejectParams>(
 );
 export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
   NodePairRemoveParamsSchema,
-);
-export const validateNodePairVerifyParams = lazyCompile<NodePairVerifyParams>(
-  NodePairVerifyParamsSchema,
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
@@ -879,6 +891,18 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTaskSuggestionsListParams = lazyCompile<TaskSuggestionsListParams>(
+  TaskSuggestionsListParamsSchema,
+);
+export const validateTaskSuggestionsCreateParams = lazyCompile<TaskSuggestionsCreateParams>(
+  TaskSuggestionsCreateParamsSchema,
+);
+export const validateTaskSuggestionsAcceptParams = lazyCompile<TaskSuggestionsAcceptParams>(
+  TaskSuggestionsAcceptParamsSchema,
+);
+export const validateTaskSuggestionsDismissParams = lazyCompile<TaskSuggestionsDismissParams>(
+  TaskSuggestionsDismissParamsSchema,
+);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -1239,12 +1263,10 @@ export {
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,
   WebPushTestParamsSchema,
-  NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
-  NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
@@ -1291,6 +1313,17 @@ export {
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
   TaskSummarySchema,
   TasksListParamsSchema,
   TasksListResultSchema,
@@ -1496,7 +1529,6 @@ export type {
   TickEvent,
   ShutdownEvent,
   WakeParams,
-  NodePairRequestParams,
   NodePairListParams,
   NodePairApproveParams,
   DevicePairListParams,
@@ -1651,7 +1683,6 @@ export type {
   SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
-  NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
@@ -1680,6 +1711,17 @@ export type {
   AuditEvent,
   AuditListParams,
   AuditListResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionResolution,
+  TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateResult,
+  TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissResult,
+  TaskSuggestionsListParams,
+  TaskSuggestionsListResult,
   TaskSummary,
   TasksListParams,
   TasksListResult,

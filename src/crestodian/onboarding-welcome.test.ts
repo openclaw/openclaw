@@ -58,6 +58,7 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/existing/workspace" });
     expect(welcome).toContain("Workspace: /existing/workspace");
+    expect(welcome).toContain("configure a model provider with masked credential prompts");
   });
 
   it("ignores a blank authored workspace", async () => {

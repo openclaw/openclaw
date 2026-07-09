@@ -5252,6 +5252,58 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("keeps tool-error fallbacks eligible when a channel declines failed progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn(async () => false as const);
+    const onItemEvent = vi.fn(async () => false as const);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      SessionKey: "agent:main:discord:direct:U1",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    let commandOutputResult: false | void = undefined;
+    let itemEventResult: false | void = undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      commandOutputResult = await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
+      itemEventResult = await opts?.onItemEvent?.({
+        kind: "tool",
+        phase: "end",
+        name: "exec",
+        status: "failed",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput, onItemEvent },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(commandOutputResult).toBe(false);
+    expect(itemEventResult).toBe(false);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
   it("suppresses terminal tool-error fallbacks in group sessions when verbose progress is visible", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

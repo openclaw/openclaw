@@ -13,6 +13,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
+  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -271,6 +272,9 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  // Safety net for processes that end without an orderly close: agent DBs have
+  // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
+  unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
   registerAgentDatabase({ agentId, path: pathname, env: options.env });
   return database;
 }
@@ -286,12 +290,21 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
-/** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */
-export function closeOpenClawAgentDatabasesForTest(): void {
+let unregisterExitClose: (() => void) | null = null;
+
+/** Close all cached agent database handles. */
+export function closeOpenClawAgentDatabases(): void {
+  unregisterExitClose?.();
+  unregisterExitClose = null;
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(database.db);
-    database.db.close();
+    if (database.db.isOpen) {
+      database.db.close();
+    }
   }
   cachedDatabases.clear();
 }
+
+/** Test alias for closing cached agent database handles from teardown code. */
+export const closeOpenClawAgentDatabasesForTest = closeOpenClawAgentDatabases;
