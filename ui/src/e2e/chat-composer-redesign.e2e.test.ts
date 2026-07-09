@@ -185,22 +185,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => composer.locator(".chat-controls__provider-icon").count())
         .toBeGreaterThan(0);
-      const patchCountBeforeDraft = (await gateway.getRequests("sessions.patch")).length;
+      // Reasoning and speed commit immediately; the picker stays open so all
+      // three controls can be adjusted together.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toHaveLength(patchCountBeforeDraft);
-      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
-      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await composer.locator('[data-chat-speed-option="on"]').click();
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toHaveLength(patchCountBeforeDraft);
-      await expect
-        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
-        .toBe("true");
-      await composer.getByRole("button", { name: "Save", exact: true }).click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -212,6 +200,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
+      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
+      await composer.locator('[data-chat-speed-option="on"]').click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -223,6 +214,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
+      await expect
+        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
+        .toBe("true");
+      await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
         .toBe(false);
@@ -631,7 +626,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
+      const defaultOption = composer.locator('[data-chat-model-option=""]');
+      await expect.poll(() => defaultOption.count()).toBe(1);
+      await expect.poll(() => defaultOption.textContent()).toContain("Default");
     } finally {
       await context.close();
       await browser.close();

@@ -1731,10 +1731,8 @@ export const ko: TranslationMap = {
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
     modelPicker: {
-      discard: "버리기",
       faster: "더 빠르게",
       smarter: "더 똑똑하게",
-      useDefaultModel: "기본 모델 사용",
     },
     pairingQrExpired: {
       title: "페어링 QR 만료됨",

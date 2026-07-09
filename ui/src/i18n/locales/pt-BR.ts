@@ -1744,10 +1744,8 @@ export const pt_BR: TranslationMap = {
       retryQueuedMessage: "Tentar novamente mensagem na fila",
     },
     modelPicker: {
-      discard: "Descartar",
       faster: "Mais rápido",
       smarter: "Mais inteligente",
-      useDefaultModel: "Usar modelo padrão",
     },
     pairingQrExpired: {
       title: "QR de pareamento expirado",

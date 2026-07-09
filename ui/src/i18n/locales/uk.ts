@@ -1745,10 +1745,8 @@ export const uk: TranslationMap = {
       retryQueuedMessage: "Повторити повідомлення в черзі",
     },
     modelPicker: {
-      discard: "Відкинути",
       faster: "Швидше",
       smarter: "Розумніше",
-      useDefaultModel: "Використати модель за замовчуванням",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",

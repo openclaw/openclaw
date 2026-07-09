@@ -1702,10 +1702,8 @@ export const zh_TW: TranslationMap = {
       retryQueuedMessage: "重試佇列中的訊息",
     },
     modelPicker: {
-      discard: "捨棄",
       faster: "更快",
       smarter: "更智慧",
-      useDefaultModel: "使用預設模型",
     },
     pairingQrExpired: {
       title: "配對 QR 碼已過期",

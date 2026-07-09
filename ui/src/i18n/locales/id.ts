@@ -1742,10 +1742,8 @@ export const id: TranslationMap = {
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
     modelPicker: {
-      discard: "Buang",
       faster: "Lebih cepat",
       smarter: "Lebih cerdas",
-      useDefaultModel: "Gunakan model default",
     },
     pairingQrExpired: {
       title: "QR pemasangan kedaluwarsa",

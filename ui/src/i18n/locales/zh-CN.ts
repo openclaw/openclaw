@@ -1700,10 +1700,8 @@ export const zh_CN: TranslationMap = {
       retryQueuedMessage: "重试排队消息",
     },
     modelPicker: {
-      discard: "放弃",
       faster: "更快",
       smarter: "更智能",
-      useDefaultModel: "使用默认模型",
     },
     pairingQrExpired: {
       title: "配对二维码已过期",
