@@ -662,6 +662,57 @@ export const ja_JP: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
+  codexSessions: {
+    eyebrow: "Codex フリート",
+    title: "すべてのコンピューター上のセッション",
+    subtitle:
+      "この Gateway と、接続済みでセッション共有を有効にしているすべてのコンピューター上の Codex セッションを読み取り専用で表示します。",
+    summaryLabel: "Codex セッションの概要",
+    summary: {
+      sessions: "セッション",
+      onlineHosts: "オンライン",
+      hosts: "ホスト",
+    },
+    searchLabel: "Codex セッションを検索",
+    searchPlaceholder: "セッションタイトルを検索",
+    scopeLabel: "セッションのアーカイブフィルター",
+    scope: {
+      active: "アクティブ",
+      archived: "アーカイブ済み",
+    },
+    refresh: "更新",
+    disconnected: "Codex セッションを更新するには、Gateway に再接続してください。",
+    partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
+    loading: "Codex セッションを読み込み中…",
+    loadMore: "さらに読み込む",
+    loadingMore: "読み込み中…",
+    untitled: "無題の Codex セッション",
+    threadId: "スレッド",
+    status: {
+      active: "アクティブ",
+      idle: "アイドル",
+      archived: "アーカイブ済み",
+      notLoaded: "保存済み",
+      systemError: "システムエラー",
+      unknown: "不明",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "ノード",
+      connected: "接続済み",
+      offline: "オフライン",
+      unavailable: "セッションカタログを利用できません",
+      sessionCount: "{count} 件表示",
+    },
+    empty: {
+      title: "Codex ホストが見つかりません",
+      subtitle:
+        "Gateway またはペアリング済みのコンピューターで Codex セッション共有を有効にしてから、このビューを更新してください。",
+      search: "このホストに検索条件と一致するセッションはありません。",
+      active: "このホストにアクティブなセッションはありません。",
+      archived: "このホストにアーカイブ済みのセッションはありません。",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",

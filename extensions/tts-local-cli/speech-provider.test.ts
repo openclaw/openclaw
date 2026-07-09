@@ -9,9 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type SpeechSynthesisTarget = SpeechSynthesisRequest["target"];
 
 const runFfmpegMock = vi.hoisted(() => vi.fn<(args: string[]) => Promise<string | void>>());
+const debugLogMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   runFfmpeg: runFfmpegMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({ debug: debugLogMock }),
 }));
 
 import { buildCliSpeechProvider } from "./speech-provider.js";
@@ -255,6 +260,27 @@ describe("buildCliSpeechProvider", () => {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it.each(["synthesize", "synthesizeTelephony"] as const)(
+    "keeps %s debug previews free of lone surrogates",
+    async (method) => {
+      const text = `${"a".repeat(49)}😀tail`;
+      const providerConfig = { command: "missing-openclaw-tts-test-command" };
+      const run =
+        method === "synthesize"
+          ? synthesize({ providerConfig, text })
+          : buildCliSpeechProvider().synthesizeTelephony?.({
+              text,
+              cfg: TEST_CFG,
+              providerConfig,
+              timeoutMs: 1000,
+            });
+      await expect(run).rejects.toThrow();
+
+      const preview = String(debugLogMock.mock.calls[0]?.[0]);
+      expect(Buffer.from(preview).toString()).toBe(preview);
+    },
+  );
 
   it("can synthesize through a real local CLI fixture and ffmpeg", async () => {
     if (process.env.OPENCLAW_LIVE_TEST !== "1") {

@@ -658,6 +658,57 @@ export const uk: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
+  codexSessions: {
+    eyebrow: "Парк Codex",
+    title: "Сеанси на всіх ваших комп’ютерах",
+    subtitle:
+      "Сеанси Codex на цьому Gateway й усіх підключених комп’ютерах зі спільним доступом. Лише для читання.",
+    summaryLabel: "Підсумок сеансів Codex",
+    summary: {
+      sessions: "сеанси",
+      onlineHosts: "у мережі",
+      hosts: "хости",
+    },
+    searchLabel: "Пошук сеансів Codex",
+    searchPlaceholder: "Пошук за назвами сеансів",
+    scopeLabel: "Фільтр архіву сеансів",
+    scope: {
+      active: "Активні",
+      archived: "Заархівовані",
+    },
+    refresh: "Оновити",
+    disconnected: "Повторно підключіться до Gateway, щоб оновити сеанси Codex.",
+    partial: "Недоступних хостів: {count}. Решта хостів доступні.",
+    loading: "Завантаження сеансів Codex…",
+    loadMore: "Завантажити ще",
+    loadingMore: "Завантаження…",
+    untitled: "Сеанс Codex без назви",
+    threadId: "Гілка",
+    status: {
+      active: "Активний",
+      idle: "Неактивний",
+      archived: "Заархівований",
+      notLoaded: "Збережений",
+      systemError: "Системна помилка",
+      unknown: "Невідомо",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Вузол",
+      connected: "Підключено",
+      offline: "Поза мережею",
+      unavailable: "Каталог сеансів недоступний",
+      sessionCount: "Показано: {count}",
+    },
+    empty: {
+      title: "Хости Codex не знайдено",
+      subtitle:
+        "Увімкніть спільний доступ до сеансів Codex на Gateway або спареному комп’ютері, а потім оновіть цю сторінку.",
+      search: "Жоден сеанс на цьому хості не відповідає пошуку.",
+      active: "На цьому хості немає активних сеансів.",
+      archived: "На цьому хості немає архівних сеансів.",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",

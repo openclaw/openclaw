@@ -658,6 +658,57 @@ export const es: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
+  codexSessions: {
+    eyebrow: "Flota de Codex",
+    title: "Sesiones en todos tus equipos",
+    subtitle:
+      "Una vista de solo lectura de las sesiones de Codex en este Gateway y en todos los equipos conectados que las comparten.",
+    summaryLabel: "Resumen de sesiones de Codex",
+    summary: {
+      sessions: "sesiones",
+      onlineHosts: "en línea",
+      hosts: "hosts",
+    },
+    searchLabel: "Buscar sesiones de Codex",
+    searchPlaceholder: "Buscar títulos de sesiones",
+    scopeLabel: "Filtro de archivado de sesiones",
+    scope: {
+      active: "Activas",
+      archived: "Archivadas",
+    },
+    refresh: "Actualizar",
+    disconnected: "Vuelve a conectarte al Gateway para actualizar las sesiones de Codex.",
+    partial: "Hosts no disponibles: {count}. Los demás hosts siguen disponibles.",
+    loading: "Cargando sesiones de Codex…",
+    loadMore: "Cargar más",
+    loadingMore: "Cargando…",
+    untitled: "Sesión de Codex sin título",
+    threadId: "Hilo",
+    status: {
+      active: "Activa",
+      idle: "Inactiva",
+      archived: "Archivada",
+      notLoaded: "Almacenada",
+      systemError: "Error del sistema",
+      unknown: "Desconocido",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Nodo",
+      connected: "Conectado",
+      offline: "Sin conexión",
+      unavailable: "Catálogo de sesiones no disponible",
+      sessionCount: "{count} mostrados",
+    },
+    empty: {
+      title: "No se encontraron hosts de Codex",
+      subtitle:
+        "Activa el uso compartido de sesiones de Codex en el Gateway o en un equipo emparejado y actualiza esta vista.",
+      search: "Ninguna sesión de este host coincide con tu búsqueda.",
+      active: "No hay sesiones activas en este host.",
+      archived: "No hay sesiones archivadas en este host.",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",

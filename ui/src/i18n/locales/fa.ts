@@ -657,6 +657,57 @@ export const fa: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
+  codexSessions: {
+    eyebrow: "ناوگان Codex",
+    title: "نشست‌ها در همهٔ رایانه‌های شما",
+    subtitle:
+      "نمایی فقط‌خواندنی از نشست‌های Codex روی این Gateway و همهٔ رایانه‌های متصلی که آن‌ها را به اشتراک می‌گذارند.",
+    summaryLabel: "خلاصهٔ نشست‌های Codex",
+    summary: {
+      sessions: "نشست‌ها",
+      onlineHosts: "آنلاین",
+      hosts: "میزبان‌ها",
+    },
+    searchLabel: "جست‌وجوی نشست‌های Codex",
+    searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
+    scopeLabel: "فیلتر بایگانی نشست‌ها",
+    scope: {
+      active: "فعال",
+      archived: "بایگانی‌شده",
+    },
+    refresh: "تازه‌سازی",
+    disconnected: "برای تازه‌سازی نشست‌های Codex دوباره به Gateway متصل شوید.",
+    partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
+    loading: "در حال بارگیری نشست‌های Codex…",
+    loadMore: "بارگیری بیشتر",
+    loadingMore: "در حال بارگیری…",
+    untitled: "نشست بی‌عنوانِ Codex",
+    threadId: "رشته",
+    status: {
+      active: "فعال",
+      idle: "بی‌کار",
+      archived: "بایگانی‌شده",
+      notLoaded: "ذخیره‌شده",
+      systemError: "خطای سیستم",
+      unknown: "نامشخص",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "گره",
+      connected: "متصل",
+      offline: "آفلاین",
+      unavailable: "فهرست نشست‌ها در دسترس نیست",
+      sessionCount: "{count} نمایش داده شده",
+    },
+    empty: {
+      title: "هیچ میزبان Codex پیدا نشد",
+      subtitle:
+        "اشتراک‌گذاری نشست‌های Codex را روی Gateway یا یک رایانهٔ جفت‌شده فعال کنید، سپس این نما را تازه‌سازی کنید.",
+      search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
+      active: "هیچ نشست فعالی روی این میزبان وجود ندارد.",
+      archived: "هیچ نشست بایگانی‌شده‌ای روی این میزبان وجود ندارد.",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
