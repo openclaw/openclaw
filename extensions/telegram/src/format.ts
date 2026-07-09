@@ -1496,13 +1496,11 @@ export function splitTelegramHtmlChunks(
 
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
+  const suppressedTagNames: string[] = [];
   let current = "";
   let currentBlockCount = 0;
   let currentMediaCount = 0;
   let chunkHasPayload = false;
-  // Set when tag overhead fills an empty chunk and rich formatting is stripped.
-  // Close tags are skipped so the segment is delivered as bounded plain text.
-  let strippedTagsForPlainTextFallback = false;
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
@@ -1526,11 +1524,11 @@ export function splitTelegramHtmlChunks(
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
         if (!chunkHasPayload) {
-          // Tag overhead fills the entire chunk; strip rich formatting and
-          // retry as plain text so message content is still delivered within
-          // the chunk limit.
+          // Preserve the matching closes separately when tag overhead alone
+          // fills a chunk. Dropping only this active scope keeps later tags
+          // balanced while the affected text degrades to plain HTML content.
+          suppressedTagNames.push(...openTags.map((tag) => tag.name));
           openTags.length = 0;
-          strippedTagsForPlainTextFallback = true;
           resetCurrent();
           continue;
         }
@@ -1597,9 +1595,10 @@ export function splitTelegramHtmlChunks(
       }
     }
 
-    // Skip orphan close tags after stripping formatting for plain-text fallback.
-    // openTags was cleared so the close tag has no matching open tag.
-    if (!strippedTagsForPlainTextFallback || !isClosing || openTags.length > 0) {
+    const closesOpenTag = isClosing && openTags.some((tag) => tag.name === tagName);
+    const closesSuppressedTag =
+      isClosing && !closesOpenTag && popLastTagName(suppressedTagNames, tagName);
+    if (!closesSuppressedTag) {
       current += rawTag;
     }
     if (isSelfClosing) {

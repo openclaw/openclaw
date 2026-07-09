@@ -638,9 +638,16 @@ describe("markdownToTelegramHtml", () => {
   it("delivers content as plain text when tag overhead fills the chunk", () => {
     const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
     expect(chunks).toHaveLength(1);
-    // Rich formatting stripped; content delivered as bounded plain text.
-    // The existing send.ts plain-text fallback path is preserved.
     expect(chunks[0]).toBe("x");
+  });
+
+  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
+    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
+    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
+
+    expect(chunks).toEqual(["first<b>second</b>"]);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
   });
 
   it("does not split an astral char across the chunk boundary", () => {
