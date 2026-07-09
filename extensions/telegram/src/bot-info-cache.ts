@@ -19,7 +19,7 @@ type TelegramBotInfoCacheState = {
   botInfo: TelegramBotInfo;
 };
 
-export type CachedTelegramBotInfo = {
+type CachedTelegramBotInfo = {
   botInfo: TelegramBotInfo;
   fetchedAt: string;
 };

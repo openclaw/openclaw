@@ -7,7 +7,10 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasConfiguredSecretInput,
+  isProviderApiKeyConfigured,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -157,7 +160,11 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
     models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
-    isConfigured: ({ agentDir }) =>
+    isConfigured: ({ cfg, agentDir }) =>
+      // generateImage already authenticates from a config apiKey; count a
+      // usable one (non-blank literal or secret ref) as configured here too,
+      // so image gen works from config alone, like chat.
+      hasConfiguredSecretInput(cfg?.models?.providers?.google?.apiKey) ||
       isProviderApiKeyConfigured({
         provider: "google",
         agentDir,

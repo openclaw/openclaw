@@ -14,8 +14,21 @@ export type InstallSmokeScope = {
   runFullInstallSmoke: boolean;
 };
 
+export type NodeFastScope = {
+  runFastOnly: boolean;
+  runPluginContracts: boolean;
+  runCiRouting: boolean;
+};
+
+export type ChangedScopeArgs = {
+  base: string;
+  head: string;
+  mergeHeadFirstParent: boolean;
+};
+
 export function detectChangedScope(changedPaths: string[]): ChangedScope;
 export function shouldRunNativeI18n(changedPaths: string[]): boolean;
+export function detectNodeFastScope(changedPaths: string[]): NodeFastScope;
 export function detectInstallSmokeScope(changedPaths: string[]): InstallSmokeScope;
 export function listChangedPaths(
   base: string,
@@ -27,10 +40,8 @@ export function writeGitHubOutput(
   scope: ChangedScope,
   outputPath?: string,
   installSmokeScope?: InstallSmokeScope,
-  nodeFastScope?: {
-    runFastOnly: boolean;
-    runPluginContracts: boolean;
-    runCiRouting: boolean;
-  },
+  nodeFastScope?: NodeFastScope,
   runNativeI18n?: boolean,
 ): void;
+
+export function parseArgs(argv: string[]): ChangedScopeArgs;

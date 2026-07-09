@@ -57,6 +57,7 @@ async function issueSmsPairingChallenge(params: {
 }) {
   const issueChallenge = createChannelPairingChallengeIssuer({
     channel: CHANNEL_ID,
+    accountId: params.account.accountId,
     upsertPairingRequest: async (input) =>
       await params.channelRuntime.pairing.upsertPairingRequest({
         channel: CHANNEL_ID,

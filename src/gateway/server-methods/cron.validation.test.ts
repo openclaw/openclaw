@@ -83,10 +83,33 @@ function setCronValidationTestRegistry(): void {
 
 function createCronContext(currentJobs?: CronJob | CronJob[]) {
   const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
+  const update = vi.fn(async (id: string, patch: Partial<CronJob>) =>
+    createCronJob({
+      ...jobs.find((job) => job.id === id),
+      ...patch,
+      id,
+    }),
+  );
   return {
     cron: {
-      add: vi.fn(async () => ({ id: "cron-1" })),
-      update: vi.fn(async () => ({ id: "cron-1" })),
+      add: vi.fn(async (input: Partial<CronJob>, _opts?: unknown) =>
+        createCronJob({ ...input, id: "cron-1" }),
+      ),
+      update,
+      updateWithPrecondition: vi.fn(
+        async (
+          id: string,
+          patch: Partial<CronJob>,
+          precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
+        ) => {
+          const job = jobs.find((candidate) => candidate.id === id);
+          if (!job) {
+            throw new Error(`unknown cron job id: ${id}`);
+          }
+          await precondition(job, Date.now());
+          return await update(id, patch);
+        },
+      ),
       remove: vi.fn(async () => ({ ok: true, removed: true })),
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
@@ -331,7 +354,7 @@ function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
 }
 
 function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
-  expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -540,7 +563,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.listPage).toHaveBeenCalledWith(
-      expect.objectContaining({ includeDisabled: true, agentId: "ops" }),
+      expect.objectContaining({ includeDisabled: true, agentId: undefined }),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -603,7 +626,9 @@ describe("cron method validation", () => {
       { context, client: callerClient("ops") },
     );
 
-    expect(context.cron.listPage).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
+    expect(context.cron.listPage).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: undefined }),
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -641,6 +666,225 @@ describe("cron method validation", () => {
     expect(payload.agentId).toBe("ops");
     expect(payload).not.toHaveProperty("callerScope");
     expectCronSuccess(respond);
+  });
+
+  it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        declarationKey: "daily-report",
+        owner: { agentId: "spoofed", sessionKey: "agent:spoofed:main" },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    const payload = requireCronAddPayload(context);
+    expect(payload.owner).toEqual({ agentId: "ops", sessionKey: "agent:ops:main" });
+    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
+    expect(matchesExisting?.(createCronJob({ agentId: "ops" }))).toBe(true);
+    expect(matchesExisting?.(createCronJob({ agentId: "worker" }))).toBe(false);
+    expect(matchesExisting?.(createCronJob({ agentId: "worker", owner: { agentId: "ops" } }))).toBe(
+      true,
+    );
+    expect(matchesExisting?.(createCronJob({ agentId: "ops", owner: { agentId: "worker" } }))).toBe(
+      false,
+    );
+    expectCronSuccess(respond);
+  });
+
+  it("keeps scoped read access with the stamped owner after operator retargeting", async () => {
+    const job = createCronJob({
+      agentId: "worker",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+    });
+    const context = createCronContext(job);
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1, jobs: [expect.objectContaining({ id: "cron-1" })] }),
+      undefined,
+    );
+  });
+
+  it("keeps explicit declaration ownership for operator callers", async () => {
+    const owner = { agentId: "ops", sessionKey: "agent:ops:main" };
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ declarationKey: "daily-report", owner }),
+    );
+
+    expect(requireCronAddPayload(context).owner).toEqual(owner);
+    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
+    expect(matchesExisting?.(createCronJob({ owner }))).toBe(true);
+    expect(
+      matchesExisting?.(
+        createCronJob({ owner: { agentId: "ops", sessionKey: "agent:ops:other" } }),
+      ),
+    ).toBe(true);
+    expect(matchesExisting?.(createCronJob({ owner: { agentId: "worker" } }))).toBe(false);
+    expectCronSuccess(respond);
+  });
+
+  it("returns the published declarative cron.add result shape", async () => {
+    const context = createCronContext();
+    const job = createCronJob({ declarationKey: "daily-report" });
+    context.cron.add.mockImplementationOnce(
+      async () => ({ ...job, created: false, updated: false, job }) as never,
+    );
+    const { respond } = await invokeCron(
+      "cron.add",
+      agentTurnCronParams({ declarationKey: "daily-report" }),
+      { context },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        created: false,
+        updated: false,
+        job: expect.objectContaining({ id: "cron-1", declarationKey: "daily-report" }),
+      },
+      undefined,
+    );
+  });
+
+  it("rejects blank and oversized declaration keys", async () => {
+    for (const declarationKey of ["   ", "x".repeat(201)]) {
+      const { context, respond } = await invokeCronAdd(agentTurnCronParams({ declarationKey }));
+      expect(context.cron.add).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("rejects blank display names and invalid explicit enablement on cron.add", async () => {
+    for (const overrides of [{ displayName: "   " }, { declarationKey: "daily", enabled: null }]) {
+      const { context, respond } = await invokeCronAdd(agentTurnCronParams(overrides));
+      expect(context.cron.add).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("defaults session-target declarations to announce delivery", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        declarationKey: "session-report",
+        sessionTarget: "session:agent:ops:main",
+        agentId: "ops",
+        delivery: undefined,
+      }),
+    );
+
+    expect(requireCronAddPayload(context).delivery).toEqual({ mode: "announce" });
+    expectCronSuccess(respond);
+  });
+
+  it("accepts webhook delivery for main-session adds and updates", async () => {
+    // Shipped cron behavior: main-session jobs may deliver via webhook.
+    const add = await invokeCronAdd({
+      name: "main webhook",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "wake" },
+      delivery: { mode: "webhook", to: "https://example.invalid/hook" },
+    });
+    expect(add.context.cron.add).toHaveBeenCalledTimes(1);
+    expectCronSuccess(add.respond);
+
+    const update = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { delivery: { mode: "webhook", to: "https://example.invalid/hook" } },
+      },
+      createCronJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "wake" },
+      }),
+    );
+    expect(update.context.cron.update).toHaveBeenCalledTimes(1);
+    expectCronSuccess(update.respond);
+  });
+
+  it("revalidates delivery against the locked cron.update snapshot", async () => {
+    const currentJob = createCronJob();
+    const context = createCronContext(currentJob);
+    context.cron.updateWithPrecondition.mockImplementationOnce(
+      async (_id, _patch, precondition) => {
+        await precondition(
+          createCronJob({
+            sessionTarget: "main",
+            payload: { kind: "systemEvent", text: "wake" },
+          }),
+          Date.now(),
+        );
+        return currentJob;
+      },
+    );
+    const { respond } = await invokeCron(
+      "cron.update",
+      {
+        id: "cron-1",
+        // Channel/target provider mismatch fails announce validation without
+        // any configured-channel dependency, so the locked-snapshot
+        // revalidation path stays observable.
+        patch: { delivery: { mode: "announce", channel: "discord", to: "telegram:123" } },
+      },
+      { context },
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel" });
+  });
+
+  it("projects declaration metadata and existing run and delivery state in compact lists", async () => {
+    const job = createCronJob({
+      declarationKey: "daily-report",
+      displayName: "Daily report",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+      state: {
+        nextRunAtMs: 2000,
+        lastRunAtMs: 1000,
+        lastRunStatus: "error",
+        lastError: "boom",
+        lastDelivered: false,
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: "offline",
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      },
+    });
+    const context = createCronContext(job);
+    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            declarationKey: "daily-report",
+            displayName: "Daily report",
+            owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+            nextRunAtMs: 2000,
+            lastRunAtMs: 1000,
+            lastRunStatus: "error",
+            lastRunError: "boom",
+            lastDelivered: false,
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: "offline",
+            lastFailureNotificationDelivered: true,
+            lastFailureNotificationDeliveryStatus: "delivered",
+          }),
+        ],
+      }),
+      undefined,
+    );
   });
 
   it("rejects caller-scoped cron.add for a foreign agent", async () => {
@@ -716,6 +960,26 @@ describe("cron method validation", () => {
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
     expectCronSuccess(respond);
+  });
+
+  it("allows cron.update to clear a display name", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { displayName: null } },
+      createCronJob({ displayName: "Daily report" }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { displayName: null });
+    expectCronSuccess(respond);
+  });
+
+  it("rejects a blank cron.update display name", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { displayName: "   " } },
+      createCronJob({ displayName: "Daily report" }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "must not be blank" });
   });
 
   it("hides caller-scoped cron.update for a foreign agent", async () => {
@@ -1287,7 +1551,25 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
-    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "cron-1" }),
+      undefined,
+    );
+  });
+
+  it("allows unrelated updates to legacy main-session webhook jobs", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { enabled: false } },
+      createCronJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "wake" },
+        delivery: { mode: "webhook", to: "https://example.invalid/hook" },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expectCronSuccess(respond);
   });
 
   it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {

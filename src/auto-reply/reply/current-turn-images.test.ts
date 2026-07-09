@@ -61,6 +61,59 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("preserves the full order when only inline image payloads are present", async () => {
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
+
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [inlineImage],
+      imageOrder: ["offloaded", "inline", "offloaded"],
+    });
+
+    expect(result).toEqual({
+      images: [inlineImage],
+      imageOrder: ["offloaded", "inline", "offloaded"],
+    });
+  });
+
+  it("preserves all-offloaded image order without inline payloads", async () => {
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [],
+      imageOrder: ["offloaded", "offloaded"],
+    });
+
+    expect(result).toEqual({
+      imageOrder: ["offloaded", "offloaded"],
+    });
+  });
+
+  it("preserves interleaved offloaded slots around inline image payloads", async () => {
+    const inlineImages = ["first", "second"].map((data) => ({
+      type: "image" as const,
+      data: Buffer.from(data).toString("base64"),
+      mimeType: "image/png",
+    }));
+
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: inlineImages,
+      imageOrder: ["inline", "offloaded", "inline"],
+    });
+
+    expect(result).toEqual({
+      images: inlineImages,
+      imageOrder: ["inline", "offloaded", "inline"],
+    });
+  });
+
   it("appends extracted PDF page images without dropping current image attachments", async () => {
     await withTempDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");

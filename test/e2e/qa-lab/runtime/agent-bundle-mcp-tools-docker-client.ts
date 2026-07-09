@@ -10,7 +10,10 @@ import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
 } from "../../../../dist/agents/agent-bundle-mcp-runtime.js";
-import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
+import {
+  applyFinalEffectiveToolPolicy,
+  resolveConversationCapabilityProfile,
+} from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
 import { getPluginToolMeta } from "../../../../dist/plugins/tools.js";
@@ -53,9 +56,11 @@ function applyPolicy(params: {
     tools: applyFinalEffectiveToolPolicy({
       bundledTools: params.tools,
       config: params.config,
-      sessionKey: "agent:main:docker-agent-bundle-mcp",
-      agentId: "main",
-      senderIsOwner: true,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: params.config,
+        sessionKey: "agent:main:docker-agent-bundle-mcp",
+        agentId: "main",
+      }),
       warn: (message) => {
         warnings.push(message);
       },

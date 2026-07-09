@@ -4,6 +4,7 @@ import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -1809,6 +1810,33 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(registry.diagnostics, "plugin id conflicts with core tool name");
   });
 
+  it("allows a plugin to register a second tool when one tool shares the plugin id", () => {
+    // Regression: the canvas plugin registers a `canvas` tool (same name as its
+    // plugin id) plus `show_widget`; the id-conflict guard must not treat the
+    // plugin's own earlier tool as a shadowing core name.
+    const registry = setRegistry([
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["canvas"],
+        factory: () => makeTool("canvas"),
+      },
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["show_widget"],
+        factory: () => makeTool("show_widget"),
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({}));
+
+    expectResolvedToolNames(tools, ["canvas", "show_widget"]);
+    expect(registry.diagnostics).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "skips conflicting tool names but keeps other tools",
@@ -2861,15 +2889,9 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {
-    setActivePluginRegistry(
-      {
-        plugins: [],
-        tools: [],
-        diagnostics: [],
-      } as never,
-      "default-registry",
-      "default",
-    );
+    // Retiring an active registry walks all cleanup collections, so the
+    // default-mode stand-in must be a fully initialized registry shape.
+    setActivePluginRegistry(createEmptyPluginRegistry(), "default-registry", "default");
     setOptionalDemoRegistry();
 
     resolvePluginTools({

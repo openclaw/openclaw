@@ -1,11 +1,15 @@
 // Systemd tests cover Linux service install, start, stop, and status behavior.
-import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
+import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type ExecFileCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
+type ExecFileError = Error & {
+  stderr?: string;
+  code?: string | number;
+};
+type ExecFileCallback = (error: ExecFileError | null, stdout: string, stderr: string) => void;
 type ExecFileMock = (
   command: string,
   args: string[],
@@ -88,11 +92,6 @@ import {
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
-
-type ExecFileError = Error & {
-  stderr?: string;
-  code?: string | number;
-};
 
 const TEST_SERVICE_HOME = "/home/test";
 const TEST_MANAGED_HOME = "/tmp/openclaw-test-home";
@@ -920,6 +919,32 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
+  // Regression for #84698: status probes must bound the systemctl subprocess so a
+  // wedged systemd socket cannot hang `openclaw status` (which advertises --timeout).
+  it("passes a kill-backed timeout to systemctl when a read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME }, { timeoutMs: 1234 });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBe(1234);
+      expect(opts.killSignal).toBe("SIGKILL");
+    }
+  });
+
+  it("leaves systemctl unbounded when no read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBeUndefined();
+      expect(opts.killSignal).toBeUndefined();
+    }
+  });
+
   it("carries the supervision counters through a crash-looped failed unit", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -1284,10 +1309,12 @@ describe("stageSystemdService", () => {
         environment: {
           OPENCLAW_GATEWAY_TOKEN: "file-backed-token",
           OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "file",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
 

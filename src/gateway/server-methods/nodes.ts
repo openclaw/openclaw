@@ -59,6 +59,7 @@ import {
 } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -139,18 +140,29 @@ function canReadPendingNodePairing(client: GatewayClient | null): boolean {
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
 }
 
-function safeNodeReadProjection(node: NodeListNode): NodeListNode | null {
+function safeNodeReadProjection(
+  node: NodeListNode,
+  ownDeviceId: string | undefined,
+): NodeListNode | null {
   if (!node.paired && !node.connected) {
     return null;
   }
   const {
-    pendingRequestId: _pendingRequestId,
+    pendingRequestId,
     pendingDeclaredCaps: _pendingDeclaredCaps,
     pendingDeclaredCommands: _pendingDeclaredCommands,
     pendingDeclaredPermissions: _pendingDeclaredPermissions,
     ...safeNode
   } = node;
-  return safeNode;
+  // A read-scoped mobile client may guide its user to approve this phone, but must not expose
+  // another node's approval target or any pending capability declaration.
+  return node.nodeId === ownDeviceId && pendingRequestId
+    ? { ...safeNode, pendingRequestId }
+    : safeNode;
+}
+
+function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
+  return normalizeOptionalString(client?.connect?.device?.id);
 }
 
 function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
@@ -174,7 +186,8 @@ function listNodesForClient(params: {
   if (canReadPendingNodePairing(params.client)) {
     return nodes;
   }
-  return nodes.map(safeNodeReadProjection).filter(isVisibleNode);
+  const ownDeviceId = nodeReadCallerDeviceId(params.client);
+  return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
 }
 
 function normalizeBrowserProxyPath(value: string): string {
@@ -514,6 +527,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
   const { nodeSession } = params;
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,
+    connId: nodeSession.connId,
     displayName: nodeSession.displayName,
     platform: nodeSession.platform,
     deviceFamily: nodeSession.deviceFamily,
@@ -1195,7 +1209,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         catalogNode && canReadPendingNodePairing(client)
           ? catalogNode
           : catalogNode
-            ? safeNodeReadProjection(catalogNode)
+            ? safeNodeReadProjection(catalogNode, nodeReadCallerDeviceId(client))
             : null;
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
@@ -1429,7 +1443,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession, cfg);
         respond(
           false,
           undefined,
@@ -1654,6 +1668,7 @@ function buildNodeCommandRejectionHint(
   reason: string,
   command: string,
   node: { platform?: string } | undefined,
+  cfg: OpenClawConfig,
 ): string {
   const platform = node?.platform ?? "unknown";
   if (reason === "command not declared by node") {
@@ -1662,6 +1677,13 @@ function buildNodeCommandRejectionHint(
   if (reason === "command not allowlisted") {
     if (command.startsWith("talk.")) {
       return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
+    }
+    const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
+    if (denyCommands.some((entry) => entry.trim() === command)) {
+      return `node command not allowed: "${command}" is blocked by gateway.nodes.denyCommands`;
+    }
+    if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {
+      return `node command not allowed: "${command}" requires explicit gateway.nodes.allowCommands opt-in`;
     }
     return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
   }

@@ -43,7 +43,7 @@ export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions?: "auto" | "always";
+  allowDestructiveActions?: "auto" | "ask";
 };
 
 type CodexPluginMigrationBlockSkipDetails = {
@@ -171,7 +171,7 @@ function isLegacyDestructivePolicyRepair(
 function readExistingPluginAllowDestructiveActions(
   existing: unknown,
   pluginName: string,
-): "auto" | "always" | undefined {
+): "auto" | "ask" | undefined {
   const existingEntry = isRecord(existing) ? existing : undefined;
   if (existingEntry?.pluginName !== pluginName) {
     return undefined;
@@ -179,7 +179,7 @@ function readExistingPluginAllowDestructiveActions(
   const normalized = normalizeExistingAllowDestructiveActions(
     existingEntry.allow_destructive_actions,
   );
-  return normalized === "auto" || normalized === "always" ? normalized : undefined;
+  return normalized === "auto" || normalized === "ask" ? normalized : undefined;
 }
 
 function buildPluginItems(
@@ -241,7 +241,7 @@ function buildPluginItems(
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
             ...(plannedEntry.allow_destructive_actions === "auto" ||
-            plannedEntry.allow_destructive_actions === "always"
+            plannedEntry.allow_destructive_actions === "ask"
               ? { allowDestructiveActions: plannedEntry.allow_destructive_actions }
               : {}),
             ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
@@ -317,7 +317,7 @@ export function readCodexPluginMigrationConfigEntry(
     configKey,
     pluginName,
     enabled,
-    ...(allowDestructiveActions === "auto" || allowDestructiveActions === "always"
+    ...(allowDestructiveActions === "auto" || allowDestructiveActions === "ask"
       ? { allowDestructiveActions }
       : {}),
   };
@@ -325,7 +325,7 @@ export function readCodexPluginMigrationConfigEntry(
 
 function readExistingAllowDestructiveActions(
   config: MigrationProviderContext["config"],
-): boolean | "auto" | "always" | undefined {
+): boolean | "auto" | "ask" | undefined {
   const value = readMigrationConfigPath(config as Record<string, unknown>, [
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
@@ -335,12 +335,12 @@ function readExistingAllowDestructiveActions(
 
 function normalizeExistingAllowDestructiveActions(
   value: unknown,
-): boolean | "auto" | "always" | undefined {
+): boolean | "auto" | "ask" | undefined {
   if (value === "auto" || value === "on-request") {
     return "auto";
   }
-  if (value === "always") {
-    return "always";
+  if (value === "ask") {
+    return "ask";
   }
   return asBoolean(value);
 }

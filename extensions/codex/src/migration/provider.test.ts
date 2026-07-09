@@ -2108,7 +2108,7 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 
-  it("preserves global always destructive plugin policy during migration", async () => {
+  it("preserves global ask destructive plugin policy during migration", async () => {
     const fixture = await createCodexFixture();
     const configState: MigrationProviderContext["config"] = {
       plugins: {
@@ -2118,7 +2118,7 @@ describe("buildCodexMigrationProvider", () => {
             config: {
               codexPlugins: {
                 enabled: true,
-                allow_destructive_actions: "always",
+                allow_destructive_actions: "ask",
                 plugins: {},
               },
             },
@@ -2167,7 +2167,7 @@ describe("buildCodexMigrationProvider", () => {
     expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
-      allow_destructive_actions: "always",
+      allow_destructive_actions: "ask",
       plugins: {
         "google-calendar": {
           enabled: true,

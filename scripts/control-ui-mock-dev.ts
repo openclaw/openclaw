@@ -1,6 +1,7 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -9,6 +10,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
@@ -72,7 +74,7 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } = {},
 ) {
   return {
-    contextTokens: null,
+    contextTokens: 200_000,
     displayName: label,
     hasActiveRun: false,
     key,
@@ -90,7 +92,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   return {
     count: sessions.length,
     defaults: {
-      contextTokens: null,
+      contextTokens: 200_000,
       model: "gpt-5.5",
       modelProvider: "openai",
     },
@@ -162,6 +164,114 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
+function usageCostTotals(totalTokens: number, totalCost = 0) {
+  return {
+    input: Math.round(totalTokens * 0.2),
+    output: Math.round(totalTokens * 0.1),
+    cacheRead: Math.round(totalTokens * 0.6),
+    cacheWrite: Math.round(totalTokens * 0.1),
+    totalTokens,
+    totalCost,
+    inputCost: totalCost,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+// Deterministic year of daily activity so the settings profile heatmap,
+// streaks, and stat strip render with a lively fixture in the mock harness.
+function buildProfileUsageMocks(baseTime: number) {
+  const daily: Array<Record<string, unknown>> = [];
+  let lifetimeTokens = 0;
+  for (let daysAgo = 364; daysAgo >= 0; daysAgo -= 1) {
+    const date = new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000);
+    const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const weekendDamper = date.getDay() === 0 || date.getDay() === 6 ? 0.3 : 1;
+    const quietDay = daysAgo % 19 === 4 ? 0 : 1;
+    const wave = (Math.sin(daysAgo / 6) + 1.4) * 1_400_000_000;
+    const spike = daysAgo % 47 === 0 ? 6_000_000_000 : 0;
+    const tokens = Math.round((wave + spike) * weekendDamper * quietDay);
+    lifetimeTokens += tokens;
+    daily.push({ date: iso, ...usageCostTotals(tokens, tokens / 1e9) });
+  }
+  return {
+    cost: {
+      updatedAt: baseTime,
+      days: daily.length,
+      daily,
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+    },
+    sessions: {
+      updatedAt: baseTime,
+      startDate: daily[0]?.date,
+      endDate: daily[daily.length - 1]?.date,
+      sessions: [
+        {
+          key: "agent:openclaw-mock:marathon",
+          label: "Release night marathon",
+          usage: { ...usageCostTotals(4_000_000_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
+        },
+        {
+          key: "agent:openclaw-mock:daily",
+          label: "Daily driver",
+          usage: { ...usageCostTotals(900_000_000), durationMs: 3 * 60 * 60 * 1000 },
+        },
+      ],
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+      aggregates: {
+        sessionCount: 48_212,
+        longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
+        messages: {
+          total: 2_787_815,
+          user: 1_400_000,
+          assistant: 1_387_815,
+          toolCalls: 42_380,
+          toolResults: 42_380,
+          errors: 128,
+        },
+        tools: {
+          totalCalls: 42_380,
+          uniqueTools: 205,
+          tools: [
+            { name: "exec", count: 6_418 },
+            { name: "browser", count: 5_256 },
+            { name: "message", count: 4_708 },
+            { name: "read", count: 4_489 },
+            { name: "sessions_list", count: 3_066 },
+          ],
+        },
+        byModel: [
+          {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            count: 9_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7)),
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            count: 4_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
+          },
+        ],
+        byProvider: [],
+        byAgent: [
+          { agentId: "openclaw-mock", totals: usageCostTotals(Math.round(lifetimeTokens * 0.8)) },
+          { agentId: "alpha", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        byChannel: [
+          { channel: "whatsapp", totals: usageCostTotals(Math.round(lifetimeTokens * 0.5)) },
+          { channel: "telegram", totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)) },
+          { channel: "discord", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        daily: [],
+      },
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -204,8 +314,20 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-function createChatPickerScenario(): ControlUiMockGatewayScenario {
+async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const devicePairSetupCode = Buffer.from(
+    JSON.stringify({
+      url: "wss://gateway.example.test",
+      bootstrapToken: "mock-bootstrap-token",
+    }),
+    "utf8",
+  ).toString("base64url");
+  const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
   const workspaceFiles = [
     {
       missing: false,
@@ -325,7 +447,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
       "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
     ],
     [
-      "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      "ui/src/e2e/chat-flow.e2e.test.ts",
       "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
     ],
   ]);
@@ -427,12 +549,26 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     model: "claude-sonnet-4-6",
     modelProvider: "anthropic",
   });
+  // Profile fixtures track the real clock so streaks and the trailing-year
+  // heatmap stay filled no matter when the mock harness runs.
+  const profileUsage = buildProfileUsageMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "usage.cost": profileUsage.cost,
+      "sessions.usage": profileUsage.sessions,
+      "device.pair.list": { paired: [], pending: [] },
+      "device.pair.setupCode": {
+        auth: "token",
+        gatewayUrl: "wss://gateway.example.test",
+        qrDataUrl: devicePairQrDataUrl,
+        setupCode: devicePairSetupCode,
+        urlSource: "mock",
+      },
+      "node.list": { nodes: [] },
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -488,7 +624,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
                   {
                     kind: "file",
                     name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
                     size: 24950,
                     updatedAtMs: baseTime - 25_000,
                   },
@@ -591,7 +727,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = createChatPickerScenario();
+const scenario = await createChatPickerScenario();
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
@@ -607,7 +743,11 @@ const server = await createServer({
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
-    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+    alias: [
+      ...resolveExternalPackageAliasesForVite(),
+      ...resolveSourcePackageAliasesForVite(),
+      ...resolveTsconfigPathAliasesForVite(),
+    ],
   },
   root: uiRoot,
   server: {

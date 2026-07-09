@@ -42,6 +42,18 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
     return parsed.string ?? trimmed
 }
 
+/// Binds suspended work to one installed gateway channel generation.
+/// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
+public struct GatewayNodeSessionRoute: Sendable, Equatable {
+    fileprivate let channelGeneration: UInt64
+}
+
+/// A route lease became stale before its request touched the channel. Unlike
+/// a socket cancellation, this proves the payload was never dispatched.
+public enum GatewayNodeSessionRequestError: Error, Sendable {
+    case routeChangedBeforeDispatch
+}
+
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
@@ -54,6 +66,7 @@ public actor GatewayNodeSession {
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
     private var activeSessionIdentity: ObjectIdentifier?
+    private var channelGeneration: UInt64 = 0
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
@@ -61,6 +74,7 @@ public actor GatewayNodeSession {
     private var hasEverConnected = false
     private var hasNotifiedConnected = false
     private var snapshotReceived = false
+    private var serverCapabilities: Set<GatewayServerCapability>?
     private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
 
     static func invokeWithTimeout(
@@ -164,6 +178,9 @@ public actor GatewayNodeSession {
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let deviceIdentityProfile = options.deviceIdentityProfile.rawValue
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
+        let allowStoredDeviceAuth = options.allowStoredDeviceAuth ? "1" : "0"
+        let deviceAuthGatewayID = options.deviceAuthGatewayID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let permissions = options.permissions
             .map { key, value in
                 let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,6 +199,8 @@ public actor GatewayNodeSession {
             clientDisplayName,
             deviceIdentityProfile,
             includeDeviceIdentity,
+            allowStoredDeviceAuth,
+            deviceAuthGatewayID,
             permissions,
         ].joined(separator: "|")
     }
@@ -193,6 +212,7 @@ public actor GatewayNodeSession {
         password: String?,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
@@ -212,11 +232,20 @@ public actor GatewayNodeSession {
         self.onDisconnected = onDisconnected
         self.onInvoke = onInvoke
 
+        let channelGeneration: UInt64
         if shouldReconnect {
+            self.channelGeneration &+= 1
+            channelGeneration = self.channelGeneration
             self.resetConnectionState()
             if let existing = self.channel {
+                // Detach before suspension so callers cannot lease the old channel with
+                // the replacement generation while shutdown is in flight.
+                self.channel = nil
                 await existing.shutdown()
             }
+            // A newer connect or disconnect can run while shutdown suspends. Never let the
+            // superseded call install its endpoint or credentials afterward.
+            guard self.channelGeneration == channelGeneration else { throw CancellationError() }
             let channel = GatewayChannelActor(
                 url: url,
                 token: token,
@@ -224,12 +253,16 @@ public actor GatewayNodeSession {
                 password: password,
                 session: sessionBox,
                 pushHandler: { [weak self] push in
-                    await self?.handlePush(push)
+                    await self?.handlePush(push, channelGeneration: channelGeneration)
                 },
                 connectOptions: connectOptions,
                 disconnectHandler: { [weak self] reason in
-                    await self?.handleChannelDisconnected(reason)
-                })
+                    await self?.handleChannelDisconnected(reason, channelGeneration: channelGeneration)
+                },
+                // Intentionally outside the shouldReconnect identity key: the channel re-reads
+                // the provider on every upgrade, so header edits ride the next reconnect
+                // without forcing a new channel.
+                extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
             self.activeURL = url
             self.activeToken = token
@@ -237,9 +270,11 @@ public actor GatewayNodeSession {
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
+        } else {
+            channelGeneration = self.channelGeneration
         }
 
-        guard let channel = self.channel else {
+        guard let channel else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [
                 NSLocalizedDescriptionKey: "gateway channel unavailable",
             ])
@@ -247,7 +282,13 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
+            guard self.channelGeneration == channelGeneration,
+                  self.channel === channel
+            else { throw CancellationError() }
             _ = await self.waitForSnapshot(timeoutMs: 500)
+            guard self.channelGeneration == channelGeneration,
+                  self.channel === channel
+            else { throw CancellationError() }
             await self.notifyConnectedIfNeeded()
         } catch {
             throw error
@@ -255,7 +296,8 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
-        await self.channel?.shutdown()
+        self.channelGeneration &+= 1
+        let channel = self.channel
         self.channel = nil
         self.activeURL = nil
         self.activeToken = nil
@@ -265,6 +307,12 @@ public actor GatewayNodeSession {
         self.activeSessionIdentity = nil
         self.hasEverConnected = false
         self.resetConnectionState()
+        await channel?.shutdown()
+    }
+
+    public func currentIssuedDeviceAuthRoles() async -> Set<String> {
+        guard let channel else { return [] }
+        return await channel.currentIssuedDeviceAuthRoles()
     }
 
     public func currentCanvasHostUrl() -> String? {
@@ -273,7 +321,7 @@ public actor GatewayNodeSession {
 
     @discardableResult
     public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
-        guard let channel = self.channel else { return nil }
+        guard let channel else { return nil }
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
 
@@ -291,7 +339,7 @@ public actor GatewayNodeSession {
     }
 
     public func currentRemoteAddress() -> String? {
-        guard let url = self.activeURL else { return nil }
+        guard let url = activeURL else { return nil }
         guard let host = url.host else { return url.absoluteString }
         let port = url.port ?? (url.scheme == "wss" ? 443 : 80)
         if host.contains(":") {
@@ -300,38 +348,82 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
-    public func sendEvent(event: String, payloadJSON: String?) async {
-        guard let channel = self.channel else { return }
+    public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) -> GatewayNodeSessionRoute? {
+        guard self.channel != nil else { return nil }
+        if let expectedGatewayID {
+            let expected = expectedGatewayID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let current = self.connectOptions?.deviceAuthGatewayID?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !expected.isEmpty, current == expected else { return nil }
+        }
+        return GatewayNodeSessionRoute(channelGeneration: self.channelGeneration)
+    }
+
+    public func supportsServerCapability(
+        _ capability: GatewayServerCapability,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> Bool?
+    {
+        guard expectedRoute.channelGeneration == self.channelGeneration,
+              self.channel != nil,
+              let serverCapabilities
+        else { return nil }
+        return serverCapabilities.contains(capability)
+    }
+
+    @discardableResult
+    public func sendEvent(
+        event: String,
+        payloadJSON: String?,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil) async -> Bool
+    {
+        if let expectedRoute, expectedRoute.channelGeneration != self.channelGeneration {
+            return false
+        }
+        guard let channel else { return false }
         let params: [String: AnyCodable] = [
             "event": AnyCodable(event),
             "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
         ]
         do {
             try await channel.send(method: "node.event", params: params)
+            return true
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
     public func send(method: String, paramsJSON: String?) async throws {
-        guard let channel = self.channel else {
+        guard let channel else {
             throw NSError(domain: "Gateway", code: 11, userInfo: [
                 NSLocalizedDescriptionKey: "not connected",
             ])
         }
 
-        let params = try self.decodeParamsJSON(paramsJSON)
+        let params = try decodeParamsJSON(paramsJSON)
         try await channel.send(method: method, params: params)
     }
 
-    public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
-        guard let channel = self.channel else {
+    public func request(
+        method: String,
+        paramsJSON: String?,
+        timeoutSeconds: Int = 15,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
+        if let expectedRoute, expectedRoute.channelGeneration != self.channelGeneration {
+            if distinguishPreDispatchRouteChange {
+                throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
+            }
+            throw CancellationError()
+        }
+        guard let channel else {
             throw NSError(domain: "Gateway", code: 11, userInfo: [
                 NSLocalizedDescriptionKey: "not connected",
             ])
         }
 
-        let params = try self.decodeParamsJSON(paramsJSON)
+        let params = try decodeParamsJSON(paramsJSON)
         return try await channel.request(
             method: method,
             params: params,
@@ -349,10 +441,13 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func handlePush(_ push: GatewayPush) async {
+    private func handlePush(_ push: GatewayPush, channelGeneration: UInt64) async {
+        guard self.channelGeneration == channelGeneration else { return }
         switch push {
         case let .snapshot(ok):
             self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(ok.pluginsurfaceurls)
+            self.serverCapabilities = Set(
+                GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -361,7 +456,11 @@ public actor GatewayNodeSession {
             self.markSnapshotReceived()
             await self.notifyConnectedIfNeeded()
         case let .event(evt):
-            await self.handleEvent(evt)
+            guard let channel else { return }
+            await self.handleEvent(
+                evt,
+                channel: channel,
+                channelGeneration: channelGeneration)
         default:
             break
         }
@@ -370,10 +469,12 @@ public actor GatewayNodeSession {
     private func resetConnectionState() {
         self.hasNotifiedConnected = false
         self.snapshotReceived = false
+        self.serverCapabilities = nil
         self.drainSnapshotWaiters(returning: false)
     }
 
-    private func handleChannelDisconnected(_ reason: String) async {
+    private func handleChannelDisconnected(_ reason: String, channelGeneration: UInt64) async {
+        guard self.channelGeneration == channelGeneration else { return }
         // The underlying channel can auto-reconnect; resetting state here ensures we surface a fresh
         // onConnected callback once a new snapshot arrives after reconnect.
         self.resetConnectionState()
@@ -445,7 +546,7 @@ public actor GatewayNodeSession {
                 method: method,
                 params: params,
                 timeoutMs: Double(timeoutSeconds * 1000))
-            let decoded = try self.decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
+            let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
             self.pluginSurfaceUrls[surface] = refreshed
@@ -456,13 +557,17 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func handleEvent(_ evt: EventFrame) async {
+    private func handleEvent(
+        _ evt: EventFrame,
+        channel: GatewayChannelActor,
+        channelGeneration: UInt64) async
+    {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
         self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
-            let request = try self.decodeInvokeRequest(from: payload)
+            let request = try decodeInvokeRequest(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
                 "node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
@@ -472,22 +577,48 @@ public actor GatewayNodeSession {
                 command: request.command,
                 paramsJSON: request.paramsJSON,
                 nodeId: request.nodeId)
-            self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
-            let response = await Self.invokeWithTimeout(
-                request: req,
-                timeoutMs: request.timeoutMs,
-                onInvoke: onInvoke)
-            self.logger.info(
-                "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
-            await self.sendInvokeResult(request: request, response: response)
+            // GatewayChannel waits for push handling before it rearms receive. Run device work
+            // separately so a long invoke cannot starve heartbeats or later node requests.
+            Task { [weak self] in
+                await self?.handleInvokeRequest(
+                    request: request,
+                    bridgeRequest: req,
+                    timeoutMs: request.timeoutMs,
+                    onInvoke: onInvoke,
+                    channel: channel,
+                    channelGeneration: channelGeneration)
+            }
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
+    private func handleInvokeRequest(
+        request: NodeInvokeRequestPayload,
+        bridgeRequest: BridgeInvokeRequest,
+        timeoutMs: Int?,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        channel: GatewayChannelActor,
+        channelGeneration: UInt64) async
+    {
+        self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
+        let response = await Self.invokeWithTimeout(
+            request: bridgeRequest,
+            timeoutMs: timeoutMs,
+            onInvoke: onInvoke)
+        // Invoke output belongs to the requesting channel. A target switch while the device
+        // command is running must discard it instead of disclosing it to the replacement.
+        guard self.channelGeneration == channelGeneration,
+              self.channel === channel
+        else { return }
+        self.logger.info(
+            "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        await self.sendInvokeResult(request: request, response: response, channel: channel)
+    }
+
     private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
         do {
-            let data = try self.encoder.encode(payload)
+            let data = try encoder.encode(payload)
             return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
         } catch {
             if let raw = payload.value as? String, let data = raw.data(using: .utf8) {
@@ -497,8 +628,11 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
-        guard let channel = self.channel else { return }
+    private func sendInvokeResult(
+        request: NodeInvokeRequestPayload,
+        response: BridgeInvokeResponse,
+        channel: GatewayChannelActor) async
+    {
         self.logger.info(
             "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [

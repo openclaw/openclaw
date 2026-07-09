@@ -203,6 +203,7 @@ describe("whatsappChannelOutbound", () => {
       cfg: {},
       accountId: undefined,
       gifPlayback: undefined,
+      onDeliveryResult: expect.any(Function),
       preserveLeadingWhitespace: true,
     });
   });

@@ -91,6 +91,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
+  callGateway: vi.fn(),
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -107,6 +108,7 @@ vi.mock("./outbound-send-service.js", () => ({
 }));
 
 vi.mock("./message.gateway.runtime.js", () => ({
+  callGateway: mocks.callGateway,
   callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
   randomIdempotencyKey: mocks.randomIdempotencyKey,
 }));
@@ -187,6 +189,7 @@ function createGatewayActionPlugin(params: {
   gatewayActions?: ChannelMessageActionName[];
   capabilities?: ChannelPlugin["capabilities"];
   messaging?: ChannelPlugin["messaging"];
+  threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
 }): ChannelPlugin {
   const actions = new Set(params.actions);
@@ -203,6 +206,7 @@ function createGatewayActionPlugin(params: {
     capabilities: params.capabilities ?? { chatTypes: ["direct"] },
     config: createAlwaysConfiguredPluginConfig(),
     messaging: params.messaging,
+    threading: params.threading,
     actions: {
       describeMessageTool: () => ({ actions: params.actions }),
       supportsAction: ({ action }) => actions.has(action),
@@ -274,6 +278,7 @@ describe("runMessageAction plugin dispatch", () => {
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "poll", ctx }),
     );
+    mocks.callGateway.mockReset();
     mocks.callGatewayLeastPrivilege.mockReset();
     mocks.randomIdempotencyKey.mockClear();
     mocks.maybeApplyTtsToPayload.mockReset();
@@ -581,7 +586,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      mocks.callGateway.mockResolvedValue({
         ok: true,
         added: "✅",
       });
@@ -612,17 +617,18 @@ describe("runMessageAction plugin dispatch", () => {
           currentMessageId: "wamid.1",
         },
         gateway: {
-          clientName: "cli",
-          mode: "cli",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
         dryRun: false,
       });
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
+      const gatewayCall = readMockCallArg(mocks.callGateway, "trusted gateway call");
+      expectRecordFields(
+        gatewayCall,
+        { method: "message.action", scopes: ["operator.admin"] },
+        "gateway call",
       );
-      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
       expectRecordFields(
         gatewayParams,
@@ -646,6 +652,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway tool context",
       );
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
@@ -664,6 +671,156 @@ describe("runMessageAction plugin dispatch", () => {
           added: "✅",
         },
         "result payload",
+      );
+    });
+
+    it("keeps blank backend requester provenance least-privileged", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat blank requester test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterSenderId: "   ",
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      expectRecordFields(
+        gatewayCall,
+        {
+          method: "message.action",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        "gateway call",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
+    });
+
+    it("keeps CLI gateway-executed actions least-privileged when they carry sender ownership", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat CLI reaction test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        senderIsOwner: true,
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      expectRecordFields(
+        gatewayCall,
+        {
+          method: "message.action",
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        "gateway call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        gatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "react",
+          senderIsOwner: true,
+        },
+        "gateway call params",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
+      expectRecordFields(
+        result,
+        {
+          kind: "action",
+          channel: "gatewaychat",
+          action: "react",
+          handledBy: "plugin",
+        },
+        "result",
       );
     });
 
@@ -1570,13 +1727,112 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
-  describe("presentation-only send behavior", () => {
+  describe("threaded plugin actions", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        presentation: params.presentation ?? null,
-        message: params.message ?? null,
-      }),
+      jsonResult({ ok: true, params }),
+    );
+    const cfg = { channels: { forumchat: { enabled: true } } } as OpenClawConfig;
+    const threading: ChannelPlugin["threading"] = {
+      resolveAutoThreadId: ({ toolContext, to }) =>
+        toolContext?.currentChannelId === to ? toolContext.currentThreadTs : undefined,
+    };
+    const createThreadedPlugin = (executionMode: "local" | "gateway") =>
+      createGatewayActionPlugin({
+        pluginId: "forumchat",
+        label: "Forum Chat",
+        blurb: "Forum chat threaded action dispatch test plugin.",
+        actions: ["sticker"],
+        gatewayActions: executionMode === "gateway" ? ["sticker"] : [],
+        capabilities: { chatTypes: ["channel"] },
+        threading,
+        handleAction,
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+      });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it.each(["local", "gateway"] as const)(
+      "applies auto threadId before %s plugin dispatch",
+      async (executionMode) => {
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "forumchat",
+              source: "test",
+              plugin: createThreadedPlugin(executionMode),
+            },
+          ]),
+        );
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+
+        await runMessageAction({
+          cfg,
+          action: "sticker",
+          params: {
+            channel: "forumchat",
+            target: "forum:123",
+            stickerName: "wave",
+          },
+          toolContext: {
+            currentChannelProvider: "forumchat",
+            currentChannelId: "forum:123",
+            currentThreadTs: "42",
+          },
+          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          dryRun: false,
+        });
+
+        const dispatchedParams =
+          executionMode === "gateway"
+            ? readRecordField(
+                readRecordField(
+                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+                  "params",
+                  "gateway call params",
+                ),
+                "params",
+                "gateway action params",
+              )
+            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
+        expectRecordFields(
+          dispatchedParams,
+          { to: "forum:123", threadId: "42" },
+          `${executionMode} action params`,
+        );
+        expect(handleAction).toHaveBeenCalledTimes(executionMode === "local" ? 1 : 0);
+      },
+    );
+  });
+
+  describe("presentation-only send behavior", () => {
+    const handleAction = vi.fn(
+      async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
+        const message = typeof params.message === "string" ? params.message : "";
+        const responsePrefix = cfg.messages?.responsePrefix;
+        const rawMessage =
+          responsePrefix && message.startsWith(`${responsePrefix} `)
+            ? message.slice(responsePrefix.length + 1)
+            : message;
+        let detectedCard = false;
+        try {
+          detectedCard = isRecord((JSON.parse(rawMessage) as { body?: unknown }).body);
+        } catch {
+          // Non-JSON text remains a normal plugin message.
+        }
+        return jsonResult({
+          ok: true,
+          presentation: params.presentation ?? null,
+          message: params.message ?? null,
+          detectedCard,
+        });
+      },
     );
 
     const cardPlugin: ChannelPlugin = {
@@ -1650,6 +1906,44 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("keeps prefixed JSON recoverable by plugin-owned card detection", async () => {
+      const cardJson = JSON.stringify({
+        body: {
+          elements: [{ tag: "markdown", content: "Card body" }],
+        },
+      });
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            cardchat: {
+              enabled: true,
+            },
+          },
+          messages: { responsePrefix: "[Nexus]" },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: cardJson,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expectRecordFields(
+        readRecordField(result, "payload", "result payload"),
+        {
+          ok: true,
+          detectedCard: true,
+        },
+        "result payload",
+      );
+      const pluginParams = readRecordField(readFirstPluginCall(handleAction), "params", "params");
+      expect(pluginParams.message).toBe(`[Nexus] ${cardJson}`);
     });
   });
 

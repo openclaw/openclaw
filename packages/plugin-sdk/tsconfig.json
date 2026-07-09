@@ -13,6 +13,7 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": [
+    "../../packages/ai/src/**/*.ts",
     "../../packages/markdown-core/src/**/*.ts",
     "../../packages/media-core/src/**/*.ts",
     "../../packages/media-generation-core/src/**/*.ts",

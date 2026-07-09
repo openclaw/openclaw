@@ -1,5 +1,6 @@
-import { note as clackNote } from "@clack/prompts";
 // Terminal Core tests cover table behavior.
+import path from "node:path";
+import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
@@ -175,6 +176,30 @@ describe("renderTable", () => {
     const line2Index = lines.findIndex((line) => line.includes("line2"));
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
+  });
+
+  it("shortens only exact home paths and child paths in table cells", () => {
+    const home = path.resolve("test-home", "alice");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", "");
+    vi.stubEnv("OPENCLAW_HOME", "");
+
+    const out = renderTable({
+      border: "none",
+      columns: [{ key: "Path", header: "Path" }],
+      rows: [
+        { Path: home },
+        { Path: `${home}/project` },
+        { Path: `${home}2/project` },
+        { Path: `Workspace: ${home}/project` },
+      ],
+    });
+
+    expect(out).toContain("~\n");
+    expect(out).toContain("~/project");
+    expect(out).toContain(`${home}2/project`);
+    expect(out).toContain("Workspace: ~/project");
+    expect(out).not.toContain("~2/project");
   });
 
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {

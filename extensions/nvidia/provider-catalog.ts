@@ -13,6 +13,7 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -163,10 +164,6 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
         }
       : model,
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

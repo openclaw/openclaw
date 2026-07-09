@@ -45,6 +45,19 @@ describe("redactSensitiveUrl", () => {
       "https://example.com/mcp?safe=value",
     );
   });
+
+  it("redacts Telegram bot tokens from URL paths", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://telegram.internal/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
+      ),
+    ).toBe("https://telegram.internal/bot***/getMe");
+    expect(
+      redactSensitiveUrl(
+        "https://api.telegram.org/bot123456%3AABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
+      ),
+    ).toBe("https://api.telegram.org/bot***/getMe");
+  });
 });
 
 describe("redactSensitiveUrlLikeString", () => {
@@ -88,6 +101,14 @@ describe("redactSensitiveUrlLikeString", () => {
         "wss://fallback-user:fallback-pass@[bad-host/socket?token=fallback-secret&keep=visible)",
       ),
     ).toBe("wss://***:***@[bad-host/socket?token=***&keep=visible)");
+  });
+
+  it("redacts Telegram bot tokens from URL-like fallback strings", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "timeout /bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/sendMessage and keep /bot/settings",
+      ),
+    ).toBe("timeout /bot***/sendMessage and keep /bot/settings");
   });
 });
 

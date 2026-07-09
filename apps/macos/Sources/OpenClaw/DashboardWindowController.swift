@@ -21,7 +21,7 @@ private final class DashboardWindowDragRegionView: NSView {
 @MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private let webView: WKWebView
-    private var currentURL: URL
+    private(set) var currentURL: URL
     private var auth: DashboardWindowAuth
 
     init(url: URL, auth: DashboardWindowAuth) {
@@ -81,11 +81,27 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func show(url: URL, auth: DashboardWindowAuth) {
+        self.update(url: url, auth: auth)
+        self.show()
+    }
+
+    /// Swap the dashboard to a new gateway endpoint without reordering the window:
+    /// re-injects the native auth script for the new origin and reloads. Used when
+    /// the remote tunnel is recreated on a new local port while the window stays
+    /// open; ordering the window front here would steal focus on background
+    /// tunnel recreation.
+    func update(url: URL, auth: DashboardWindowAuth) {
         self.currentURL = url
         self.auth = auth
         self.refreshNativeAuthScript(url: url, auth: auth)
         self.load(url)
-        self.show()
+    }
+
+    /// Miniaturized windows report `isVisible == false` but must still follow
+    /// endpoint changes so deminiaturizing does not land on a dead port.
+    var isWindowOpen: Bool {
+        guard let window else { return false }
+        return window.isVisible || window.isMiniaturized
     }
 
     func show() {
@@ -120,7 +136,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func load(_ url: URL) {
-        dashboardWindowLogger.debug("dashboard load \(url.absoluteString, privacy: .public)")
+        dashboardWindowLogger.debug("dashboard load \(dashboardLogString(for: url), privacy: .public)")
         self.webView.load(URLRequest(url: url))
     }
 
@@ -190,12 +206,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
           --openclaw-native-titlebar-height: 50px;
         }
         @media (min-width: 700px) {
-          html.openclaw-native-macos .sidebar-shell {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
             padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
-          }
-          html.openclaw-native-macos .sidebar-shell__header {
-            padding-left: 10px !important;
-            padding-right: 8px !important;
           }
         }
         """
@@ -320,7 +335,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
         dashboardWindowLogger.error(
-            "dashboard load failed url=\(self.currentURL.absoluteString, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            "dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         let html = Self.failureHTML(
             title: "Dashboard unavailable",
             message: error.localizedDescription,
@@ -437,3 +452,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
+
+#if DEBUG
+extension DashboardWindowController {
+    var _testUserScripts: [WKUserScript] {
+        self.webView.configuration.userContentController.userScripts
+    }
+}
+#endif

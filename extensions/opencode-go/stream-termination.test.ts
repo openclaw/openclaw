@@ -408,6 +408,44 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
+  it("preserves the provider-owned first-event timeout when core passes a shorter generic value", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+
+    const underlying = vi.fn((_model, _context, _options) => baseStream);
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 120_000,
+      firstEventTimeoutMs: 300_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
+        {} as any,
+        { firstEventTimeoutMs: 30_000 } as any,
+      ),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        void event;
+      }
+    })();
+
+    expect(underlying).toHaveBeenCalledTimes(1);
+    expect(underlying.mock.calls[0]?.[2]).toMatchObject({
+      firstEventTimeoutMs: 300_000,
+    });
+
+    controller.end();
+    await consumer;
+  });
+
   it("honors explicit opencode-go provider request timeout below wrapper defaults", async () => {
     const { stream: baseStream } = createFakeBaseStream();
     let abortCalled = false;
@@ -741,9 +779,9 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       wrapper({ provider: "opencode-go", id: "glm-4.6" } as any, {} as any, {} as any),
     );
     expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
-      }
+    if (!downstream) {
+      return;
+    }
 
     const received: AnyEvent[] = [];
     const consumer = (async () => {

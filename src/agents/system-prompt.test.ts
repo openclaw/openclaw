@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // System prompt tests cover the main prompt facade, prompt-surface routing, and
 // user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
@@ -5,8 +6,8 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
+import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
   buildAgentBootstrapSystemContext,
   buildAgentBootstrapSystemPromptSections,
@@ -172,6 +173,23 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).toContain('reply with exactly "NO_REPLY"');
+  });
+
+  it("keeps source delivery guidance mode-neutral when silent replies are suppressed", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      silentReplyPromptMode: "none",
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(prompt).toContain("final text normally routes to the source channel");
+    expect(prompt).toContain("Follow current-turn delivery context");
+    expect(prompt).not.toContain(
+      "Do not use `message(action=send)` to deliver the current source-channel reply",
+    );
   });
 
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
@@ -716,12 +734,20 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
+    const section = buildSkillWorkshopPromptSection();
+    const sectionText = section.join("\n");
+    expect(section.length).toBeLessThanOrEqual(4);
+    expect(sectionText).toContain("Route durable skill work");
+    expect(sectionText).toContain("through the `skill_workshop` tool");
+    expect(sectionText).toContain("Generated skills are pending proposals.");
+    expect(sectionText).toContain("only when the user explicitly asks");
+
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],
     });
     expect(withoutTool).not.toContain("## Skill Workshop");
-    expect(withoutTool).not.toContain("use `skill_workshop`");
+    expect(withoutTool).not.toContain("Route durable skill work");
 
     const withTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -731,32 +757,8 @@ describe("buildAgentSystemPrompt", () => {
       "- skill_workshop: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     );
     expect(withTool).toContain("## Skill Workshop");
-    expect(withTool).toContain(
-      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-    );
-    expect(withTool).toContain(
-      "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
-    );
-    expect(withTool).toContain(
-      "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
-    );
-    expect(withTool).toContain("keep `description` under 160 bytes");
-    expect(withTool).toContain("`proposal_content` within the configured body limit");
-    expect(withTool).toContain(
-      "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
-    );
-    expect(withTool).toContain("`action=revise` for an existing pending proposal");
-    expect(withTool).toContain("pass the proposal or skill name in `name`");
-    expect(withTool).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
-    );
-    expect(withTool).toContain("Generated skills are pending proposals by default.");
-    expect(withTool).toContain(
-      "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
-    );
-    expect(withTool).toContain(
-      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
-    );
+    expect(withTool).toContain("Route durable skill work");
+    expect(withTool).toContain("Generated skills are pending proposals.");
   });
 
   it("appends available skills when provided", () => {
@@ -1050,7 +1052,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
-  it("describes Telegram rich text for automatic final replies without the message tool", () => {
+  it("describes Telegram rich text for source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
@@ -1059,7 +1061,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Reply in current session → automatically routes");
+    expect(prompt).toContain("final text normally routes to the source channel");
+    expect(prompt).toContain("if current-turn context says final text stays private");
     expect(prompt).toContain("Telegram rich text is available");
     expect(prompt).toContain("headings, tables");
     expect(prompt).not.toContain("### message tool");
@@ -1104,7 +1107,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
       expect(prompt).toContain(
-        "Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output",
+        "Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private.",
       );
       expect(prompt).toContain("The target defaults to the current source channel");
       expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -1130,6 +1133,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).toContain(
+      "Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private.",
+    );
     expect(prompt).not.toContain("The target defaults to the current source channel");
   });
 
@@ -1150,7 +1156,7 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("keeps Discord group etiquette scoped to group message-tool-only delivery", () => {
+  it("keeps group/channel etiquette scoped to message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1160,10 +1166,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
-  it("omits Discord group etiquette for direct message-tool-only delivery", () => {
+  it("omits group/channel etiquette for direct message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1175,7 +1181,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
@@ -1316,7 +1322,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.match(/Custom runtime context/g)).toHaveLength(1);
-    expect(prompt.match(/## Group Chat Context/g)).toHaveLength(1);
+    expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
@@ -1412,7 +1418,7 @@ describe("buildAgentSystemPrompt", () => {
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const messagingPos = prompt.lastIndexOf("## Messaging");
-    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const conversationContextPos = prompt.lastIndexOf("## Conversation Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
     // These sections vary with approval UI capabilities and owner identity, so
@@ -1423,7 +1429,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(boundaryPos).toBeGreaterThan(projectContextPos);
     expect(messagingPos).toBeGreaterThan(boundaryPos);
-    expect(groupChatPos).toBeGreaterThan(boundaryPos);
+    expect(conversationContextPos).toBeGreaterThan(boundaryPos);
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
     expect(approvalPos).toBeGreaterThan(boundaryPos);

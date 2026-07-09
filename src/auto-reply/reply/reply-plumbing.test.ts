@@ -27,7 +27,7 @@ function createSlackThreadingPlugin(): ChannelPlugin {
         currentChannelId: context.To?.replace(/^channel:/, ""),
         currentThreadTs:
           context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
-        replyToMode: "all",
+        replyToMode: context.ReplyToMode ?? "all",
       }),
     },
   } as ChannelPlugin;
@@ -193,6 +193,26 @@ describe("buildThreadingToolContext", () => {
 
     expect(result.currentChannelId).toBe("C1");
     expect(result.currentThreadTs).toBe("123.456");
+  });
+
+  it("passes the prepared reply mode to the Slack threading adapter", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: createSlackThreadingPlugin(), source: "test" },
+      ]),
+    );
+
+    const result = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "slack",
+        To: "channel:C1",
+        ReplyToMode: "off",
+      },
+      config: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.replyToMode).toBe("off");
   });
 
   it("lets plugin threading adapters suppress the generic message-id fallback", () => {

@@ -698,6 +698,26 @@ async function pumpStreamWithRecovery(
   }
 }
 
+function createRecoveryStream(
+  stream: Awaited<ReturnType<StreamFn>>,
+  sessionMeta: RecoverySessionMeta,
+  retry: () => ReturnType<StreamFn>,
+  notify: () => Promise<void>,
+): Awaited<ReturnType<StreamFn>> {
+  const outer = createAssistantMessageEventStream();
+  const finalResultPromise = pumpStreamWithRecovery(
+    outer,
+    stream,
+    sessionMeta,
+    retry,
+    notify,
+  ).finally(() => {
+    outer.end();
+  });
+  outer.result = () => finalResultPromise;
+  return outer;
+}
+
 export function wrapAnthropicStreamWithRecovery(
   innerStreamFn: StreamFn,
   sessionMeta: RecoverySessionMeta,
@@ -727,28 +747,20 @@ export function wrapAnthropicStreamWithRecovery(
 
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      return stream.catch((error: unknown) => {
-        if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-          throw error;
-        }
-        requestMeta.recoveredAnthropicThinking = true;
-        log.warn(
-          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-        );
-        return wrapRetryStreamWithRecoveryNotification(retry(), notify);
-      }) as ReturnType<StreamFn>;
+      return stream.then(
+        (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
+        (error: unknown) => {
+          if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+            throw error;
+          }
+          requestMeta.recoveredAnthropicThinking = true;
+          log.warn(
+            `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
+          );
+          return wrapRetryStreamWithRecoveryNotification(retry(), notify);
+        },
+      ) as ReturnType<StreamFn>;
     }
-    const outer = createAssistantMessageEventStream();
-    const finalResultPromise = pumpStreamWithRecovery(
-      outer,
-      stream,
-      requestMeta,
-      retry,
-      notify,
-    ).finally(() => {
-      outer.end();
-    });
-    outer.result = () => finalResultPromise;
-    return outer as unknown as ReturnType<StreamFn>;
+    return createRecoveryStream(stream, requestMeta, retry, notify);
   };
 }

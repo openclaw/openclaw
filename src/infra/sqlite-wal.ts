@@ -274,6 +274,19 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
+function enableMacosCheckpointFullfsync(db: DatabaseSync): void {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  try {
+    db.exec("PRAGMA checkpoint_fullfsync = 1;");
+  } catch {
+    // Older SQLite builds may ignore or reject platform-specific pragmas. WAL
+    // setup should still proceed because this is a durability upgrade, not a
+    // prerequisite for opening the store.
+  }
+}
+
 function refuseUnsupportedFilesystem(options: SqliteWalMaintenanceOptions): never {
   const label = options.databaseLabel ?? "sqlite database";
   const location = options.databasePath ? ` at ${options.databasePath}` : "";
@@ -312,6 +325,7 @@ export function configureSqliteWalMaintenance(
     };
   }
   db.exec("PRAGMA journal_mode = WAL;");
+  enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
@@ -344,6 +358,25 @@ export function configureSqliteWalMaintenance(
       }
       return checkpoint();
     },
+  };
+}
+
+/**
+ * Register a best-effort exit-time close for a SQLite handle cache. Returns an
+ * unregister callback the cache's orderly close path must invoke, so tests and
+ * runtime shutdowns do not accumulate listeners on shared worker processes.
+ */
+export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
+  const closeOnExit = () => {
+    try {
+      closeAll();
+    } catch {
+      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+    }
+  };
+  process.once("exit", closeOnExit);
+  return () => {
+    process.removeListener("exit", closeOnExit);
   };
 }
 

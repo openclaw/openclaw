@@ -18,7 +18,10 @@ export const QWEN_OAUTH_PROVIDER_ID = "qwen-oauth";
 export const QWEN_OAUTH_BASE_URL = "https://portal.qwen.ai/v1";
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
+export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
+export const QWEN_37_MAX_MODEL_ID = "qwen3.7-max";
+export const QWEN_37_PLUS_MODEL_ID = "qwen3.7-plus";
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -39,9 +42,36 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     maxTokens: 65_536,
   },
   {
+    id: QWEN_36_FLASH_MODEL_ID,
+    name: QWEN_36_FLASH_MODEL_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
     id: QWEN_36_PLUS_MODEL_ID,
     name: QWEN_36_PLUS_MODEL_ID,
-    reasoning: false,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_37_MAX_MODEL_ID,
+    name: QWEN_37_MAX_MODEL_ID,
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_37_PLUS_MODEL_ID,
+    name: QWEN_37_PLUS_MODEL_ID,
+    reasoning: true,
     input: ["text", "image"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,
@@ -128,16 +158,31 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   }
 }
 
-export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
-  return !isQwenCodingPlanBaseUrl(baseUrl);
+export function isQwen36PlusSupportedBaseUrl(_baseUrl: string | undefined): boolean {
+  return true;
+}
+
+const QWEN_STANDARD_ONLY_MODEL_IDS = new Set<string>([
+  QWEN_36_FLASH_MODEL_ID,
+  QWEN_37_MAX_MODEL_ID,
+]);
+
+const QWEN_OAUTH_UNSUPPORTED_MODEL_IDS = new Set<string>([
+  QWEN_36_FLASH_MODEL_ID,
+  QWEN_37_MAX_MODEL_ID,
+  QWEN_37_PLUS_MODEL_ID,
+]);
+
+export function isQwenStandardOnlyModelId(modelId: string): boolean {
+  return QWEN_STANDARD_ONLY_MODEL_IDS.has(modelId);
 }
 
 export function buildQwenModelCatalogForBaseUrl(
   baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return isQwen36PlusSupportedBaseUrl(baseUrl)
-    ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+  return isQwenCodingPlanBaseUrl(baseUrl)
+    ? QWEN_MODEL_CATALOG.filter((model) => !isQwenStandardOnlyModelId(model.id))
+    : QWEN_MODEL_CATALOG;
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
@@ -183,7 +228,9 @@ export function buildQwenDefaultModelDefinition(): ModelDefinitionConfig {
 }
 
 export function buildQwenOAuthModelCatalog(): ReadonlyArray<ModelDefinitionConfig> {
-  return QWEN_MODEL_CATALOG.map((model) => ({ ...model, maxTokens: 65_536 }));
+  return QWEN_MODEL_CATALOG.filter((model) => !QWEN_OAUTH_UNSUPPORTED_MODEL_IDS.has(model.id)).map(
+    (model) => Object.assign({}, model, { maxTokens: 65_536 }),
+  );
 }
 
 /** @deprecated Use QWEN_BASE_URL. */

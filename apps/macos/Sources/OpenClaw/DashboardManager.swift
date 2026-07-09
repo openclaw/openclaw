@@ -10,9 +10,44 @@ final class DashboardManager {
     static let shared = DashboardManager()
 
     private var controller: DashboardWindowController?
+    private var endpointTask: Task<Void, Never>?
     private static let failureURL = URL(string: "about:blank")!
 
     private init() {}
+
+    /// The remote SSH tunnel can be recreated on a new ephemeral local port while
+    /// the dashboard stays open; without following endpoint changes the WebView
+    /// keeps reconnecting to the dead old port forever (#100476).
+    private func observeEndpointChanges() {
+        guard self.endpointTask == nil else { return }
+        self.endpointTask = Task { [weak self] in
+            let stream = await GatewayEndpointStore.shared.subscribe()
+            for await state in stream {
+                guard let self else { return }
+                await self.handleEndpointState(state)
+            }
+        }
+    }
+
+    func handleEndpointState(_ state: GatewayEndpointState) async {
+        guard case let .ready(mode, url, token, password) = state else { return }
+        guard let controller, controller.isWindowOpen else { return }
+        let config: GatewayConnection.Config = (url, token, password)
+        let authToken = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        guard let dashboardURL = try? GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: authToken),
+              dashboardURL != controller.currentURL
+        else {
+            return
+        }
+        let auth = DashboardWindowAuth(
+            gatewayUrl: Self.websocketURLString(for: dashboardURL),
+            token: authToken,
+            password: password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        guard auth.hasCredential, controller.isWindowOpen else { return }
+        dashboardManagerLogger.info(
+            "dashboard endpoint changed; reloading url=\(dashboardLogString(for: dashboardURL), privacy: .public)")
+        controller.update(url: dashboardURL, auth: auth)
+    }
 
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
@@ -39,6 +74,7 @@ final class DashboardManager {
             self.controller = controller
             controller.show(url: url, auth: auth)
         }
+        self.observeEndpointChanges()
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
         return true
     }
@@ -56,15 +92,17 @@ final class DashboardManager {
             password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
 
         if let controller {
-            dashboardManagerLogger.info("dashboard reuse window url=\(url.absoluteString, privacy: .public)")
+            dashboardManagerLogger.info("dashboard reuse window url=\(dashboardLogString(for: url), privacy: .public)")
             controller.show(url: url, auth: auth)
+            self.observeEndpointChanges()
             return
         }
 
-        dashboardManagerLogger.info("dashboard create window url=\(url.absoluteString, privacy: .public)")
+        dashboardManagerLogger.info("dashboard create window url=\(dashboardLogString(for: url), privacy: .public)")
         let controller = DashboardWindowController(url: url, auth: auth)
         self.controller = controller
         controller.show(url: url, auth: auth)
+        self.observeEndpointChanges()
 
         // Refresh the cached hello payload without blocking window creation.
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
@@ -77,6 +115,9 @@ final class DashboardManager {
             url: Self.failureURL,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         self.controller = controller
+        // Keep observing while the failure page is up so a recovered tunnel
+        // swaps the window back to the live dashboard.
+        self.observeEndpointChanges()
         controller.showFailure(
             title: "Dashboard unavailable",
             message: message,
@@ -133,3 +174,17 @@ final class DashboardManager {
         return nil
     }
 }
+
+#if DEBUG
+extension DashboardManager {
+    /// Test instances skip `observeEndpointChanges()` so the shared endpoint
+    /// store cannot race test-driven `handleEndpointState` calls.
+    static func _testMake() -> DashboardManager {
+        DashboardManager()
+    }
+
+    func _testSetController(_ controller: DashboardWindowController?) {
+        self.controller = controller
+    }
+}
+#endif
