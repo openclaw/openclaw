@@ -19,29 +19,24 @@ struct ExecApprovalEvaluation {
 struct ExecApprovalStoreMutations: Sendable {
     let addAllowlistEntries: @Sendable (
         _ agentId: String?,
-        _ entries: [ExecAllowlistEntry]
-    ) -> Result<Void, ExecApprovalsMutationError>
+        _ entries: [ExecAllowlistEntry]) -> Result<Void, ExecApprovalsMutationError>
     let recordAllowlistUses: @Sendable (
         _ agentId: String?,
         _ uses: [ExecAllowlistUse],
-        _ command: String
-    ) -> Result<Void, ExecApprovalsMutationError>
+        _ command: String) -> Result<Void, ExecApprovalsMutationError>
 
     static let live = ExecApprovalStoreMutations(
         addAllowlistEntries: { agentId, entries in
             ExecApprovalsStore.addAllowlistEntries(
                 agentId: agentId,
-                entries: entries
-            )
+                entries: entries)
         },
         recordAllowlistUses: { agentId, uses, command in
             ExecApprovalsStore.recordAllowlistUses(
                 agentId: agentId,
                 uses: uses,
-                command: command
-            )
-        }
-    )
+                command: command)
+        })
 }
 
 enum ExecApprovalEvaluator {
@@ -50,8 +45,8 @@ enum ExecApprovalEvaluator {
         rawCommand: String?,
         cwd: String?,
         envOverrides: [String: String]?,
-        agentId: String?
-    ) async -> ExecApprovalEvaluation {
+        agentId: String?) async -> ExecApprovalEvaluation
+    {
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
         let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
@@ -62,25 +57,21 @@ enum ExecApprovalEvaluator {
         let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
         let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(
             command: command,
-            rawCommand: rawCommand
-        )
+            rawCommand: rawCommand)
         let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: allowlistRawCommand,
             cwd: cwd,
-            env: env
-        )
+            env: env)
         let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: command,
             cwd: cwd,
             env: env,
-            rawCommand: allowlistRawCommand
-        )
+            rawCommand: allowlistRawCommand)
         let boundCommand = ExecCommandResolution.bindForAllowlistExecution(
             command: command,
             rawCommand: allowlistRawCommand,
-            resolutions: allowlistResolutions
-        )
+            resolutions: allowlistResolutions)
         let allowlistMatches = security == .allowlist
             ? ExecAllowlistMatcher.matchAll(entries: approvals.allowlist, resolutions: allowlistResolutions)
             : []
@@ -95,7 +86,7 @@ enum ExecApprovalEvaluator {
         if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
             let bins = await SkillBinsCache.shared.currentTrust()
             skillAllow = boundCommand != nil &&
-                isSkillAutoAllowed(allowlistResolutions, trustedBinsByName: bins)
+                self.isSkillAutoAllowed(allowlistResolutions, trustedBinsByName: bins)
         } else {
             skillAllow = false
         }
@@ -113,22 +104,20 @@ enum ExecApprovalEvaluator {
             allowlistMatches: allowlistMatches,
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
-            skillAllow: skillAllow
-        )
+            skillAllow: skillAllow)
     }
 
     static func isSkillAutoAllowed(
         _ resolutions: [ExecCommandResolution],
-        trustedBinsByName: [String: Set<String>]
-    ) -> Bool {
+        trustedBinsByName: [String: Set<String>]) -> Bool
+    {
         guard !resolutions.isEmpty, !trustedBinsByName.isEmpty else { return false }
         return resolutions.allSatisfy { resolution in
             guard !ExecApprovalHelpers.patternHasPathSelector(resolution.rawExecutable) else { return false }
             guard !ExecCommandResolution.isUnsafeReusableExecutionTarget(resolution) else { return false }
             guard let executableName = SkillBinsCache.normalizeSkillBinName(resolution.executableName),
                   let resolvedPath = SkillBinsCache.normalizeResolvedPath(
-                      resolution.resolvedRealPath ?? resolution.resolvedPath
-                  )
+                      resolution.resolvedRealPath ?? resolution.resolvedPath)
             else {
                 return false
             }
@@ -138,8 +127,8 @@ enum ExecApprovalEvaluator {
 
     static func _testIsSkillAutoAllowed(
         _ resolutions: [ExecCommandResolution],
-        trustedBinsByName: [String: Set<String>]
-    ) -> Bool {
-        isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
+        trustedBinsByName: [String: Set<String>]) -> Bool
+    {
+        self.isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
     }
 }

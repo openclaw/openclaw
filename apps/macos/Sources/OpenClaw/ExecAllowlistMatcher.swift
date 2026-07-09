@@ -18,7 +18,7 @@ enum ExecAllowlistMatcher {
         for entry in entries {
             switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
             case let .valid(pattern):
-                guard matchesExecutable(pattern: pattern, resolution: resolution) else { continue }
+                guard self.matchesExecutable(pattern: pattern, resolution: resolution) else { continue }
                 guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
                     if pathOnlyMatch == nil {
                         pathOnlyMatch = entry
@@ -37,8 +37,8 @@ enum ExecAllowlistMatcher {
 
     static func matchAll(
         entries: [ExecAllowlistEntry],
-        resolutions: [ExecCommandResolution]
-    ) -> [ExecAllowlistEntry] {
+        resolutions: [ExecCommandResolution]) -> [ExecAllowlistEntry]
+    {
         guard !entries.isEmpty, !resolutions.isEmpty else { return [] }
         var matches: [ExecAllowlistEntry] = []
         matches.reserveCapacity(resolutions.count)
@@ -53,8 +53,8 @@ enum ExecAllowlistMatcher {
 
     private static func matchesExecutableBasename(
         pattern: String,
-        resolution: ExecCommandResolution
-    ) -> Bool {
+        resolution: ExecCommandResolution) -> Bool
+    {
         var candidates = Set<String>()
         if !resolution.executableName.isEmpty {
             candidates.insert(resolution.executableName)
@@ -67,15 +67,15 @@ enum ExecAllowlistMatcher {
 
     private static func matchesExecutable(
         pattern: String,
-        resolution: ExecCommandResolution
-    ) -> Bool {
+        resolution: ExecCommandResolution) -> Bool
+    {
         if ExecApprovalHelpers.patternHasPathSelector(pattern) {
             guard let trustPath = resolution.resolvedRealPath ?? resolution.resolvedPath else { return false }
-            return matches(pattern: pattern, target: trustPath)
+            return self.matches(pattern: pattern, target: trustPath)
         }
         return pattern != "*" &&
             !ExecApprovalHelpers.patternHasPathSelector(resolution.rawExecutable) &&
-            matchesExecutableBasename(pattern: pattern, resolution: resolution)
+            self.matchesExecutableBasename(pattern: pattern, resolution: resolution)
     }
 
     /// Mirrors the TypeScript exec-approval argv contract. Generated patterns
@@ -109,8 +109,8 @@ enum ExecAllowlistMatcher {
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         let expanded = ExecApprovalsStore.expandPath(trimmed)
-        let normalizedPattern = normalizeMatchTarget(expanded)
-        let normalizedTarget = normalizeMatchTarget(target)
+        let normalizedPattern = self.normalizeMatchTarget(expanded)
+        let normalizedTarget = self.normalizeMatchTarget(target)
         guard let regex = regex(for: normalizedPattern) else { return false }
         let range = NSRange(location: 0, length: normalizedTarget.utf16.count)
         return regex.firstMatch(in: normalizedTarget, options: [], range: range) != nil

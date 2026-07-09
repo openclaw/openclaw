@@ -23,7 +23,7 @@ enum ExecEnvInvocationUnwrapper {
     }
 
     static func unwrap(_ command: [String]) -> [String]? {
-        unwrapWithMetadata(command)?.command
+        self.unwrapWithMetadata(command)?.command
     }
 
     static func unwrapWithMetadata(_ command: [String]) -> UnwrapResult? {
@@ -50,7 +50,7 @@ enum ExecEnvInvocationUnwrapper {
                 idx += 1
                 break
             }
-            if isEnvAssignment(token) {
+            if self.isEnvAssignment(token) {
                 usesModifiers = true
                 idx += 1
                 continue
@@ -99,7 +99,7 @@ enum ExecEnvInvocationUnwrapper {
     static func unwrapDispatchWrappersForResolution(_ command: [String]) -> [String] {
         var current = command
         var depth = 0
-        while depth < maxWrapperDepth {
+        while depth < self.maxWrapperDepth {
             guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
                 break
             }
@@ -132,7 +132,7 @@ enum ExecEnvInvocationUnwrapper {
             if token == "-" {
                 return nil
             }
-            if isEnvAssignment(token) {
+            if self.isEnvAssignment(token) {
                 return nil
             }
             if token.hasPrefix("-"), token != "-" {
@@ -149,7 +149,7 @@ enum ExecEnvInvocationUnwrapper {
     static func unwrapTransparentDispatchWrappersForResolution(_ command: [String]) -> [String] {
         var current = command
         var depth = 0
-        while depth < maxWrapperDepth {
+        while depth < self.maxWrapperDepth {
             guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
                 break
             }

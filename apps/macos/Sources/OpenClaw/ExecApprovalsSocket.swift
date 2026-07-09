@@ -168,9 +168,13 @@ private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> S
     var buffer = Data()
     while buffer.count < maxBytes {
         let chunk = try handle.read(upToCount: 4096) ?? Data()
-        if chunk.isEmpty { break }
+        if chunk.isEmpty {
+            break
+        }
         buffer.append(chunk)
-        if buffer.contains(0x0A) { break }
+        if buffer.contains(0x0A) {
+            break
+        }
     }
     guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
         guard !buffer.isEmpty else { return nil }
@@ -807,7 +811,9 @@ private enum ExecHostExecutor {
         guard needsScreenRecording == true else { return nil }
         let authorized = await PermissionManager
             .status([.screenRecording])[.screenRecording] ?? false
-        if authorized { return nil }
+        if authorized {
+            return nil
+        }
         return self.errorResponse(
             code: "UNAVAILABLE",
             message: "PERMISSION_MISSING: screenRecording",
@@ -920,9 +926,15 @@ enum ExecApprovalsSocketPathGuard {
         }
 
         let fileType = status.st_mode & mode_t(S_IFMT)
-        if fileType == mode_t(S_IFDIR) { return .directory }
-        if fileType == mode_t(S_IFSOCK) { return .socket }
-        if fileType == mode_t(S_IFLNK) { return .symlink }
+        if fileType == mode_t(S_IFDIR) {
+            return .directory
+        }
+        if fileType == mode_t(S_IFSOCK) {
+            return .socket
+        }
+        if fileType == mode_t(S_IFLNK) {
+            return .symlink
+        }
         return .other
     }
 
