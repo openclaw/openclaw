@@ -38,6 +38,7 @@ function createMockChild(): MockChild {
 }
 
 const TEST_CFG = {} as OpenClawConfig;
+const MIB = 1024 * 1024;
 
 type SpeechTarget = SpeechSynthesisRequest["target"];
 
@@ -190,6 +191,25 @@ describe("CLI TTS provider stream error handling", () => {
 
     await expect(promise).rejects.toThrow(
       "CLI TTS exit 1: partial diagnostic; CLI TTS stderr stream error: EIO: diagnostics stream broken",
+    );
+  });
+
+  it.each([
+    { stream: "stdout", chunkBytes: MIB, repeats: 51, limitBytes: 50 * MIB },
+    { stream: "stderr", chunkBytes: MIB / 2, repeats: 3, limitBytes: MIB },
+  ] as const)("terminates the child when $stream exceeds its byte cap", async (testCase) => {
+    const child = createMockChild();
+    const { promise } = await startSpeech({ child });
+    const chunk = Buffer.alloc(testCase.chunkBytes);
+
+    for (let index = 0; index < testCase.repeats; index += 1) {
+      child[testCase.stream].emit("data", chunk);
+    }
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    child.emit("close", null);
+
+    await expect(promise).rejects.toThrow(
+      `CLI TTS ${testCase.stream} exceeded ${testCase.limitBytes} bytes`,
     );
   });
 

@@ -270,6 +270,7 @@ export const de: TranslationMap = {
     model: "Modell",
     provider: "Anbieter",
     runtime: "Laufzeit",
+    runDuration: "Laufzeit",
     surface: "Oberfläche",
     subject: "Betreff",
     room: "Raum",

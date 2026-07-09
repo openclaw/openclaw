@@ -268,6 +268,7 @@ export const uk: TranslationMap = {
     model: "Модель",
     provider: "Провайдер",
     runtime: "Середовище виконання",
+    runDuration: "Тривалість виконання",
     surface: "Поверхня",
     subject: "Тема",
     room: "Кімната",

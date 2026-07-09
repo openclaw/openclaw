@@ -266,6 +266,7 @@ export const ko: TranslationMap = {
     model: "모델",
     provider: "제공업체",
     runtime: "런타임",
+    runDuration: "실행 시간",
     surface: "표면",
     subject: "제목",
     room: "방",

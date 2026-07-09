@@ -272,6 +272,7 @@ export const ja_JP: TranslationMap = {
     model: "モデル",
     provider: "プロバイダー",
     runtime: "ランタイム",
+    runDuration: "実行時間",
     surface: "サーフェス",
     subject: "件名",
     room: "ルーム",

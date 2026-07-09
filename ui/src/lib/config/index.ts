@@ -1,5 +1,4 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
@@ -63,7 +62,6 @@ export type RuntimeConfigCapability = {
   removeFormValue: (path: Array<string | number>) => void;
   setRaw: (value: string) => void;
   resetDraft: () => void;
-  stagePreset: (patch: Record<string, unknown>) => void;
   save: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
@@ -634,20 +632,6 @@ export function updateConfigRawValue(state: ConfigState, value: string) {
   }
 }
 
-export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
-  const snapshotConfig = resolveEditableSnapshotConfig(state.configSnapshot);
-  const baseSource = state.configForm ?? snapshotConfig;
-  if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
-    return;
-  }
-  const base = cloneConfigObject(baseSource);
-  const merged = applyMergePatch(base, patch);
-  if (!merged || typeof merged !== "object" || Array.isArray(merged)) {
-    return;
-  }
-  syncConfigDraft(state, cloneConfigObject(merged as Record<string, unknown>));
-}
-
 export function resetConfigPendingChanges(state: ConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   state.configForm = cloneConfigObject(state.configFormOriginal ?? editableConfig ?? {});
@@ -872,7 +856,6 @@ export function createRuntimeConfigCapability(
     removeFormValue: (path) => mutate(() => removeConfigFormValue(state, path)),
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => mutate(() => resetConfigPendingChanges(state)),
-    stagePreset: (patch) => mutate(() => stageConfigPreset(state, patch)),
     save: () => run(() => saveConfig(state)),
     apply: () => run(() => applyConfig(state)),
     openFile: () => run(() => openConfigFile(state)),

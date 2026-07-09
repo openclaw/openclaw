@@ -759,12 +759,33 @@ struct RootTabsSourceGuardTests {
         let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("NotificationServingPreference.isEnabled()"))
         #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
         #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
         #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
         #expect(modelSource.contains("notifications_not_authorized"))
         #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
+    }
+
+    @Test func `notification preference lives in privacy and keeps system authority separate`() throws {
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            sectionsSource,
+            from: "@ViewBuilder var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let privacyDestination = try Self.extract(
+            sectionsSource,
+            from: "var privacyDestination: some View",
+            to: "var notificationsDestination: some View")
+
+        #expect(!settingsList.contains("route: .notifications"))
+        #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(sectionsSource.contains("Toggle(\"Notifications\", isOn: self.notificationToggleBinding)"))
+        #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
+        #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
+        #expect(!actionsSource.contains("UIApplication.openSettingsURLString"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {

@@ -5097,6 +5097,31 @@ describe("active-memory plugin", () => {
     expect(prompt).not.toContain("Recent conversation tail:");
   });
 
+  it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const prefix = "a".repeat(479);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: `${prefix}😀tail`,
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const query = lastEmbeddedPrompt().match(/Bounded memory search query:\n([^\n]*)/u)?.[1];
+    expect(query).toBe(prefix);
+  });
+
   it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
     api.pluginConfig = {
       agents: ["main"],

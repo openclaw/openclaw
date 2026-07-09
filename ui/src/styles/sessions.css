@@ -327,7 +327,20 @@
 
 /* --- Table --- */
 .sessions-table {
-  min-width: 860px;
+  min-width: 760px;
+}
+
+.sessions-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .sessions-table tbody tr.session-data-row > td {
@@ -543,20 +556,16 @@
   min-width: 0;
 }
 
+/* Status is a plain dot + label — no pill chrome; the tone carries state. */
 .session-status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   max-width: 116px;
-  box-sizing: border-box;
-  padding: 3px 8px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--bg-hover) 76%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -567,7 +576,7 @@
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.68;
+  opacity: 0.55;
 }
 
 .session-status-badge__label {
@@ -578,8 +587,7 @@
 
 .session-status-badge--live {
   color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 11%, var(--card));
-  border-color: color-mix(in srgb, var(--ok) 36%, var(--border));
+  font-weight: 650;
 }
 
 .session-status-badge--live .session-status-badge__dot {
@@ -590,13 +598,20 @@
 
 .session-status-badge--idle,
 .session-status-badge--done {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+/* A green dot with a neutral label reads "finished cleanly" without shouting. */
+.session-status-badge--done .session-status-badge__dot {
+  background: var(--ok);
 }
 
 .session-status-badge--failed {
   color: var(--danger);
-  background: var(--danger-subtle);
-  border-color: color-mix(in srgb, var(--danger) 26%, var(--border));
+}
+
+.session-status-badge--failed .session-status-badge__dot {
+  opacity: 0.9;
 }
 
 .session-status-badge--muted {
@@ -731,21 +746,6 @@
 }
 
 /* Activity cells */
-.session-runtime-col,
-.session-runtime-cell {
-  width: 130px;
-  max-width: 150px;
-}
-
-.session-runtime-cell .mono {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
 .session-token-cell {
   min-width: 96px;
   font-family: var(--mono);
@@ -801,7 +801,7 @@
 
 /* Actions cell: details disclosure + row tools */
 .session-actions-col {
-  width: 150px;
+  width: 76px;
 }
 
 .session-actions-cell {

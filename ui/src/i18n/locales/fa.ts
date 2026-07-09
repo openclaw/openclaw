@@ -268,6 +268,7 @@ export const fa: TranslationMap = {
     model: "مدل",
     provider: "ارائه‌دهنده",
     runtime: "زمان اجرا",
+    runDuration: "مدت‌زمان اجرا",
     surface: "سطح",
     subject: "موضوع",
     room: "اتاق",

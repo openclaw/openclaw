@@ -265,6 +265,7 @@ export const en: TranslationMap = {
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
+    runDuration: "Run duration",
     surface: "Surface",
     subject: "Subject",
     room: "Room",
