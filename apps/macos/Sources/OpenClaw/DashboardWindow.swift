@@ -36,8 +36,8 @@ struct DashboardWindowAuth: Equatable {
     var password: String?
 
     var hasCredential: Bool {
-        token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
-            password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+            self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 

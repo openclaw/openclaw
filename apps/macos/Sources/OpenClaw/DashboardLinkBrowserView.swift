@@ -13,8 +13,7 @@ final class DashboardLinkBrowserView: NSView {
     private let reloadButton = DashboardLinkBrowserView.makeButton(symbol: "arrow.clockwise", label: "Reload")
     private let externalButton = DashboardLinkBrowserView.makeButton(
         symbol: "arrow.up.right.square",
-        label: "Open in Default Browser"
-    )
+        label: "Open in Default Browser")
     private let closeButton = DashboardLinkBrowserView.makeButton(symbol: "xmark", label: "Close Sidebar")
     private var navigationObservations: [NSKeyValueObservation] = []
     private var representedURL: URL?
@@ -35,14 +34,14 @@ final class DashboardLinkBrowserView: NSView {
         configuration.websiteDataStore = websiteDataStore
         configuration.preferences.isElementFullscreenEnabled = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        self.webView = WKWebView(frame: .zero, configuration: configuration)
         super.init(frame: .zero)
 
-        webView.setValue(true, forKey: "drawsBackground")
-        configureActions()
-        buildView()
-        observeNavigationState()
-        updateChrome()
+        self.webView.setValue(true, forKey: "drawsBackground")
+        self.configureActions()
+        self.buildView()
+        self.observeNavigationState()
+        self.updateChrome()
     }
 
     @available(*, unavailable)
@@ -51,65 +50,65 @@ final class DashboardLinkBrowserView: NSView {
     }
 
     func open(_ url: URL) {
-        navigationWillStart(url)
-        webView.load(URLRequest(url: url))
+        self.navigationWillStart(url)
+        self.webView.load(URLRequest(url: url))
     }
 
     func closeBrowser() {
-        webView.stopLoading()
-        representedURL = nil
-        webView.load(URLRequest(url: URL(string: "about:blank")!))
-        updateChrome()
+        self.webView.stopLoading()
+        self.representedURL = nil
+        self.webView.load(URLRequest(url: URL(string: "about:blank")!))
+        self.updateChrome()
     }
 
     func updateChrome() {
-        let url = representedURL
-        addressLabel.stringValue = url?.host(percentEncoded: false) ?? url?.absoluteString ?? ""
-        addressLabel.toolTip = url?.absoluteString
-        backButton.isEnabled = webView.canGoBack
-        forwardButton.isEnabled = webView.canGoForward
-        reloadButton.isEnabled = url != nil
-        externalButton.isEnabled = url.flatMap(Self.httpURL) != nil
+        let url = self.representedURL
+        self.addressLabel.stringValue = url?.host(percentEncoded: false) ?? url?.absoluteString ?? ""
+        self.addressLabel.toolTip = url?.absoluteString
+        self.backButton.isEnabled = self.webView.canGoBack
+        self.forwardButton.isEnabled = self.webView.canGoForward
+        self.reloadButton.isEnabled = url != nil
+        self.externalButton.isEnabled = url.flatMap(Self.httpURL) != nil
     }
 
     func navigationWillStart(_ url: URL) {
-        representedURL = url
-        updateChrome()
+        self.representedURL = url
+        self.updateChrome()
     }
 
     func navigationDidFinish() {
-        representedURL = webView.url
-        updateChrome()
+        self.representedURL = self.webView.url
+        self.updateChrome()
     }
 
     private func configureActions() {
-        backButton.target = self
-        backButton.action = #selector(goBack)
-        forwardButton.target = self
-        forwardButton.action = #selector(goForward)
-        reloadButton.target = self
-        reloadButton.action = #selector(reload)
-        externalButton.target = self
-        externalButton.action = #selector(openExternal)
-        closeButton.target = self
-        closeButton.action = #selector(close)
+        self.backButton.target = self
+        self.backButton.action = #selector(self.goBack)
+        self.forwardButton.target = self
+        self.forwardButton.action = #selector(self.goForward)
+        self.reloadButton.target = self
+        self.reloadButton.action = #selector(self.reload)
+        self.externalButton.target = self
+        self.externalButton.action = #selector(self.openExternal)
+        self.closeButton.target = self
+        self.closeButton.action = #selector(self.close)
     }
 
     private func observeNavigationState() {
         // WebKit updates these properties after some navigation delegate callbacks.
         // KVO also catches same-document SPA URL changes that skip didFinish.
-        navigationObservations = [
-            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
+        self.navigationObservations = [
+            self.webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     self?.updateChrome()
                 }
             },
-            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
+            self.webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     self?.updateChrome()
                 }
             },
-            webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+            self.webView.observe(\.url, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     self?.navigationDidFinish()
                 }
@@ -137,8 +136,8 @@ final class DashboardLinkBrowserView: NSView {
         controls.alignment = .centerY
         controls.distribution = .fill
         controls.spacing = 4
-        controls.setCustomSpacing(10, after: reloadButton)
-        controls.setCustomSpacing(10, after: addressLabel)
+        controls.setCustomSpacing(10, after: self.reloadButton)
+        controls.setCustomSpacing(10, after: self.addressLabel)
         controls.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(controls)
 
@@ -147,8 +146,8 @@ final class DashboardLinkBrowserView: NSView {
         separator.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(separator)
 
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(webView)
+        self.webView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(self.webView)
 
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -166,10 +165,10 @@ final class DashboardLinkBrowserView: NSView {
             separator.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
 
-            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            webView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            self.webView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            self.webView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            self.webView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            self.webView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -196,35 +195,35 @@ final class DashboardLinkBrowserView: NSView {
     }
 
     @objc private func goBack() {
-        webView.goBack()
+        self.webView.goBack()
     }
 
     @objc private func goForward() {
-        webView.goForward()
+        self.webView.goForward()
     }
 
     @objc private func reload() {
-        webView.reload()
+        self.webView.reload()
     }
 
     @objc private func openExternal() {
         guard let url = representedURL.flatMap(Self.httpURL) else { return }
-        onOpenExternal?(url)
+        self.onOpenExternal?(url)
     }
 
     @objc private func close() {
-        onClose?()
+        self.onClose?()
     }
 }
 
 #if DEBUG
-    extension DashboardLinkBrowserView {
-        var _testRepresentedURL: URL? {
-            representedURL
-        }
-
-        var _testNavigationObservationCount: Int {
-            navigationObservations.count
-        }
+extension DashboardLinkBrowserView {
+    var _testRepresentedURL: URL? {
+        self.representedURL
     }
+
+    var _testNavigationObservationCount: Int {
+        self.navigationObservations.count
+    }
+}
 #endif

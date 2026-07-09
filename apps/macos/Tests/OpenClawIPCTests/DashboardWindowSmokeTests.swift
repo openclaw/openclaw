@@ -63,6 +63,24 @@ struct DashboardWindowSmokeTests {
             "url": "https://docs.openclaw.ai/",
             "target": "external",
         ]) == nil)
+        #expect(try DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": "mailto:hello@example.com",
+            "target": "external",
+        ]) == DashboardLinkRequest(
+            url: #require(URL(string: "mailto:hello@example.com")),
+            target: .external
+        ))
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": "mailto:hello@example.com",
+            "target": "inline",
+        ]) == nil)
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": "https:hostless",
+            "target": "external",
+        ]) == nil)
     }
 
     @Test func `dashboard trusts only its main control path for link messages`() throws {
