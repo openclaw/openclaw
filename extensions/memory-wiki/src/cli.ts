@@ -526,7 +526,7 @@ export async function runWikiDoctor(params: {
   return report;
 }
 
-export async function runWikiInit(params: {
+async function runWikiInit(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -540,7 +540,7 @@ export async function runWikiInit(params: {
   });
 }
 
-export async function runWikiCompile(params: {
+async function runWikiCompile(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -557,7 +557,7 @@ export async function runWikiCompile(params: {
   });
 }
 
-export async function runWikiLint(params: {
+async function runWikiLint(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -574,7 +574,7 @@ export async function runWikiLint(params: {
   });
 }
 
-export async function runWikiIngest(params: {
+async function runWikiIngest(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
@@ -613,7 +613,7 @@ export async function runWikiOkfImport(params: {
   });
 }
 
-export async function runWikiSearch(params: {
+async function runWikiSearch(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   query: string;
@@ -651,7 +651,7 @@ export async function runWikiSearch(params: {
   return results;
 }
 
-export async function runWikiGet(params: {
+async function runWikiGet(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   lookup: string;
@@ -679,7 +679,7 @@ export async function runWikiGet(params: {
   return result;
 }
 
-export async function runWikiApplySynthesis(params: {
+async function runWikiApplySynthesis(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   title: string;
@@ -720,7 +720,7 @@ export async function runWikiApplySynthesis(params: {
   return result;
 }
 
-export async function runWikiApplyMetadata(params: {
+async function runWikiApplyMetadata(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   lookup: string;
@@ -785,7 +785,7 @@ export async function runWikiBridgeImport(params: {
   });
 }
 
-export async function runWikiUnsafeLocalImport(params: {
+async function runWikiUnsafeLocalImport(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   json?: boolean;
@@ -804,7 +804,7 @@ export async function runWikiUnsafeLocalImport(params: {
   });
 }
 
-export async function runWikiObsidianStatus(params: {
+async function runWikiObsidianStatus(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -820,7 +820,7 @@ export async function runWikiObsidianStatus(params: {
   });
 }
 
-export async function runWikiObsidianSearch(params: {
+async function runWikiObsidianSearch(params: {
   config: ResolvedMemoryWikiConfig;
   query: string;
   json?: boolean;
@@ -834,7 +834,7 @@ export async function runWikiObsidianSearch(params: {
   });
 }
 
-export async function runWikiObsidianOpenCli(params: {
+async function runWikiObsidianOpenCli(params: {
   config: ResolvedMemoryWikiConfig;
   vaultPath: string;
   json?: boolean;
@@ -848,7 +848,7 @@ export async function runWikiObsidianOpenCli(params: {
   });
 }
 
-export async function runWikiObsidianCommandCli(params: {
+async function runWikiObsidianCommandCli(params: {
   config: ResolvedMemoryWikiConfig;
   id: string;
   json?: boolean;
@@ -862,7 +862,7 @@ export async function runWikiObsidianCommandCli(params: {
   });
 }
 
-export async function runWikiObsidianDailyCli(params: {
+async function runWikiObsidianDailyCli(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;

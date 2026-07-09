@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { renderProviderQuotaPill } from "../../components/provider-quota-pill.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   getContextNoticeViewModel,
@@ -53,6 +54,109 @@ function getButton(container: Element, selector: string): HTMLButtonElement {
 describe("chat run controls", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
+  });
+
+  it("uses the primary action for voice when empty, send when composed, and stop while recording", () => {
+    const container = document.createElement("div");
+    const onToggleVoice = vi.fn();
+    const emptyProps = {
+      ...createProps({ showSecondary: false }),
+      onToggleVoice,
+    } as ChatRunControlsProps & {
+      onToggleVoice: () => void;
+    };
+
+    render(renderChatRunControls(emptyProps), container);
+
+    const voiceButton = getButton(container, 'button[aria-label="Start voice input"]');
+    expect(
+      container.querySelector(`button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).toBeNull();
+    voiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        draft: "Send this",
+      }),
+      container,
+    );
+    expect(getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`)).toBe(
+      container.querySelector(".chat-send-btn"),
+    );
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        voiceActive: true,
+      } as ChatRunControlsProps & {
+        onToggleVoice: () => void;
+        voiceActive: boolean;
+      }),
+      container,
+    );
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.querySelector(".agent-chat__voice-activity")).not.toBeNull();
+    stopVoiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps attachment-only messages on the send action", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatRunControls({
+        ...createProps({ showSecondary: false }),
+        hasAttachments: true,
+        onToggleVoice: () => undefined,
+      } as ChatRunControlsProps & {
+        hasAttachments: boolean;
+        onToggleVoice: () => void;
+      }),
+      container,
+    );
+
+    expect(
+      getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
+  it("keeps voice and generation stop actions available when both are active", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    const onToggleVoice = vi.fn();
+    render(
+      renderChatRunControls(
+        createProps({
+          canAbort: true,
+          onAbort,
+          onToggleVoice,
+          voiceActive: true,
+        }),
+      ),
+      container,
+    );
+
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    const stopGenerationButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
+
+    // Redesign guard: the two controls must stay visually distinct — a live
+    // waveform pill for voice and a single danger stop square for the run.
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(false);
+    expect(stopGenerationButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+
+    stopVoiceButton.click();
+    stopGenerationButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+    expect(onAbort).toHaveBeenCalledTimes(1);
   });
 
   it("switches between idle and abort actions", () => {
@@ -331,6 +435,75 @@ describe("context notice", () => {
     resetContextNoticeThemeCacheForTest();
   });
 
+  it("treats unavailable provider usage as absent content", () => {
+    expect(renderProviderQuotaPill({ modelAuthStatusResult: null })).toBe(nothing);
+
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerQuota: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".context-usage")).toBeNull();
+
+    const session: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    };
+    render(
+      renderContextNotice(session, 200_000, {
+        providerQuota: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+    expect(container.querySelector(".context-usage")).not.toBeNull();
+    expect(container.querySelector(".context-usage__quota")).toBeNull();
+  });
+
+  it("keeps provider usage available before context token metrics arrive", () => {
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerQuota: {
+          basePath: "/rosita",
+          modelAuthStatusResult: {
+            ts: Date.now(),
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
+                usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+              },
+            ],
+          },
+        },
+      }),
+      container,
+    );
+
+    const context = container.querySelector<HTMLElement>(".context-ring");
+    expect(context).toBeInstanceOf(HTMLElement);
+    expect(context?.getAttribute("aria-label")).toBe("Usage Remaining");
+    expect(context?.querySelector(".context-ring__detail")).toBeNull();
+    expect(container.querySelector(".context-usage__bar")).toBeNull();
+    expect(container.querySelector(".context-usage__stats")).toBeNull();
+    const quota = container.querySelector<HTMLAnchorElement>(
+      ".context-usage__popover [data-chat-provider-usage='true']",
+    );
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
+    expect(quota?.getAttribute("href")).toBe("/rosita/usage");
+
+    render(renderContextNotice(undefined, 200_000), container);
+    expect(container.querySelector(".context-usage")).toBeNull();
+  });
+
   it("renders persistent fresh context usage and keeps high-usage warning behavior", () => {
     const container = document.createElement("div");
     vi.spyOn(window, "getComputedStyle").mockReturnValue({
@@ -346,7 +519,20 @@ describe("context notice", () => {
       inputTokens: 757_300,
       totalTokens: 46_000,
       contextTokens: 200_000,
+      estimatedCostUsd: 0.007725,
+      model: "gpt-5.5",
+      modelProvider: "openai",
     };
+    const providerCostMessages = [
+      { role: "assistant", cost: { input: 99, output: 99 } },
+      { role: "user", content: "Current turn" },
+      {
+        role: "assistant",
+        model: "openrouter/auto",
+        responseModel: "gpt-5.5",
+        cost: { input: 0.001225, output: 0.006, cacheRead: 0.0005, cacheWrite: 0 },
+      },
+    ];
     const lowUsage = getContextNoticeViewModel(lowUsageSession, 200_000);
     if (!lowUsage) {
       throw new Error("expected low usage context notice");
@@ -355,13 +541,18 @@ describe("context notice", () => {
     expect(lowUsage.detail).toBe("46k / 200k");
     expect(lowUsage.input).toBe(757_300);
     expect(lowUsage.output).toBeNull();
+    expect(lowUsage.cost).toBe(0.007725);
     expect(lowUsage.warning).toBe(false);
     expect(lowUsage.compactRecommended).toBe(false);
-    render(renderContextNotice(lowUsageSession, 200_000), container);
+    render(
+      renderContextNotice(lowUsageSession, 200_000, { messages: providerCostMessages }),
+      container,
+    );
     const lowNotice = container.querySelector<HTMLElement>(".context-ring");
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
     expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
+    expect(lowNotice!.querySelector(".context-ring__detail")).toBeNull();
     expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k of 200k (23%)");
     expect(lowNotice!.tagName.toLowerCase()).toBe("summary");
     const usageDetails = container.querySelector<HTMLDetailsElement>(".context-usage details");
@@ -370,7 +561,20 @@ describe("context notice", () => {
     expect(usageDetails?.open).toBe(true);
     expect(
       container.querySelector(".context-usage__popover")?.textContent?.replace(/\s+/gu, " ").trim(),
-    ).toBe("Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output —");
+    ).toBe(
+      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider: openai Model: gpt-5.5",
+    );
+    expect(
+      container.querySelectorAll(".context-usage__stats:not(.context-usage__stats--cost) > div"),
+    ).toHaveLength(3);
+    expect(container.querySelectorAll(".context-usage__stats--cost > div")).toHaveLength(4);
+    render(
+      renderContextNotice(lowUsageSession, 200_000, {
+        messages: [...providerCostMessages, { role: "user", content: "Steer before response" }],
+      }),
+      container,
+    );
+    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     const lowFill = lowNotice!.querySelector(".context-ring__fill");
     expect(lowFill?.tagName.toLowerCase()).toBe("circle");
     // 23% of the 40.84 circumference stays hidden via dashoffset.
@@ -378,6 +582,8 @@ describe("context notice", () => {
       40.84 * 0.77,
       1,
     );
+    render(renderContextNotice({ ...lowUsageSession, estimatedCostUsd: 0 }, 200_000), container);
+    expect(container.querySelector(".context-usage__stats")?.textContent).toContain("$0.00");
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -398,6 +604,7 @@ describe("context notice", () => {
     const usage = container.querySelector<HTMLElement>(".context-usage");
     expect(usage!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
     expect(usage!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
+    expect(container.querySelectorAll(".context-usage__stats > div")).toHaveLength(2);
 
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);
@@ -418,19 +625,29 @@ describe("context notice", () => {
         200_000,
       ),
     ).toBeNull();
-    expect(
-      getContextNoticeViewModel(
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: null,
-          totalTokens: 190_000,
-          totalTokensFresh: false,
-          contextTokens: 200_000,
-        },
-        200_000,
-      ),
-    ).toBeNull();
+    const staleSession: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 190_000,
+      totalTokensFresh: false,
+      contextTokens: 200_000,
+    };
+    expect(getContextNoticeViewModel(staleSession, 200_000)).toMatchObject({
+      pct: 95,
+      detail: "~190k / 200k",
+      approximate: true,
+      warning: false,
+      compactRecommended: false,
+    });
+    render(renderContextNotice(staleSession, 200_000, { onCompact }), container);
+    const staleNotice = container.querySelector<HTMLElement>(".context-ring");
+    expect(staleNotice?.textContent?.trim()).toBe("~95%");
+    expect(staleNotice?.classList.contains("context-ring--warning")).toBe(false);
+    expect(staleNotice?.getAttribute("aria-label")).toBe(
+      "Session context usage: ~190k of 200k (~95%)",
+    );
+    expect(container.querySelector(".context-ring__action")).toBeNull();
   });
 });
 

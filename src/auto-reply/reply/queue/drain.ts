@@ -145,6 +145,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     run.queuedLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
+    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",
@@ -160,6 +161,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
+    execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,
@@ -466,10 +468,14 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
     return undefined;
   }
   const resumableText = renderField("resumableText");
+  const injectedGoalContexts = [
+    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
+  ];
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
     promptJoiner: "\n\n",
+    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
 }
 

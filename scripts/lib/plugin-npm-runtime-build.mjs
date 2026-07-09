@@ -22,7 +22,7 @@ function readJsonFile(filePath) {
 }
 
 /** Return whether a plugin package publishes through an artifact release workflow. */
-export function isPublishablePluginPackage(packageJson) {
+function isPublishablePluginPackage(packageJson) {
   return (
     packageJson.openclaw?.release?.publishToNpm === true ||
     packageJson.openclaw?.release?.publishToClawHub === true
@@ -121,7 +121,7 @@ export function listPluginNpmRuntimeBuildOutputs(plan) {
 }
 
 /** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
-export function resolvePluginNpmRuntimePackageFiles(plan) {
+function resolvePluginNpmRuntimePackageFiles(plan) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
       ? plan.packageJson.files.filter((entry) => typeof entry === "string")
@@ -167,7 +167,7 @@ function resolveOpenClawPeerRange(packageJson, rootPackageJson) {
 }
 
 /** Resolve package peer dependency metadata for the OpenClaw plugin API. */
-export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
+function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
   const openclawPeerRange = resolveOpenClawPeerRange(plan.packageJson, plan.rootPackageJson);
   if (!openclawPeerRange) {
     throw new Error(

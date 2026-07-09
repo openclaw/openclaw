@@ -19,6 +19,7 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -809,4 +810,20 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   const { runEmbeddedAgent } = await import("./run.js");
   return { runEmbeddedAgent };
+}
+
+/** Move one-time runner compilation out of individual behavior timings. */
+export async function warmRunOverflowCompactionHarness(
+  runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent,
+  params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
+): Promise<void> {
+  resetRunOverflowCompactionHarnessMocks();
+  mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "warmup" }]);
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["warmup"] }));
+  await runEmbeddedAgent({
+    ...overflowBaseRunParams,
+    ...params,
+    runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
+  });
 }

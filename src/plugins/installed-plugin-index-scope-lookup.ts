@@ -19,6 +19,7 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "musicGenerationProviders",
   "webFetchProviders",
   "webSearchProviders",
+  "usageProviders",
 ] as const;
 
 type OwnerMap = ReadonlyMap<string, readonly string[]>;

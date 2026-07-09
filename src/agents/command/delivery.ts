@@ -9,7 +9,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
-import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import {
+  sendDurableMessageBatch,
+  serializeDurableMessagePayloadOutcomes,
+  type SerializedDurableMessagePayloadOutcome,
+} from "../../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -65,24 +69,6 @@ function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   };
 }
 
-/** Per-payload durable delivery status. */
-type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
-
-/** Delivery outcome for one normalized outbound payload. */
-type AgentCommandDeliveryPayloadOutcome = {
-  index: number;
-  status: AgentCommandDeliveryPayloadStatus;
-  reason?: string;
-  resultCount?: number;
-  sentBeforeError?: boolean;
-  stage?: string;
-  error?: string;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-};
-
 /** Aggregate delivery status for an agent command result. */
 type AgentCommandDeliveryStatus = {
   requested: true;
@@ -96,7 +82,7 @@ type AgentCommandDeliveryStatus = {
   reason?: string;
   resultCount?: number;
   sentBeforeError?: true;
-  payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
+  payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
 };
 
 /** Agent command result after payload normalization and optional delivery. */
@@ -239,40 +225,10 @@ function buildDeliveryResult(params: {
   };
 }
 
-function serializeDeliveryPayloadOutcomes(
-  outcomes: DurableSendResult["payloadOutcomes"],
-): AgentCommandDeliveryPayloadOutcome[] | undefined {
-  if (!outcomes || outcomes.length === 0) {
-    return undefined;
-  }
-  return outcomes.map((outcome) => {
-    if (outcome.status === "sent") {
-      return {
-        index: outcome.index,
-        status: "sent",
-        resultCount: outcome.results.length,
-      };
-    }
-    if (outcome.status === "suppressed") {
-      return {
-        index: outcome.index,
-        status: "suppressed",
-        reason: outcome.reason,
-        ...(outcome.hookEffect ? { hookEffect: outcome.hookEffect } : {}),
-      };
-    }
-    return {
-      index: outcome.index,
-      status: "failed",
-      error: formatErrorMessage(outcome.error),
-      sentBeforeError: outcome.sentBeforeError,
-      stage: outcome.stage,
-    };
-  });
-}
-
 function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDeliveryStatus {
-  const payloadOutcomes = serializeDeliveryPayloadOutcomes(send.payloadOutcomes);
+  const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
+    includeHookEffect: true,
+  });
   switch (send.status) {
     case "sent":
       return {

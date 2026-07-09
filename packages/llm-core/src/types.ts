@@ -185,7 +185,7 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
@@ -274,6 +274,8 @@ export interface Usage {
     cacheRead: number;
     cacheWrite: number;
     total: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: "provider-billed";
   };
 }
 
@@ -285,6 +287,15 @@ export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /**
+   * Marks a user message that carries transient current-turn runtime context
+   * (e.g. an OpenClaw runtime-context carrier appended after the active user
+   * turn). Such messages are volatile — present only on the turn they belong to
+   * and stripped on replay — so providers must NOT anchor a prompt-cache
+   * breakpoint on them, or the breakpoint would land on bytes that change every
+   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   */
+  runtimeContextCarrier?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */

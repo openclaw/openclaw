@@ -1,4 +1,8 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+} from "../../../../src/chat/tool-content.js";
 import type {
   ChatItem,
   MessageGroup,
@@ -22,7 +26,7 @@ import {
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
-  isToolResultMessage,
+  isStandaloneToolMessageForDisplay,
   normalizeMessage,
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
@@ -51,8 +55,8 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
 };
 
-export type RenderChatItem = ReturnType<typeof buildChatItems>[number];
-export type StreamRunRenderItem = {
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
   parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
@@ -283,8 +287,106 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
+  if (callItem.kind !== "message" || resultItem.kind !== "message") {
+    return null;
+  }
+  const callMessage = asRecord(callItem.message);
+  const resultMessage = asRecord(resultItem.message);
+  if (!callMessage || !resultMessage) {
+    return null;
+  }
+  const callRole = typeof callMessage.role === "string" ? callMessage.role.toLowerCase() : "";
+  const normalizedResult = safeNormalizeMessage(resultItem.message);
+  const resultRole = normalizedResult ? normalizeRoleForGrouping(normalizedResult.role) : "unknown";
+  if (callRole !== "assistant" || resultRole !== "tool" || !Array.isArray(callMessage.content)) {
+    return null;
+  }
+  const hasToolCallBlock = callMessage.content.some((block) =>
+    isToolCallContentType(asRecord(block)?.type),
+  );
+  if (!hasToolCallBlock) {
+    return null;
+  }
+
+  const callCards = extractToolCardsCached(callItem.message, `${callItem.key}:activity-call`);
+  const resultCards = extractToolCardsCached(
+    resultItem.message,
+    `${resultItem.key}:activity-result`,
+  );
+  if (callCards.length !== 1 || resultCards.length !== 1) {
+    return null;
+  }
+  const [callCard] = callCards;
+  const [resultCard] = resultCards;
+  const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
+  const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
+  const resultOnlyContent = rawResultContent.filter(
+    (block) => !isToolCallContentType(asRecord(block)?.type),
+  );
+  const hasToolResultBlock = resultOnlyContent.some((block) =>
+    isToolResultContentType(asRecord(block)?.type),
+  );
+  const hasToolResult =
+    hasToolResultBlock || resultCard.outputText !== undefined || resultCard.isError !== undefined;
+  if (
+    !callCard.callId ||
+    callCard.callId !== resultCard.callId ||
+    !hasToolResult ||
+    normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
+  ) {
+    return null;
+  }
+
+  const preservedResultContent = resultOnlyContent.filter(
+    (block) => asRecord(block)?.type !== "text",
+  );
+  const resultContent = hasToolResultBlock
+    ? resultOnlyContent
+    : [
+        {
+          type: "tool_result",
+          id: resultCard.callId,
+          name: resultName,
+          text: resultCard.outputText ?? "",
+          ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
+        },
+        ...preservedResultContent,
+      ];
+  const resultError = resultMessage.isError ?? resultMessage.is_error;
+  return {
+    ...callItem,
+    message: {
+      ...callMessage,
+      content: [...callMessage.content, ...resultContent],
+      ...(typeof resultError === "boolean" ? { isError: resultError } : {}),
+    },
+  };
+}
+
+function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
+  const coalesced: ChatItem[] = [];
+  for (const item of items) {
+    const previous = coalesced[coalesced.length - 1];
+    const merged = previous ? mergeToolCallResultPair(previous, item) : null;
+    if (merged) {
+      coalesced[coalesced.length - 1] = merged;
+    } else {
+      coalesced.push(item);
+    }
+  }
+  return coalesced;
+}
+
 function assistantGroupHasReplyText(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+}
+
+function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    const provenance = asRecord(asRecord(message)?.provenance);
+    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  });
 }
 
 function annotateToolTurnOutcome(
@@ -300,7 +402,11 @@ function annotateToolTurnOutcome(
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (assistantGroupHasReplyText(item)) {
+      if (assistantGroupIsForwardedBoundary(item)) {
+        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
+        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
+        sawAssistantReply = false;
+      } else if (assistantGroupHasReplyText(item)) {
         sawAssistantReply = true;
       }
     } else if (role === "tool") {
@@ -568,9 +674,32 @@ function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number)
     : desiredTimestamp;
 }
 
-function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
+function sortChatItemsByVisibleTime(
+  items: ChatItem[],
+  toolStreamPredecessors: ReadonlyMap<string, string>,
+): ChatItem[] {
+  const timestampsByKey = new Map<string, number>();
+  for (const item of items) {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp != null) {
+      timestampsByKey.set(item.key, timestamp);
+    }
+  }
   return items
-    .map((item, index) => ({ item, index, timestamp: chatItemTimestamp(item) }))
+    .map((item, index) => {
+      const timestamp = chatItemTimestamp(item);
+      const predecessorKey = toolStreamPredecessors.get(item.key);
+      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+      return {
+        item,
+        index,
+        predecessorKey,
+        timestamp:
+          timestamp != null && predecessorTimestamp != null
+            ? Math.max(timestamp, predecessorTimestamp)
+            : timestamp,
+      };
+    })
     .toSorted((a, b) => {
       if (a.timestamp == null && b.timestamp == null) {
         return a.index - b.index;
@@ -583,6 +712,12 @@ function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
       }
       if (a.timestamp !== b.timestamp) {
         return a.timestamp - b.timestamp;
+      }
+      if (a.predecessorKey === b.item.key) {
+        return 1;
+      }
+      if (b.predecessorKey === a.item.key) {
+        return -1;
       }
       return a.index - b.index;
     })
@@ -849,8 +984,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const segments = props.streamSegments ?? [];
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
+  const toolItems = tools.map((message, index) => ({
+    key: messageKey(message, index + history.length),
+    message,
+  }));
+  const toolKeysByCallId = new Map<string, string>();
+  for (const tool of toolItems) {
+    const toolCallId = asRecord(tool.message)?.toolCallId;
+    if (typeof toolCallId === "string" && toolCallId.trim()) {
+      toolKeysByCallId.set(toolCallId.trim(), tool.key);
+    }
+  }
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
+  const toolStreamPredecessors = new Map<string, string>();
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
@@ -863,20 +1010,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         previousAccumulatedStreamText = text;
       }
       if (visibleText.length > 0) {
+        const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         items.push({
           kind: "stream",
-          key: `stream-seg:${props.sessionKey}:${i}`,
+          key: streamKey,
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
         });
+        const toolCallId = segment.toolCallId?.trim();
+        const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
+        if (toolKey) {
+          // Gateway and browser clocks can disagree. Keep the assistant text that
+          // introduced a tool causally before its card even when timestamps do not.
+          toolStreamPredecessors.set(toolKey, streamKey);
+        }
       }
     }
-    if (i < tools.length && props.showToolCalls) {
+    const tool = toolItems[i];
+    if (tool && props.showToolCalls) {
       items.push({
         kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
+        key: tool.key,
+        message: tool.message,
       });
     }
   }
@@ -940,7 +1096,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
 
   return annotateToolTurnOutcome(
-    groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items))),
+    groupMessages(
+      collapseSequentialDuplicateMessages(
+        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items, toolStreamPredecessors)),
+      ),
+    ),
   );
 }
 
@@ -1055,17 +1215,7 @@ export function syncToolCardExpansionState(
         expanded.set(disclosureId, autoExpandToolCalls);
         initialized.add(disclosureId);
       }
-      const messageRecord = entry.message as Record<string, unknown>;
-      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
-      const normalizedRole = normalizeRoleForGrouping(role);
-      const isToolMessage =
-        isToolResultMessage(entry.message) ||
-        normalizedRole === "tool" ||
-        role.toLowerCase() === "toolresult" ||
-        role.toLowerCase() === "tool_result" ||
-        typeof messageRecord.toolCallId === "string" ||
-        typeof messageRecord.tool_call_id === "string";
-      if (!isToolMessage) {
+      if (!isStandaloneToolMessageForDisplay(entry.message)) {
         continue;
       }
       const disclosureId = `toolmsg:${entry.key}`;

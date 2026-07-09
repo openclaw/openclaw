@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayChatClient } from "./gateway-chat.js";
@@ -22,11 +22,17 @@ type MockModelRequest = {
   body: Record<string, unknown>;
 };
 
-const activeRuns: PtyRun[] = [];
 const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;
+
+function createIdempotentCleanup(cleanup: () => Promise<void>) {
+  let cleanupPromise: Promise<void> | undefined;
+  return () => (cleanupPromise ??= cleanup());
+}
+
+type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
 
 async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
   await waitFor({
@@ -125,6 +131,42 @@ async function writeResponsesSse(res: ServerResponse, text: string, completionDe
   res.end(completionBody);
 }
 
+function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
+  const item = {
+    type: "function_call",
+    id: `fc_tui_validation_${requestIndex}`,
+    call_id: `call_tui_validation_${requestIndex}`,
+    name: "edit",
+    arguments: "{}",
+    status: "completed",
+  };
+  const events = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, status: "in_progress" },
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: `resp_tui_validation_${requestIndex}`,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    },
+  ];
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  res.end(
+    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+  );
+}
+
 async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readRequestBody(req);
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -132,7 +174,11 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
 
 async function startMockModelServer(
   replyText: string,
-  opts: { firstResponseDelayMs?: number; followupReplyText?: string } = {},
+  opts: {
+    firstResponseDelayMs?: number;
+    followupReplyText?: string;
+    invalidEditLoop?: boolean;
+  } = {},
 ): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
   const server = createServer((req, res) => {
@@ -151,6 +197,10 @@ async function startMockModelServer(
         const requestIndex = requests.length;
         requests.push({ method: req.method, path: url.pathname, body });
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
+          if (opts.invalidEditLoop) {
+            writeInvalidEditCallSse(res, requestIndex);
+            return;
+          }
           await writeResponsesSse(
             res,
             requestIndex === 0 ? replyText : (opts.followupReplyText ?? replyText),
@@ -179,6 +229,9 @@ async function startMockModelServer(
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        // Aborted local runs can leave a provider keep-alive open. Force-close
+        // test-owned connections so cleanup does not wait for idle expiry.
+        server.closeAllConnections();
       });
     },
   };
@@ -199,7 +252,11 @@ function buildTuiCliScript(args: string[]) {
   ].join("\n");
 }
 
-function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: string }) {
+function buildLocalModeConfig(params: {
+  workspaceDir: string;
+  providerBaseUrl: string;
+  toolsProfile?: "minimal" | "coding";
+}) {
   return {
     plugins: {
       enabled: false,
@@ -227,7 +284,7 @@ function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: s
       ],
     },
     tools: {
-      profile: "minimal",
+      profile: params.toolsProfile ?? "minimal",
     },
     models: {
       mode: "replace",
@@ -260,7 +317,10 @@ function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: s
   } satisfies OpenClawConfig;
 }
 
-async function startLocalModeTui() {
+async function startLocalModeTui(
+  registerCleanup: CleanupRegistrar,
+  opts: { invalidEditLoop?: boolean } = {},
+) {
   const replyText = "LOCAL_PTY_RESPONSE";
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
   const workspaceDir = path.join(tempDir, "workspace");
@@ -270,8 +330,14 @@ async function startLocalModeTui() {
   const xdgDataHome = path.join(tempDir, "xdg-data");
   const xdgCacheHome = path.join(tempDir, "xdg-cache");
   const configPath = path.join(tempDir, "openclaw.json");
-  const mockModel = await startMockModelServer(replyText);
-  const config = buildLocalModeConfig({ workspaceDir, providerBaseUrl: mockModel.baseUrl });
+  const mockModel = await startMockModelServer(replyText, {
+    invalidEditLoop: opts.invalidEditLoop,
+  });
+  const config = buildLocalModeConfig({
+    workspaceDir,
+    providerBaseUrl: mockModel.baseUrl,
+    toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
+  });
   const script = buildTuiCliScript(["tui", "--local"]);
   await Promise.all([
     mkdir(workspaceDir, { recursive: true }),
@@ -284,7 +350,6 @@ async function startLocalModeTui() {
   ]);
 
   const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-    activeRuns,
     cwd: process.cwd(),
     env: {
       HOME: homeDir,
@@ -302,30 +367,43 @@ async function startLocalModeTui() {
     outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
   });
 
+  const cleanup = createIdempotentCleanup(async () => {
+    run.dispose();
+    await mockModel.stop();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+  registerCleanup(cleanup);
   return {
+    kind: "local" as const,
     run,
     mockModel,
-    cleanup: async () => {
-      run.dispose();
-      await mockModel.stop();
-      await rm(tempDir, { recursive: true, force: true });
-    },
+    cleanup,
   };
 }
 
-async function startGatewayModeTui(params: {
-  queueMode: "followup" | "collect";
-  firstResponseDelayMs?: number;
-  queueDebounceMs?: number;
-}) {
+async function startGatewayModeTui(
+  params: {
+    queueMode: "followup" | "collect";
+    firstReplyText?: string;
+    firstResponseDelayMs?: number;
+    queueDebounceMs?: number;
+    invalidEditLoop?: boolean;
+  },
+  registerCleanup: CleanupRegistrar,
+) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-"));
   const workspaceDir = path.join(tempDir, "workspace");
-  const mockModel = await startMockModelServer("FIRST_RUN_ACTIVE", {
-    firstResponseDelayMs: params.firstResponseDelayMs ?? 2_500,
+  const mockModel = await startMockModelServer(params.firstReplyText ?? "FIRST_RUN_ACTIVE", {
+    firstResponseDelayMs: params.firstResponseDelayMs ?? 1_500,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+    invalidEditLoop: params.invalidEditLoop,
   });
   const config = {
-    ...buildLocalModeConfig({ workspaceDir, providerBaseUrl: mockModel.baseUrl }),
+    ...buildLocalModeConfig({
+      workspaceDir,
+      providerBaseUrl: mockModel.baseUrl,
+      toolsProfile: params.invalidEditLoop ? "coding" : "minimal",
+    }),
     messages: {
       queue: {
         mode: params.queueMode,
@@ -355,7 +433,6 @@ async function startGatewayModeTui(params: {
       "agent:main:main",
     ]);
     const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-      activeRuns,
       cwd: process.cwd(),
       env: {
         ...gateway.env,
@@ -365,16 +442,19 @@ async function startGatewayModeTui(params: {
       exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
       outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     });
+    const cleanup = createIdempotentCleanup(async () => {
+      run.dispose();
+      await gateway.cleanup();
+      await mockModel.stop();
+      await rm(tempDir, { recursive: true, force: true });
+    });
+    registerCleanup(cleanup);
     return {
+      kind: "gateway" as const,
       run,
       gateway,
       mockModel,
-      cleanup: async () => {
-        run.dispose();
-        await gateway.cleanup();
-        await mockModel.stop();
-        await rm(tempDir, { recursive: true, force: true });
-      },
+      cleanup,
     };
   } catch (error) {
     await gateway.cleanup();
@@ -384,17 +464,11 @@ async function startGatewayModeTui(params: {
   }
 }
 
-describe("TUI PTY real backends", () => {
-  afterEach(async () => {
-    for (const run of activeRuns.splice(0)) {
-      run.dispose();
-    }
-  });
-
+describe.concurrent("TUI PTY real backends", () => {
   it(
     "drives the real local backend with a mocked model endpoint",
-    async () => {
-      const fixture = await startLocalModeTui();
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished);
       try {
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
         for (const command of ["/status", "/compact", "/commands", "/context"]) {
@@ -453,13 +527,104 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
+  for (const mode of ["gateway", "local"] as const) {
+    it(
+      `renders safe validation-loop abort diagnostics through the real ${mode} backend`,
+      async ({ onTestFinished }) => {
+        const fixture =
+          mode === "gateway"
+            ? await startGatewayModeTui(
+                {
+                  queueMode: "followup",
+                  invalidEditLoop: true,
+                },
+                onTestFinished,
+              )
+            : await startLocalModeTui(onTestFinished, { invalidEditLoop: true });
+        let eventProbe: GatewayChatClient | undefined;
+        const probedEvents: Array<{ event: string; payload: unknown }> = [];
+        try {
+          if (fixture.kind === "gateway") {
+            let probeConnected = false;
+            eventProbe = new GatewayChatClient({
+              url: fixture.gateway.url,
+              token: fixture.gateway.gatewayToken,
+              allowInsecureLocalOperatorUi: false,
+            });
+            eventProbe.onConnected = () => {
+              probeConnected = true;
+            };
+            eventProbe.onEvent = ({ event, payload }) => {
+              probedEvents.push({ event, payload });
+            };
+            eventProbe.start();
+            await waitFor({
+              timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+              read: () => (probeConnected ? true : null),
+              onTimeout: () => new Error("Gateway event probe did not connect"),
+            });
+            await eventProbe.subscribeSessionEvents();
+          }
+          await fixture.run.waitForOutput(
+            mode === "gateway" ? "gateway connected" : "local ready",
+            LOCAL_STARTUP_TIMEOUT_MS,
+          );
+          await fixture.run.write("trigger malformed edit calls\r");
+          await waitFor({
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
+            onTimeout: () =>
+              new Error(`model did not repeat the malformed edit call\n${fixture.run.output()}`),
+          });
+          if (eventProbe) {
+            await waitFor({
+              timeoutMs: 30_000,
+              read: () => {
+                const observed = probedEvents.some((event) => {
+                  if (event.event !== "session.tool" || !event.payload) {
+                    return false;
+                  }
+                  const data = (event.payload as { data?: Record<string, unknown> }).data;
+                  return typeof data?.toolErrorSummary === "string";
+                });
+                return observed ? true : null;
+              },
+              onTimeout: () =>
+                new Error(
+                  `Gateway did not project a safe tool diagnostic (${probedEvents.length})`,
+                ),
+            });
+          }
+          await fixture.run.write("\u001b", { delay: false });
+          await fixture.run.waitForOutput(
+            "run aborted: edit tool validation failed:",
+            LOCAL_OUTPUT_TIMEOUT_MS,
+          );
+
+          expect(fixture.mockModel.requests().length).toBeGreaterThan(0);
+          expect(fixture.run.output()).not.toContain("Received arguments");
+
+          await fixture.run.write("/exit\r", { delay: false });
+          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        } finally {
+          eventProbe?.stop();
+          await fixture.cleanup();
+        }
+      },
+      LOCAL_TEST_TIMEOUT_MS,
+    );
+  }
+
   it(
     "creates and adopts a fresh session through the real Gateway backend",
-    async () => {
-      const fixture = await startGatewayModeTui({
-        queueMode: "followup",
-        firstResponseDelayMs: 0,
-      });
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui(
+        {
+          queueMode: "followup",
+          firstResponseDelayMs: 0,
+        },
+        onTestFinished,
+      );
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("seed gateway session\r");
@@ -494,8 +659,8 @@ describe("TUI PTY real backends", () => {
 
   it(
     "forwards an active-run prompt through the real Gateway followup queue",
-    async () => {
-      const fixture = await startGatewayModeTui({ queueMode: "followup" });
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui({ queueMode: "followup" }, onTestFinished);
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow first turn\r");
@@ -548,12 +713,72 @@ describe("TUI PTY real backends", () => {
   );
 
   it(
+    "renders a non-deliverable direct reply failure through the real Gateway and TUI",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui(
+        {
+          queueMode: "followup",
+          firstReplyText: "[[reply_to_current]]",
+          firstResponseDelayMs: 0,
+        },
+        onTestFinished,
+      );
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("non-deliverable first turn\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+        });
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () =>
+            fixture.run.output().includes("did not produce a visible reply") ? true : null,
+          onTimeout: () =>
+            new Error(
+              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+                fixture.mockModel.requests(),
+                null,
+                2,
+              )}\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        expect(fixture.mockModel.requests()).toHaveLength(1);
+        expect(fixture.run.output()).not.toContain("[[reply_to_current]]");
+
+        await fixture.run.write("turn after empty reply\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `TUI stayed blocked after empty-reply fallback\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "cancels an admitted followup with Esc before it reaches the model",
-    async () => {
-      const fixture = await startGatewayModeTui({
-        queueMode: "followup",
-        firstResponseDelayMs: 3_000,
-      });
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui(
+        {
+          queueMode: "followup",
+          firstResponseDelayMs: 1_500,
+        },
+        onTestFinished,
+      );
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow turn to abort\r");
@@ -567,7 +792,7 @@ describe("TUI PTY real backends", () => {
         await sleep(150);
         await fixture.run.write("\u001b", { delay: false });
         await fixture.run.waitForOutput("aborted");
-        await sleep(3_250);
+        await sleep(1_750);
 
         expect(fixture.mockModel.requests()).toHaveLength(1);
         expect(fixture.run.output()).not.toContain("FOLLOWUP_RUN_COMPLETE");
@@ -583,12 +808,15 @@ describe("TUI PTY real backends", () => {
 
   it(
     "collects two TUI-client prompts into one real Gateway followup turn",
-    async () => {
-      const fixture = await startGatewayModeTui({
-        queueMode: "collect",
-        firstResponseDelayMs: 4_000,
-        queueDebounceMs: 1_000,
-      });
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui(
+        {
+          queueMode: "collect",
+          firstResponseDelayMs: 1_500,
+          queueDebounceMs: 250,
+        },
+        onTestFinished,
+      );
       const queueClient = new GatewayChatClient({
         url: fixture.gateway.url,
         token: fixture.gateway.gatewayToken,
@@ -606,7 +834,7 @@ describe("TUI PTY real backends", () => {
           read: () => (queueClientConnected ? true : null),
           onTimeout: () => new Error("TUI Gateway client did not connect"),
         });
-        await fixture.run.write("/queue collect debounce:1s\r", { delay: false });
+        await fixture.run.write("/queue collect debounce:250ms\r", { delay: false });
         await fixture.run.waitForOutput("Queue mode set to collect.");
         await fixture.run.write("slow collect parent\r");
         await waitFor({
@@ -620,7 +848,7 @@ describe("TUI PTY real backends", () => {
           message: "collect prompt alpha",
           runId: "collect-alpha",
         });
-        await sleep(100);
+        await sleep(50);
         const betaSend = queueClient.sendChat({
           sessionKey: "agent:main:main",
           message: "collect prompt beta",
@@ -636,7 +864,7 @@ describe("TUI PTY real backends", () => {
               `collected prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await sleep(1_000);
+        await sleep(500);
 
         const requests = fixture.mockModel.requests();
         expect(

@@ -3,7 +3,9 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
-import { renderSkills, type SkillsProps } from "./view.ts";
+import { renderSkills } from "./view.ts";
+
+type SkillsProps = Parameters<typeof renderSkills>[0];
 
 const dialogRestores: Array<() => void> = [];
 
@@ -137,7 +139,11 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     const selector = container.querySelector<HTMLSelectElement>('select[name="skills-agent"]');
+    const filter = container.querySelector<HTMLInputElement>('input[name="skills-filter"]');
     expect(selector).toBeInstanceOf(HTMLSelectElement);
+    expect(filter).toBeInstanceOf(HTMLInputElement);
+    expect(normalizeText(selector!.closest("label")!)).toContain("Agent");
+    expect(normalizeText(filter!.closest("label")!)).toContain("Search");
     expect(selector?.value).toBe("research");
     expect(Array.from(selector!.options).map((option) => option.textContent?.trim())).toEqual([
       "Main (default)",

@@ -112,6 +112,9 @@ export const DevicePairSetupCodeResultSchema = Type.Object(
     setupCode: NonEmptyString,
     qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
     gatewayUrl: NonEmptyString,
+    gatewayUrls: Type.Optional(
+      Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),
+    ),
     auth: Type.Union([Type.Literal("token"), Type.Literal("password")]),
     urlSource: NonEmptyString,
   },

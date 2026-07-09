@@ -68,15 +68,10 @@ import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
-  isStuckSessionRecoveryEnabled,
   markDiagnosticSessionProgress,
-  requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -123,6 +118,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
+  setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -152,7 +148,10 @@ import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import {
+  appendReplyDispatcherBeforeDeliverCancelled,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import type {
   DispatcherOutcomeCountsView,
   ReplyDispatchKind,
@@ -195,11 +194,51 @@ type TranscriptMirror = SourceReplyTranscriptMirror & {
   storePath?: string;
   preferText?: boolean;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  transcriptOwner?: boolean;
 };
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
+
+function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(payload);
+  return JSON.stringify({
+    payload: {
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls,
+      trustedLocalMedia: payload.trustedLocalMedia,
+      sensitiveMedia: payload.sensitiveMedia,
+      presentation: payload.presentation,
+      delivery: payload.delivery,
+      interactive: payload.interactive,
+      btw: payload.btw,
+      replyToId: payload.replyToId,
+      replyToTag: payload.replyToTag,
+      replyToCurrent: payload.replyToCurrent,
+      audioAsVoice: payload.audioAsVoice,
+      spokenText: payload.spokenText,
+      ttsSupplement: payload.ttsSupplement,
+      isError: payload.isError,
+      isReasoning: payload.isReasoning,
+      isCommentary: payload.isCommentary,
+      isReasoningSnapshot: payload.isReasoningSnapshot,
+      isCompactionNotice: payload.isCompactionNotice,
+      isFallbackNotice: payload.isFallbackNotice,
+      isStatusNotice: payload.isStatusNotice,
+      channelData: payload.channelData,
+    },
+    identity: {
+      assistantMessageIndex: metadata?.assistantMessageIndex,
+      assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
+      replyToIdExplicit: metadata?.replyToIdExplicit,
+      replyDelivery: metadata?.replyDelivery,
+      replyDeliverySource: metadata?.replyDeliverySource,
+      sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
+    },
+  });
+}
 
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -333,7 +372,7 @@ function loadReplyMediaPathsRuntime() {
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
+  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
   const sendableParts = resolveSendableOutboundReplyParts(reply);
   const richParts = [
     reply.presentation ? "presentation" : undefined,
@@ -826,31 +865,6 @@ export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCou
   };
 }
 
-function visibleRecoveryClearedActiveWork(outcome: StuckSessionRecoveryOutcome): boolean {
-  return (
-    outcome.status === "aborted" ||
-    outcome.status === "released" ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
-  );
-}
-
-function isSameReplyOperation(
-  left: ReplyOperation | undefined,
-  right: ReplyOperation | undefined,
-): boolean {
-  return Boolean(left && right && left === right);
-}
-
-function visibleRecoveryShouldKeepWaiting(outcome: StuckSessionRecoveryOutcome): boolean {
-  return (
-    outcome.status === "skipped" &&
-    (outcome.reason === "active_reply_work" ||
-      outcome.reason === "active_embedded_run" ||
-      outcome.reason === "active_lane_task" ||
-      outcome.reason === "already_in_flight")
-  );
-}
-
 function transcriptMirrorForDeliveredPayload(
   metadata: TranscriptMirror,
   payload: ReplyPayload,
@@ -866,42 +880,107 @@ function transcriptMirrorForDeliveredPayload(
   };
 }
 
+const STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT =
+  "Channel final suppressed before delivery: stale foreground";
+
+function captureSuppressedTranscriptMirror(params: {
+  metadata: TranscriptMirror;
+  payload: ReplyPayload;
+  deliveryId?: string | number;
+}): TranscriptMirror | undefined {
+  const payloadMetadata = getReplyPayloadMetadata(params.payload);
+  if (
+    !params.metadata.transcriptOwner ||
+    payloadMetadata?.foregroundDeliverySuppression?.reason !== "stale-foreground"
+  ) {
+    return undefined;
+  }
+  const sourceMessageId = normalizeOptionalString(params.metadata.deliveryMirror?.sourceMessageId);
+  if (!sourceMessageId) {
+    return undefined;
+  }
+  const { transcriptOwner: _transcriptOwner, ...metadata } = params.metadata;
+  return {
+    ...metadata,
+    // The transcript owner already persisted the answer; this row records only delivery state.
+    text: STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT,
+    mediaUrls: undefined,
+    preferText: true,
+    idempotencyKey: `channel-final-suppressed:${sourceMessageId}:${params.deliveryId ?? "single"}`,
+    deliveryMirror: {
+      kind: "channel-final-suppressed",
+      reason: "stale-foreground",
+      sourceMessageId,
+    },
+  };
+}
+
 function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: TranscriptMirror;
+  deliveryId?: string | number;
+  captureToken?: object;
 }): () => TranscriptMirror | undefined {
   if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
-    return () => params.metadata;
+    return () => (params.metadata?.transcriptOwner ? undefined : params.metadata);
   }
   const metadata = params.metadata;
   let deliveredMetadata: TranscriptMirror | undefined;
+  let suppressedMetadata: TranscriptMirror | undefined;
   let observedFinal = false;
   const { idempotencyKey, sessionKey } = metadata;
   params.dispatcher.appendBeforeDeliver((payload, info) => {
     if (info.kind !== "final") {
       return payload;
     }
+    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+      return payload;
+    }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
-      payloadMetadata &&
-      payloadMetadata.idempotencyKey === idempotencyKey &&
-      payloadMetadata.sessionKey === sessionKey
+      payloadMirror &&
+      payloadMirror.idempotencyKey === idempotencyKey &&
+      payloadMirror.sessionKey === sessionKey
     ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
         {
-          ...payloadMetadata,
+          ...payloadMirror,
           ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
           storePath: metadata.storePath,
         },
         payload,
       );
-    } else if (!payloadMetadata && (!idempotencyKey || metadata.deliveryMirror)) {
+    } else if (
+      !payloadMirror &&
+      !metadata.transcriptOwner &&
+      (!idempotencyKey || metadata.deliveryMirror)
+    ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
     return payload;
   });
-  return () => (observedFinal ? deliveredMetadata : metadata);
+  appendReplyDispatcherBeforeDeliverCancelled(params.dispatcher, (payload, info) => {
+    if (info.kind !== "final") {
+      return;
+    }
+    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+      return;
+    }
+    observedFinal = true;
+    suppressedMetadata = captureSuppressedTranscriptMirror({
+      metadata,
+      payload,
+      deliveryId: params.deliveryId,
+    });
+  });
+  return () =>
+    observedFinal
+      ? (suppressedMetadata ?? deliveredMetadata)
+      : metadata.transcriptOwner
+        ? undefined
+        : metadata;
 }
 
 async function mirrorTranscriptAfterDispatcherSettled(params: {
@@ -911,11 +990,15 @@ async function mirrorTranscriptAfterDispatcherSettled(params: {
   cfg: OpenClawConfig;
 }): Promise<void> {
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
-  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
-    return;
-  }
   const metadata = params.metadata();
   if (!metadata) {
+    return;
+  }
+  const suppressedFinal = metadata.deliveryMirror?.kind === "channel-final-suppressed";
+  if (
+    !suppressedFinal &&
+    (after.cancelled > params.before.cancelled || after.failed > params.before.failed)
+  ) {
     return;
   }
   await mirrorDeliveredReplyToTranscript({
@@ -1258,10 +1341,6 @@ export async function dispatchReplyFromConfig(
       markDiagnosticSessionProgress({ sessionKey: acpDispatchSessionKey });
     }
   };
-  const visibleReplyRecoveryWaitMs = (() => {
-    const warnMs = resolveStuckSessionWarnMs(cfg);
-    return resolveStuckSessionAbortMs(cfg, warnMs);
-  })();
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
@@ -1349,6 +1428,8 @@ export async function dispatchReplyFromConfig(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
+  const hasInboundAudioForTts = () =>
+    inboundAudio || dispatchReplyOperation?.acceptedSteeredInboundAudio === true;
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
@@ -1445,7 +1526,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchOperationSessionKey) {
       return { status: "ready" };
     }
-    let operationSessionId =
+    const operationSessionId =
       dispatchAbortOperation?.sessionId ??
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
@@ -1475,22 +1556,6 @@ export async function dispatchReplyFromConfig(
       preDispatchLifecycleInterrupted = true;
       lifecycleOnlyAbortController?.abort();
     };
-    const shouldRecoverStaleVisibleOperation =
-      phase === "dispatch" &&
-      replyTurnKind === "visible" &&
-      !allowSlackRoutedThreadBypass &&
-      isStuckSessionRecoveryEnabled(cfg) &&
-      params.replyOptions?.abortSignal?.aborted !== true;
-    const recoverStaleVisibleOperation = async (
-      activeOperation: ReplyOperation,
-    ): Promise<StuckSessionRecoveryOutcome | undefined> =>
-      requestStuckDiagnosticSessionRecovery({
-        sessionId: activeOperation.sessionId,
-        sessionKey: dispatchOperationSessionKey,
-        ageMs: visibleReplyRecoveryWaitMs,
-        queueDepth: 1,
-        staleActiveProgressAbortMs: visibleReplyRecoveryWaitMs,
-      });
     let admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,
@@ -1504,58 +1569,7 @@ export async function dispatchReplyFromConfig(
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
-      ...(shouldRecoverStaleVisibleOperation ? { waitTimeoutMs: visibleReplyRecoveryWaitMs } : {}),
     });
-    if (shouldRecoverStaleVisibleOperation) {
-      while (
-        admission.status === "skipped" &&
-        admission.reason === "active-run" &&
-        admission.activeOperation
-      ) {
-        operationSessionId = admission.activeOperation.sessionId;
-        const recovery = await recoverStaleVisibleOperation(admission.activeOperation);
-        let activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
-        if (
-          recovery &&
-          visibleRecoveryClearedActiveWork(recovery) &&
-          isSameReplyOperation(activeAfterRecovery, admission.activeOperation)
-        ) {
-          forceClearReplyRunBySessionId(
-            admission.activeOperation.sessionId,
-            new Error("Stale visible reply operation recovered without clearing reply registry"),
-          );
-          activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
-          if (isSameReplyOperation(activeAfterRecovery, admission.activeOperation)) {
-            break;
-          }
-        }
-        const replyOperationStillActive = Boolean(activeAfterRecovery);
-        if (
-          replyOperationStillActive &&
-          (!recovery ||
-            (!visibleRecoveryClearedActiveWork(recovery) &&
-              !visibleRecoveryShouldKeepWaiting(recovery)))
-        ) {
-          break;
-        }
-        if (activeAfterRecovery) {
-          operationSessionId = activeAfterRecovery.sessionId;
-        }
-        admission = await admitReplyTurn({
-          sessionKey: dispatchOperationSessionKey,
-          sessionId: operationSessionId,
-          expectedSessionId: resolveOperationExpectedSessionId(),
-          expectedActiveOperation: initialDispatchReplyOperation,
-          storePath: operationSessionStoreEntry.storePath,
-          kind: replyTurnKind,
-          resetTriggered: false,
-          routeThreadId,
-          upstreamAbortSignal: params.replyOptions?.abortSignal,
-          waitForActive: replyOperationStillActive,
-          waitTimeoutMs: visibleReplyRecoveryWaitMs,
-        });
-      }
-    }
     if (
       admission.status === "skipped" &&
       admission.reason === "active-run" &&
@@ -2687,7 +2701,7 @@ export async function dispatchReplyFromConfig(
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio,
+              inboundAudio: hasInboundAudioForTts(),
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -2728,8 +2742,7 @@ export async function dispatchReplyFromConfig(
       );
       const transcriptMirror =
         sourceReplyTranscriptMirror ??
-        (!hasTranscriptOwner &&
-        normalizedCurrentSurface === "slack" &&
+        (normalizedCurrentSurface === "slack" &&
         hasVisibleFinalContent &&
         transcriptMirrorSessionKey
           ? transcriptMirrorForDeliveredPayload(
@@ -2741,6 +2754,7 @@ export async function dispatchReplyFromConfig(
                   : {}),
                 storePath: transcriptMirrorSessionBinding?.storePath ?? sessionStoreEntry.storePath,
                 preferText: true,
+                ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
                 idempotencyKey: transcriptMirrorSourceId
                   ? `channel-final:${transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
                   : undefined,
@@ -2758,9 +2772,18 @@ export async function dispatchReplyFromConfig(
       const finalOutcomeBefore = transcriptMirror
         ? getDispatcherFinalOutcomeCounts(dispatcher)
         : undefined;
+      const finalDeliveryCapture = transcriptMirror ? {} : undefined;
       const deliveredTranscriptMirror = transcriptMirror
-        ? captureDeliveredTranscriptMirror({ dispatcher, metadata: transcriptMirror })
+        ? captureDeliveredTranscriptMirror({
+            dispatcher,
+            metadata: transcriptMirror,
+            deliveryId: options.deliveryId,
+            captureToken: finalDeliveryCapture,
+          })
         : undefined;
+      if (finalDeliveryCapture) {
+        setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
+      }
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
         // The common settle owner runs this after successful delivery or
@@ -3170,34 +3193,41 @@ export async function dispatchReplyFromConfig(
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
     };
-    const wrapProgressCallback = <Args extends unknown[]>(
-      callback: ((...args: Args) => Promise<void> | void) | undefined,
+    const wrapProgressCallback = <Args extends unknown[], Result extends false | void>(
+      callback: ((...args: Args) => Promise<Result> | Result) | undefined,
       options?: {
         allowWhenToolSummariesHidden?: boolean;
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
+        onVisible?: (...args: Args) => Promise<void> | void;
         waitForDirectBlockReplyDelivery?: boolean;
       },
-    ): ((...args: Args) => Promise<void>) | undefined => {
+    ): ((...args: Args) => Promise<Result | undefined>) | undefined => {
       if (!callback) {
         return undefined;
       }
       return async (...args: Args) => {
         if (isDispatchOperationAborted()) {
-          return;
+          return undefined;
         }
+        dispatchReplyOperation?.recordActivity();
         markProgress();
         if (options?.waitForDirectBlockReplyDelivery) {
           await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
           if (isDispatchOperationAborted()) {
-            return;
+            return undefined;
           }
         }
         if (shouldForwardProgressCallback(options)) {
           await options?.onForward?.(...args);
-          await callback?.(...args);
+          const result = await callback?.(...args);
+          if (result === false) {
+            return result;
+          }
+          await options?.onVisible?.(...args);
         }
+        return undefined;
       };
     };
 
@@ -3220,7 +3250,7 @@ export async function dispatchReplyFromConfig(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
-          onForward: (payload) => {
+          onVisible: (payload) => {
             if (hasFailedProgressStatus(payload)) {
               markVisibleToolErrorProgress();
             }
@@ -3242,7 +3272,7 @@ export async function dispatchReplyFromConfig(
           if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
             await noteCommentaryProgress(payload);
           }
-          await forwardItemEvent?.(payload);
+          return await forwardItemEvent?.(payload);
         }
       : undefined;
     // Let draft-rendering channels yield their ephemeral commentary lines while
@@ -3314,7 +3344,7 @@ export async function dispatchReplyFromConfig(
                     forwardWhenSourceDeliverySuppressed: true,
                     requiresToolSummaryVisibility: true,
                     waitForDirectBlockReplyDelivery: true,
-                    onForward: (payload) => {
+                    onVisible: (payload) => {
                       if (hasFailedProgressStatus(payload)) {
                         markVisibleToolErrorProgress();
                       }
@@ -3335,6 +3365,7 @@ export async function dispatchReplyFromConfig(
                     waitForDirectBlockReplyDelivery: true,
                   }),
                   onToolResult: (payload: ReplyPayload) => {
+                    dispatchReplyOperation?.recordActivity();
                     markProgress();
                     const run = async () => {
                       if (isDispatchOperationAborted()) {
@@ -3403,7 +3434,7 @@ export async function dispatchReplyFromConfig(
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio,
+                        inboundAudio: hasInboundAudioForTts(),
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -3652,7 +3683,7 @@ export async function dispatchReplyFromConfig(
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio,
+                              inboundAudio: hasInboundAudioForTts(),
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -3782,6 +3813,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    const sentFinalPayloadDedupeKeys = new Set<string>();
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -3809,6 +3841,11 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
+      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
+        continue;
+      }
+      sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
@@ -3853,7 +3890,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio,
+            inboundAudio: hasInboundAudioForTts(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,

@@ -10,6 +10,45 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun manualTransportForcesSecureConnectionForRemoteHosts() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "gateway.example.com",
+        requestedTls = false,
+      )
+
+    assertEquals(true, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertEquals("Secure connection is required for this host.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportAllowsUnencryptedPrivateLanConnections() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = false,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(false, presentation.effectiveTls)
+    assertEquals("Use only on a trusted private network.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportDoesNotRepeatSelectedPrivateLanTlsState() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = true,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertNull(presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 
@@ -191,14 +230,13 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
     listOf(
-        "ws://[fe80::1%25eth0]",
-        "wss://[fe80::1%25wlan0]:443",
-      )
-      .forEach { url ->
-        val parsed = parseGatewayEndpointResult(url)
-        assertNull(url, parsed.config)
-        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
-      }
+      "ws://[fe80::1%25eth0]",
+      "wss://[fe80::1%25wlan0]:443",
+    ).forEach { url ->
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+    }
   }
 
   @Test
@@ -661,6 +699,7 @@ class GatewayConfigResolverTest {
     assertEquals("token", plan?.config?.token)
     assertEquals("", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.password)
+    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
   }
 
   @Test

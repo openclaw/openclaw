@@ -3217,45 +3217,31 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("uses score tie-breakers when capping stores with invalid timestamps", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
-      await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: Object.fromEntries(
-          Array.from({ length: maxEntries + 3 }, (_, index) => [
-            `entry-${index}`,
-            {
-              key: `entry-${index}`,
-              path: "memory/2026-04-01.md",
-              startLine: index + 1,
-              endLine: index + 1,
-              source: "memory",
-              snippet: `Invalid timestamp recall ${index}`,
-              recallCount: 1,
-              dailyCount: 0,
-              groundedCount: 0,
-              totalScore: index,
-              maxScore: 0.75,
-              firstRecalledAt: "not-a-date",
-              lastRecalledAt: "not-a-date",
-              queryHashes: [`q-${index}`],
-              recallDays: ["2026-04-01"],
-              conceptTags: [],
-            },
-          ]),
-        ),
-      });
+  it("uses score tie-breakers when retention timestamps are invalid", () => {
+    const entry = {
+      key: "lower-score",
+      path: "memory/2026-04-01.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "Invalid timestamp recall",
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 1,
+      maxScore: 0.75,
+      firstRecalledAt: "not-a-date",
+      lastRecalledAt: "not-a-date",
+      queryHashes: ["q"],
+      recallDays: ["2026-04-01"],
+      conceptTags: [],
+    };
+    const higherScoreEntry = { ...entry, key: "higher-score", totalScore: 2 };
 
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-
-      expect(repair.removedOverflowEntries).toBe(3);
-      const entries = await readRecallStoreEntries(workspaceDir);
-      expect(Object.keys(entries)).toHaveLength(maxEntries);
-      expect(entries["entry-0"]).toBeUndefined();
-      expect(entries[`entry-${maxEntries + 2}`]).toBeDefined();
-    });
+    expect([entry, higherScoreEntry].toSorted(testing.compareShortTermRecallRetention)).toEqual([
+      higherScoreEntry,
+      entry,
+    ]);
   });
 
   it("rejects long contaminated legacy recall entries before truncating snippets", async () => {
@@ -3599,6 +3585,72 @@ describe("short-term promotion", () => {
         expect(applied.compactedDates).toEqual([]);
         const memoryText = await fs.readFile(memoryPath, "utf-8");
         expect(memoryText).toContain("Some small existing content.");
+      });
+    });
+  });
+  describe("UTF-16 snippet bounds", () => {
+    it("stores a complete-code-point short-term recall snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "y".repeat(testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS - 1);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 recall",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: `${prefix}🚀tail`,
+            },
+          ],
+        });
+
+        const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+        expect(entries).toHaveLength(1);
+        expect(readEntrySnippet(entries[0])).toBe(prefix);
+      });
+    });
+
+    it("writes a complete-code-point promoted MEMORY.md snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "a".repeat(7);
+        const snippet = `${prefix}🚀tail`;
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 promotion",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+            },
+          ],
+        });
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          maxPromotedSnippetTokens: 2,
+        });
+
+        const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+        expect(memoryText).toContain(`- ${prefix}... [`);
+        expect(memoryText).not.toContain("🚀");
       });
     });
   });

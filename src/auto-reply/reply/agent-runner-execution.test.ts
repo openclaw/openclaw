@@ -25,6 +25,8 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  buildEmptyInteractiveReplyPayload,
+  buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
@@ -58,6 +60,8 @@ const state = vi.hoisted(() => ({
 
 const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+const EMPTY_INTERACTIVE_REPLY_TEXT =
+  "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
   afterEach(() => {
@@ -463,9 +467,13 @@ function createMockReplyOperation(): {
       abortSignal: new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
+      acceptedSteeredInboundAudio: false,
       phase: "running",
       result: null,
+      startedAtMs: Date.now(),
+      lastActivityAtMs: Date.now(),
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+      recordActivity: vi.fn(),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
@@ -479,6 +487,7 @@ function createMockReplyOperation(): {
       abortByUser: vi.fn(() => true),
       abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
+      markAcceptedSteeredInboundAudio: vi.fn(),
     },
   };
 }
@@ -646,6 +655,37 @@ describe("computeContextAwareReserveTokensFloor", () => {
     expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
     expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
     expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+  });
+});
+
+describe("buildEmptyInteractiveReplyPayload", () => {
+  const baseParams = {
+    isInteractive: true,
+    isMessageToolOnly: false,
+    hasPendingContinuation: false,
+    hasExplicitSilentReply: false,
+    hasCommittedDelivery: false,
+    sessionCtx: {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    },
+  } as const;
+
+  it("preserves the default silent policy in group conversations", () => {
+    const payload = buildEmptyInteractiveReplyPayload(baseParams);
+
+    expect(payload?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.isError).toBeUndefined();
+  });
+
+  it("surfaces the fallback when group silence is explicitly disallowed", () => {
+    expect(
+      buildEmptyInteractiveReplyPayload({
+        ...baseParams,
+        cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
+      }),
+    ).toMatchObject({ text: EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
   });
 });
 
@@ -2073,6 +2113,7 @@ describe("runAgentTurnWithFallback", () => {
       fallbackExhausted: true,
       fallbackProvider: probe.provider,
       fallbackModel: probe.model,
+      runResult: exhaustedResult,
     });
     expect(activeSessionStore[sessionKey]).toMatchObject({
       providerOverride: probe.fallbackProvider,
@@ -2140,7 +2181,7 @@ describe("runAgentTurnWithFallback", () => {
       }),
     );
 
-    expect(result.kind).toBe("success");
+    expect(result).toMatchObject({ kind: "success", runResult: terminalErrorResult });
     expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const lifecycleEvents = emitAgentEvent.mock.calls
@@ -2165,6 +2206,66 @@ describe("runAgentTurnWithFallback", () => {
       ),
     ).toBe(false);
     expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
+  });
+
+  it.each([
+    {
+      label: "exhausted",
+      outcome: "exhausted" as const,
+      attempts: [{ error: "missing tool result" }],
+      isHeartbeat: false,
+      expectedText: GENERIC_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "completed",
+      outcome: "completed" as const,
+      attempts: [],
+      isHeartbeat: false,
+      expectedText: GENERIC_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "heartbeat",
+      outcome: "completed" as const,
+      attempts: [],
+      isHeartbeat: true,
+      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+  ])("surfaces an empty $label terminal result through the normal reply path", async (testCase) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run reached a terminal error before reply delivery.",
+        },
+      },
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: testCase.outcome,
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: testCase.attempts,
+    }));
+    const { replyOperation, failMock } = createMockReplyOperation();
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ replyOperation }),
+      isHeartbeat: testCase.isHeartbeat,
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      terminalFailurePayload: {
+        text: testCase.expectedText,
+        isError: true,
+      },
+      runResult: {
+        payloads: [],
+      },
+    });
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("reports exhausted CLI results without a success lifecycle terminal", async () => {
@@ -2222,6 +2323,47 @@ describe("runAgentTurnWithFallback", () => {
       ]),
     );
     expect(lifecycleEvents.some((event) => event.data.phase === "end")).toBe(false);
+  });
+
+  it("preserves a CLI watchdog timeout through the lifecycle backstop", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      try {
+        return await params.run("codex-cli", "gpt-5.4");
+      } catch (cause) {
+        throw new Error("All model fallback candidates failed", { cause });
+      }
+    });
+    state.runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output", { reason: "timeout" }),
+    );
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        opts: { runId: "run-cli-timeout" },
+      }),
+    );
+
+    expect(
+      emitAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find(
+          (event) =>
+            event.runId === "run-cli-timeout" &&
+            event.stream === "lifecycle" &&
+            event.data.phase === "error",
+        )?.data,
+    ).toMatchObject({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      fallbackExhaustedFailure: true,
+    });
   });
 
   it("keeps fallback auth available for later same-provider fallback models", async () => {
@@ -6979,6 +7121,58 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces typed periodic rate-limit details in $label chats",
+    async (testCase) => {
+      const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError(periodicLimitMessage, {
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude-opus-4-1",
+          rawError: periodicLimitMessage,
+        }),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("weekly limit");
+        expect(result.payload.text).toContain("resets 6pm");
+        expect(result.payload.text).not.toContain("few minutes");
+      }
+    },
+  );
+
+  it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
+    const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError(periodicLimitMessage, {
+        reason: "rate_limit",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        rawError: periodicLimitMessage,
+      }),
+      sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload).toBeDefined();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.text).toContain("weekly limit");
+    expect(payload?.text).toContain("resets 6pm");
+    expect(payload?.text).not.toContain("few minutes");
+  });
+
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces overloaded fallback copy in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
@@ -6998,6 +7192,33 @@ describe("runAgentTurnWithFallback", () => {
       }
     },
   );
+
+  it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("529 Please try again", {
+        reason: "overloaded",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        status: 529,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toContain("overloaded");
+      expect(result.payload.text).not.toContain("rate-limited");
+      expect(result.payload.text).not.toContain("few minutes");
+    }
+  });
 
   it("surfaces rate-limit fallback copy in Discord group chats when silentReply.group is disallow", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
@@ -7550,6 +7771,60 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Model login expired on the gateway for anthropic. Re-auth with `openclaw models auth login --provider anthropic` in a terminal, then try again.",
       );
       expect(result.payload.text).not.toContain("/login codex");
+    }
+  });
+
+  it("surfaces claude-cli re-auth hint over generic provider auth copy for 401 OAuth expiry", async () => {
+    // When the claude subprocess emits a 401 "Failed to authenticate" because
+    // its OAuth token has expired, the error is wrapped as a FailoverError with
+    // reason:"auth" and status:401.  Without the ordering fix, this would be
+    // caught by classifyProviderRequestError before reaching classifyOAuthRefreshFailure,
+    // producing the generic "re-authenticate this provider" copy instead of the
+    // targeted claude-cli re-auth command.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-20250514",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
+    }
+  });
+
+  it("surfaces claude-cli re-auth hint from structured provider metadata when the message omits claude-cli", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-20250514",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
     }
   });
 

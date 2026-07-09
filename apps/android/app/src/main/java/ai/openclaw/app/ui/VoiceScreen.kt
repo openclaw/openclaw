@@ -136,6 +136,8 @@ fun VoiceScreen(
   // Talk mode and dictation use different managers, so choose the transcript
   // from the mode the user is actually seeing.
   val activeConversation = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) talkModeConversation else micConversation
+  val showTranscriptThinking =
+    micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
   val voiceAttentionStatus =
@@ -252,11 +254,13 @@ fun VoiceScreen(
       )
     }
 
-    VoiceTranscript(
-      entries = activeConversation,
-      showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
-      modifier = Modifier.weight(1f),
-    )
+    if (activeConversation.isNotEmpty() || showTranscriptThinking) {
+      VoiceTranscript(
+        entries = activeConversation,
+        showThinking = showTranscriptThinking,
+        modifier = Modifier.weight(1f),
+      )
+    }
   }
 }
 
@@ -377,9 +381,20 @@ private fun DictationScreen(
       }
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
       Icon(imageVector = Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
-      Text(text = "Tip: stop listening to send the captured turn.", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(
+        text = "Tip: stop listening to send the captured turn.",
+        modifier = Modifier.weight(1f),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
 
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -464,12 +479,28 @@ private fun TalkSessionScreen(
 
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceEvenly,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      TalkControl(icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, label = if (speakerEnabled) "Mute" else "Unmute", onClick = onToggleSpeaker)
-      TalkControl(icon = Icons.Default.PhoneDisabled, label = "End", primary = true, onClick = onEndTalk)
-      TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = onOpenVoiceSettings)
+      TalkControl(
+        icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+        label = if (speakerEnabled) "Mute" else "Unmute",
+        modifier = Modifier.weight(1f),
+        onClick = onToggleSpeaker,
+      )
+      TalkControl(
+        icon = Icons.Default.PhoneDisabled,
+        label = "End",
+        primary = true,
+        modifier = Modifier.weight(1f),
+        onClick = onEndTalk,
+      )
+      TalkControl(
+        icon = Icons.Default.GraphicEq,
+        label = "Voice",
+        modifier = Modifier.weight(1f),
+        onClick = onOpenVoiceSettings,
+      )
     }
   }
 }
@@ -519,10 +550,15 @@ private fun TalkTranscriptCard(
 private fun TalkControl(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   label: String,
+  modifier: Modifier = Modifier,
   primary: Boolean = false,
   onClick: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+  Column(
+    modifier = modifier,
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(5.dp),
+  ) {
     Surface(
       onClick = onClick,
       modifier = Modifier.size(ClawTheme.spacing.touchTarget),
@@ -535,7 +571,15 @@ private fun TalkControl(
         Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(if (primary) 20.dp else 18.dp))
       }
     }
-    Text(text = label, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+    Text(
+      text = label,
+      modifier = Modifier.fillMaxWidth(),
+      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      color = ClawTheme.colors.textMuted,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
   }
 }
 
@@ -742,7 +786,7 @@ private fun VoiceModeRow(
 ) {
   Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 0.dp, vertical = 7.dp),
+      modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(horizontal = 0.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -767,9 +811,9 @@ private fun VoiceModeRow(
         )
         Text(
           text = subtitle,
-          style = ClawTheme.type.caption,
+          style = ClawTheme.type.caption.copy(lineHeight = 16.sp),
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
+          maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
       }
@@ -866,6 +910,7 @@ private fun VoiceProviderCard(
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
         )
       }
     }
@@ -897,12 +942,18 @@ private fun VoicePrimaryAction(
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Row(
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
-      Text(text = text, modifier = Modifier.padding(start = 8.dp), style = ClawTheme.type.label)
+      Text(
+        text = text,
+        modifier = Modifier.padding(start = 8.dp),
+        style = ClawTheme.type.label,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
   }
 }
@@ -984,24 +1035,6 @@ private fun VoiceTranscript(
     items(entries.asReversed(), key = { it.id }) { entry ->
       VoiceTurnCard(entry = entry)
     }
-
-    if (entries.isEmpty() && !showThinking) {
-      item {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-          ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              Text(text = "No transcript yet", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-              Text(
-                text = "Your words and OpenClaw replies will appear here.",
-                style = ClawTheme.type.body,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
-          }
-        }
-      }
-    }
   }
 }
 
@@ -1037,7 +1070,14 @@ private fun VoiceThinkingCard() {
   ClawPanel {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
       ClawStatusPill(text = "Sending", status = ClawStatus.Warning)
-      Text(text = "OpenClaw is preparing a response.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(
+        text = "OpenClaw is preparing a response.",
+        modifier = Modifier.weight(1f),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
   }
 }

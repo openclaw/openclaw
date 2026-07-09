@@ -170,6 +170,312 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("omits unavailable catalog entries from picker options", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          available: true,
+        },
+        {
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          provider: "codex",
+          available: false,
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.defaultSelectable).toBe(true);
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+  });
+
+  it("keeps an available OpenAI route when an unavailable legacy route has the same model id", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          available: true,
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "codex",
+          available: false,
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.5",
+        modelProvider: "codex",
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "codex",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5.5");
+    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+    expect(resolved.defaultSelectable).toBe(true);
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+  });
+
+  it("preserves an exact available OpenAI route when a legacy route is also available", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          provider: "codex",
+          available: true,
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          available: true,
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5.5");
+    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+  });
+
+  it("does not reintroduce an unavailable current or default model", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          available: true,
+        },
+        {
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          provider: "codex",
+          available: false,
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.3-codex-spark",
+        modelProvider: "openai",
+        defaultsModel: "gpt-5.3-codex-spark",
+        defaultsProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.defaultSelectable).toBe(false);
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+  });
+
+  it("supports fast mode for a default legacy Codex provider", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5.5",
+      modelProvider: "codex",
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "codex",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [],
+        connected: true,
+        currentModelOverride: "",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(true);
+  });
+
+  it("uses the session provider for fast mode with a slash-containing raw model id", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "google/gemma-4-26b-a4b-it",
+      modelProvider: "openrouter",
+      defaultsModel: "google/gemma-4-26b-a4b-it",
+      defaultsProvider: "openrouter",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [],
+        connected: true,
+        currentModelOverride: "google/gemma-4-26b-a4b-it",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(true);
+  });
+
+  it("uses a catalog-qualified model provider before a stale session runtime provider", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "claude-opus-4-8",
+      modelProvider: "claude-cli",
+      defaultsModel: "claude-opus-4-8",
+      defaultsProvider: "claude-cli",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [
+          {
+            id: "claude-opus-4-8",
+            name: "Claude Opus 4.8",
+            provider: "anthropic",
+          },
+        ],
+        connected: true,
+        currentModelOverride: "anthropic/claude-opus-4-8",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(true);
+  });
+
+  it("keeps a unique qualified provider when proxy catalogs reuse the nested id", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "claude-opus-4-8",
+      modelProvider: "claude-cli",
+      defaultsModel: "claude-opus-4-8",
+      defaultsProvider: "claude-cli",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [
+          {
+            id: "claude-opus-4-8",
+            name: "Claude Opus 4.8",
+            provider: "anthropic",
+          },
+          {
+            id: "anthropic/claude-opus-4-8",
+            name: "Claude Opus 4.8",
+            provider: "openrouter",
+          },
+          {
+            id: "anthropic/claude-opus-4-8",
+            name: "Claude Opus 4.8",
+            provider: "gateway-proxy",
+          },
+        ],
+        connected: true,
+        currentModelOverride: "anthropic/claude-opus-4-8",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(true);
+  });
+
+  it("prefers an explicit native qualified route over a stale proxy provider hint", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "google/gemini-2.5-pro",
+      modelProvider: "openrouter",
+      defaultsModel: "google/gemini-2.5-pro",
+      defaultsProvider: "openrouter",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [
+          {
+            id: "gemini-2.5-pro",
+            name: "Gemini 2.5 Pro",
+            provider: "google",
+          },
+          {
+            id: "google/gemini-2.5-pro",
+            name: "Gemini 2.5 Pro",
+            provider: "openrouter",
+          },
+        ],
+        connected: true,
+        currentModelOverride: "google/gemini-2.5-pro",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(false);
+  });
+
+  it("does not restore a session provider rejected by relevant catalog metadata", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "vendor/model",
+      modelProvider: "openrouter",
+      defaultsModel: "vendor/model",
+      defaultsProvider: "openrouter",
+    });
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: [
+          {
+            id: "vendor/model",
+            name: "Vendor Model",
+            provider: "proxy-a",
+          },
+          {
+            id: "vendor/model",
+            name: "Vendor Model",
+            provider: "proxy-b",
+          },
+        ],
+        connected: true,
+        currentModelOverride: "vendor/model",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }).supported,
+    ).toBe(false);
+  });
+
   it("uses catalog names for the default label and matching picker options", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog({
@@ -195,6 +501,34 @@ describe("chat-model-select-state", () => {
         label: "Kimi K2.5 (NVIDIA)",
       },
     ]);
+  });
+
+  it("uses the active agent model for the default label", () => {
+    const state = createChatModelState({
+      agentDefaultModel: "anthropic/claude-opus-4-5",
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "openai",
+        model: "claude-opus-4-5",
+        modelProvider: "anthropic",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.defaultModel).toBe("anthropic/claude-opus-4-5");
+    expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {

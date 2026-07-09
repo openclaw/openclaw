@@ -7,6 +7,7 @@ struct WatchReplyDraft {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var note: String?
     var sentAtMs: Int
 }
@@ -23,6 +24,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 
     private let store: WatchInboxStore
     private let session: WCSession?
+    private let activationGate = WatchSessionActivationGate()
 
     init(store: WatchInboxStore) {
         self.store = store
@@ -37,26 +39,33 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     func activate() {
         guard let session else { return }
         session.delegate = self
-        session.activate()
+        self.beginActivation(session)
     }
 
-    private func ensureActivated() async {
-        guard let session else { return }
+    private func beginActivation(_ session: WCSession) {
+        if self.activationGate.beginActivation() {
+            session.activate()
+        }
+    }
+
+    private func activatedSession() async throws -> WCSession {
+        guard let session else {
+            throw WatchSessionActivationError.failed("session unavailable")
+        }
         if session.activationState == .activated {
-            return
+            self.activationGate.complete(activated: true, errorDescription: nil)
+            return session
         }
-        session.activate()
-        for _ in 0..<8 {
-            if session.activationState == .activated {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        self.beginActivation(session)
+        try await self.activationGate.waitUntilActivated()
+        guard session.activationState == .activated else {
+            throw WatchSessionActivationError.failed("session stayed inactive")
         }
+        return session
     }
 
     func requestExecApprovalSnapshot() async {
-        await self.ensureActivated()
-        guard let session else { return }
+        guard let session = try? await self.activatedSession() else { return }
         let request = WatchExecApprovalSnapshotRequestMessage(
             requestId: UUID().uuidString,
             sentAtMs: Self.nowMs())
@@ -73,13 +82,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func requestAppSnapshot() async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
         let request = WatchAppSnapshotRequestMessage(
             requestId: UUID().uuidString,
@@ -89,13 +96,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func sendReply(_ draft: WatchReplyDraft) async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
 
         var payload: [String: Any] = [
@@ -115,6 +120,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         {
             payload["sessionKey"] = sessionKey
         }
+        if let gatewayStableID = draft.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let note = draft.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
             payload["note"] = note
         }
@@ -124,20 +134,20 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 
     func sendExecApprovalResolve(
         approvalId: String,
+        gatewayStableID: String?,
         decision: WatchExecApprovalDecision) async -> WatchReplySendResult
     {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
 
         let payload = Self.encodeExecApprovalResolvePayload(
             WatchExecApprovalResolveMessage(
                 approvalId: approvalId,
+                gatewayStableID: gatewayStableID,
                 decision: decision,
                 replyId: UUID().uuidString,
                 sentAtMs: Self.nowMs()))
@@ -145,13 +155,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func sendAppCommand(_ message: WatchAppCommandMessage) async -> WatchReplySendResult {
-        await self.ensureActivated()
-        guard let session else {
-            return WatchReplySendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: false,
-                transport: "none",
-                errorMessage: "watch session unavailable")
+        let session: WCSession
+        do {
+            session = try await self.activatedSession()
+        } catch {
+            return Self.unavailableResult(error)
         }
         return await self.sendPayload(Self.encodeAppCommandPayload(message), session: session)
     }
@@ -185,6 +193,14 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
                 replyHandler: { _ in continuation.resume(returning: ()) },
                 errorHandler: { error in continuation.resume(throwing: error) })
         }
+    }
+
+    private static func unavailableResult(_ error: any Error) -> WatchReplySendResult {
+        WatchReplySendResult(
+            deliveredImmediately: false,
+            queuedForDelivery: false,
+            transport: "none",
+            errorMessage: error.localizedDescription)
     }
 
     private static func nowMs() -> Int {
@@ -250,6 +266,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let kind = (payload["kind"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let details = (payload["details"] as? String)?
@@ -266,6 +284,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             sentAtMs: sentAtMs,
             promptId: promptId,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -293,6 +312,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let host = (payload["host"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let nodeId = (payload["nodeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let agentId = (payload["agentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let expiresAtMs = (payload["expiresAtMs"] as? Int) ?? (payload["expiresAtMs"] as? NSNumber)?.intValue
         let riskRaw = (payload["risk"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let risk = WatchRiskLevel(rawValue: riskRaw)
@@ -301,6 +322,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         }
         return WatchExecApprovalItem(
             id: id,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             commandText: commandText,
             commandPreview: commandPreview,
             host: host,
@@ -341,11 +363,14 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let approvalId = (payload["approvalId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !approvalId.isEmpty else { return nil }
         let decision = Self.parseExecApprovalDecision(payload["decision"])
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedAtMs = (payload["resolvedAtMs"] as? Int)
             ?? (payload["resolvedAtMs"] as? NSNumber)?.intValue
         let source = (payload["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalResolvedMessage(
             approvalId: approvalId,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             decision: decision,
             resolvedAtMs: resolvedAtMs,
             source: source)
@@ -367,8 +392,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             return nil
         }
         let expiredAtMs = (payload["expiredAtMs"] as? Int) ?? (payload["expiredAtMs"] as? NSNumber)?.intValue
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalExpiredMessage(
             approvalId: approvalId,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             reason: reason,
             expiredAtMs: expiredAtMs)
     }
@@ -384,10 +412,13 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let approvals = (payload["approvals"] as? [Any] ?? []).compactMap { item in
             Self.parseExecApprovalItem(item)
         }
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         let snapshotId = (payload["snapshotId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalSnapshotMessage(
             approvals: approvals,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             sentAtMs: sentAtMs,
             snapshotId: snapshotId)
     }
@@ -548,6 +579,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             "decision": message.decision.rawValue,
             "replyId": message.replyId,
         ]
+        if let gatewayStableID = message.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
         }
@@ -559,8 +595,11 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
     func session(
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
-        error _: (any Error)?)
+        error: (any Error)?)
     {
+        self.activationGate.complete(
+            activated: activationState == .activated,
+            errorDescription: error?.localizedDescription)
         if activationState == .activated, !session.receivedApplicationContext.isEmpty {
             self.consumeIncomingPayload(
                 session.receivedApplicationContext,
@@ -593,6 +632,26 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
     }
 
     private func consumeIncomingPayload(_ payload: [String: Any], transport: String) {
+        let appSnapshot = (payload[WatchPayloadType.appSnapshot.rawValue] as? [String: Any])
+            .flatMap(Self.parseAppSnapshotPayload)
+        let execApprovalSnapshot =
+            (payload[WatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
+            .flatMap(Self.parseExecApprovalSnapshotPayload)
+        if appSnapshot != nil || execApprovalSnapshot != nil {
+            // Owner state must land first so approvals are filtered against this context's route.
+            Task { @MainActor in
+                if let appSnapshot {
+                    self.store.consume(appSnapshot: appSnapshot)
+                }
+                if let execApprovalSnapshot {
+                    self.store.consume(execApprovalSnapshot: execApprovalSnapshot, transport: transport)
+                }
+                if appSnapshot != nil {
+                    self.store.replayDeferredGatewayPayloads()
+                }
+            }
+            return
+        }
         if let incoming = Self.parseNotificationPayload(payload) {
             Task { @MainActor in
                 self.store.consume(message: incoming, transport: transport)
@@ -626,6 +685,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         if let snapshot = Self.parseAppSnapshotPayload(payload) {
             Task { @MainActor in
                 self.store.consume(appSnapshot: snapshot)
+                self.store.replayDeferredGatewayPayloads()
             }
             return
         }

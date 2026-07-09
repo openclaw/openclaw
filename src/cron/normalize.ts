@@ -353,6 +353,15 @@ function coercePayload(payload: UnknownRecord) {
   return next;
 }
 
+function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
+  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
+  const once = parseBoolean(trigger.once);
+  return {
+    script,
+    ...(once !== undefined ? { once } : {}),
+  };
+}
+
 function coerceDelivery(delivery: UnknownRecord) {
   const next: UnknownRecord = { ...delivery };
   const parsed = parseDeliveryInput(delivery);
@@ -530,6 +539,30 @@ export function normalizeCronJobInput(
   const base = raw;
   const next: UnknownRecord = { ...base };
 
+  for (const field of ["declarationKey", "displayName"] as const) {
+    if (field in base && typeof base[field] === "string") {
+      const trimmed = base[field].trim();
+      if (trimmed) {
+        next[field] = trimmed;
+      } else {
+        delete next[field];
+      }
+    }
+  }
+
+  if (isRecord(base.owner)) {
+    const agentId = normalizeOptionalString(base.owner.agentId);
+    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    if (agentId || sessionKey) {
+      next.owner = {
+        ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    } else {
+      delete next.owner;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {
@@ -589,6 +622,16 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.payload)) {
     next.payload = coercePayload(base.payload);
+  }
+
+  if ("trigger" in base) {
+    if (base.trigger === null) {
+      next.trigger = null;
+    } else if (isRecord(base.trigger)) {
+      next.trigger = coerceTrigger(base.trigger);
+    } else {
+      delete next.trigger;
+    }
   }
 
   if (isRecord(base.delivery)) {

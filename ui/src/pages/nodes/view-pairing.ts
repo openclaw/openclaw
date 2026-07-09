@@ -8,7 +8,7 @@ import type { DevicePairSetup } from "../../lib/device-pair-setup.ts";
 const PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 
-export type DevicePairSetupProps = {
+type DevicePairSetupProps = {
   open: boolean;
   loading: boolean;
   error: string | null;
@@ -28,6 +28,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const description = t("nodes.pairing.subtitle");
   const setup = props.setup;
   const pendingCount = props.pendingCount;
+  const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
 
   return html`
     <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${props.onClose}>
@@ -90,9 +91,15 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
 
                 <div class="device-pair-setup__meta">
                   <span class="pill">${setup.auth}</span>
-                  <span class="device-pair-setup__gateway" title=${setup.gatewayUrl}
-                    >${setup.gatewayUrl}</span
-                  >
+                  <div class="device-pair-setup__gateways">
+                    ${gatewayUrls.map(
+                      (gatewayUrl) => html`
+                        <span class="device-pair-setup__gateway" title=${gatewayUrl}
+                          >${gatewayUrl}</span
+                        >
+                      `,
+                    )}
+                  </div>
                 </div>
 
                 <div class="device-pair-setup__actions">

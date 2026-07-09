@@ -105,6 +105,39 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `handle invoke returns injected Codex thread catalog`() async throws {
+        let payload = #"{"sessions":[]}"#
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadListRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"limit":7}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-threads",
+            command: MacNodeCodexThreadCatalogContract.listCommand,
+            paramsJSON: #"{"limit":7}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+    }
+
+    @Test func `handle invoke enforces local Codex catalog consent`() async {
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { false },
+            codexThreadListRequest: { _ in
+                Issue.record("disabled Codex catalog request must not execute")
+                return #"{"sessions":[]}"#
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-disabled",
+            command: MacNodeCodexThreadCatalogContract.listCommand))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
+    }
+
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
         let runtime = MacNodeRuntime(
@@ -564,10 +597,12 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {
-        let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
-            #expect(paramsJSON?.contains("/tabs") == true)
-            return #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#
-        })
+        let runtime = MacNodeRuntime(
+            browserProxyRequest: { paramsJSON in
+                #expect(paramsJSON?.contains("/tabs") == true)
+                return #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#
+            },
+            browserControlEnabled: { true })
         let paramsJSON = #"{"method":"GET","path":"/tabs","timeoutMs":2500}"#
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(
@@ -579,24 +614,20 @@ struct MacNodeRuntimeTests {
         #expect(response.payloadJSON == #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#)
     }
 
-    @Test func `handle invoke browser proxy rejects disabled browser control`() async throws {
-        let override = TestIsolation.tempConfigPath()
-        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            try JSONSerialization.data(withJSONObject: ["browser": ["enabled": false]])
-                .write(to: URL(fileURLWithPath: override))
-
-            let runtime = MacNodeRuntime(browserProxyRequest: { _ in
+    @Test func `handle invoke browser proxy rejects disabled browser control`() async {
+        let runtime = MacNodeRuntime(
+            browserProxyRequest: { _ in
                 Issue.record("browserProxyRequest should not run when browser control is disabled")
                 return "{}"
-            })
-            let response = await runtime.handleInvoke(
-                BridgeInvokeRequest(
-                    id: "req-browser-disabled",
-                    command: OpenClawBrowserCommand.proxy.rawValue,
-                    paramsJSON: #"{"method":"GET","path":"/tabs"}"#))
+            },
+            browserControlEnabled: { false })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-browser-disabled",
+                command: OpenClawBrowserCommand.proxy.rawValue,
+                paramsJSON: #"{"method":"GET","path":"/tabs"}"#))
 
-            #expect(response.ok == false)
-            #expect(response.error?.message.contains("BROWSER_DISABLED") == true)
-        }
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("BROWSER_DISABLED") == true)
     }
 }

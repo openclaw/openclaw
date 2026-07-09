@@ -1,7 +1,6 @@
 // Qa Lab tests cover qa transport registry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
 import {
   createQaTransportAdapter,
   createQaTransportAdapterFactoryRegistry,
@@ -10,6 +9,31 @@ import {
   type QaTransportFactoryContext,
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+
+function createAdapterDefinition(cleanup?: () => Promise<void>) {
+  const state = createQaBusState();
+  return {
+    id: "selected",
+    label: "Selected",
+    accountId: "sut",
+    requiredPluginIds: [],
+    supportedActions: [],
+    async sendInbound(input: Parameters<QaTransportAdapter["sendInbound"]>[0]) {
+      return state.addInboundMessage(input);
+    },
+    createGatewayConfig: () => ({}),
+    async waitReady() {},
+    buildAgentDelivery: ({ target }: { target: string }) => ({
+      channel: "selected",
+      to: target,
+      replyChannel: "selected",
+      replyTo: target,
+    }),
+    async handleAction() {},
+    createReportNotes: () => [],
+    ...(cleanup ? { cleanup } : {}),
+  };
+}
 
 function createFactoryContext(
   overrides: Partial<QaTransportFactoryContext> = {},
@@ -39,35 +63,42 @@ describe("qa transport registry", () => {
   });
 
   it("selects an injected matching factory", async () => {
-    const adapter = createQaChannelTransport(createQaBusState());
-    const skippedCreate = vi.fn(async () => adapter);
-    const selectedCreate = vi.fn(async () => adapter);
+    const definition = createAdapterDefinition();
+    const skippedCreate = vi.fn(async () => definition);
+    const selectedCreate = vi.fn(async () => definition);
     const factories: QaTransportAdapterFactory[] = [
       { id: "skipped", matches: () => false, create: skippedCreate },
       { id: "selected", matches: () => true, create: selectedCreate },
     ];
     const registry = createQaTransportAdapterFactoryRegistry(factories);
 
-    const created = await registry.create(createFactoryContext());
+    const created = await registry.create(
+      createFactoryContext({ channelId: "selected", driver: "live" }),
+    );
 
-    expect(created.adapter).toBe(adapter);
+    expect(created.adapter).toMatchObject({
+      id: definition.id,
+      label: definition.label,
+      state: expect.any(Object),
+    });
     expect(skippedCreate).not.toHaveBeenCalled();
     expect(selectedCreate).toHaveBeenCalledOnce();
   });
 
   it("returns cleanup owned by the selected adapter", async () => {
     const cleanup = vi.fn(async () => undefined);
-    const adapter: QaTransportAdapter = createQaChannelTransport(createQaBusState());
-    adapter.cleanup = cleanup;
+    const definition = createAdapterDefinition(cleanup);
     const factory: QaTransportAdapterFactory = {
       id: "cleanup",
       matches: () => true,
       async create() {
-        return adapter;
+        return definition;
       },
     };
     const registry = createQaTransportAdapterFactoryRegistry([factory]);
-    const created = await registry.create(createFactoryContext());
+    const created = await registry.create(
+      createFactoryContext({ channelId: "cleanup", driver: "live" }),
+    );
 
     await created.cleanup();
 
@@ -75,10 +106,10 @@ describe("qa transport registry", () => {
   });
 
   it("reports no-match and startup failures with transport context", async () => {
-    const context = createFactoryContext();
+    const context = createFactoryContext({ channelId: "missing", driver: "live" });
     const emptyRegistry = createQaTransportAdapterFactoryRegistry([]);
     await expect(emptyRegistry.create(context)).rejects.toThrow(
-      "no QA transport factory for qa-channel:qa-channel",
+      "no QA transport factory for live:missing",
     );
 
     const brokenRegistry = createQaTransportAdapterFactoryRegistry([
@@ -91,7 +122,7 @@ describe("qa transport registry", () => {
       },
     ]);
     await expect(brokenRegistry.create(context)).rejects.toThrow(
-      "broken failed to create QA transport qa-channel:qa-channel: provider boot failed",
+      "failed to create QA transport live:missing: provider boot failed",
     );
   });
 });

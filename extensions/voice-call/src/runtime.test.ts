@@ -323,6 +323,57 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(fullConfig);
   });
 
+  it("builds realtime instructions for the agent frozen on each call", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    config.realtime.agentContext = {
+      enabled: true,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeWorkspaceFiles: false,
+      files: ["SOUL.md"],
+    };
+    const fullConfig = {
+      agents: { list: [{ id: "main" }, { id: "support" }] },
+    } as OpenClawConfig;
+    const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
+      name: agentId === "support" ? "Support Voice" : "Main Voice",
+    }));
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      fullConfig,
+      agentRuntime: {
+        resolveAgentIdentity,
+      } as never,
+    });
+
+    const resolveInstructions = mocks.realtimeHandlerCtorArgs[0]?.[7];
+    if (typeof resolveInstructions !== "function") {
+      throw new Error("expected per-call realtime instruction resolver");
+    }
+    const supportInstructions = resolveInstructions({
+      callId: "call-support",
+      agentId: "support",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15550002222",
+    });
+    expect(supportInstructions).toContain("- Agent id: support");
+    expect(supportInstructions).toContain("- Name: Support Voice");
+    expect(supportInstructions).not.toContain("Main Voice");
+
+    const unknownInstructions = resolveInstructions({
+      callId: "call-unknown",
+      agentId: "unknown",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15550002222",
+    });
+    expect(unknownInstructions).not.toContain("OpenClaw agent voice context:");
+  });
+
   it.each(["twilio", "telnyx", "plivo"] as const)(
     "fails closed when %s falls back to a local-only webhook",
     async (provider) => {
@@ -432,6 +483,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "support",
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -470,7 +522,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
       "embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("agent:main:voice:15550009999");
+    expect(consultParams.agentId).toBe("support");
+    expect(consultParams.sessionKey).toBe("agent:support:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");

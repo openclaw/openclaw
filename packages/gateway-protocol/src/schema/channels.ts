@@ -48,6 +48,17 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * One-shot text-to-speech request rendered with the configured TTS provider
+ * chain (unlike `talk.speak`, which pins the Talk-mode provider).
+ */
+export const TtsSpeakParamsSchema = Type.Object(
+  {
+    text: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 /** Supported Talk session shapes exposed to clients and providers. */
 const TalkModeSchema = Type.Union([
   Type.Literal("realtime"),
@@ -620,7 +631,14 @@ const TalkRealtimeConfigSchema = Type.Object(
     instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
+    vadThreshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    reasoningEffort: Type.Optional(Type.String({ minLength: 1 })),
     brain: Type.Optional(TalkBrainSchema),
+    consultRouting: Type.Optional(
+      Type.Union([Type.Literal("provider-direct"), Type.Literal("force-agent-consult")]),
+    ),
   },
   { additionalProperties: false },
 );
@@ -686,6 +704,18 @@ export const TalkSpeakResultSchema = Type.Object(
     provider: NonEmptyString,
     outputFormat: Type.Optional(Type.String()),
     voiceCompatible: Type.Optional(Type.Boolean()),
+    mimeType: Type.Optional(Type.String()),
+    fileExtension: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** Text-to-speech result for `tts.speak` with encoded audio and provider metadata. */
+export const TtsSpeakResultSchema = Type.Object(
+  {
+    audioBase64: NonEmptyString,
+    provider: NonEmptyString,
+    outputFormat: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileExtension: Type.Optional(Type.String()),
   },

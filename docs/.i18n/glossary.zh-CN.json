@@ -992,8 +992,8 @@
     "target": "轨迹导出"
   },
   {
-    "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
+    "source": "Tencent Cloud (TokenHub / TokenPlan)",
+    "target": "腾讯云（TokenHub / TokenPlan）"
   },
   {
     "source": "Codex Harness Context Engine Port",
@@ -1240,6 +1240,10 @@
     "target": "Agent 配置参考"
   },
   {
+    "source": "Audit records",
+    "target": "审计记录"
+  },
+  {
     "source": "Background process",
     "target": "后台进程"
   },
@@ -1304,12 +1308,24 @@
     "target": "消息呈现"
   },
   {
+    "source": "Media understanding",
+    "target": "媒体理解"
+  },
+  {
     "source": "Models CLI reference",
     "target": "模型 CLI 参考"
   },
   {
     "source": "Network proxy",
     "target": "网络代理"
+  },
+  {
+    "source": "Node troubleshooting",
+    "target": "节点故障排查"
+  },
+  {
+    "source": "Nodes",
+    "target": "节点"
   },
   {
     "source": "Nodes CLI",

@@ -16,6 +16,7 @@ import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./chat-send.ts";
 import { buildChatSessionListOptions } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
@@ -158,6 +159,21 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
 }
 
 function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
+  const renderLifecycle: RenderLifecycle = {
+    invalidate: vi.fn(),
+    afterCommit: (effect) => {
+      let active = true;
+      renderLifecycle.invalidate();
+      queueMicrotask(() => {
+        if (active) {
+          effect(() => undefined);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    },
+  };
   const host = {
     client: null,
     chatMessages: [],
@@ -199,7 +215,21 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    updateComplete: Promise.resolve(),
+    renderLifecycle,
+    querySelector: () => null,
+    chatScrollCommitCleanup: null,
+    chatScrollFrame: null,
+    chatScrollGuardFrame: null,
+    chatScrollTimeout: null,
+    chatScrollGeneration: 0,
+    chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatNewMessagesBelow: false,
+    chatIsProgrammaticScroll: false,
+    chatProgrammaticScrollTarget: 0,
     ...overrides,
   };
   const sessions = createSessionCapability({
@@ -2197,6 +2227,40 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw what changed?");
+  });
+
+  it("sends /approve immediately while a main run is waiting without queueing it", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Waiting for approval...",
+      chatMessage: "/approve approval-123 allow-once",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "approval command payload",
+    );
+    expect(payload.sessionKey).toBe("agent:main");
+    expect(payload.message).toBe("/approve approval-123 allow-once");
+    expect(payload.deliver).toBe(false);
+    expect(payload.idempotencyKey).toEqual(expect.stringMatching(uuidPattern));
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Waiting for approval...");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/approve approval-123 allow-once");
   });
 
   it("sends /side through the detached BTW path", async () => {

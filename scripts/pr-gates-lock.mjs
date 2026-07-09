@@ -10,7 +10,7 @@ import {
 // A queued gate block legitimately waits out another full gate run; the
 // 10-minute per-command default in the lock runtime is far too short for that.
 const DEFAULT_GATE_LOCK_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-const PARENT_WATCH_INTERVAL_MS = 2_000;
+const PARENT_WATCH_INTERVAL_MS = 500;
 
 function parseArgs(argv) {
   const args = { statusFile: "" };
@@ -61,7 +61,7 @@ function main() {
   fs.writeFileSync(statusFile, "acquired\n");
 
   // The owner-pid reclaim in the lock runtime already covers a SIGKILLed
-  // holder; this watch releases promptly when the gate shell dies mid-block.
+  // holder; this watch releases within half a second when the gate shell dies.
   // ppid 1 also counts as dead: orphans reparent to init/launchd, and a
   // helper that started orphaned has no gate block to hold the lock for.
   setInterval(() => {

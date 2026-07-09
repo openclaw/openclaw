@@ -231,7 +231,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       result.push({
         name,
-        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+        transport: capabilities.usesChromeMcp
+          ? "chrome-mcp"
+          : capabilities.mode === "local-extension"
+            ? "extension"
+            : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
         cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,

@@ -3,27 +3,29 @@ agp = "9.2.1"
 androidx-activity = "1.13.0"
 androidx-benchmark = "1.4.1"
 androidx-camera = "1.6.0"
-androidx-compose-bom = "2026.05.01"
-androidx-core = "1.18.0"
+androidx-compose-bom = "2026.06.01"
+androidx-core = "1.19.0"
 androidx-exifinterface = "1.4.2"
-androidx-lifecycle = "2.10.0"
+androidx-lifecycle = "2.11.0"
 androidx-security = "1.1.0"
 androidx-test-ext = "1.3.0"
-androidx-uiautomator = "2.4.0-beta02"
+androidx-uiautomator = "2.4.0"
 androidx-webkit = "1.15.0"
 bcprov = "1.84"
-commonmark = "0.28.0"
+commonmark = "0.29.0"
 coroutines = "1.11.0"
 dnsjava = "3.6.5"
 junit = "4.13.2"
-junit-vintage = "6.1.0"
-kotest = "6.1.11"
+junit-vintage = "6.1.1"
+kotest = "6.2.1"
+ksp = "2.3.9"
 ktlint-gradle = "14.2.0"
 kotlin = "2.4.0"
 material = "1.14.0"
-okhttp = "5.3.2"
+okhttp = "5.4.0"
 barcode-scanning = "17.3.0"
 robolectric = "4.16.1"
+room = "2.8.4"
 serialization-json = "1.11.0"
 
 [libraries]
@@ -43,6 +45,8 @@ androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version.ref = "androidx-exifinterface" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-ext" }
 androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "androidx-uiautomator" }
@@ -72,4 +76,5 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 android-test = { id = "com.android.test", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint-gradle" }

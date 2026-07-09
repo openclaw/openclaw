@@ -242,6 +242,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
+          taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
         });
@@ -285,13 +286,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                   }
                 : undefined,
               onToolCallResult: cliCaptureHandle
-                ? ({ toolName: resultToolName, args, result, isError }) => {
+                ? (result) => {
                     recordMcpLoopbackToolCallResult({
                       captureHandle: cliCaptureHandle,
-                      toolName: resultToolName,
-                      args,
-                      result,
-                      isError,
+                      ...result,
                     });
                   }
                 : undefined,

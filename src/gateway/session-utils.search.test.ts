@@ -11,7 +11,11 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
+import {
+  buildGatewaySessionInfo,
+  filterAndSortSessionEntries,
+  listSessionsFromStore,
+} from "./session-utils.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
 const MAIN_SESSION_ID = "sess-main";
@@ -79,6 +83,17 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
       model,
     } as SessionEntry,
   };
+}
+
+function buildLegacyRuntimeRow(cfg: OpenClawConfig, model: string) {
+  const store = createLegacyRuntimeStore(model);
+  return buildGatewaySessionInfo({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store,
+    key: MAIN_SESSION_KEY,
+    entry: store[MAIN_SESSION_KEY],
+  });
 }
 
 function createOpenAiPricingConfig(params: {
@@ -327,6 +342,20 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 describe("listSessionsFromStore search", () => {
   beforeAll(() => {
     listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
+      store: {
+        "agent:main:warm-runtime": {
+          sessionId: "sess-warm-runtime",
+          updatedAt: Date.now(),
+        } as SessionEntry,
+      },
+      storePath: "/tmp/openclaw-session-search-warm.json",
+      opts: { search: "anthropic" },
+    });
+  });
+
+  beforeAll(() => {
+    listSessionsFromStore({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
       storePath: "/tmp/sessions.json",
       store: {
@@ -460,14 +489,14 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSearchSessions({
+      const entries = filterAndSortSessionEntries({
         cfg,
         store,
         opts: { search: testCase.search },
+        now,
       });
 
-      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
-      expect(result.totalCount).toBe(1);
+      expect(entries.map(([key]) => key)).toEqual([testCase.expectedKey]);
     }
   });
 
@@ -539,14 +568,10 @@ describe("listSessionsFromStore search", () => {
       expectedProvider: "vercel-ai-gateway",
     },
   ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSearchSessions({
-      cfg,
-      store: createLegacyRuntimeStore(runtimeModel),
-      opts: {},
-    });
+    const row = buildLegacyRuntimeRow(cfg, runtimeModel);
 
-    expect(result.sessions[0]?.modelProvider).toBe(expectedProvider);
-    expect(result.sessions[0]?.model).toBe(runtimeModel);
+    expect(row.modelProvider).toBe(expectedProvider);
+    expect(row.model).toBe(runtimeModel);
   });
 
   test("exposes unknown totals when freshness is stale or missing", () => {

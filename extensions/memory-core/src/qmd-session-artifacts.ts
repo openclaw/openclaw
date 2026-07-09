@@ -6,7 +6,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 
 const QMD_SESSION_ARTIFACT_TABLE = "openclaw_qmd_session_artifacts";
 
-export const QMD_SESSION_ARTIFACT_HIT: unique symbol = Symbol("openclaw.qmdSessionArtifactHit");
+const QMD_SESSION_ARTIFACT_HIT: unique symbol = Symbol("openclaw.qmdSessionArtifactHit");
 
 export type QmdSessionArtifactMapping = {
   agentId: string;
@@ -18,7 +18,7 @@ export type QmdSessionArtifactMapping = {
   sessionId: string;
 };
 
-export type QmdSessionArtifactLookup = {
+type QmdSessionArtifactLookup = {
   artifactPath?: string;
   collection?: string;
   docid?: string;
@@ -26,7 +26,7 @@ export type QmdSessionArtifactLookup = {
   searchPath: string;
 };
 
-export type QmdSessionArtifactIdentity = {
+type QmdSessionArtifactIdentity = {
   agentId: string;
   archived: boolean;
   memoryKey: string;

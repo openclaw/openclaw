@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
+// The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
+const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
@@ -843,6 +845,7 @@ exit "$status"
     const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
     const nodeShim = path.join(fakeBin, "node");
     const sleepShim = path.join(fakeBin, "sleep");
+    const fixtureReadyPath = path.join(parent, "fixture-log-ready");
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -853,6 +856,7 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
+          ': >"$FIXTURE_READY_PATH"',
           "/bin/sleep 30",
           "",
         ].join("\n"),
@@ -862,8 +866,8 @@ exit "$status"
         sleepShim,
         [
           "#!/usr/bin/env bash",
-          "for _ in $(seq 1 50); do",
-          '  grep -q "FIXTURE_TAIL_MARKER" "$FIXTURE_DIR/clawhub-fixture.log" && exit 0',
+          'for _ in $(seq 1 "$FIXTURE_READY_WAIT_ATTEMPTS"); do',
+          '  [[ -f "$FIXTURE_READY_PATH" ]] && exit 0',
           "  /bin/sleep 0.01",
           "done",
           "exit 1",
@@ -891,6 +895,8 @@ exit "$status"
         {
           FAKE_BIN: fakeBin,
           FIXTURE_DIR: fixtureDir,
+          FIXTURE_READY_PATH: fixtureReadyPath,
+          FIXTURE_READY_WAIT_ATTEMPTS: String(FIXTURE_READY_WAIT_ATTEMPTS),
           SCRATCH_ROOT: scratchRoot,
         },
       );

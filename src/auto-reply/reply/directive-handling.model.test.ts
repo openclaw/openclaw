@@ -1483,6 +1483,22 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     };
   }
 
+  beforeAll(async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
+        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
+        allowedModelCatalog: [
+          ...allowedModelCatalog,
+          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+        ],
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+      }),
+    );
+  });
+
   it("shows success message when session state is available", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();

@@ -14,6 +14,7 @@ export type ActiveChannelPluginRuntimeShape = {
   } | null;
   conversationBindings?: {
     supportsCurrentConversationBinding?: boolean;
+    isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   } | null;
 };
 

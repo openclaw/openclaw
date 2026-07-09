@@ -116,6 +116,55 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it.each([
+    {
+      label: "write-plugin-sdk-entry-dts",
+      scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
+      expectedEnv: { FOO: "bar", OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" },
+    },
+    {
+      label: "copy-hook-metadata",
+      scriptPath: "scripts/copy-hook-metadata.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "copy-export-html-templates",
+      scriptPath: "scripts/copy-export-html-templates.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-build-info",
+      scriptPath: "scripts/write-build-info.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-cli-startup-metadata",
+      scriptPath: "scripts/write-cli-startup-metadata.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-cli-compat",
+      scriptPath: "scripts/write-cli-compat.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+  ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
+    const step = getBuildAllStep(label);
+
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { FOO: "bar" },
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: ["--import", "tsx", scriptPath],
+      options: {
+        stdio: "inherit",
+        env: expectedEnv,
+      },
+    });
+  });
+
   it("can route pnpm script steps through direct node entrypoints", () => {
     const step = getBuildAllStep("plugins:assets:build");
 

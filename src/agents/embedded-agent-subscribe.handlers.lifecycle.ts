@@ -28,6 +28,7 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
+import { summarizeToolValidationError } from "./tool-error-summary.js";
 
 export {
   handleCompactionEnd,
@@ -175,6 +176,12 @@ export function handleAgentEnd(
       typeof ctx.state.terminalAborted === "boolean"
         ? ctx.state.terminalAborted
         : ctx.params.isTerminalAborted?.();
+    // Aborted validation loops lose their final tool result. Preserve only the
+    // argument-free validator summary; arbitrary tool errors can contain secrets.
+    const toolErrorSummary =
+      terminalAborted === true && ctx.state.lastToolError
+        ? summarizeToolValidationError(ctx.state.lastToolError)
+        : undefined;
     const terminalMeta = {
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
@@ -183,6 +190,7 @@ export function handleAgentEnd(
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
     };
     const phase =
       ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
@@ -247,7 +255,7 @@ export function handleAgentEnd(
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();
     if (isPromiseLike<void>(postMediaFlushResult)) {
       return postMediaFlushResult.then(() => {
-        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {
           return onBlockReplyFlushResult;
         }
@@ -255,7 +263,7 @@ export function handleAgentEnd(
       });
     }
 
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult;
     }

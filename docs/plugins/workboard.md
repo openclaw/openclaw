@@ -25,9 +25,11 @@ openclaw gateway restart
 openclaw dashboard
 ```
 
-The Workboard tab appears in the dashboard nav. If the tab is visible but the
-plugin is disabled or blocked by `plugins.allow`/`plugins.deny`, the tab shows
-a plugin-unavailable state instead of card data.
+The Workboard tab appears in the dashboard nav once the plugin is enabled;
+while it is disabled the tab stays hidden from navigation. Opening the
+`/workboard` route directly while the plugin is disabled or blocked by
+`plugins.allow`/`plugins.deny` shows a plugin-unavailable state instead of
+card data.
 
 ## Configuration
 

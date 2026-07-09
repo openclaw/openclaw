@@ -2,12 +2,14 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.gateway.DeviceAuthStore
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRegistryEntry
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
@@ -15,10 +17,12 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
+import android.Manifest
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +32,24 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
+
+enum class ChatDraftPlacement {
+  Replace,
+  BeforeExisting,
+}
+
+data class ChatDraft(
+  val text: String,
+  val placement: ChatDraftPlacement,
+)
+
+internal fun shouldStartRuntimeOnForeground(
+  foreground: Boolean,
+  onboardingCompleted: Boolean,
+): Boolean = foreground && onboardingCompleted
 
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
@@ -39,6 +61,10 @@ class MainViewModel(
   private val nodeApp = app as NodeApp
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
+  private val gatewayConfigOperationSeq = AtomicLong()
+  private val gatewayConfigOperationMutex = Mutex()
+
+  @Volatile private var permissionRequester: PermissionRequester? = null
 
   @Volatile private var foreground = false
 
@@ -48,10 +74,12 @@ class MainViewModel(
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
-  private val _chatDraft = MutableStateFlow<String?>(null)
-  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
+  val chatDraft: StateFlow<ChatDraft?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
+  private val _assistantAutoSendInFlight = MutableStateFlow(false)
+  val assistantAutoSendInFlight: StateFlow<Boolean> = _assistantAutoSendInFlight
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
@@ -62,6 +90,19 @@ class MainViewModel(
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
     return runtime
+  }
+
+  internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
+    check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    check(runtimeRef.value == null) { "Screenshot fixture mode must be selected before runtime startup" }
+    prefs.setOnboardingCompleted(true)
+    prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
+    prefs.setDisplayName("Pixel")
+    prefs.setSpeakerEnabled(true)
+    val runtime = nodeApp.ensureScreenshotFixtureRuntime()
+    runtime.setForeground(foreground)
+    runtimeRef.value = runtime
+    _requestedHomeDestination.value = scene.homeDestination
   }
 
   /**
@@ -122,6 +163,7 @@ class MainViewModel(
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
+  val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -130,6 +172,9 @@ class MainViewModel(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
+  val modelRecents: StateFlow<List<String>> = prefs.modelRecents
+  val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -138,12 +183,20 @@ class MainViewModel(
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
+  val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = runtimeState(initial = GatewayCronJobDetailState.Idle) { it.cronJobDetailState }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
   val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
+    runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
+  val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
+  val skillWorkshopErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopErrorText }
+  val skillWorkshopNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopNoticeText }
+  val skillWorkshopInspectingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopInspectingProposalId }
+  val skillWorkshopMutatingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopMutatingProposalId }
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
@@ -165,7 +218,6 @@ class MainViewModel(
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
-  val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -177,8 +229,8 @@ class MainViewModel(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
-  val gatewayToken: StateFlow<String> = prefs.gatewayToken
-  val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
+  val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
+  val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
@@ -209,11 +261,16 @@ class MainViewModel(
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
   val chatThinkingLevel: StateFlow<String> = runtimeState(initial = "off") { it.chatThinkingLevel }
+  val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
+  val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
+  internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
+    runtimeState(initial = null) { it.messageSpeechState }
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
@@ -238,6 +295,7 @@ class MainViewModel(
     runtime.camera.attachLifecycleOwner(owner)
     runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
+    this.permissionRequester = permissionRequester
   }
 
   /**
@@ -245,7 +303,12 @@ class MainViewModel(
    */
   fun setForeground(value: Boolean) {
     foreground = value
-    if (value && prefs.onboardingCompleted.value) {
+    if (
+      shouldStartRuntimeOnForeground(
+        foreground = value,
+        onboardingCompleted = prefs.onboardingCompleted.value,
+      )
+    ) {
       queueRuntimeStartup()
     }
     runtimeRef.value?.setForeground(value)
@@ -287,66 +350,83 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
-  fun setGatewayBootstrapToken(value: String) {
-    prefs.setGatewayBootstrapToken(value)
-  }
-
-  fun setGatewayPassword(value: String) {
-    prefs.setGatewayPassword(value)
-  }
-
   /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
-  private fun resetGatewaySetupAuth() {
-    runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
-  }
-
-  private fun resetGatewaySetupAuthWithoutRuntime() {
-    prefs.clearGatewaySetupAuth()
-    val deviceId = DeviceIdentityStore(nodeApp).loadOrCreate().deviceId
-    val deviceAuthStore = DeviceAuthStore(prefs)
-    deviceAuthStore.clearToken(deviceId, "node")
-    deviceAuthStore.clearToken(deviceId, "operator")
+  private suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
+    val reset = nodeApp.resetGatewaySetupAuth(stableId)
+    nodeApp.peekRuntime()?.let { runtimeRef.value = it }
+    return reset
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
+    val operation = gatewayConfigOperationSeq.incrementAndGet()
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
     viewModelScope.launch(Dispatchers.Default) {
-      val config = plan.config
-      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
-      val hasExplicitAuth =
-        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
-      if (replacesSavedAuth) {
-        resetGatewaySetupAuth()
-      }
-      prefs.setManualEnabled(true)
-      prefs.setManualHost(config.host)
-      prefs.setManualPort(config.port)
-      prefs.setManualTls(config.tls)
+      gatewayConfigOperationMutex.withLock {
+        if (operation != gatewayConfigOperationSeq.get()) return@withLock
+        val config = plan.config
+        val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+        val targetAlreadyPaired =
+          prefs.gatewayRegistry.entries.value
+            .any { it.stableId == endpoint.stableId }
+        val blankCredentials = config.token.isEmpty() && config.bootstrapToken.isEmpty() && config.password.isEmpty()
+        val preservesPairedTarget =
+          targetAlreadyPaired && blankCredentials && plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_ENDPOINT
+        val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE && !preservesPairedTarget
+        if (replacesSavedAuth && !resetGatewaySetupAuth(endpoint.stableId)) return@launch
+        if (operation != gatewayConfigOperationSeq.get()) return@launch
+        prefs.setManualEnabled(true)
+        prefs.setManualHost(config.host)
+        prefs.setManualPort(config.port)
+        prefs.setManualTls(config.tls)
 
-      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
-      // including password-only setups that Compose deliberately cannot read back.
-      if (replacesSavedAuth || hasExplicitAuth) {
-        prefs.setGatewayBootstrapToken(config.bootstrapToken)
-        prefs.setGatewayToken(config.token)
-        prefs.setGatewayPassword(config.password)
-      }
+        // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
+        // including password-only setups that Compose deliberately cannot read back.
+        if (replacesSavedAuth) {
+          prefs.saveGatewayCredentials(
+            stableId = endpoint.stableId,
+            token = config.token,
+            bootstrapToken = config.bootstrapToken,
+            password = config.password,
+          )
+        }
 
-      val runtime = ensureRuntime()
-      val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
-      if (replacesSavedAuth || hasExplicitAuth) {
-        runtime.connect(
-          endpoint,
-          NodeRuntime.GatewayConnectAuth(
-            token = config.token.ifEmpty { null },
-            bootstrapToken = config.bootstrapToken.ifEmpty { null },
-            password = config.password.ifEmpty { null },
+        prefs.gatewayRegistry.upsert(
+          GatewayRegistryEntry(
+            stableId = endpoint.stableId,
+            kind = GatewayRegistryEntryKind.MANUAL,
+            name = endpoint.name,
+            host = config.host,
+            port = config.port,
+            tls = config.tls,
           ),
         )
-      } else {
-        runtime.connect(endpoint)
+
+        val runtime = ensureRuntime()
+        if (replacesSavedAuth) {
+          runtime.connectSwitchingGateway(
+            endpoint,
+            NodeRuntime.GatewayConnectAuth(
+              token = config.token.ifEmpty { null },
+              bootstrapToken = config.bootstrapToken.ifEmpty { null },
+              password = config.password.ifEmpty { null },
+            ),
+          )
+        } else {
+          runtime.connectSwitchingGateway(endpoint)
+        }
       }
     }
+  }
+
+  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
+  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
+
+  fun setGatewayCustomHeaders(
+    stableId: String,
+    headers: Map<String, String>,
+  ) {
+    prefs.saveGatewayCustomHeaders(stableId, headers)
   }
 
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
@@ -359,11 +439,19 @@ class MainViewModel(
 
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
+    val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
-      runtimeRef.value?.disconnect()
-      resetGatewaySetupAuth()
-      prefs.setOnboardingCompleted(false)
-      _startOnboardingAtGatewaySetup.value = true
+      gatewayConfigOperationMutex.withLock {
+        if (operation != gatewayConfigOperationSeq.get()) return@withLock
+        nodeApp.peekRuntime()?.also { runtime ->
+          runtimeRef.value = runtime
+          runtime.prepareForGatewaySetup()
+        }
+        // Pairing another gateway no longer forgets existing gateways; per-gateway
+        // credentials and proxy headers are removed only by forgetGateway.
+        prefs.setOnboardingCompleted(false)
+        _startOnboardingAtGatewaySetup.value = true
+      }
     }
   }
 
@@ -424,7 +512,7 @@ class MainViewModel(
       return
     }
     _pendingAssistantAutoSend.value = null
-    _chatDraft.value = request.prompt
+    _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
   }
 
   fun clearRequestedHomeDestination() {
@@ -439,8 +527,38 @@ class MainViewModel(
     _chatDraft.value = null
   }
 
-  fun clearPendingAssistantAutoSend() {
+  fun setChatReplyDraft(value: String) {
     _pendingAssistantAutoSend.value = null
+    _chatDraft.value = ChatDraft(text = value, placement = ChatDraftPlacement.BeforeExisting)
+  }
+
+  /** Claims an assistant prompt before sending so Compose effect restarts cannot dispatch it twice. */
+  fun dispatchPendingAssistantAutoSend(
+    pendingPrompt: String,
+    thinking: String,
+  ) {
+    val prompt = pendingPrompt.trim().ifEmpty { return }
+    if (!chatHealthOk.value || pendingRunCount.value > 0) return
+    if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
+    if (_pendingAssistantAutoSend.value != pendingPrompt) {
+      _assistantAutoSendInFlight.value = false
+      return
+    }
+    viewModelScope.launch {
+      try {
+        sendChatAwaitAcceptance(
+          message = prompt,
+          thinking = thinking,
+          attachments = emptyList(),
+        )
+        // A definitive rejection is surfaced by chatError; it must not strand the
+        // one-shot assistant prompt or overwrite text typed into the composer.
+        _pendingAssistantAutoSend.compareAndSet(pendingPrompt, null)
+      } finally {
+        // Observable release wakes a newer prompt queued while this send was in flight.
+        _assistantAutoSendInFlight.value = false
+      }
+    }
   }
 
   fun setMicEnabled(enabled: Boolean) {
@@ -453,6 +571,23 @@ class MainViewModel(
 
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
+  }
+
+  suspend fun requestVoiceNotePermission(): Boolean {
+    val requester = permissionRequester ?: return false
+    return try {
+      requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
+    } catch (error: CancellationException) {
+      throw error
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  internal fun tryAcquireVoiceNoteMic(): Boolean = runtimeRef.value?.tryAcquireVoiceNoteMic() == true
+
+  internal fun releaseVoiceNoteMic() {
+    runtimeRef.value?.releaseVoiceNoteMic()
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
@@ -474,12 +609,14 @@ class MainViewModel(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
-    ensureRuntime().connect(endpoint)
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().connectSwitchingGateway(endpoint)
+    }
   }
 
   fun connectInBackground(endpoint: GatewayEndpoint) {
     viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connect(endpoint)
+      ensureRuntime().connectSwitchingGateway(endpoint)
     }
   }
 
@@ -489,22 +626,53 @@ class MainViewModel(
     bootstrapToken: String?,
     password: String?,
   ) {
-    ensureRuntime().connect(
-      endpoint,
-      NodeRuntime.GatewayConnectAuth(
-        token = token,
-        bootstrapToken = bootstrapToken,
-        password = password,
-      ),
-    )
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().connectSwitchingGateway(
+        endpoint,
+        NodeRuntime.GatewayConnectAuth(
+          token = token,
+          bootstrapToken = bootstrapToken,
+          password = password,
+        ),
+      )
+    }
   }
 
   fun connectManual() {
     ensureRuntime().connectManual()
   }
 
+  fun switchToGateway(stableId: String) {
+    val operation = gatewayConfigOperationSeq.incrementAndGet()
+    viewModelScope.launch(Dispatchers.Default) {
+      gatewayConfigOperationMutex.withLock {
+        if (operation == gatewayConfigOperationSeq.get()) {
+          ensureRuntime().switchToGateway(stableId)
+        }
+      }
+    }
+  }
+
+  fun forgetGateway(stableId: String) {
+    val operation = gatewayConfigOperationSeq.incrementAndGet()
+    viewModelScope.launch(Dispatchers.Default) {
+      gatewayConfigOperationMutex.withLock {
+        if (operation == gatewayConfigOperationSeq.get()) {
+          ensureRuntime().forgetGateway(stableId)
+        }
+      }
+    }
+  }
+
   fun disconnect() {
-    runtimeRef.value?.disconnect()
+    val operation = gatewayConfigOperationSeq.incrementAndGet()
+    viewModelScope.launch(Dispatchers.Default) {
+      gatewayConfigOperationMutex.withLock {
+        if (operation == gatewayConfigOperationSeq.get()) {
+          runtimeRef.value?.disconnect()
+        }
+      }
+    }
   }
 
   fun acceptGatewayTrustPrompt() {
@@ -545,12 +713,60 @@ class MainViewModel(
     ensureRuntime().refreshCronJobs()
   }
 
+  fun loadCronJobDetail(id: String) {
+    ensureRuntime().loadCronJobDetail(id)
+  }
+
+  fun clearCronJobDetail() {
+    ensureRuntime().clearCronJobDetail()
+  }
+
   fun refreshUsage() {
     ensureRuntime().refreshUsage()
   }
 
   fun refreshSkills() {
     ensureRuntime().refreshSkills()
+  }
+
+  fun refreshSkillWorkshopProposals(agentId: String? = null) {
+    ensureRuntime().refreshSkillWorkshopProposals(agentId = agentId)
+  }
+
+  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
+    ensureRuntime().resetSkillWorkshopAgentScope(agentId = agentId)
+  }
+
+  fun inspectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().inspectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun applySkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().applySkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun rejectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().rejectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun quarantineSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    ensureRuntime().quarantineSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
+  }
+
+  fun clearSkillWorkshopMessage() {
+    ensureRuntime().clearSkillWorkshopMessage()
   }
 
   fun refreshNodesDevices() {
@@ -588,28 +804,127 @@ class MainViewModel(
     ensureRuntime().refreshChat()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    ensureRuntime().refreshChatSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    ensureRuntime().refreshChatSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    ensureRuntime().patchChatSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    ensureRuntime().deleteChatSession(key)
+  }
+
+  /** Remembers a custom session group locally so it renders as an empty section. */
+  fun addChatSessionGroup(name: String) {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value + trimmed)
+  }
+
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val stored = prefs.sessionCustomGroups.value
+    // Web semantics: replace a stored name in place, otherwise remember the new name.
+    prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
+    ensureRuntime().renameChatSessionGroup(from = from, to = to)
+  }
+
+  suspend fun deleteChatSessionGroup(group: String) {
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
+    ensureRuntime().dissolveChatSessionGroup(group)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
+
+  suspend fun listWorkspaceFiles(
+    path: String?,
+    offset: Int? = null,
+  ): GatewayWorkspaceListing = ensureRuntime().listWorkspaceFiles(path = path, offset = offset)
+
+  suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile = ensureRuntime().fetchWorkspaceFile(path)
 
   fun setChatThinkingLevel(level: String) {
     ensureRuntime().setChatThinkingLevel(level)
+  }
+
+  fun setChatSessionModel(
+    sessionKey: String,
+    modelRef: String?,
+  ) {
+    ensureRuntime().setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
+  }
+
+  fun toggleModelFavorite(ref: String) {
+    prefs.toggleModelFavorite(ref)
+  }
+
+  fun toggleChatMessageSpeech(
+    messageId: String,
+    text: String,
+  ) {
+    ensureRuntime().toggleMessageSpeech(messageId = messageId, text = text)
+  }
+
+  fun stopChatMessageSpeech() {
+    runtimeRef.value?.stopMessageSpeech()
   }
 
   fun switchChatSession(sessionKey: String) {
     ensureRuntime().switchChatSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    ensureRuntime().selectChatAgent(agentId)
+  }
+
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = ensureRuntime().fetchChatSessionList(search = search, archived = archived)
+
   fun abortChat() {
     ensureRuntime().abortChat()
   }
 
-  fun startNewChat() {
-    ensureRuntime().startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    ensureRuntime().startNewChat(worktree = worktree)
   }
 
   fun refreshChatCommands() {
     ensureRuntime().refreshChatCommands()
+  }
+
+  fun retryChatOutboxCommand(id: String) {
+    ensureRuntime().retryChatOutboxCommand(id)
+  }
+
+  fun deleteChatOutboxCommand(id: String) {
+    ensureRuntime().deleteChatOutboxCommand(id)
   }
 
   fun sendChat(

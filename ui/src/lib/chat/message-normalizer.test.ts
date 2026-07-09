@@ -252,6 +252,29 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves a canvas preview sandbox ceiling from history", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+              sandbox: "scripts",
+            },
+          },
+        ],
+      });
+
+      expect(result.content[0]).toMatchObject({
+        type: "canvas",
+        preview: { sandbox: "scripts" },
+      });
+    });
+
     it("ignores [embed] shortcodes inside fenced code blocks", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -330,6 +353,25 @@ describe("message-normalizer", () => {
             label: "voice.ogg",
             mimeType: "audio/ogg",
             isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
+    it("classifies MPEG-2 audio attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:https://example.com/recording.m2a",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/recording.m2a",
+            kind: "audio",
+            label: "recording.m2a",
+            mimeType: "audio/mpeg",
           },
         },
       ]);

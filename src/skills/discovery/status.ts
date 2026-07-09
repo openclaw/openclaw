@@ -354,6 +354,7 @@ export function buildWorkspaceSkillStatus(
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
+      includeArchived: true,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);

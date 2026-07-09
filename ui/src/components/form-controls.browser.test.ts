@@ -31,9 +31,11 @@ function readUiCss(): string {
 function controlsHtml() {
   return `
     <main>
-      <label class="field"><input value="field input" /></label>
+      <label class="field"><input type="text" value="field input" /></label>
       <label class="field"><textarea>field textarea</textarea></label>
       <label class="field"><select><option>field select</option></select></label>
+      <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
+      <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="config-search__input" value="search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
@@ -151,6 +153,35 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
         expect(select.repeat).toContain("no-repeat");
       }
+    } finally {
+      await closeMobileFixture(fixture);
+    }
+  });
+
+  it("aligns text controls without stretching checkbox and radio inputs", async () => {
+    const fixture = await openMobileFixture();
+    const { page } = fixture;
+    try {
+      const dimensions = await page.evaluate(() => {
+        const height = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing control ${selector}`);
+          }
+          return node.getBoundingClientRect().height;
+        };
+        return {
+          checkbox: height('.field input[type="checkbox"]'),
+          radio: height('.field input[type="radio"]'),
+          select: height(".field select"),
+          text: height('.field input[type="text"]'),
+        };
+      });
+
+      expect(dimensions.text).toBe(38);
+      expect(dimensions.select).toBe(38);
+      expect(dimensions.checkbox).toBeLessThan(38);
+      expect(dimensions.radio).toBeLessThan(38);
     } finally {
       await closeMobileFixture(fixture);
     }

@@ -2,10 +2,21 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.LocationMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SettingsScreensTest {
+  @Test
+  fun locationModes_hideAlwaysFromPlayAndMapThirdPartySelection() {
+    assertEquals(listOf("Off", "While Using"), locationModeLabels(backgroundLocationAvailable = false))
+    assertEquals(
+      listOf("Off", "While Using", "Always"),
+      locationModeLabels(backgroundLocationAvailable = true),
+    )
+    assertEquals(LocationMode.Always, locationModeForLabel("Always"))
+  }
+
   @Test
   fun androidDistributionChannelUsesBuildFlavorLabels() {
     assertEquals("Play", androidDistributionChannel("play"))

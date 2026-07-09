@@ -20,6 +20,7 @@ type MockProcessor = {
 
 const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
+let getUserMedia: ReturnType<typeof vi.fn>;
 
 class MockAudioContext {
   readonly currentTime = 0;
@@ -41,6 +42,15 @@ class MockAudioContext {
     };
     processors.push(processor);
     return processor;
+  }
+
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+    };
   }
 
   createBuffer(_channels: number, length: number, sampleRate: number) {
@@ -116,12 +126,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
+    getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: vi.fn() }],
+    }));
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: vi.fn() }],
-        })),
+        getUserMedia,
       },
     });
   });
@@ -130,6 +141,51 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.unstubAllGlobals();
     listeners.clear();
     processors.length = 0;
+  });
+
+  it("preserves audio processing while selecting the exact microphone", async () => {
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+      inputDeviceId: "usb-mic",
+    });
+
+    await transport.start();
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "usb-mic" },
+      },
+    });
+    transport.stop();
+  });
+
+  it("releases microphone access that resolves after stop", async () => {
+    let resolveMedia: (media: MediaStream) => void = () => undefined;
+    const pendingMedia = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    getUserMedia.mockReturnValue(pendingMedia);
+    const stopTrack = vi.fn();
+    const onInputLevel = vi.fn();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onInputLevel },
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    const start = transport.start();
+    transport.stop();
+    resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
+    await start;
+
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(processors).toHaveLength(0);
+    expect(onInputLevel).not.toHaveBeenCalled();
   });
 
   it("forwards common Talk events from Gateway relay frames", async () => {
@@ -222,6 +278,23 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
     expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
     transport.stop();
+  });
+
+  it("reports microphone activity and resets it when stopped", async () => {
+    const onInputLevel = vi.fn();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onInputLevel },
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    pumpMicrophone(new Float32Array(4096));
+    pumpMicrophone(new Float32Array(4096).fill(0.25));
+    transport.stop();
+
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
   it("stops microphone pumping when the relay rejects appended audio", async () => {

@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -25,7 +28,7 @@ Options:
 `;
 }
 
-export function parsePluginSdkSurfaceReportArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -46,7 +49,7 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -62,7 +65,7 @@ export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env)
   return parsed;
 }
 
-export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -87,7 +90,7 @@ export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.e
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -113,7 +116,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 585,
+  "infra-runtime": 590,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -169,7 +172,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
-  "provider-model-shared": 29,
+  "provider-model-shared": 30,
   "provider-stream-family": 40,
   "provider-stream-shared": 29,
   "provider-stream": 40,
@@ -192,17 +195,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10429,
+      10467,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5206,
+      5223,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3261,
+      3263,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
@@ -274,29 +277,33 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
-// All three inventories overlap. Reuse one module graph so reporting subsets
-// does not triple TypeScript compiler time and heap usage.
-const exportStatsProgram = ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
-  allowJs: false,
-  declaration: true,
-  emitDeclarationOnly: true,
-  module: ts.ModuleKind.ESNext,
-  moduleResolution: ts.ModuleResolutionKind.Bundler,
-  noEmit: true,
-  skipLibCheck: true,
-  strict: false,
-  target: ts.ScriptTarget.ES2022,
-  types: [],
-});
-const exportStatsChecker = exportStatsProgram.getTypeChecker();
+// All three inventories overlap. Lazily reuse one module graph so --help and
+// invalid options avoid compiler work without tripling report time and heap.
+let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
+  exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
+    allowJs: false,
+    declaration: true,
+    emitDeclarationOnly: true,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    skipLibCheck: true,
+    strict: false,
+    target: ts.ScriptTarget.ES2022,
+    types: [],
+  });
+  const program = exportStatsProgram;
+  const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
   const uniqueCallableNames = new Set();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = exportStatsProgram.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -306,8 +313,8 @@ function collectExportStats(entrypoints) {
       });
       continue;
     }
-    const moduleSymbol = exportStatsChecker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? exportStatsChecker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -315,11 +322,11 @@ function collectExportStats(entrypoints) {
     for (const symbol of symbols) {
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
-      const callable = isCallableExport(exportStatsChecker, symbol, sourceFile);
+      const callable = isCallableExport(checker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
         hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(exportStatsChecker, symbol));
+        hasDeprecatedTag(unwrapAlias(checker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);

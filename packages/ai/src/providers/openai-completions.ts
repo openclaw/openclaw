@@ -13,7 +13,11 @@ import type {
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import {
+  applyProviderReportedUsageCost,
+  calculateCost,
+  clampThinkingLevel,
+} from "../model-utils.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -421,13 +425,19 @@ export const streamOpenAICompletions: StreamFunction<
           hasFinishReason = true;
         }
 
-        if (choice.delta) {
+        // Some OpenAI-compatible endpoints deliver a full `message` instead of
+        // `delta` (including refusal-only turns with content: null). Normalize
+        // the same way the managed agent transport does.
+        const choiceDelta =
+          choice.delta ??
+          (choice as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+        if (choiceDelta) {
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
           // or reasoning (other openai compatible endpoints)
           // Use the first non-empty reasoning field to avoid duplication
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-          const deltaFields = choice.delta as Record<string, unknown>;
+          const deltaFields = choiceDelta as Record<string, unknown>;
           const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
@@ -451,19 +461,27 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
           if (
-            choice.delta.content !== null &&
-            choice.delta.content !== undefined &&
-            choice.delta.content.length > 0
+            choiceDelta.content !== null &&
+            choiceDelta.content !== undefined &&
+            choiceDelta.content.length > 0
           ) {
-            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+            appendPartitionedContent(choiceDelta.content, Boolean(foundReasoningField));
           }
 
-          if (choice?.delta?.tool_calls) {
+          // Chat Completions can put safety/structured-output refusals in a
+          // top-level `refusal` field with content null. Surface that as
+          // visible text so the assistant turn is not empty.
+          const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+          if (refusalText.length > 0) {
+            appendPartitionedContent(refusalText, Boolean(foundReasoningField));
+          }
+
+          if (choiceDelta.tool_calls) {
             flushPartitionedContent();
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
-            for (const toolCall of choice.delta.tool_calls) {
+            for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
@@ -489,7 +507,7 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
 
-          const reasoningDetails = (choice.delta as { reasoning_details?: unknown })
+          const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
             .reasoning_details;
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
@@ -639,6 +657,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });
 }
@@ -651,7 +670,11 @@ function buildParams(
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
   const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheOptOutIndexes = new Set<number>();
   const messages = convertMessages(model, context, compat, {
+    cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary: cacheControl !== undefined,
   });
 
@@ -732,7 +755,7 @@ function buildParams(
   }
 
   if (cacheControl) {
-    applyAnthropicCacheControl(messages, params.tools, cacheControl);
+    applyAnthropicCacheControl(messages, params.tools, cacheControl, cacheOptOutIndexes);
   }
 
   if (options?.toolChoice) {
@@ -763,7 +786,7 @@ function buildParams(
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
-    if (options?.reasoningEffort) {
+    if (options?.reasoningEffort && compat.supportsReasoningEffort) {
       params.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
     }
@@ -850,10 +873,11 @@ function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
   cacheControl: OpenAICompatCacheControl,
+  cacheOptOutIndexes: ReadonlySet<number>,
 ): void {
   addCacheControlToSystemPrompt(messages, cacheControl);
   addCacheControlToLastTool(tools, cacheControl);
-  addCacheControlToLastConversationMessage(messages, cacheControl);
+  addCacheControlToLastConversationMessage(messages, cacheControl, cacheOptOutIndexes);
 }
 
 function addCacheControlToSystemPrompt(
@@ -871,9 +895,13 @@ function addCacheControlToSystemPrompt(
 function addCacheControlToLastConversationMessage(
   messages: ChatCompletionMessageParam[],
   cacheControl: OpenAICompatCacheControl,
+  cacheOptOutIndexes: ReadonlySet<number>,
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+    if (cacheOptOutIndexes.has(i)) {
+      continue;
+    }
     if (message.role === "user" || message.role === "assistant") {
       if (addCacheControlToMessage(message, cacheControl)) {
         return;
@@ -970,7 +998,10 @@ export function convertMessages(
   model: Model<"openai-completions">,
   context: Context,
   compat: ResolvedOpenAICompletionsCompat,
-  options: { preserveSystemPromptCacheBoundary?: boolean } = {},
+  options: {
+    cacheOptOutIndexes?: Set<number>;
+    preserveSystemPromptCacheBoundary?: boolean;
+  } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
 
@@ -1025,11 +1056,16 @@ export function convertMessages(
     }
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          options.cacheOptOutIndexes?.add(params.length);
+        }
+        params.push(userParam);
       } else {
         const content: ChatCompletionContentPart[] = msg.content.map(
           (item): ChatCompletionContentPart => {
@@ -1050,10 +1086,14 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content,
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          options.cacheOptOutIndexes?.add(params.length);
+        }
+        params.push(userParam);
       }
     } else if (msg.role === "assistant") {
       // Some providers don't accept null content, use empty string instead
@@ -1263,6 +1303,7 @@ function parseChunkUsage(
     completion_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    cost?: unknown;
   },
   model: Model<"openai-completions">,
 ): AssistantMessage["usage"] {
@@ -1291,6 +1332,7 @@ function parseChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, usage);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 

@@ -20,6 +20,7 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { testing as slackRoutingTesting } from "./prepare-routing.js";
@@ -187,6 +188,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.BodyForAgent).toContain(body);
   });
 
+  it("keeps a whole code point when the inbound preview boundary crosses an emoji", async () => {
+    const prefix = "a".repeat(159);
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: `${prefix}😀tail` }));
+
+    assertPrepared(prepared);
+    expect(prepared.preview).toBe(prefix);
+  });
+
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);
@@ -243,6 +252,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared, "open-policy Slack DM");
     expect(prepared.ctxPayload.RawBody).toContain("hello");
     expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
+  it("uses the validated event workspace as the standardized conversation space", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.teamId = "";
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true,
+      teamId: "T_ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack DM");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
   });
 
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
@@ -860,7 +891,86 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
-  it("keeps unmentioned room events quiet even when group replies are automatic", async () => {
+  it("defaults Slack to a static ack reaction while native thread status handles progress", async () => {
+    const addReaction = vi.fn().mockResolvedValue({ ok: true });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        reactions: { add: addReaction },
+      } as unknown as App["client"],
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+    expect(await prepared.ackReactionPromise).toBe(true);
+    expect(addReaction).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "1.000",
+      name: "eyes",
+    });
+  });
+
+  it("keeps unmentioned room events quiet when ack scope does not force all messages", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+          ackReactionScope: "group-all",
+          groupChat: {
+            unmentionedInbound: "room_event",
+            visibleReplies: "automatic",
+          },
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.ackReactionScope = "group-all";
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "ambient note",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(prepared.ackReactionMessageTs).toBe("1.000");
+    expect(prepared.ackReactionPromise).toBeNull();
+  });
+
+  it("sends Slack ack reactions for room events when ack scope is all", async () => {
+    const reactionAdd = vi.fn().mockResolvedValue({ ok: true });
     const slackCtx = createInboundSlackCtx({
       cfg: {
         messages: {
@@ -879,10 +989,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
           },
         },
       } as OpenClawConfig,
+      appClient: { reactions: { add: reactionAdd } } as any,
       defaultRequireMention: false,
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.ackReactionScope = "all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -895,7 +1007,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared);
     expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
     expect(prepared.ackReactionMessageTs).toBe("1.000");
-    expect(prepared.ackReactionPromise).toBeNull();
+    expect(prepared.ackReactionValue).toBe("eyes");
+    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+    expect(await prepared.ackReactionPromise).toBe(true);
+    expect(reactionAdd).toHaveBeenCalledWith({
+      channel: "C123",
+      name: "eyes",
+      timestamp: "1.000",
+    });
   });
 
   it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
