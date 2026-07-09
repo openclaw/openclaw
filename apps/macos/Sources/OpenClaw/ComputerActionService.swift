@@ -111,9 +111,18 @@ final class ComputerActionService {
         let releaseGenerationAtStart = self.releaseGeneration
         let display = try await self.resolveDisplay(screenIndex: params.screenIndex)
         try await self.dispatch(params, display: display)
-        // No suspension between dispatch arming the button and this check, so the
-        // read of leftButtonDown/releaseGeneration is atomic on the actor.
-        if self.leftButtonDown, self.releaseGeneration != releaseGenerationAtStart {
+        // Catch-up release scoped to the left_mouse_down that armed the button:
+        // that branch is synchronous with no await before the check, so
+        // leftButtonDown here reflects THIS action's own arm, not a concurrent
+        // invoke's. Restricting to leftMouseDown keeps a stale non-arming invoke
+        // (scroll/type/move) that predates a lifecycle release from releasing a
+        // button a newer action legitimately holds. If the generation moved while
+        // this action was suspended, a lifecycle release ran before it armed, so
+        // the release must win and the just-armed button is released.
+        if params.action == .leftMouseDown,
+           self.leftButtonDown,
+           self.releaseGeneration != releaseGenerationAtStart
+        {
             self.releaseHeldInput()
         }
         let cursor = self.automation.currentMouseLocation() ?? CGPoint.zero
