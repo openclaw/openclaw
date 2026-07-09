@@ -8,6 +8,7 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { resolveFeishuMediaList } from "./bot-content.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -67,11 +68,21 @@ type FeishuCreateMessageClient = {
       reply: (opts: {
         path: { message_id: string };
         data: { content: string; msg_type: string; reply_in_thread?: true };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
+      }) => Promise<{
+        code?: number;
+        msg?: string;
+        data?: { message_id?: string };
+      }>;
       create: (opts: {
-        params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
+        params: {
+          receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+        };
         data: { receive_id: string; content: string; msg_type: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
+      }) => Promise<{
+        code?: number;
+        msg?: string;
+        data?: { message_id?: string };
+      }>;
     };
   };
 };
@@ -357,6 +368,8 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
 function parseFeishuMessageItem(
   item: FeishuMessageGetItem,
   fallbackMessageId?: string,
+  media?: FeishuMessageInfo["media"],
+  mediaUnavailableCount?: number,
 ): FeishuMessageInfo {
   const msgType = item.msg_type ?? "text";
   const rawContent = item.body?.content ?? "";
@@ -378,7 +391,44 @@ function parseFeishuMessageItem(
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
+    ...(media && media.length > 0 ? { media } : {}),
+    ...(mediaUnavailableCount && mediaUnavailableCount > 0 ? { mediaUnavailableCount } : {}),
   };
+}
+
+async function resolveHistoricalMessageMedia(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  item: FeishuMessageGetItem;
+  fallbackMessageId: string;
+}): Promise<Pick<FeishuMessageInfo, "media" | "mediaUnavailableCount">> {
+  const messageId = params.item.message_id ?? params.fallbackMessageId;
+  const msgType = params.item.msg_type ?? "text";
+  const rawContent = params.item.body?.content ?? "";
+  if (!messageId || !rawContent) {
+    return {};
+  }
+  const account = resolveFeishuRuntimeAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
+  try {
+    const result = await resolveFeishuMediaList({
+      cfg: params.cfg,
+      messageId,
+      messageType: msgType,
+      content: rawContent,
+      maxBytes: mediaMaxBytes,
+      accountId: account.accountId,
+    });
+    return {
+      ...(result.media.length > 0 ? { media: result.media } : {}),
+      ...(result.unavailableCount > 0 ? { mediaUnavailableCount: result.unavailableCount } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -419,7 +469,13 @@ export async function getMessageFeishu(params: {
       return null;
     }
 
-    return parseFeishuMessageItem(item, messageId);
+    const media = await resolveHistoricalMessageMedia({
+      cfg,
+      accountId,
+      item,
+      fallbackMessageId: messageId,
+    });
+    return parseFeishuMessageItem(item, messageId, media.media, media.mediaUnavailableCount);
   } catch {
     return null;
   }
@@ -595,7 +651,11 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -603,7 +663,10 @@ export async function sendMessageFeishu(
 
   const messageText = convertMarkdownTables(text ?? "", tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions,
+  });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
@@ -632,10 +695,19 @@ type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify(card);
 
-  const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
+  const directParams = {
+    receiveId,
+    receiveIdType,
+    content,
+    msgType: "interactive",
+  };
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
@@ -745,7 +817,10 @@ export function buildStructuredCard(
   const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
   if (options?.note) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+    elements.push({
+      tag: "markdown",
+      content: `<font color='grey'>${options.note}</font>`,
+    });
   }
   const card: Record<string, unknown> = {
     schema: "2.0",

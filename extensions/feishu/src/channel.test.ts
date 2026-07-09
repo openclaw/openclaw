@@ -146,7 +146,10 @@ describe("feishuPlugin.status.probeAccount", () => {
 describe("feishuPlugin.pairing.notifyApproval", () => {
   beforeEach(() => {
     sendMessageFeishuMock.mockReset();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "pairing-msg", chatId: "ou_user" });
+    sendMessageFeishuMock.mockResolvedValue({
+      messageId: "pairing-msg",
+      chatId: "ou_user",
+    });
   });
 
   it("preserves accountId when sending pairing approvals", async () => {
@@ -332,7 +335,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends text messages", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_sent",
+      chatId: "oc_group_1",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -357,7 +363,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends plain message card JSON as a native Feishu card", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -404,7 +413,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends legacy top-level elements card JSON as a native Feishu card", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -418,7 +430,10 @@ describe("feishuPlugin actions", () => {
           elements: [
             {
               tag: "div",
-              text: { tag: "lark_md", content: '**Legacy** <at id="ou_1">body</at>' },
+              text: {
+                tag: "lark_md",
+                content: '**Legacy** <at id="ou_1">body</at>',
+              },
             },
             {
               tag: "div",
@@ -454,7 +469,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("detects message card JSON after the configured response prefix", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
     const cardJson = JSON.stringify({
       body: {
         elements: [{ tag: "markdown", content: "Prefixed card" }],
@@ -487,7 +505,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends wrapped interactive card JSON as a Feishu thread reply card", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "thread-reply",
@@ -522,7 +543,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("keeps ordinary JSON messages on the text path", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_sent",
+      chatId: "oc_group_1",
+    });
     const message = JSON.stringify({ ok: true, elements: "not-a-card" });
 
     await feishuPlugin.actions?.handleAction?.({
@@ -568,7 +592,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("renders presentation messages as cards", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -614,7 +641,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("prefers structured presentation over raw card JSON text", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -649,7 +679,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("prefers structured interactive input over raw card JSON text", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -680,7 +713,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("renders presentation buttons as native Feishu card buttons", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -730,7 +766,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("does not render callback action buttons as Feishu quick commands", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -740,7 +779,12 @@ describe("feishuPlugin actions", () => {
           blocks: [
             {
               type: "buttons",
-              buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect:123" } }],
+              buttons: [
+                {
+                  label: "Inspect",
+                  action: { type: "callback", value: "inspect:123" },
+                },
+              ],
             },
           ],
         },
@@ -760,7 +804,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("renders legacy web_app presentation buttons as native Feishu link buttons", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -770,7 +817,12 @@ describe("feishuPlugin actions", () => {
           blocks: [
             {
               type: "buttons",
-              buttons: [{ label: "Open app", web_app: { url: "https://example.com/app" } }],
+              buttons: [
+                {
+                  label: "Open app",
+                  web_app: { url: "https://example.com/app" },
+                },
+              ],
             },
           ],
         },
@@ -797,7 +849,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("does not duplicate title-only presentation cards in the body fallback", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -831,7 +886,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("renders presentation select labels into the card fallback", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -951,6 +1009,35 @@ describe("feishuPlugin actions", () => {
     expect(message.content).toBe("hello");
   });
 
+  it("preserves recovered media on read results", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_image",
+      content: "![image]",
+      contentType: "image",
+      media: [
+        {
+          path: "media://inbound/feishu-image.jpg",
+          contentType: "image/jpeg",
+          placeholder: "<media:image>",
+        },
+      ],
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { messageId: "om_image" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    const details = resultDetails(result);
+    const message = requireRecord(details.message, "read message");
+    const media = requireArray(message.media, "read message media");
+    expect(requireRecord(media[0], "read message media item").path).toBe(
+      "media://inbound/feishu-image.jpg",
+    );
+  });
+
   it("returns an error result when message reads fail", async () => {
     getMessageFeishuMock.mockResolvedValueOnce(null);
 
@@ -968,7 +1055,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("edits messages", async () => {
-    editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_2", contentType: "post" });
+    editMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_2",
+      contentType: "post",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "edit",
@@ -991,11 +1081,18 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_reply",
+      chatId: "oc_group_1",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "thread-reply",
-      params: { to: "chat:oc_group_1", messageId: "om_parent", text: "reply body" },
+      params: {
+        to: "chat:oc_group_1",
+        messageId: "om_parent",
+        text: "reply body",
+      },
       cfg,
       accountId: undefined,
       toolContext: {},
@@ -1016,7 +1113,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("auto-threads `send` text against the inbound trigger in group_topic sessions", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_topic",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1038,7 +1138,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("auto-threads `send` cards against the inbound trigger in group_topic sessions", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_topic_card", chatId: "oc_group_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_topic_card",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1093,7 +1196,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("auto-threads `send` in group_topic_sender sessions too", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_topic",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1113,7 +1219,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("does not auto-thread `send` in plain group sessions (no topic)", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_plain",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1135,7 +1244,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("does not auto-thread `send` in group_topic when no inbound currentMessageId is available", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_topic",
+      chatId: "oc_group_1",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1157,7 +1269,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("creates pins", async () => {
-    createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_pin", chatId: "oc_group_1" });
+    createPinFeishuMock.mockResolvedValueOnce({
+      messageId: "om_pin",
+      chatId: "oc_group_1",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "pin",
@@ -1226,7 +1341,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("fetches channel info", async () => {
-    getChatInfoMock.mockResolvedValueOnce({ chat_id: "oc_group_1", name: "Eng" });
+    getChatInfoMock.mockResolvedValueOnce({
+      chat_id: "oc_group_1",
+      name: "Eng",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "channel-info",
@@ -1276,7 +1394,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("fetches individual member info", async () => {
-    getFeishuMemberInfoMock.mockResolvedValueOnce({ member_id: "ou_1", name: "Alice" });
+    getFeishuMemberInfoMock.mockResolvedValueOnce({
+      member_id: "ou_1",
+      name: "Alice",
+    });
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "member-info",
@@ -1295,7 +1416,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("infers user_id lookups from the userId alias", async () => {
-    getFeishuMemberInfoMock.mockResolvedValueOnce({ member_id: "u_1", name: "Alice" });
+    getFeishuMemberInfoMock.mockResolvedValueOnce({
+      member_id: "u_1",
+      name: "Alice",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "member-info",
@@ -1309,7 +1433,10 @@ describe("feishuPlugin actions", () => {
   });
 
   it("honors explicit open_id over alias heuristics", async () => {
-    getFeishuMemberInfoMock.mockResolvedValueOnce({ member_id: "u_1", name: "Alice" });
+    getFeishuMemberInfoMock.mockResolvedValueOnce({
+      member_id: "u_1",
+      name: "Alice",
+    });
 
     await feishuPlugin.actions?.handleAction?.({
       action: "member-info",
