@@ -359,6 +359,17 @@ export class ChatPage extends LitElement {
     }
   };
 
+  private readonly handleToolbarPaneFocus = (paneId: string) => {
+    this.handleFocusPane(paneId);
+    // Tabbing can land on a toolbar segment the clipped track has translated
+    // off-screen; scroll its pane into view so the scroll sync follows and the
+    // focused control becomes visible (no-op when already in view).
+    const pane = Array.from(this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")).find(
+      (element) => element.paneId === paneId,
+    );
+    pane?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+
   private readonly handleSplitRight = (paneId: string) => {
     const layout = this.layout;
     const pane = layout ? findPane(layout, paneId)?.pane : null;
@@ -421,7 +432,7 @@ export class ChatPage extends LitElement {
       <div
         class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
         @pointerdown=${() => this.handleFocusPane(pane.id)}
-        @focusin=${() => this.handleFocusPane(pane.id)}
+        @focusin=${() => this.handleToolbarPaneFocus(pane.id)}
       >
         <label class="chat-pane__session-label">
           <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
