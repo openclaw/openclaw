@@ -49,6 +49,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
+    sandboxed?: boolean;
   } {
     const args = hoisted.createOpenClawToolsMock.mock.calls[index]?.[0];
     if (!args || typeof args !== "object") {
