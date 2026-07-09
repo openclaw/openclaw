@@ -431,24 +431,26 @@ async function readComputerUseTools(params: {
     config: params.config,
     repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
-  const fallbackPermitted = !liveTest.ok && params.config.fallbackOnFailure;
+  const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
     ...status,
-    ready: liveTest.ok || fallbackPermitted,
+    ready: liveTest.ok || compatibilityStartupAllowed,
     reason: liveTest.ok ? "ready" : "live_test_failed",
     liveTest,
     ...(repair ? { repair } : {}),
     warnings: [
       ...status.warnings,
       ...(repair?.warnings ?? []),
-      ...(fallbackPermitted
-        ? ["Computer Use live test failed, but computerUse.fallbackOnFailure permits fallback."]
+      ...(compatibilityStartupAllowed
+        ? [
+            "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+          ]
         : []),
     ],
     message: liveTest.ok
       ? "Computer Use is ready."
-      : fallbackPermitted
-        ? `${liveTest.message} Fallback is permitted by computerUse.fallbackOnFailure.`
+      : compatibilityStartupAllowed
+        ? `${liveTest.message} Startup is allowed because computerUse.strictReadiness is false.`
         : liveTest.message,
   };
 }

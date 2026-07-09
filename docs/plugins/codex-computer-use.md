@@ -121,9 +121,16 @@ turn-start check and `/codex computer-use status` report three separate layers:
 
 The live test uses `liveTestTimeoutMs` (default 60 seconds) and calls
 `computer-use.list_apps` through a transient Codex thread. If the first probe
-fails, OpenClaw terminates only stale `SkyComputerUseClient ... mcp` descendants
-of the scoped Codex app-server process, retries exactly once with the same
-timeout, and reports both the repair result and the final live-test result.
+fails, OpenClaw retries exactly once with the same timeout. When
+`computerUse.autoRepair` is `true`, OpenClaw first attempts to terminate only
+`SkyComputerUseClient ... mcp` descendants of the scoped Codex app-server
+process; when it is `false` (the default), the retry does not repair child
+processes. Status reports both any repair result and the final live-test result.
+
+To preserve existing enabled Computer Use setups, a failed live probe is a
+warning by default and Codex-mode startup continues. Set
+`computerUse.strictReadiness: true` to make a failed live probe block startup.
+Installation and MCP exposure failures remain blocking in both modes.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -166,8 +173,9 @@ only an owner or an `operator.admin` Gateway client can run `install`. Other
 authorized senders can continue to use the read-only `status` command,
 including with overrides.
 
-Browser/DOM tools are separate OpenClaw capabilities. `computerUse` failing
-closed only disables fallback inside the Computer Use setup path; if a user
+Browser/DOM tools are separate OpenClaw capabilities.
+`computerUse.strictReadiness` controls whether a failed Computer Use live probe
+blocks Codex-mode startup; it does not select a browser/DOM fallback. If a user
 prompt, cron, or workflow explicitly requests browser/DOM fallback after a
 Computer Use failure, that explicit instruction still controls the later
 workflow.
@@ -263,7 +271,7 @@ remote install is unsupported, run install with a local source or path:
 | `healthCheckEnabled`            | false          | Run periodic Computer Use health probes.                                       |
 | `healthCheckIntervalMinutes`    | 60             | Periodic health cadence when health checks are enabled: 30, 60, 120, or 240.   |
 | `pluginCacheMode`               | `shared`       | Refresh a Codex-discoverable cache copy, or use `independent` cache handling.  |
-| `fallbackOnFailure`             | false          | Allow fallback inside the Computer Use setup path instead of failing closed.   |
+| `strictReadiness`               | false          | Set true to block startup when the live readiness probe fails.                 |
 | `autoRepair`                    | false          | Repair scoped stale Computer Use MCP children before retrying a failed probe.  |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
@@ -306,7 +314,7 @@ matching config key is unset:
 | `healthCheckEnabled`            | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED`             |
 | `healthCheckIntervalMinutes`    | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES`    |
 | `pluginCacheMode`               | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE`                |
-| `fallbackOnFailure`             | `OPENCLAW_CODEX_COMPUTER_USE_FALLBACK_ON_FAILURE`              |
+| `strictReadiness`               | `OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS`                 |
 | `autoRepair`                    | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR`                      |
 | `marketplaceSource`             | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE`               |
 | `marketplacePath`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH`                 |
@@ -350,9 +358,10 @@ Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-OpenClaw intentionally fails closed when `computerUse.enabled` is true. A
-Codex-mode turn should not silently proceed without the native desktop tools
-that the config required.
+OpenClaw always fails closed when required installation or MCP exposure is
+missing. A failed live probe remains visible in status and warnings but keeps
+startup compatible by default; set `computerUse.strictReadiness: true` when the
+turn must not start unless the live probe passes.
 
 ## Troubleshooting
 
@@ -372,13 +381,14 @@ Codex app-server MCP status, or macOS permissions.
 
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and
 MCP server are present, but the local Computer Use bridge did not answer.
-OpenClaw kills stale `SkyComputerUseClient ... mcp` descendants of the scoped
-Codex app-server process once and retries once. It does not kill host-wide
-Computer Use children from other app-server processes. If the second probe still
-fails, quit or restart Codex Computer Use, relaunch Codex Desktop if needed,
-then retry in a fresh OpenClaw session. If the host previously ran Computer Use
-through an older managed Codex app-server, refresh the installed plugin from the
-desktop bundled marketplace:
+OpenClaw retries once. When `computerUse.autoRepair` is `true`, it first attempts
+to terminate stale `SkyComputerUseClient ... mcp` descendants of the scoped
+Codex app-server process; it never terminates Computer Use children belonging
+to other app-server processes. If the second probe still fails, quit or restart
+Codex Computer Use,
+relaunch Codex Desktop if needed, then retry in a fresh OpenClaw session. If the
+host previously ran Computer Use through an older managed Codex app-server,
+refresh the installed plugin from the desktop bundled marketplace:
 
 ```text
 /codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled

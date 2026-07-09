@@ -232,7 +232,12 @@ describe("Codex Computer Use setup", () => {
 
     const status = await readCodexComputerUseStatus({
       pluginConfig: {
-        computerUse: { enabled: true, marketplaceName: "desktop-tools", autoRepair: true },
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          autoRepair: true,
+          strictReadiness: true,
+        },
       },
       request,
       repairComputerUseMcpChildren,
@@ -261,7 +266,7 @@ describe("Codex Computer Use setup", () => {
     expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
   });
 
-  it("permits setup to continue when fallbackOnFailure is enabled", async () => {
+  it("keeps startup compatible by default when the live test fails", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
 
     const status = await ensureCodexComputerUse({
@@ -269,7 +274,6 @@ describe("Codex Computer Use setup", () => {
         computerUse: {
           enabled: true,
           marketplaceName: "desktop-tools",
-          fallbackOnFailure: true,
         },
       },
       request,
@@ -290,9 +294,35 @@ describe("Codex Computer Use setup", () => {
     });
     expect(status.liveTest).toMatchObject({ status: "failed", ok: false });
     expect(status.warnings).toContain(
-      "Computer Use live test failed, but computerUse.fallbackOnFailure permits fallback.",
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
     );
-    expect(status.message).toContain("Fallback is permitted by computerUse.fallbackOnFailure.");
+    expect(status.message).toContain(
+      "Startup is allowed because computerUse.strictReadiness is false.",
+    );
+  });
+
+  it("fails startup closed when strictReadiness is enabled", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
+
+    await expectSetupErrorStatus(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            marketplaceName: "desktop-tools",
+            strictReadiness: true,
+          },
+        },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "live_test_failed",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: true,
+      },
+    );
   });
 
   it("parses process trees so repair can stay scoped to the app-server child tree", () => {

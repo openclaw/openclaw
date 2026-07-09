@@ -103,7 +103,7 @@
             "enum": ["shared", "independent"],
             "default": "shared"
           },
-          "fallbackOnFailure": {
+          "strictReadiness": {
             "type": "boolean",
             "default": false
           },
@@ -383,9 +383,9 @@
       "help": "Use shared for a Codex-discoverable copied Computer Use plugin cache or independent for per-runtime copies.",
       "advanced": true
     },
-    "computerUse.fallbackOnFailure": {
-      "label": "Fallback On Failure",
-      "help": "When false, Computer Use startup failures stop and report instead of silently falling back inside the Computer Use integration.",
+    "computerUse.strictReadiness": {
+      "label": "Strict Readiness",
+      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
       "advanced": true
     },
     "computerUse.autoRepair": {

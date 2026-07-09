@@ -159,7 +159,7 @@ function computerUseConfig(
     healthCheckEnabled: false,
     healthCheckIntervalMinutes: 60,
     pluginCacheMode: "shared",
-    fallbackOnFailure: false,
+    strictReadiness: false,
     autoRepair: false,
     pluginName: "computer-use",
     mcpServerName: "computer-use",

@@ -86,7 +86,7 @@ export type CodexComputerUseConfig = {
   healthCheckEnabled?: boolean;
   healthCheckIntervalMinutes?: number;
   pluginCacheMode?: "shared" | "independent";
-  fallbackOnFailure?: boolean;
+  strictReadiness?: boolean;
   autoRepair?: boolean;
   marketplaceSource?: string;
   marketplacePath?: string;
@@ -105,7 +105,7 @@ export type ResolvedCodexComputerUseConfig = {
   healthCheckEnabled: boolean;
   healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
   pluginCacheMode: "shared" | "independent";
-  fallbackOnFailure: boolean;
+  strictReadiness: boolean;
   autoRepair: boolean;
   pluginName: string;
   mcpServerName: string;
@@ -299,7 +299,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "healthCheckEnabled",
   "healthCheckIntervalMinutes",
   "pluginCacheMode",
-  "fallbackOnFailure",
+  "strictReadiness",
   "autoRepair",
   "marketplaceSource",
   "marketplacePath",
@@ -431,7 +431,7 @@ const codexPluginConfigSchema = z
         healthCheckEnabled: z.boolean().optional(),
         healthCheckIntervalMinutes: codexComputerUseHealthIntervalSchema.optional(),
         pluginCacheMode: codexComputerUsePluginCacheModeSchema.optional(),
-        fallbackOnFailure: z.boolean().optional(),
+        strictReadiness: z.boolean().optional(),
         autoRepair: z.boolean().optional(),
         marketplaceSource: z.string().optional(),
         marketplacePath: z.string().optional(),
@@ -936,10 +936,10 @@ export function resolveCodexComputerUseConfig(
     normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
     "shared";
-  const fallbackOnFailure =
-    params.overrides?.fallbackOnFailure ??
-    config.fallbackOnFailure ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_FALLBACK_ON_FAILURE) ??
+  const strictReadiness =
+    params.overrides?.strictReadiness ??
+    config.strictReadiness ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
     false;
   const autoRepair =
     params.overrides?.autoRepair ??
@@ -962,7 +962,7 @@ export function resolveCodexComputerUseConfig(
     healthCheckEnabled,
     healthCheckIntervalMinutes,
     pluginCacheMode,
-    fallbackOnFailure,
+    strictReadiness,
     autoRepair,
     pluginName:
       readNonEmptyString(params.overrides?.pluginName) ??
