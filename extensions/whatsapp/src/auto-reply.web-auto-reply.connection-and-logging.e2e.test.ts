@@ -1043,9 +1043,41 @@ describe("web auto-reply connection", () => {
       reply,
     });
 
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    const shouldDebounce = capture.getLastOptions()?.shouldDebounce;
+    expect(shouldDebounce?.(msg)).toBe(true);
     expect(
-      capture.getLastOptions()?.shouldDebounce?.(
+      shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "<media:image>",
+            media: { path: "/tmp/inbound.jpg", type: "image/jpeg" },
+          },
+          platform: { sendComposing, reply, sendMedia },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "Location: -27.594870, -48.548219",
+            location: { latitude: -27.59487, longitude: -48.548219 },
+          },
+          platform: { sendComposing, reply, sendMedia },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: { body: "replying with more context" },
+          platform: { sendComposing, reply, sendMedia },
+          quote: { id: "quoted-1", body: "previous context" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldDebounce?.(
         createTestWebInboundMessage({
           payload: {
             body: "/stop\n\n[whatsapp attachment unavailable]",

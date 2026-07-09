@@ -263,15 +263,6 @@ export async function monitorWebChannel(
       });
       const shouldDebounce = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);
-        if (normalized.payload.media?.path || normalized.payload.media?.type) {
-          return false;
-        }
-        if (normalized.payload.location) {
-          return false;
-        }
-        if (normalized.quote?.id || normalized.quote?.body) {
-          return false;
-        }
         return !isControlCommandMessage(
           normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
