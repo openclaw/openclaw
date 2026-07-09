@@ -503,13 +503,15 @@ async function resolveSlackConversationContext(params: {
   // Remember explicit event-carried types so later events for the same room that omit
   // channel_type (e.g. bot-authored mpDM ingress) classify identically instead of
   // falling back to C-prefix inference and keying a second session (#102676).
-  ctx.rememberSlackChannelType(message.channel, message.channel_type);
+  ctx.rememberSlackChannelType(message.channel, message.channel_type, params.eventScope);
   // D-prefixed channels are always direct messages. Skip channel lookups in
   // that common path to avoid an unnecessary API round-trip.
   if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
     resolvedChannelType = normalizeSlackChannelType(
-      message.channel_type ?? channelInfo.type ?? ctx.recallSlackChannelType(message.channel),
+      message.channel_type ??
+        channelInfo.type ??
+        ctx.recallSlackChannelType(message.channel, params.eventScope),
       message.channel,
     );
   }

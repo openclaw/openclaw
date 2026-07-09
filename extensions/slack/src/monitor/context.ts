@@ -170,14 +170,16 @@ export type SlackMonitorContext = {
     topic?: string;
     purpose?: string;
   }>;
-  /** Records an explicit channel_type seen on an event, keyed by channel id (#102676). */
+  /** Records an explicit channel_type seen on an event, keyed like channelCache (#102676). */
   rememberSlackChannelType: (
     channelId: string | null | undefined,
     channelType: string | null | undefined,
+    eventScope?: SlackEventScope,
   ) => void;
-  /** Returns a previously seen explicit channel_type for the channel, if any. */
+  /** Returns a previously seen explicit channel_type for the channel/scope, if any. */
   recallSlackChannelType: (
     channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
   setSlackThreadStatus: (params: {
@@ -273,6 +275,7 @@ export function createSlackMonitorContext(params: {
   const rememberSlackChannelType = (
     channelId: string | null | undefined,
     channelType: string | null | undefined,
+    eventScope?: SlackEventScope,
   ) => {
     const id = normalizeOptionalString(channelId);
     if (!id) {
@@ -284,15 +287,18 @@ export function createSlackMonitorContext(params: {
       channelType === "channel" ||
       channelType === "group"
     ) {
-      knownChannelTypes.set(id, channelType);
+      // Same account/team scoping as channelCache: multi-workspace installs must not
+      // cross-contaminate remembered types between scopes that share a channel id.
+      knownChannelTypes.set(scopedKey(id, eventScope), channelType);
     }
   };
 
   const recallSlackChannelType = (
     channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
   ): SlackMessageEvent["channel_type"] | undefined => {
     const id = normalizeOptionalString(channelId);
-    return id ? knownChannelTypes.get(id) : undefined;
+    return id ? knownChannelTypes.get(scopedKey(id, eventScope)) : undefined;
   };
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
