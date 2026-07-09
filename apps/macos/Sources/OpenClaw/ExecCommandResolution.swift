@@ -103,25 +103,105 @@ struct ExecCommandResolution {
     }
 
     /// Reusable authorization must execute the same canonical executable that
-    /// was matched. Shell wrappers and dispatch carriers stay approval-gated:
-    /// rebinding them can drop execution modes or reinterpret their operands.
+    /// was matched. The node host's exact `sh -c`/`sh -lc` transport may bind a
+    /// static single command directly; every other shell or carrier stays gated.
     static func bindForAllowlistExecution(
         command: [String],
         rawCommand: String?,
         resolutions: [ExecCommandResolution]) -> [String]?
     {
-        guard !ExecShellWrapperParser.extractForAllowlist(
+        let shell = ExecShellWrapperParser.extractForAllowlist(
             command: command,
-            rawCommand: rawCommand).isWrapper else { return nil }
+            rawCommand: rawCommand)
         guard resolutions.count == 1,
               let resolution = resolutions.first,
-              let realPath = resolution.resolvedRealPath,
-              FileManager().isExecutableFile(atPath: realPath),
               let argv = resolution.argv,
               !argv.isEmpty
         else { return nil }
+
+        if shell.isWrapper {
+            guard let payload = self.staticNodeShellPayload(command: command, parsed: shell),
+                  self.tokenizeShellWords(payload) == argv
+            else { return nil }
+        }
+
+        guard let realPath = resolution.resolvedRealPath,
+              FileManager().isExecutableFile(atPath: realPath)
+        else { return nil }
         guard !self.isUnsafeReusableExecutionTarget(resolution) else { return nil }
         return [realPath] + Array(argv.dropFirst())
+    }
+
+    /// The macOS node receives ordinary POSIX commands through this exact
+    /// wrapper. Binding the parsed argv directly avoids re-running a shell,
+    /// profile, expansion, redirection, or command chain after authorization.
+    private static func staticNodeShellPayload(
+        command: [String],
+        parsed: ExecShellWrapperParser.ParsedShellWrapper) -> String?
+    {
+        guard command.count == 3,
+              ExecCommandToken.basenameLower(command[0]) == "sh",
+              command[1] == "-c" || command[1] == "-lc",
+              let payload = parsed.command,
+              self.isStaticShellPayload(payload),
+              !self.hasLeadingShellAssignment(payload),
+              splitShellCommandChain(payload)?.count == 1
+        else { return nil }
+        return payload
+    }
+
+    private static func hasLeadingShellAssignment(_ payload: String) -> Bool {
+        guard let first = self.tokenizeShellWords(payload).first else { return false }
+        return first.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*\+?="#,
+            options: .regularExpression) != nil
+    }
+
+    private static func isStaticShellPayload(_ payload: String) -> Bool {
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+        let chars = Array(payload)
+
+        for idx in chars.indices {
+            let ch = chars[idx]
+            if escaped {
+                if ch == "\n" {
+                    return false
+                }
+                if inDouble, ch != "$", ch != "`", ch != "\"", ch != "\\" {
+                    // POSIX double quotes preserve the backslash here, while
+                    // our argv tokenizer removes it. Reject semantic drift.
+                    return false
+                }
+                escaped = false
+                continue
+            }
+            if ch == "\\", !inSingle {
+                escaped = true
+                continue
+            }
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                continue
+            }
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                continue
+            }
+            if inSingle {
+                continue
+            }
+            if ch == "$" || ch == "`" {
+                return false
+            }
+            if !inDouble,
+               "*?[]<>|&;\n{}()#~!".contains(ch)
+            {
+                return false
+            }
+        }
+        return !escaped && !inSingle && !inDouble
     }
 
     static func isUnsafeReusableExecutionTarget(_ resolution: ExecCommandResolution) -> Bool {
@@ -273,6 +353,7 @@ struct ExecCommandResolution {
         }
 
         guard let resolution = resolve(command: command, cwd: cwd, env: env),
+              !self.isInterpreterLikePersistentGrantTarget(resolution),
               let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution),
               seen.insert(pattern).inserted
         else {
@@ -280,6 +361,34 @@ struct ExecCommandResolution {
         }
         patterns.append(pattern)
     }
+
+    /// Path-only durable grants are too broad for tools that can execute code
+    /// from ordinary argv. This mirrors the node host's default allow-always
+    /// policy; users may still configure an explicit manual rule.
+    static func isInterpreterLikePersistentGrantTarget(_ resolution: ExecCommandResolution) -> Bool {
+        [resolution.rawExecutable, resolution.resolvedPath, resolution.resolvedRealPath]
+            .compactMap(\.self)
+            .map(ExecCommandToken.basenameLower)
+            .contains(where: self.isInterpreterLikeName)
+    }
+
+    private static func isInterpreterLikeName(_ value: String) -> Bool {
+        let normalized = value.hasSuffix(".exe") ? String(value.dropLast(4)) : value
+        if self.interpreterLikePersistentGrantNames.contains(normalized) {
+            return true
+        }
+        let stripped = normalized.replacingOccurrences(
+            of: #"-?\d+(?:\.\d+)*$"#,
+            with: "",
+            options: .regularExpression)
+        return stripped.count >= 2 && self.interpreterLikePersistentGrantNames.contains(stripped)
+    }
+
+    private static let interpreterLikePersistentGrantNames = Set([
+        "awk", "bun", "deno", "find", "gawk", "gmake", "gsed", "lua", "make", "mawk", "nawk",
+        "node", "nodejs", "osascript", "perl", "php", "pypy", "pypy3", "python", "python2", "python3",
+        "r", "rscript", "ruby", "sed", "xargs",
+    ])
 
     private static func isAllowlistShellWrapper(command: [String], rawCommand: String?) -> Bool {
         ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand).isWrapper
@@ -621,17 +730,46 @@ struct ExecCommandResolution {
 }
 
 enum ExecCommandFormatter {
+    private static let safeDisplayScalars = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_@%+=:,./-")
+
     static func displayString(for argv: [String]) -> String {
         argv.map { arg in
-            let trimmed = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "\"\"" }
-            let needsQuotes = trimmed.contains { $0.isWhitespace || $0 == "\"" }
-            if !needsQuotes {
-                return trimmed
+            guard !arg.isEmpty else { return "\"\"" }
+            if arg.unicodeScalars.allSatisfy({ self.safeDisplayScalars.contains($0) }) {
+                return arg
             }
-            let escaped = trimmed.replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(escaped)\""
+            return "\"\(self.escapeDisplayArg(arg))\""
         }.joined(separator: " ")
+    }
+
+    static func legacyDisplayString(for argv: [String]) -> String {
+        argv.map { arg in
+            guard !arg.isEmpty else { return "\"\"" }
+            let needsQuotes = arg.contains { $0.isWhitespace || $0 == "\"" }
+            guard needsQuotes else { return arg }
+            return "\"\(arg.replacingOccurrences(of: "\"", with: "\\\""))\""
+        }.joined(separator: " ")
+    }
+
+    private static func escapeDisplayArg(_ arg: String) -> String {
+        var escaped = ""
+        for scalar in arg.unicodeScalars {
+            switch scalar.value {
+            case 0x5C: escaped += "\\\\"
+            case 0x22: escaped += "\\\""
+            case 0x08: escaped += "\\b"
+            case 0x0C: escaped += "\\f"
+            case 0x0A: escaped += "\\n"
+            case 0x0D: escaped += "\\r"
+            case 0x09: escaped += "\\t"
+            case 0x00...0x1F, 0x7F:
+                escaped += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
+            default:
+                escaped.append(String(scalar))
+            }
+        }
+        return escaped
     }
 
     static func displayString(for argv: [String], rawCommand: String?) -> String {

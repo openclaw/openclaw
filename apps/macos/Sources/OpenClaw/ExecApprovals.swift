@@ -487,61 +487,90 @@ enum ExecApprovalsStore {
                 == effectiveLegacyDir.standardizedFileURL.path
                 ? trustedRoot
                 : FileManager().homeDirectoryForCurrentUser
-            guard let legacy = try ExecApprovalsFileIO.read(at: legacyURL, trustedRoot: legacyRoot) else {
-                throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
-                    NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
-                ])
-            }
-            let data = legacy.data
-            guard self.hasValidPersistedStructure(data) else {
-                throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
-                    NSLocalizedDescriptionKey: "invalid legacy approvals structure",
-                ])
-            }
-            var file = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-            guard file.version == 1 else {
-                throw NSError(domain: "ExecApprovals", code: 11, userInfo: [
-                    NSLocalizedDescriptionKey: "unsupported legacy approvals version",
-                ])
-            }
-            file = self.normalizeIncoming(file)
-            let rawSocketPath = file.socket?.path?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if self.isLegacyDefaultSocketPath(rawSocketPath, legacyFileURL: legacyURL) {
-                if file.socket == nil {
-                    file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
+            // ensureFileUnlocked already owns the target lock. Always take the
+            // legacy lock second so migration cannot race an older writer and
+            // two migrating processes cannot deadlock with opposite lock order.
+            return try ExecApprovalsFileIO.withLock(
+                fileURL: legacyURL,
+                trustedRoot: legacyRoot)
+            {
+                if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
+                    return .notNeeded
                 }
-                file.socket?.path = self.socketPath()
+                guard ExecApprovalsFileIO.pathExistsNoFollow(legacyURL) else {
+                    throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
+                        NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
+                    ])
+                }
+                return try self.migrateLegacyFileLocked(
+                    legacyURL: legacyURL,
+                    legacyRoot: legacyRoot,
+                    targetURL: targetURL,
+                    trustedRoot: trustedRoot)
             }
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let migrated = try encoder.encode(file)
-            try self.ensureSecureStateDirectory()
-            try FileManager().createDirectory(
-                at: targetURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
-            if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
-                return .notNeeded
-            }
-            let created = try writeMigratedFileExclusively(migrated, to: targetURL)
-            if !created {
-                return .notNeeded
-            }
-            do {
-                _ = try self.archiveMigratedLegacyFile(legacyURL)
-            } catch {
-                self.logger
-                    .warning(
-                        "exec approvals legacy archive failed: \(error.localizedDescription, privacy: .public)")
-            }
-            return .migrated
         } catch {
             self.logger
                 .error(
                     "exec approvals legacy migration failed: \(error.localizedDescription, privacy: .public)")
             return .blocked
         }
+    }
+
+    private static func migrateLegacyFileLocked(
+        legacyURL: URL,
+        legacyRoot: URL,
+        targetURL: URL,
+        trustedRoot: URL) throws -> LegacyMigrationResult
+    {
+        guard let legacy = try ExecApprovalsFileIO.read(at: legacyURL, trustedRoot: legacyRoot) else {
+            throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
+            ])
+        }
+        let data = legacy.data
+        guard self.hasValidPersistedStructure(data) else {
+            throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
+                NSLocalizedDescriptionKey: "invalid legacy approvals structure",
+            ])
+        }
+        var file = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+        guard file.version == 1 else {
+            throw NSError(domain: "ExecApprovals", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "unsupported legacy approvals version",
+            ])
+        }
+        file = self.normalizeIncoming(file)
+        let rawSocketPath = file.socket?.path?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if self.isLegacyDefaultSocketPath(rawSocketPath, legacyFileURL: legacyURL) {
+            if file.socket == nil {
+                file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
+            }
+            file.socket?.path = self.socketPath()
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let migrated = try encoder.encode(file)
+        try self.ensureSecureStateDirectory()
+        try FileManager().createDirectory(
+            at: targetURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
+        if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
+            return .notNeeded
+        }
+        let created = try writeMigratedFileExclusively(migrated, to: targetURL)
+        if !created {
+            return .notNeeded
+        }
+        do {
+            _ = try self.archiveMigratedLegacyFile(legacyURL)
+        } catch {
+            self.logger
+                .warning(
+                    "exec approvals legacy archive failed: \(error.localizedDescription, privacy: .public)")
+        }
+        return .migrated
     }
 
     static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -589,6 +618,22 @@ enum ExecApprovalsStore {
                 exists: ExecApprovalsFileIO.pathExistsNoFollow(self.fileURL()),
                 hash: "",
                 file: self.failClosedFallbackFile())
+        }
+    }
+
+    static func ensureSnapshotResult()
+        -> Result<ExecApprovalsSnapshot, ExecApprovalsReadError>
+    {
+        do {
+            let snapshot = try self.withWriteLock {
+                _ = try self.ensureFileUnlocked()
+                return try self.readSnapshotUnlocked()
+            }
+            return .success(snapshot)
+        } catch {
+            self.logger.warning(
+                "exec approvals snapshot unavailable: \(error.localizedDescription, privacy: .public)")
+            return .failure(.unavailable)
         }
     }
 
@@ -961,15 +1006,6 @@ enum ExecApprovalsStore {
             file: file)
     }
 
-    static func resolveDefaults() -> ExecApprovalsResolvedDefaults {
-        switch self.resolveDefaultsResult() {
-        case let .success(defaults):
-            defaults
-        case .failure:
-            self.resolveFromFile(self.failClosedFallbackFile(), agentId: nil).defaults
-        }
-    }
-
     static func resolveDefaultsResult() -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError> {
         self.resolveResult(agentId: nil).map(\.defaults)
     }
@@ -1058,19 +1094,6 @@ extension ExecApprovalsStore {
     }
 
     @discardableResult
-    static func recordAllowlistUse(
-        agentId: String?,
-        match: ExecAllowlistEntry,
-        command: String,
-        resolvedPath: String?) -> Result<Void, ExecApprovalsMutationError>
-    {
-        self.recordAllowlistUses(
-            agentId: agentId,
-            uses: [ExecAllowlistUse(match: match, resolvedPath: resolvedPath)],
-            command: command)
-    }
-
-    @discardableResult
     static func recordAllowlistUses(
         agentId: String?,
         uses: [ExecAllowlistUse],
@@ -1099,26 +1122,6 @@ extension ExecApprovalsStore {
             agents[key] = entry
             file.agents = agents
         }
-    }
-
-    @discardableResult
-    static func updateAllowlist(
-        agentId: String?,
-        allowlist: [ExecAllowlistEntry]) -> Result<[ExecAllowlistRejectedEntry], ExecApprovalsMutationError>
-    {
-        var rejected: [ExecAllowlistRejectedEntry] = []
-        let result = self.updateFile { file in
-            let key = self.agentKey(agentId)
-            var agents = file.agents ?? [:]
-            var entry = agents[key] ?? ExecApprovalsAgent()
-            let normalized = self.normalizeAllowlistEntries(allowlist, dropInvalid: true)
-            rejected = normalized.rejected
-            let cleaned = normalized.entries
-            entry.allowlist = cleaned
-            agents[key] = entry
-            file.agents = agents
-        }
-        return result.map { rejected }
     }
 
     @discardableResult

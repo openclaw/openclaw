@@ -57,11 +57,13 @@ function getDarwinProcessStartTime(pid: number): number | null {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        env: { ...process.env, LC_ALL: "C" },
+        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
       })
       .trim();
-    const startedAtMs = Date.parse(startedAt);
+    // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so
+    // a system timezone change cannot make a live lock owner look like PID reuse.
+    const startedAtMs = Date.parse(`${startedAt} UTC`);
     return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
   } catch {
     return null;

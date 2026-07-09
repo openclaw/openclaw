@@ -59,7 +59,7 @@ describe("acquireFileLock", () => {
     );
   }, 5_000);
 
-  it("fails closed when a stale lock owner pid is dead", async () => {
+  it("reclaims a stale lock when its owner pid is dead", async () => {
     const filePath = path.join(tempDir, "auth-profiles.json");
     const lockPath = `${filePath}.lock`;
     const options = {
@@ -79,9 +79,28 @@ describe("acquireFileLock", () => {
       "utf8",
     );
 
-    await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
-      code: FILE_LOCK_STALE_ERROR_CODE,
-    });
+    const lock = await acquireFileLock(filePath, options);
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid": ${process.pid}`);
+    await lock.release();
+  });
+
+  it("fails closed for a security-sensitive stale lock", async () => {
+    const filePath = path.join(tempDir, "exec-approvals.json");
+    const lockPath = `${filePath}.lock`;
+    const deadPid = 2 ** 30;
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      "utf8",
+    );
+
+    await expect(
+      acquireFileLock(filePath, {
+        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        stale: 10,
+        staleRecovery: "fail-closed",
+      }),
+    ).rejects.toMatchObject({ code: FILE_LOCK_STALE_ERROR_CODE });
     await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${deadPid}`);
   });
 

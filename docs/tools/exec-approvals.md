@@ -356,7 +356,8 @@ Examples:
 ### Restricting arguments with argPattern
 
 Add `argPattern` when an allowlist entry should match a binary and a
-specific argument shape. OpenClaw evaluates the regular expression against
+specific argument shape. OpenClaw uses ECMAScript (JavaScript) regular
+expression semantics on every host and evaluates the expression against
 the parsed command arguments, excluding the executable token (`argv[0]`).
 For hand-authored entries, arguments are joined with a single space, so
 anchor the pattern when you need an exact match.
@@ -392,10 +393,10 @@ Each allowlist entry supports:
 | Field              | Meaning                                              |
 | ------------------ | ---------------------------------------------------- |
 | `pattern`          | Resolved binary path glob or bare command-name glob  |
-| `argPattern`       | Optional argv regex; omitted entries are path-only   |
-| `id`               | Stable UUID used for UI identity                     |
+| `argPattern`       | Optional ECMAScript argv regex; omitted is path-only |
+| `id`               | Stable opaque ID; generated as a UUID when absent    |
 | `source`           | Entry source, such as `allow-always`                 |
-| `commandText`      | Legacy input; stripped after digest-marker migration |
+| `commandText`      | Legacy plaintext input; discarded during load        |
 | `lastUsedAt`       | Last-used timestamp                                  |
 | `lastUsedCommand`  | Last command that matched                            |
 | `lastResolvedPath` | Last resolved binary path                            |

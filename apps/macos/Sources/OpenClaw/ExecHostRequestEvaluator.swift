@@ -2,6 +2,7 @@ import Foundation
 
 struct ExecHostValidatedRequest {
     let command: [String]
+    let displayCommand: String
     let evaluationRawCommand: String?
 }
 
@@ -13,7 +14,13 @@ enum ExecHostPolicyDecision {
 
 enum ExecHostRequestEvaluator {
     static func validateRequest(_ request: ExecHostRequest) -> Result<ExecHostValidatedRequest, ExecHostError> {
-        let command = request.command
+        self.validateCommand(command: request.command, rawCommand: request.rawCommand)
+    }
+
+    static func validateCommand(
+        command: [String],
+        rawCommand: String?) -> Result<ExecHostValidatedRequest, ExecHostError>
+    {
         let executable = command.first ?? ""
         let trimmedExecutable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedExecutable.isEmpty else {
@@ -33,11 +40,12 @@ enum ExecHostRequestEvaluator {
 
         let validatedCommand = ExecSystemRunCommandValidator.resolve(
             command: command,
-            rawCommand: request.rawCommand)
+            rawCommand: rawCommand)
         switch validatedCommand {
         case let .ok(resolved):
             return .success(ExecHostValidatedRequest(
                 command: command,
+                displayCommand: resolved.displayCommand,
                 evaluationRawCommand: resolved.evaluationRawCommand))
         case let .invalid(message):
             return .failure(

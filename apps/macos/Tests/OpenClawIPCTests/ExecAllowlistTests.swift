@@ -1,6 +1,6 @@
 import Foundation
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 /// These cases cover optional `security=allowlist` behavior.
 struct ExecAllowlistTests {
@@ -41,7 +41,7 @@ struct ExecAllowlistTests {
 
     private static func fixtureURL(filename: String) -> URL {
         var repoRoot = URL(fileURLWithPath: #filePath)
-        for _ in 0 ..< 5 {
+        for _ in 0..<5 {
             repoRoot.deleteLastPathComponent()
         }
         return repoRoot
@@ -55,8 +55,7 @@ struct ExecAllowlistTests {
             rawExecutable: "rg",
             resolvedPath: "/opt/homebrew/bin/rg",
             executableName: "rg",
-            cwd: nil
-        )
+            cwd: nil)
     }
 
     private static func makeExecutable(at url: URL, body: String = "#!/bin/sh\nexit 0\n") throws {
@@ -91,14 +90,12 @@ struct ExecAllowlistTests {
             rawExecutable: "./echo",
             resolvedPath: "/tmp/oc-basename/echo",
             executableName: "echo",
-            cwd: "/tmp/oc-basename"
-        )
+            cwd: "/tmp/oc-basename")
         let absoluteResolution = ExecCommandResolution(
             rawExecutable: "/tmp/oc-basename/echo",
             resolvedPath: "/tmp/oc-basename/echo",
             executableName: "echo",
-            cwd: "/tmp/oc-basename"
-        )
+            cwd: "/tmp/oc-basename")
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: relativeResolution) == nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: absoluteResolution) == nil)
     }
@@ -124,8 +121,7 @@ struct ExecAllowlistTests {
             resolvedPath: "/tmp/a/b",
             resolvedRealPath: "/tmp/a/b",
             executableName: "b",
-            cwd: nil
-        )
+            cwd: nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) == nil)
     }
 
@@ -136,8 +132,7 @@ struct ExecAllowlistTests {
             resolvedPath: "/var/tmp/openclaw-tool",
             resolvedRealPath: "/private/var/tmp/openclaw-tool",
             executableName: "openclaw-tool",
-            cwd: nil
-        )
+            cwd: nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) != nil)
     }
 
@@ -147,24 +142,21 @@ struct ExecAllowlistTests {
         let restricted = ExecAllowlistEntry(
             id: "restricted",
             pattern: executable,
-            argPattern: #"^safe\.py$"#
-        )
+            argPattern: #"^safe\.py$"#)
         let safe = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "python3",
             cwd: nil,
-            argv: [executable, "safe.py"]
-        )
+            argv: [executable, "safe.py"])
         let unsafe = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "python3",
             cwd: nil,
-            argv: [executable, "unsafe.py"]
-        )
+            argv: [executable, "unsafe.py"])
 
         #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: safe)?.id == "restricted")
         #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: unsafe)?.id == "fallback")
@@ -180,16 +172,14 @@ struct ExecAllowlistTests {
             resolvedRealPath: executable,
             executableName: "printf",
             cwd: nil,
-            argv: [executable]
-        )
+            argv: [executable])
         let withSpace = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "printf",
             cwd: nil,
-            argv: [executable, "hello world"]
-        )
+            argv: [executable, "hello world"])
 
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: base) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [oneArg], resolution: withSpace) != nil)
@@ -201,16 +191,14 @@ struct ExecAllowlistTests {
         let restricted = ExecAllowlistEntry(pattern: executable, argPattern: #"^safe\.py$"#)
         let explicit = ExecAllowlistEntry(
             pattern: executable,
-            argPattern: #"^safe\.py 2>/dev/null$"#
-        )
+            argPattern: #"^safe\.py 2>/dev/null$"#)
         let resolution = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "python3",
             cwd: nil,
-            argv: [executable, "safe.py", "2>/dev/null"]
-        )
+            argv: [executable, "safe.py", "2>/dev/null"])
 
         #expect(ExecAllowlistMatcher.match(entries: [restricted], resolution: resolution) == nil)
         #expect(ExecAllowlistMatcher.match(entries: [explicit], resolution: resolution)?.pattern == executable)
@@ -225,8 +213,7 @@ struct ExecAllowlistTests {
                 resolvedRealPath: executable,
                 executableName: "printf",
                 cwd: nil,
-                argv: [executable, argument]
-            )
+                argv: [executable, argument])
         }
 
         let digit = ExecAllowlistEntry(pattern: executable, argPattern: #"^\d$"#)
@@ -254,8 +241,7 @@ struct ExecAllowlistTests {
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "printf",
-            cwd: nil
-        )
+            cwd: nil)
         let invalid = ExecAllowlistEntry(pattern: executable, argPattern: "[")
         let restricted = ExecAllowlistEntry(pattern: executable, argPattern: "^ok$")
 
@@ -277,15 +263,13 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": root.path]
-        )
+            env: ["PATH": root.path])
 
         #expect(resolutions.count == 1)
         #expect(ExecCommandResolution.bindForAllowlistExecution(
             command: command,
             rawCommand: nil,
-            resolutions: resolutions
-        ) == [executable.path, "literal"])
+            resolutions: resolutions) == [executable.path, "literal"])
     }
 
     @Test func `symlink allowlist match and execution stay bound to canonical target`() throws {
@@ -306,16 +290,14 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: nil
-        )
+            env: nil)
         let resolution = try #require(resolutions.first)
         let targetEntry = ExecAllowlistEntry(pattern: first.path)
         let aliasEntry = ExecAllowlistEntry(pattern: alias.path)
         let bound = ExecCommandResolution.bindForAllowlistExecution(
             command: command,
             rawCommand: nil,
-            resolutions: resolutions
-        )
+            resolutions: resolutions)
 
         #expect(ExecAllowlistMatcher.match(entries: [targetEntry], resolution: resolution) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [aliasEntry], resolution: resolution) == nil)
@@ -326,9 +308,24 @@ struct ExecAllowlistTests {
         #expect(bound == [first.path, "value"])
     }
 
-    @Test func `shell wrappers never receive reusable execution binding`() {
+    @Test func `standard sh transport binds one static command directly`() {
+        for flag in ["-c", "-lc"] {
+            let payload = "/usr/bin/printf 'literal value'"
+            let command = ["/bin/sh", flag, payload]
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: payload,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: payload,
+                resolutions: resolutions) == ["/usr/bin/printf", "literal value"])
+        }
+    }
+
+    @Test func `nonstandard shell wrappers never receive reusable execution binding`() {
         let cases: [([String], String?)] = [
-            (["/bin/sh", "-c", "/usr/bin/printf literal"], "/usr/bin/printf literal"),
             (["/bin/sh", "-n", "-c", "/bin/rm /tmp/x"], "/bin/rm /tmp/x"),
             (["fish", "-c", "/usr/bin/printf literal"], nil),
             (["cmd", "/c", "/usr/bin/printf literal"], nil),
@@ -340,14 +337,12 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: rawCommand,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(!resolutions.isEmpty)
             #expect(ExecCommandResolution.bindForAllowlistExecution(
                 command: command,
                 rawCommand: rawCommand,
-                resolutions: resolutions
-            ) == nil)
+                resolutions: resolutions) == nil)
         }
     }
 
@@ -364,13 +359,11 @@ struct ExecAllowlistTests {
                 resolvedRealPath: directPath,
                 executableName: carrier,
                 cwd: nil,
-                argv: command
-            )
+                argv: command)
             #expect(ExecCommandResolution.bindForAllowlistExecution(
                 command: command,
                 rawCommand: nil,
-                resolutions: [resolution]
-            ) == nil)
+                resolutions: [resolution]) == nil)
         }
 
         let aliasCommand = ["skill-shell", "-c", "/usr/bin/printf ok"]
@@ -380,13 +373,11 @@ struct ExecAllowlistTests {
             resolvedRealPath: "/bin/sh",
             executableName: "skill-shell",
             cwd: nil,
-            argv: aliasCommand
-        )
+            argv: aliasCommand)
         #expect(ExecCommandResolution.bindForAllowlistExecution(
             command: aliasCommand,
             rawCommand: nil,
-            resolutions: [aliasResolution]
-        ) == nil)
+            resolutions: [aliasResolution]) == nil)
     }
 
     @Test func `shell tokenization uses shell lexical separators only`() throws {
@@ -398,16 +389,14 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: payload,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             let resolution = try #require(resolutions.first)
 
             #expect(resolution.argv == ["/usr/bin/printf", argument])
             #expect(ExecCommandResolution.bindForAllowlistExecution(
                 command: command,
                 rawCommand: payload,
-                resolutions: resolutions
-            ) == nil)
+                resolutions: resolutions) == ["/usr/bin/printf", argument])
         }
 
         let tabPayload = "/usr/bin/printf left\tright"
@@ -415,9 +404,48 @@ struct ExecAllowlistTests {
             command: ["/bin/sh", "-c", tabPayload],
             rawCommand: tabPayload,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        ).first)
+            env: ["PATH": "/usr/bin:/bin"]).first)
         #expect(tabResolution.argv == ["/usr/bin/printf", "left", "right"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: ["/bin/sh", "-c", tabPayload],
+            rawCommand: tabPayload,
+            resolutions: [tabResolution]) == ["/usr/bin/printf", "left", "right"])
+    }
+
+    @Test func `dynamic shell payloads cannot receive reusable binding`() {
+        for payload in [
+            "/usr/bin/printf $HOME",
+            "/usr/bin/printf $(/usr/bin/id)",
+            "/usr/bin/printf *",
+            "/usr/bin/printf ok > /tmp/out",
+            "/usr/bin/printf ok && /usr/bin/true",
+            "FOO=bar /usr/bin/printf ok",
+            "/usr/bin/printf ok # ignored",
+        ] {
+            let command = ["/bin/sh", "-lc", payload]
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: payload,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: payload,
+                resolutions: resolutions) == nil)
+        }
+
+        let assignmentPayload = "FOO=bar /usr/bin/printf ok"
+        let spoofedAssignmentResolution = ExecCommandResolution(
+            rawExecutable: "FOO=bar",
+            resolvedPath: "/usr/bin/true",
+            resolvedRealPath: "/usr/bin/true",
+            executableName: "true",
+            cwd: nil,
+            argv: ["FOO=bar", "/usr/bin/printf", "ok"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: ["/bin/sh", "-lc", assignmentPayload],
+            rawCommand: assignmentPayload,
+            resolutions: [spoofedAssignmentResolution]) == nil)
     }
 
     @Test func `env empty utility operands cannot receive reusable binding`() {
@@ -430,14 +458,12 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.first?.executableName == "env")
             #expect(ExecCommandResolution.bindForAllowlistExecution(
                 command: command,
                 rawCommand: nil,
-                resolutions: resolutions
-            ) == nil)
+                resolutions: resolutions) == nil)
         }
     }
 
@@ -449,14 +475,12 @@ struct ExecAllowlistTests {
             command: clearCommand,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(clearResolutions.first?.executableName == "env")
         #expect(ExecCommandResolution.bindForAllowlistExecution(
             command: clearCommand,
             rawCommand: nil,
-            resolutions: clearResolutions
-        ) == nil)
+            resolutions: clearResolutions) == nil)
 
         let separatorCommand = ["/usr/bin/env", "--", "/usr/bin/true"]
         let separator = try #require(ExecEnvInvocationUnwrapper.unwrapWithMetadata(separatorCommand))
@@ -470,22 +494,19 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         let withDisplay = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "/usr/bin/env /usr/bin/printf ok",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
 
         #expect(withDisplay.map(\.rawExecutable) == withoutDisplay.map(\.rawExecutable))
         #expect(withDisplay.first?.resolvedRealPath == "/usr/bin/printf")
         #expect(ExecCommandResolution.bindForAllowlistExecution(
             command: command,
             rawCommand: "/usr/bin/env /usr/bin/printf ok",
-            resolutions: withDisplay
-        ) == ["/usr/bin/printf", "ok"])
+            resolutions: withDisplay) == ["/usr/bin/printf", "ok"])
     }
 
     @Test func `shell comments and dispatch wrappers cannot receive reusable binding`() {
@@ -494,13 +515,11 @@ struct ExecAllowlistTests {
             command: commented,
             rawCommand: "/bin/rm /tmp/safe # /tmp/protected",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(ExecCommandResolution.bindForAllowlistExecution(
             command: commented,
             rawCommand: "/bin/rm /tmp/safe # /tmp/protected",
-            resolutions: commentedResolutions
-        ) == nil)
+            resolutions: commentedResolutions) == nil)
 
         for command in [
             ["/usr/bin/nice", "/usr/bin/printf", "ok"],
@@ -511,13 +530,11 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: "/tmp",
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(ExecCommandResolution.bindForAllowlistExecution(
                 command: command,
                 rawCommand: nil,
-                resolutions: resolutions
-            ) == nil)
+                resolutions: resolutions) == nil)
         }
     }
 
@@ -527,8 +544,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 2)
         #expect(resolutions[0].executableName == "echo")
         #expect(resolutions[1].executableName == "touch")
@@ -554,8 +570,7 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.count == 1)
             #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
             #expect(resolutions[0].executableName == "printf")
@@ -571,8 +586,7 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: "/tmp",
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.count == 1)
             #expect(resolutions[0].resolvedPath == "/bin/bash")
             #expect(resolutions[0].executableName == "bash")
@@ -590,8 +604,7 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.isEmpty)
         }
     }
@@ -613,8 +626,7 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.isEmpty)
         }
     }
@@ -633,8 +645,7 @@ struct ExecAllowlistTests {
                 command: command,
                 rawCommand: nil,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolutions.isEmpty)
         }
     }
@@ -646,8 +657,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: canonicalRaw,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 2)
         #expect(resolutions[0].executableName == "echo")
         #expect(resolutions[1].executableName == "touch")
@@ -659,8 +669,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "/usr/bin/printf safe_marker",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
         #expect(resolutions[0].executableName == "printf")
@@ -669,8 +678,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(rawlessResolutions.isEmpty)
     }
 
@@ -681,8 +689,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: canonicalRaw,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -693,8 +700,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: canonicalRaw,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -704,8 +710,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo \"a && b\"",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].executableName == "echo")
     }
@@ -716,8 +721,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -727,8 +731,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\"",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -738,8 +741,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -753,8 +755,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -764,8 +765,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "echo \"ok `/usr/bin/id`\"",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
     }
 
@@ -776,8 +776,7 @@ struct ExecAllowlistTests {
                 command: ["/bin/sh", "-c", fixture.command],
                 rawCommand: fixture.command,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
 
             #expect(!resolutions.isEmpty == fixture.ok)
             if fixture.ok {
@@ -794,8 +793,7 @@ struct ExecAllowlistTests {
             let resolution = ExecCommandResolution.resolve(
                 command: fixture.argv,
                 cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"]
-            )
+                env: ["PATH": "/usr/bin:/bin"])
             #expect(resolution?.rawExecutable == fixture.expectedRawExecutable)
         }
     }
@@ -804,8 +802,7 @@ struct ExecAllowlistTests {
         let resolution = ExecCommandResolution.resolve(
             command: ["/usr/bin/env", "-", "/usr/bin/printf", "ok"],
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolution?.rawExecutable == "/usr/bin/env")
         #expect(resolution?.resolvedPath == "/usr/bin/env")
         #expect(resolution?.executableName == "env")
@@ -817,8 +814,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: "/tmp",
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].executableName == "sh")
     }
@@ -834,8 +830,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 2)
         #expect(resolutions[0].executableName == "echo")
         #expect(resolutions[1].executableName == "touch")
@@ -847,8 +842,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "env /usr/bin/touch /tmp/openclaw-allowlist-test",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].resolvedPath == "/usr/bin/touch")
         #expect(resolutions[0].executableName == "touch")
@@ -860,8 +854,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test",
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].resolvedPath == "/usr/bin/env")
         #expect(resolutions[0].executableName == "env")
@@ -873,8 +866,7 @@ struct ExecAllowlistTests {
             command: command,
             rawCommand: nil,
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].resolvedPath == "/usr/bin/env")
         #expect(resolutions[0].executableName == "env")
@@ -888,21 +880,20 @@ struct ExecAllowlistTests {
             rawCommand: rawCommand,
             cwd: nil,
             envOverrides: ["PATH": "/usr/bin:/bin"],
-            agentId: nil
-        )
+            agentId: nil)
 
         #expect(evaluation.displayCommand == rawCommand)
         #expect(evaluation.allowlistResolutions.count == 1)
         #expect(evaluation.allowlistResolutions[0].resolvedPath == "/usr/bin/printf")
         #expect(evaluation.allowlistResolutions[0].executableName == "printf")
+        #expect(evaluation.boundCommand == ["/usr/bin/printf", "ok"])
     }
 
     @Test func `allow always patterns unwrap env wrapper modifiers to the inner executable`() {
         let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
             cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"]
-        )
+            env: ["PATH": "/usr/bin:/bin"])
 
         #expect(patterns == ["/usr/bin/printf"])
     }
@@ -918,8 +909,7 @@ struct ExecAllowlistTests {
             ],
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"],
-            rawCommand: "/usr/bin/printf ok"
-        )
+            rawCommand: "/usr/bin/printf ok")
 
         #expect(patterns.isEmpty)
     }
@@ -929,10 +919,31 @@ struct ExecAllowlistTests {
             command: ["/bin/sh", "-lc", "/usr/bin/printf safe_marker"],
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"],
-            rawCommand: "/usr/bin/printf safe_marker"
-        )
+            rawCommand: "/usr/bin/printf safe_marker")
 
         #expect(patterns == ["/usr/bin/printf"])
+    }
+
+    @Test func `allow always never persists broad interpreter grants`() {
+        for executable in [
+            "awk", "find", "gawk", "gmake", "gsed", "node", "osascript", "perl", "php",
+            "python3.13", "Rscript", "ruby", "sed", "xargs",
+        ] {
+            let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+                command: [executable, "inline-program"],
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(patterns.isEmpty)
+        }
+
+        let r2 = ExecCommandResolution(
+            rawExecutable: "r2",
+            resolvedPath: "/usr/local/bin/r2",
+            resolvedRealPath: "/usr/local/bin/r2",
+            executableName: "r2",
+            cwd: nil,
+            argv: ["r2"])
+        #expect(!ExecCommandResolution.isInterpreterLikePersistentGrantTarget(r2))
     }
 
     @Test func `match all requires every segment to match`() {
@@ -940,32 +951,27 @@ struct ExecAllowlistTests {
             rawExecutable: "echo",
             resolvedPath: "/usr/bin/echo",
             executableName: "echo",
-            cwd: nil
-        )
+            cwd: nil)
         let second = ExecCommandResolution(
             rawExecutable: "/usr/bin/touch",
             resolvedPath: "/usr/bin/touch",
             executableName: "touch",
-            cwd: nil
-        )
+            cwd: nil)
         let resolutions = [first, second]
 
         let partial = ExecAllowlistMatcher.matchAll(
             entries: [ExecAllowlistEntry(pattern: "/usr/bin/echo")],
-            resolutions: resolutions
-        )
+            resolutions: resolutions)
         #expect(partial.isEmpty)
 
         let caseMismatch = ExecAllowlistMatcher.matchAll(
             entries: [ExecAllowlistEntry(pattern: "/USR/BIN/ECHO"), ExecAllowlistEntry(pattern: "/usr/bin/touch")],
-            resolutions: resolutions
-        )
+            resolutions: resolutions)
         #expect(caseMismatch.isEmpty)
 
         let full = ExecAllowlistMatcher.matchAll(
             entries: [ExecAllowlistEntry(pattern: "/usr/bin/echo"), ExecAllowlistEntry(pattern: "/usr/bin/touch")],
-            resolutions: resolutions
-        )
+            resolutions: resolutions)
         #expect(full.count == 2)
     }
 }

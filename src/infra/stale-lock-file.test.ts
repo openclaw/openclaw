@@ -1,7 +1,10 @@
 // Covers stale lock-file owner decisions.
 import { describe, expect, it } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import {
+  isLockOwnerDefinitelyStale,
+  shouldRemoveDeadOwnerOrExpiredLock,
+} from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
   it("keeps expired locks when a pid owner is not definitely dead", () => {
@@ -64,6 +67,16 @@ describe("stale lock file ownership", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("retains shipped expiry recovery for generic pidless locks", () => {
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: { createdAt: "2026-05-23T00:00:00.000Z" },
+        staleMs: 10,
+        nowMs: Date.parse("2026-05-23T00:00:11.000Z"),
+      }),
+    ).toBe(true);
   });
 
   it("keeps malformed locks", () => {

@@ -29,6 +29,7 @@ let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUseLocked"];
 let recordAllowlistMatchesUseSync: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
+let restoreExecApprovalsSnapshotLocked: ExecApprovalsModule["restoreExecApprovalsSnapshotLocked"];
 let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovalsLocked"];
 let resolveExecApprovalsSync: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsDisplayPath: ExecApprovalsModule["resolveExecApprovalsDisplayPath"];
@@ -55,6 +56,7 @@ beforeAll(async () => {
   recordAllowlistMatchesUse = module.recordAllowlistMatchesUseLocked;
   recordAllowlistMatchesUseSync = module.recordAllowlistMatchesUse;
   requestExecApprovalViaSocket = module.requestExecApprovalViaSocket;
+  restoreExecApprovalsSnapshotLocked = module.restoreExecApprovalsSnapshotLocked;
   resolveExecApprovals = module.resolveExecApprovalsLocked;
   resolveExecApprovalsSync = module.resolveExecApprovals;
   resolveExecApprovalsDisplayPath = module.resolveExecApprovalsDisplayPath;
@@ -463,6 +465,91 @@ describe("exec approvals store helpers", () => {
     ).resolves.toBeNull();
     expect(fs.readFileSync(approvalsPath, "utf8")).toBe("");
   });
+
+  it("restores a matching real-store snapshot", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
+    const snapshot = readExecApprovalsSnapshot();
+    const current = await updateExecApprovals({
+      update: (file) => ({ ...file, defaults: { security: "full" } }),
+    });
+
+    expect(current).not.toBeNull();
+    if (!current) {
+      throw new Error("Expected the current approvals snapshot");
+    }
+    await expect(restoreExecApprovalsSnapshotLocked(snapshot, current.hash)).resolves.toBe(true);
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toBe(snapshot.raw);
+  });
+
+  it("removes a newly created approvals file when the current hash still matches", async () => {
+    const dir = createHomeDir();
+    const missing = readExecApprovalsSnapshot();
+    const created = await updateExecApprovals({
+      baseHash: missing.hash,
+      update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
+    });
+
+    expect(created).not.toBeNull();
+    if (!created) {
+      throw new Error("Expected the created approvals snapshot");
+    }
+    await expect(restoreExecApprovalsSnapshotLocked(missing, created.hash)).resolves.toBe(true);
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("preserves a newer approvals file when snapshot restoration loses its CAS", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
+    const snapshot = readExecApprovalsSnapshot();
+    const base = await updateExecApprovals({
+      update: (file) => ({ ...file, defaults: { security: "allowlist" } }),
+    });
+    const newer = await updateExecApprovals({
+      update: (file) => ({ ...file, defaults: { security: "full" } }),
+    });
+
+    expect(base).not.toBeNull();
+    expect(newer).not.toBeNull();
+    if (!base || !newer) {
+      throw new Error("Expected both approvals snapshots");
+    }
+    await expect(restoreExecApprovalsSnapshotLocked(snapshot, base.hash)).resolves.toBe(false);
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toBe(newer.raw);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "normalizes the approvals directory before an async no-op update",
+    async () => {
+      const dir = createHomeDir();
+      saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
+      const approvalsDir = path.dirname(approvalsFilePath(dir));
+      fs.chmodSync(approvalsDir, 0o777);
+
+      await expect(updateExecApprovals({ update: () => null })).resolves.not.toBeNull();
+
+      expect(fs.statSync(approvalsDir).mode & 0o777).toBe(0o700);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "normalizes the approvals directory before an async CAS miss",
+    async () => {
+      const dir = createHomeDir();
+      saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
+      const approvalsDir = path.dirname(approvalsFilePath(dir));
+      fs.chmodSync(approvalsDir, 0o777);
+
+      await expect(
+        updateExecApprovals({
+          baseHash: "stale",
+          update: (file) => ({ ...file, defaults: { security: "full" } }),
+        }),
+      ).resolves.toBeNull();
+
+      expect(fs.statSync(approvalsDir).mode & 0o777).toBe(0o700);
+    },
+  );
 
   it("fails closed when loading malformed or unreadable persisted approvals", () => {
     const dir = createHomeDir();
@@ -1047,6 +1134,29 @@ describe("exec approvals store helpers", () => {
     ).toThrow(/Refusing to traverse symlink in exec approvals path/);
     expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a nested symlink before acquiring the async approvals lock",
+    async () => {
+      const realHome = makeTempDir();
+      const linkedHome = `${realHome}-link`;
+      const linkedStateTarget = path.join(realHome, "state-target");
+      const redirectedLockPath = path.join(linkedStateTarget, "exec-approvals.json.lock");
+      tempDirs.push(realHome, linkedHome);
+      fs.mkdirSync(linkedStateTarget, { recursive: true });
+      fs.symlinkSync(realHome, linkedHome, "dir");
+      fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
+      setTestEnvValue("OPENCLAW_HOME", linkedHome);
+
+      await expect(
+        updateExecApprovals({
+          update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
+        }),
+      ).rejects.toThrow(/Refusing to traverse symlink in exec approvals path/);
+      expect(fs.existsSync(redirectedLockPath)).toBe(false);
+      expect(fs.readdirSync(linkedStateTarget)).toEqual([]);
+    },
+  );
 
   it("persists exact-command allow-always decisions as durable command approvals", async () => {
     const dir = createHomeDir();

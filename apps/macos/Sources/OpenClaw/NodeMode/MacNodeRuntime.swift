@@ -685,17 +685,17 @@ actor MacNodeRuntime {
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
         let command = params.command
-        guard !command.isEmpty else {
-            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
-        }
-        let validatedCommand: ExecSystemRunCommandValidator.ResolvedCommand
-        switch ExecSystemRunCommandValidator.resolve(
+        let validatedCommand: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateCommand(
             command: command,
             rawCommand: params.rawCommand)
         {
-        case let .ok(resolved):
+        case let .success(resolved):
             validatedCommand = resolved
-        case let .invalid(message):
+        case let .failure(error):
+            let message = error.message.hasPrefix("INVALID_REQUEST:")
+                ? error.message
+                : "INVALID_REQUEST: \(error.message)"
             return Self.errorResponse(req, code: .invalidRequest, message: message)
         }
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
@@ -723,6 +723,7 @@ actor MacNodeRuntime {
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: validatedCommand.evaluationRawCommand,
+            displayCommand: validatedCommand.displayCommand,
             cwd: params.cwd,
             envOverrides: params.env,
             agentId: params.agentId)
@@ -753,6 +754,7 @@ actor MacNodeRuntime {
                 resolution: evaluation.resolution,
                 allowlistMatch: evaluation.allowlistMatch,
                 skillAllow: evaluation.skillAllow,
+                allowAlwaysEligible: evaluation.canPersistAllowAlways,
                 sessionKey: sessionKey,
                 runId: runId))
         if let response = approval.response {
@@ -889,6 +891,7 @@ actor MacNodeRuntime {
         var resolution: ExecCommandResolution?
         var allowlistMatch: ExecAllowlistEntry?
         var skillAllow: Bool
+        var allowAlwaysEligible: Bool
         var sessionKey: String
         var runId: String
     }
@@ -938,7 +941,8 @@ actor MacNodeRuntime {
                         resolvedPath: context.resolution?.resolvedPath,
                         sessionKey: context.sessionKey,
                         allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
-                            forAsk: context.ask.rawValue)))
+                            forAsk: context.ask.rawValue,
+                            allowAlwaysEligible: context.allowAlwaysEligible)))
             }
             guard let decision = promptDecision else {
                 await self.emitExecEvent(
@@ -989,8 +993,16 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemExecApprovalsGet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        _ = ExecApprovalsStore.ensureFile()
-        let snapshot = ExecApprovalsStore.readSnapshot()
+        let snapshot: ExecApprovalsSnapshot
+        switch ExecApprovalsStore.ensureSnapshotResult() {
+        case let .success(current):
+            snapshot = current
+        case .failure:
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: exec approvals store unavailable; retry")
+        }
         let redacted = ExecApprovalsSnapshot(
             path: snapshot.path,
             exists: snapshot.exists,

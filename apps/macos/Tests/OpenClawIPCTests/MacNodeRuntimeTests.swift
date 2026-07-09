@@ -230,6 +230,24 @@ struct MacNodeRuntimeTests {
         #expect(await probe.capturedCommands().isEmpty)
     }
 
+    @Test func `system run shares padded executable rejection with socket host`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(command: [" /usr/bin/printf ", "unsafe"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-padded-executable",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("executable has surrounding whitespace") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
     @Test func `system run denied event preserves gateway run id`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
@@ -243,6 +261,7 @@ struct MacNodeRuntimeTests {
             }
             let params = OpenClawSystemRunParams(
                 command: ["/bin/sh", "-lc", "printf ok"],
+                rawCommand: "printf ok",
                 sessionKey: "agent:main:main",
                 runId: "gateway-run-1")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
@@ -257,10 +276,13 @@ struct MacNodeRuntimeTests {
             struct Payload: Decodable {
                 var sessionKey: String
                 var runId: String
+                var command: String
             }
             let payload = try JSONDecoder().decode(Payload.self, from: Data(denied.json.utf8))
             #expect(payload.sessionKey == "agent:main:main")
             #expect(payload.runId == "gateway-run-1")
+            #expect(payload.command == ExecCommandFormatter.displayString(for: params.command))
+            #expect(payload.command != params.rawCommand)
         }
     }
 

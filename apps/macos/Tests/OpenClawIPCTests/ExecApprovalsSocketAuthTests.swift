@@ -21,6 +21,12 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
+    func `minimum timestamp is rejected before authentication without overflow`() async {
+        #expect(!execHostTimestampIsFresh(nowMs: 1_700_000_000_000, requestMs: Int.min))
+        #expect(await ExecApprovalsPromptServer._testExecHostTimestampFailureReason(Int.min) == "ttl")
+    }
+
+    @Test
     func `exec host limiter preserves small output`() {
         #expect(ExecHostOutputLimiter.truncate("hello") == "hello")
     }
@@ -103,6 +109,7 @@ struct ExecApprovalsSocketAuthTests {
             timeout: 2)
 
         #expect(validated.command == command)
+        #expect(validated.displayCommand == ExecCommandFormatter.displayString(for: command))
         #expect(result.stdout == "<  padded  >|<-n>")
         #expect(result.exitCode == 0)
     }

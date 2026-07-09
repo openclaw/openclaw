@@ -66,10 +66,14 @@ struct ExecApprovalPromptRequest: Codable {
         self.allowedDecisions = decodedDecisions.compactMap(\.decision)
     }
 
-    static func allowedDecisions(forAsk ask: String?) -> [ExecApprovalDecision] {
+    static func allowedDecisions(
+        forAsk ask: String?,
+        allowAlwaysEligible: Bool = true) -> [ExecApprovalDecision]
+    {
         // Older payloads did not carry ask/allowedDecisions. Preserve their durable
         // approval option; explicit ask=always and allowedDecisions payloads are the
         // policy-carrying shapes that remove it.
+        guard allowAlwaysEligible else { return [.allowOnce, .deny] }
         ask == ExecAsk.always.rawValue
             ? [.allowOnce, .deny]
             : [.allowOnce, .allowAlways, .deny]
@@ -196,6 +200,23 @@ func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
         diff |= lhsBytes[index] ^ rhsBytes[index]
     }
     return diff == 0
+}
+
+func execHostTimestampIsFresh(
+    nowMs: Int,
+    requestMs: Int,
+    toleranceMs: Int = 10000) -> Bool
+{
+    guard toleranceMs >= 0 else { return false }
+    let (lowerBound, lowerOverflow) = nowMs.subtractingReportingOverflow(toleranceMs)
+    if !lowerOverflow, requestMs < lowerBound {
+        return false
+    }
+    let (upperBound, upperOverflow) = nowMs.addingReportingOverflow(toleranceMs)
+    if !upperOverflow, requestMs > upperBound {
+        return false
+    }
+    return true
 }
 
 enum ExecApprovalsSocketClient {
@@ -466,6 +487,68 @@ final class ExecApprovalsPromptServer {
         sentinel.stop()
         return (ready, preservedExistingListener)
     }
+
+    static func _testSocketLeaseHandoff(
+        socketPath: String) async -> (
+        replacementBlockedWhileOwned: Bool,
+        replacementStartedAfterRelease: Bool,
+        replacementHasDistinctIdentity: Bool,
+        replacementPreserved: Bool)
+    {
+        let first = ExecApprovalsSocketServer(
+            socketPath: socketPath,
+            token: "first-token",
+            onPrompt: { _ in nil },
+            onExec: { request in
+                await ExecHostExecutor.handle(request)
+            },
+            onUnexpectedStop: { _ in })
+        guard await first.start() else {
+            first.stop()
+            return (false, false, false, false)
+        }
+        let firstIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
+
+        let replacement = ExecApprovalsSocketServer(
+            socketPath: socketPath,
+            token: "replacement-token",
+            onPrompt: { _ in nil },
+            onExec: { request in
+                await ExecHostExecutor.handle(request)
+            },
+            onUnexpectedStop: { _ in })
+        let replacementBlockedWhileOwned = await !replacement.start()
+        first.stop()
+        let replacementStartedAfterRelease = await replacement.start()
+        let replacementIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
+        let currentIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
+        let result = (
+            replacementBlockedWhileOwned: replacementBlockedWhileOwned,
+            replacementStartedAfterRelease: replacementStartedAfterRelease,
+            replacementHasDistinctIdentity: firstIdentity != nil &&
+                replacementIdentity != nil &&
+                firstIdentity != replacementIdentity,
+            replacementPreserved: replacement.isListening && currentIdentity == replacementIdentity)
+        replacement.stop()
+        return result
+    }
+
+    static func _testExecHostTimestampFailureReason(_ timestamp: Int) async -> String? {
+        let server = ExecApprovalsSocketServer(
+            socketPath: "",
+            token: "test-token",
+            onPrompt: { _ in nil },
+            onExec: { _ in
+                ExecHostResponse(
+                    type: "exec-res",
+                    id: "unexpected-execution",
+                    ok: true,
+                    payload: nil,
+                    error: nil)
+            },
+            onUnexpectedStop: { _ in })
+        return await server.testExecHostTimestampFailureReason(timestamp)
+    }
     #endif
 }
 
@@ -570,26 +653,22 @@ enum ExecApprovalsPromptPresenter {
         contextStack.spacing = 4
         contextStack.alignment = .leading
 
-        let trimmedCwd = request.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedCwd.isEmpty {
-            self.addDetailRow(title: "Working directory", value: trimmedCwd, to: contextStack)
+        if let cwd = self.sanitizedContextValue(request.cwd) {
+            self.addDetailRow(title: "Working directory", value: cwd, to: contextStack)
         }
-        let trimmedAgent = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedAgent.isEmpty {
-            self.addDetailRow(title: "Agent", value: trimmedAgent, to: contextStack)
+        if let agent = self.sanitizedContextValue(request.agentId) {
+            self.addDetailRow(title: "Agent", value: agent, to: contextStack)
         }
-        let trimmedPath = request.resolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPath.isEmpty {
-            self.addDetailRow(title: "Executable", value: trimmedPath, to: contextStack)
+        if let path = self.sanitizedContextValue(request.resolvedPath) {
+            self.addDetailRow(title: "Executable", value: path, to: contextStack)
         }
-        let trimmedHost = request.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedHost.isEmpty {
-            self.addDetailRow(title: "Host", value: trimmedHost, to: contextStack)
+        if let host = self.sanitizedContextValue(request.host) {
+            self.addDetailRow(title: "Host", value: host, to: contextStack)
         }
-        if let security = request.security?.trimmingCharacters(in: .whitespacesAndNewlines), !security.isEmpty {
+        if let security = self.sanitizedContextValue(request.security) {
             self.addDetailRow(title: "Security", value: security, to: contextStack)
         }
-        if let ask = request.ask?.trimmingCharacters(in: .whitespacesAndNewlines), !ask.isEmpty {
+        if let ask = self.sanitizedContextValue(request.ask) {
             self.addDetailRow(title: "Ask mode", value: ask, to: contextStack)
         }
 
@@ -612,6 +691,12 @@ enum ExecApprovalsPromptPresenter {
         // alert title, message, and buttons while the frame remains zero-sized.
         stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
         return stack
+    }
+
+    static func sanitizedContextValue(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return ExecApprovalCommandDisplaySanitizer.sanitize(trimmed)
     }
 
     @MainActor
@@ -650,7 +735,8 @@ private enum ExecHostExecutor {
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
-            rawCommand: validatedRequest.evaluationRawCommand)
+            rawCommand: validatedRequest.evaluationRawCommand,
+            displayCommand: validatedRequest.displayCommand)
         var explicitlyApproved = request.approvalDecision == .allowOnce ||
             request.approvalDecision == .allowAlways
         var effectiveApprovalDecision = request.approvalDecision
@@ -675,7 +761,8 @@ private enum ExecHostExecutor {
                     resolvedPath: context.resolution?.resolvedPath,
                     sessionKey: request.sessionKey,
                     allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
-                        forAsk: context.ask.rawValue)))
+                        forAsk: context.ask.rawValue,
+                        allowAlwaysEligible: context.canPersistAllowAlways)))
             else {
                 return self.errorResponse(
                     code: "UNAVAILABLE",
@@ -750,11 +837,13 @@ private enum ExecHostExecutor {
     private static func buildContext(
         request: ExecHostRequest,
         command: [String],
-        rawCommand: String?) async -> ExecApprovalEvaluation
+        rawCommand: String?,
+        displayCommand: String) async -> ExecApprovalEvaluation
     {
         await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: rawCommand,
+            displayCommand: displayCommand,
             cwd: request.cwd,
             envOverrides: request.env,
             agentId: request.agentId)
@@ -886,13 +975,25 @@ enum ExecApprovalsSocketPathKind: Equatable {
     case other
 }
 
+struct ExecApprovalsSocketPathIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+}
+
 enum ExecApprovalsSocketPathGuardError: LocalizedError {
     case lstatFailed(path: String, code: Int32)
     case parentPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case parentOwnerInvalid(path: String, owner: uid_t, expected: uid_t)
+    case parentAncestorOwnerInvalid(path: String, owner: uid_t)
+    case parentSymlinkOwnerInvalid(path: String, owner: uid_t)
+    case parentPermissionsUnsafe(path: String, permissions: mode_t)
     case socketPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
     case unlinkFailed(path: String, code: Int32)
     case createParentDirectoryFailed(path: String, message: String)
     case setParentDirectoryPermissionsFailed(path: String, message: String)
+    case lifecycleLockOpenFailed(path: String, code: Int32)
+    case lifecycleLockInvalid(path: String)
+    case lifecycleLockBusy(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -900,6 +1001,14 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
             "lstat failed for \(path) (errno \(code))"
         case let .parentPathInvalid(path, kind):
             "socket parent path invalid (\(kind)) at \(path)"
+        case let .parentOwnerInvalid(path, owner, expected):
+            "socket parent directory owner invalid at \(path) (uid \(owner), expected \(expected))"
+        case let .parentAncestorOwnerInvalid(path, owner):
+            "socket parent ancestor owner invalid at \(path) (uid \(owner))"
+        case let .parentSymlinkOwnerInvalid(path, owner):
+            "socket parent symlink owner invalid at \(path) (uid \(owner))"
+        case let .parentPermissionsUnsafe(path, permissions):
+            "socket parent directory permissions unsafe at \(path) (mode \(String(permissions, radix: 8)))"
         case let .socketPathInvalid(path, kind):
             "socket path invalid (\(kind)) at \(path)"
         case let .unlinkFailed(path, code):
@@ -908,6 +1017,12 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
             "socket parent directory create failed at \(path): \(message)"
         case let .setParentDirectoryPermissionsFailed(path, message):
             "socket parent directory chmod failed at \(path): \(message)"
+        case let .lifecycleLockOpenFailed(path, code):
+            "socket lifecycle lock open failed at \(path) (errno \(code))"
+        case let .lifecycleLockInvalid(path):
+            "socket lifecycle lock is unsafe at \(path)"
+        case let .lifecycleLockBusy(path):
+            "socket lifecycle lock is already held at \(path)"
         }
     }
 }
@@ -938,33 +1053,281 @@ enum ExecApprovalsSocketPathGuard {
         return .other
     }
 
+    static func socketIdentity(at path: String) throws -> ExecApprovalsSocketPathIdentity? {
+        var status = stat()
+        let result = lstat(path, &status)
+        if result != 0 {
+            if errno == ENOENT {
+                return nil
+            }
+            throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
+        }
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
+        return ExecApprovalsSocketPathIdentity(
+            device: UInt64(truncatingIfNeeded: status.st_dev),
+            inode: UInt64(truncatingIfNeeded: status.st_ino))
+    }
+
     static func hardenParentDirectory(for socketPath: String) throws {
-        let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
+        guard socketPath.hasPrefix("/") else {
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: socketPath,
+                kind: .other)
+        }
+        let parentURL = URL(fileURLWithPath: socketPath)
+            .deletingLastPathComponent()
+            .standardizedFileURL
         let parentPath = parentURL.path
 
         switch try self.pathKind(at: parentPath) {
-        case .missing, .directory:
-            break
+        case .missing:
+            try self.createSecureDirectoryTree(
+                at: self.canonicalMissingDirectoryURL(parentURL))
+            try self.validateLexicalDirectoryChain(at: parentURL)
+        case .directory:
+            // Existing directories may be shared or operator-managed. Verify
+            // them but never chmod them as a side effect of listener startup.
+            try self.validateLexicalDirectoryChain(at: parentURL)
+            try self.validateDirectoryChain(at: parentURL.resolvingSymlinksInPath())
+            try self.validateParentDirectory(at: parentPath)
+            return
         case let kind:
             throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
         }
+    }
 
-        do {
-            try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
-        } catch {
-            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
-                path: parentPath,
-                message: error.localizedDescription)
+    private static func canonicalMissingDirectoryURL(_ directory: URL) throws -> URL {
+        var existingAncestor = directory
+        var missingComponents: [String] = []
+        while try self.pathKind(at: existingAncestor.path) == .missing {
+            let component = existingAncestor.lastPathComponent
+            guard !component.isEmpty, existingAncestor.path != "/" else {
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: directory.path,
+                    kind: .other)
+            }
+            missingComponents.insert(component, at: 0)
+            existingAncestor.deleteLastPathComponent()
+        }
+        let ancestorKind = try self.pathKind(at: existingAncestor.path)
+        guard ancestorKind == .directory else {
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: existingAncestor.path,
+                kind: ancestorKind)
+        }
+        try self.validateLexicalDirectoryChain(at: existingAncestor)
+        var canonical = existingAncestor.resolvingSymlinksInPath()
+        for component in missingComponents {
+            canonical.appendPathComponent(component, isDirectory: true)
+        }
+        return canonical
+    }
+
+    private static func createSecureDirectoryTree(at directory: URL) throws {
+        let components = directory.standardizedFileURL.pathComponents
+        guard components.first == "/" else {
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: directory.path,
+                kind: .other)
         }
 
-        do {
-            try FileManager().setAttributes(
-                [.posixPermissions: self.parentDirectoryPermissions],
-                ofItemAtPath: parentPath)
-        } catch {
-            throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
-                path: parentPath,
-                message: error.localizedDescription)
+        var cursor = URL(fileURLWithPath: "/", isDirectory: true)
+        var createdPath = false
+        var createdDirectories = Set<String>()
+        for component in components.dropFirst() {
+            cursor.appendPathComponent(component, isDirectory: true)
+            var status = stat()
+            if lstat(cursor.path, &status) != 0 {
+                guard errno == ENOENT else {
+                    throw ExecApprovalsSocketPathGuardError.lstatFailed(
+                        path: cursor.path,
+                        code: errno)
+                }
+                if mkdir(cursor.path, mode_t(self.parentDirectoryPermissions)) == 0 {
+                    createdDirectories.insert(cursor.path)
+                } else if errno != EEXIST {
+                    let code = errno
+                    throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                        path: cursor.path,
+                        message: POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO).localizedDescription)
+                }
+                createdPath = true
+                if lstat(cursor.path, &status) != 0 {
+                    throw ExecApprovalsSocketPathGuardError.lstatFailed(
+                        path: cursor.path,
+                        code: errno)
+                }
+            }
+
+            guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+                let kind = try self.pathKind(at: cursor.path)
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: cursor.path,
+                    kind: kind)
+            }
+            let permissions = status.st_mode & mode_t(0o7777)
+            if createdPath {
+                guard status.st_uid == geteuid() else {
+                    throw ExecApprovalsSocketPathGuardError.parentOwnerInvalid(
+                        path: cursor.path,
+                        owner: status.st_uid,
+                        expected: geteuid())
+                }
+                guard permissions & mode_t(0o022) == 0 else {
+                    throw ExecApprovalsSocketPathGuardError.parentPermissionsUnsafe(
+                        path: cursor.path,
+                        permissions: permissions)
+                }
+            } else {
+                try self.validateAncestorDirectory(
+                    status: status,
+                    path: cursor.path,
+                    permissions: permissions)
+            }
+        }
+
+        if createdDirectories.contains(directory.path) {
+            do {
+                try FileManager().setAttributes(
+                    [.posixPermissions: self.parentDirectoryPermissions],
+                    ofItemAtPath: directory.path)
+            } catch {
+                throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
+                    path: directory.path,
+                    message: error.localizedDescription)
+            }
+        }
+        try self.validateParentDirectory(at: directory.path)
+    }
+
+    private static func validateDirectoryChain(at directory: URL) throws {
+        let components = directory.standardizedFileURL.pathComponents
+        guard components.first == "/" else {
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: directory.path,
+                kind: .other)
+        }
+        var cursor = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in components.dropFirst() {
+            cursor.appendPathComponent(component, isDirectory: true)
+            var status = stat()
+            guard lstat(cursor.path, &status) == 0 else {
+                throw ExecApprovalsSocketPathGuardError.lstatFailed(
+                    path: cursor.path,
+                    code: errno)
+            }
+            guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+                let kind = try self.pathKind(at: cursor.path)
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: cursor.path,
+                    kind: kind)
+            }
+            try self.validateAncestorDirectory(
+                status: status,
+                path: cursor.path,
+                permissions: status.st_mode & mode_t(0o7777))
+        }
+    }
+
+    private static func validateLexicalDirectoryChain(at directory: URL) throws {
+        let components = directory.standardizedFileURL.pathComponents
+        guard components.first == "/" else {
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: directory.path,
+                kind: .other)
+        }
+        var cursor = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in components.dropFirst() {
+            cursor.appendPathComponent(component, isDirectory: true)
+            var status = stat()
+            guard lstat(cursor.path, &status) == 0 else {
+                throw ExecApprovalsSocketPathGuardError.lstatFailed(
+                    path: cursor.path,
+                    code: errno)
+            }
+            let fileType = status.st_mode & mode_t(S_IFMT)
+            if fileType == mode_t(S_IFLNK) {
+                guard self.symlinkOwnerIsSafe(
+                    owner: status.st_uid,
+                    expectedOwner: geteuid())
+                else {
+                    throw ExecApprovalsSocketPathGuardError.parentSymlinkOwnerInvalid(
+                        path: cursor.path,
+                        owner: status.st_uid)
+                }
+                continue
+            }
+            guard fileType == mode_t(S_IFDIR) else {
+                let kind = try self.pathKind(at: cursor.path)
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: cursor.path,
+                    kind: kind)
+            }
+            try self.validateAncestorDirectory(
+                status: status,
+                path: cursor.path,
+                permissions: status.st_mode & mode_t(0o7777))
+        }
+    }
+
+    private static func validateAncestorDirectory(
+        status: stat,
+        path: String,
+        permissions: mode_t) throws
+    {
+        guard self.ancestorDirectoryIsSafe(
+            owner: status.st_uid,
+            permissions: permissions,
+            expectedOwner: geteuid())
+        else {
+            if status.st_uid != 0, status.st_uid != geteuid() {
+                throw ExecApprovalsSocketPathGuardError.parentAncestorOwnerInvalid(
+                    path: path,
+                    owner: status.st_uid)
+            }
+            throw ExecApprovalsSocketPathGuardError.parentPermissionsUnsafe(
+                path: path,
+                permissions: permissions)
+        }
+    }
+
+    static func ancestorDirectoryIsSafe(
+        owner: uid_t,
+        permissions: mode_t,
+        expectedOwner: uid_t) -> Bool
+    {
+        guard owner == 0 || owner == expectedOwner else { return false }
+        guard permissions & mode_t(0o022) != 0 else { return true }
+        return permissions & mode_t(S_ISVTX) != 0
+    }
+
+    static func symlinkOwnerIsSafe(owner: uid_t, expectedOwner: uid_t) -> Bool {
+        owner == 0 || owner == expectedOwner
+    }
+
+    private static func validateParentDirectory(at path: String) throws {
+        var status = stat()
+        if lstat(path, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
+        }
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            let kind = try self.pathKind(at: path)
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                path: path,
+                kind: kind)
+        }
+        let expectedOwner = geteuid()
+        guard status.st_uid == expectedOwner else {
+            throw ExecApprovalsSocketPathGuardError.parentOwnerInvalid(
+                path: path,
+                owner: status.st_uid,
+                expected: expectedOwner)
+        }
+        let permissions = status.st_mode & mode_t(0o777)
+        guard permissions & mode_t(0o022) == 0 else {
+            throw ExecApprovalsSocketPathGuardError.parentPermissionsUnsafe(
+                path: path,
+                permissions: permissions)
         }
     }
 
@@ -982,9 +1345,121 @@ enum ExecApprovalsSocketPathGuard {
             throw ExecApprovalsSocketPathGuardError.unlinkFailed(path: socketPath, code: errno)
         }
     }
+
+    @discardableResult
+    static func removeSocket(
+        at socketPath: String,
+        ifIdentityMatches expectedIdentity: ExecApprovalsSocketPathIdentity) throws -> Bool
+    {
+        guard try self.socketIdentity(at: socketPath) == expectedIdentity else { return false }
+        if unlink(socketPath) != 0 {
+            if errno == ENOENT {
+                return false
+            }
+            throw ExecApprovalsSocketPathGuardError.unlinkFailed(path: socketPath, code: errno)
+        }
+        return true
+    }
+}
+
+private final class ExecApprovalsSocketLifecycleLease: @unchecked Sendable {
+    private static let processLock = NSLock()
+    private nonisolated(unsafe) static var reservedPaths = Set<String>()
+
+    private let descriptor: Int32
+    private let path: String
+    private let stateLock = NSLock()
+    private var released = false
+
+    private init(descriptor: Int32, path: String) {
+        self.descriptor = descriptor
+        self.path = path
+    }
+
+    static func acquire(for socketPath: String) throws -> ExecApprovalsSocketLifecycleLease {
+        let socketURL = URL(fileURLWithPath: socketPath).standardizedFileURL
+        let canonicalSocketPath = socketURL.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(socketURL.lastPathComponent)
+            .path
+        let lockPath = "\(canonicalSocketPath).lifecycle.lock"
+        let reserved = self.processLock.withLock { () -> Bool in
+            guard !self.reservedPaths.contains(lockPath) else { return false }
+            self.reservedPaths.insert(lockPath)
+            return true
+        }
+        guard reserved else {
+            throw ExecApprovalsSocketPathGuardError.lifecycleLockBusy(path: lockPath)
+        }
+
+        let descriptor = open(
+            lockPath,
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+            S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            self.releaseProcessReservation(lockPath)
+            throw ExecApprovalsSocketPathGuardError.lifecycleLockOpenFailed(
+                path: lockPath,
+                code: errno)
+        }
+
+        do {
+            var descriptorStatus = stat()
+            var pathStatus = stat()
+            guard fstat(descriptor, &descriptorStatus) == 0,
+                  lstat(lockPath, &pathStatus) == 0,
+                  descriptorStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                  descriptorStatus.st_uid == geteuid(),
+                  descriptorStatus.st_nlink == 1,
+                  descriptorStatus.st_mode & mode_t(0o022) == 0,
+                  descriptorStatus.st_dev == pathStatus.st_dev,
+                  descriptorStatus.st_ino == pathStatus.st_ino
+            else {
+                throw ExecApprovalsSocketPathGuardError.lifecycleLockInvalid(path: lockPath)
+            }
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                throw ExecApprovalsSocketPathGuardError.lifecycleLockBusy(path: lockPath)
+            }
+            return ExecApprovalsSocketLifecycleLease(
+                descriptor: descriptor,
+                path: lockPath)
+        } catch {
+            close(descriptor)
+            self.releaseProcessReservation(lockPath)
+            throw error
+        }
+    }
+
+    func release() {
+        let shouldRelease = self.stateLock.withLock { () -> Bool in
+            guard !self.released else { return false }
+            self.released = true
+            return true
+        }
+        guard shouldRelease else { return }
+        _ = flock(self.descriptor, LOCK_UN)
+        close(self.descriptor)
+        Self.releaseProcessReservation(self.path)
+    }
+
+    deinit {
+        self.release()
+    }
+
+    private static func releaseProcessReservation(_ path: String) {
+        self.processLock.withLock {
+            self.reservedPaths.remove(path)
+        }
+    }
 }
 
 private final class ExecApprovalsSocketServer: @unchecked Sendable {
+    private struct OpenedSocket {
+        let fd: Int32
+        let identity: ExecApprovalsSocketPathIdentity
+        let lifecycleLease: ExecApprovalsSocketLifecycleLease
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.socket")
     private let socketPath: String
     private let token: String
@@ -993,6 +1468,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let onUnexpectedStop: @Sendable (ExecApprovalsSocketServer) -> Void
     private let stateLock = NSLock()
     private var socketFD: Int32 = -1
+    private var socketIdentity: ExecApprovalsSocketPathIdentity?
+    private var socketLifecycleLease: ExecApprovalsSocketLifecycleLease?
     private var acceptTask: Task<Void, Never>?
     private var isRunning = false
 
@@ -1044,21 +1521,23 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     }
 
     func stop() {
-        let (task, fd) = self.stateLock.withLock {
+        let (task, fd, identity, lifecycleLease) = self.stateLock.withLock {
             self.isRunning = false
             let task = self.acceptTask
             self.acceptTask = nil
             let fd = self.socketFD
             self.socketFD = -1
-            return (task, fd)
+            let identity = self.socketIdentity
+            self.socketIdentity = nil
+            let lifecycleLease = self.socketLifecycleLease
+            self.socketLifecycleLease = nil
+            return (task, fd, identity, lifecycleLease)
         }
         task?.cancel()
-        if fd >= 0 {
-            // A canceled instance that never owned the listener must not unlink
-            // another generation's socket at the shared pathname.
-            close(fd)
-            self.removeSocketAfterStop()
-        }
+        self.closeOwnedSocket(
+            fd: fd,
+            identity: identity,
+            lifecycleLease: lifecycleLease)
     }
 
     private func runAcceptLoop(onReady: @escaping @Sendable (Bool) -> Void) async {
@@ -1072,8 +1551,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             return
         }
 
-        let fd = self.openSocket()
-        guard fd >= 0 else {
+        guard let openedSocket = self.openSocket() else {
             self.stateLock.withLock {
                 self.isRunning = false
                 self.acceptTask = nil
@@ -1081,15 +1559,20 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             onReady(false)
             return
         }
+        let fd = openedSocket.fd
 
         let shouldAccept = self.stateLock.withLock {
             guard self.isRunning, !Task.isCancelled else { return false }
             self.socketFD = fd
+            self.socketIdentity = openedSocket.identity
+            self.socketLifecycleLease = openedSocket.lifecycleLease
             return true
         }
         guard shouldAccept else {
-            close(fd)
-            self.removeSocketAfterStop()
+            self.closeOwnedSocket(
+                fd: fd,
+                identity: openedSocket.identity,
+                lifecycleLease: openedSocket.lifecycleLease)
             onReady(false)
             return
         }
@@ -1120,64 +1603,97 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             if ownsDescriptor {
                 self.socketFD = -1
             }
+            let identity = ownsDescriptor ? self.socketIdentity : nil
+            let lifecycleLease = ownsDescriptor ? self.socketLifecycleLease : nil
+            if ownsDescriptor {
+                self.socketIdentity = nil
+                self.socketLifecycleLease = nil
+            }
             self.isRunning = false
             self.acceptTask = nil
-            return (ownsDescriptor: ownsDescriptor, stoppedUnexpectedly: stoppedUnexpectedly)
+            return (
+                ownsDescriptor: ownsDescriptor,
+                identity: identity,
+                lifecycleLease: lifecycleLease,
+                stoppedUnexpectedly: stoppedUnexpectedly)
         }
         if termination.ownsDescriptor {
-            close(fd)
-            self.removeSocketAfterStop()
+            self.closeOwnedSocket(
+                fd: fd,
+                identity: termination.identity,
+                lifecycleLease: termination.lifecycleLease)
         }
         if termination.stoppedUnexpectedly {
             self.onUnexpectedStop(self)
         }
     }
 
-    private func removeSocketAfterStop() {
-        guard !self.socketPath.isEmpty else { return }
-        do {
-            try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
-        } catch {
-            self.logger
-                .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
+    private func closeOwnedSocket(
+        fd: Int32,
+        identity: ExecApprovalsSocketPathIdentity?,
+        lifecycleLease: ExecApprovalsSocketLifecycleLease?)
+    {
+        if fd >= 0 {
+            close(fd)
         }
+        if !self.socketPath.isEmpty, let identity {
+            do {
+                // Keep the cross-process lease through the identity check and
+                // unlink so no replacement can bind between those operations.
+                try ExecApprovalsSocketPathGuard.removeSocket(
+                    at: self.socketPath,
+                    ifIdentityMatches: identity)
+            } catch {
+                self.logger
+                    .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        lifecycleLease?.release()
     }
 
     #if DEBUG
     fileprivate func failForTesting() {
-        let (task, fd) = self.stateLock.withLock {
+        let (task, fd, identity, lifecycleLease) = self.stateLock.withLock {
             guard self.isRunning, self.socketFD >= 0 else {
-                return (nil, Int32(-1))
+                return (nil, Int32(-1), nil, nil)
             }
             self.isRunning = false
             let task = self.acceptTask
             self.acceptTask = nil
             let fd = self.socketFD
             self.socketFD = -1
-            return (task, fd)
+            let identity = self.socketIdentity
+            self.socketIdentity = nil
+            let lifecycleLease = self.socketLifecycleLease
+            self.socketLifecycleLease = nil
+            return (task, fd, identity, lifecycleLease)
         }
         guard fd >= 0 else { return }
         task?.cancel()
-        close(fd)
-        self.removeSocketAfterStop()
+        self.closeOwnedSocket(
+            fd: fd,
+            identity: identity,
+            lifecycleLease: lifecycleLease)
         self.onUnexpectedStop(self)
     }
     #endif
 
-    private func openSocket() -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            self.logger.error("exec approvals socket create failed")
-            return -1
-        }
+    private func openSocket() -> OpenedSocket? {
+        let lifecycleLease: ExecApprovalsSocketLifecycleLease
         do {
             try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
+            lifecycleLease = try ExecApprovalsSocketLifecycleLease.acquire(for: self.socketPath)
             try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
         } catch {
             self.logger
                 .error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
-            close(fd)
-            return -1
+            return nil
+        }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            self.logger.error("exec approvals socket create failed")
+            lifecycleLease.release()
+            return nil
         }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -1185,7 +1701,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         if self.socketPath.utf8.count >= maxLen {
             self.logger.error("exec approvals socket path too long")
             close(fd)
-            return -1
+            lifecycleLease.release()
+            return nil
         }
         self.socketPath.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
@@ -1203,22 +1720,48 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         if result != 0 {
             self.logger.error("exec approvals socket bind failed")
             close(fd)
-            return -1
+            lifecycleLease.release()
+            return nil
+        }
+        let identity: ExecApprovalsSocketPathIdentity
+        do {
+            guard let boundIdentity = try ExecApprovalsSocketPathGuard.socketIdentity(at: self.socketPath) else {
+                self.logger.error("exec approvals socket identity unavailable after bind")
+                close(fd)
+                try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+                lifecycleLease.release()
+                return nil
+            }
+            identity = boundIdentity
+        } catch {
+            self.logger.error(
+                "exec approvals socket identity failed: \(error.localizedDescription, privacy: .public)")
+            close(fd)
+            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            lifecycleLease.release()
+            return nil
         }
         if chmod(self.socketPath, 0o600) != 0 {
             self.logger.error("exec approvals socket chmod failed")
-            close(fd)
-            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
-            return -1
+            self.closeOwnedSocket(
+                fd: fd,
+                identity: identity,
+                lifecycleLease: lifecycleLease)
+            return nil
         }
         if listen(fd, 16) != 0 {
             self.logger.error("exec approvals socket listen failed")
-            close(fd)
-            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
-            return -1
+            self.closeOwnedSocket(
+                fd: fd,
+                identity: identity,
+                lifecycleLease: lifecycleLease)
+            return nil
         }
         self.logger.info("exec approvals socket listening at \(self.socketPath, privacy: .public)")
-        return fd
+        return OpenedSocket(
+            fd: fd,
+            identity: identity,
+            lifecycleLease: lifecycleLease)
     }
 
     private func handleClient(fd: Int32) async {
@@ -1292,7 +1835,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
 
     private func handleExecRequest(_ request: ExecHostSocketRequest) async -> ExecHostResponse {
         let nowMs = Int(Date().timeIntervalSince1970 * 1000)
-        if abs(nowMs - request.ts) > 10000 {
+        if !execHostTimestampIsFresh(nowMs: nowMs, requestMs: request.ts) {
             return ExecHostResponse(
                 type: "exec-res",
                 id: request.id,
@@ -1327,6 +1870,19 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             payload: response.payload,
             error: response.error)
     }
+
+    #if DEBUG
+    fileprivate func testExecHostTimestampFailureReason(_ timestamp: Int) async -> String? {
+        let response = await self.handleExecRequest(ExecHostSocketRequest(
+            type: "exec",
+            id: "timestamp-test",
+            nonce: "nonce",
+            ts: timestamp,
+            hmac: "unauthenticated",
+            requestJson: #"{"command":["/usr/bin/true"]}"#))
+        return response.error?.reason
+    }
+    #endif
 
     private func hmacHex(nonce: String, ts: Int, requestJson: String) -> String {
         let key = SymmetricKey(data: Data(self.token.utf8))
