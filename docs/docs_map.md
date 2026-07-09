@@ -7382,6 +7382,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/cohere
 - Headings:
+  - H2: Built-in catalog
   - H2: Get started
   - H2: Environment-only setup
   - H2: Related

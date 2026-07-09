@@ -11,6 +11,7 @@ import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
+import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
@@ -41,6 +42,7 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
+import { NAV_WIDTH_DEFAULT, NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -372,6 +374,7 @@ class OpenClawShell extends LitElement {
   private context?: ApplicationContext<RouteId>;
 
   @state() private navCollapsed = false;
+  @state() private navWidth = NAV_WIDTH_DEFAULT;
   @state() private sidebarPinnedRoutes: readonly SidebarNavRoute[] = [];
   @state() private sidebarMoreExpanded = false;
   @state() private navDrawerOpen = false;
@@ -418,6 +421,7 @@ class OpenClawShell extends LitElement {
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
+    window.addEventListener("resize", this.handleWindowResize);
   }
 
   override updated() {
@@ -486,6 +490,7 @@ class OpenClawShell extends LitElement {
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
+    window.removeEventListener("resize", this.handleWindowResize);
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
     this.stopConfigSubscription?.();
@@ -575,6 +580,22 @@ class OpenClawShell extends LitElement {
       }
     });
   }
+
+  private resizeNavigation(splitRatio: number) {
+    const shell = this.querySelector<HTMLElement>(".shell");
+    const context = this.context;
+    if (!shell || !context) {
+      return;
+    }
+    const navWidth = Math.round(
+      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
+    );
+    context.navigation.update({ navWidth });
+  }
+
+  private readonly handleWindowResize = () => {
+    this.requestUpdate();
+  };
 
   private readonly handleShellKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
@@ -731,6 +752,7 @@ class OpenClawShell extends LitElement {
     snapshot: ApplicationRuntime["context"]["navigation"]["snapshot"],
   ) => {
     this.navCollapsed = snapshot.navCollapsed;
+    this.navWidth = snapshot.navWidth;
     this.sidebarPinnedRoutes = snapshot.sidebarPinnedRoutes;
     this.sidebarMoreExpanded = snapshot.sidebarMoreExpanded;
   };
@@ -751,6 +773,7 @@ class OpenClawShell extends LitElement {
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
+    const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -766,6 +789,7 @@ class OpenClawShell extends LitElement {
           : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
           : ""}"
+        style=${`--shell-nav-expanded-width: ${this.navWidth}px`}
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
@@ -817,6 +841,21 @@ class OpenClawShell extends LitElement {
               isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>
         </div>
+        ${!navCollapsed && !this.onboarding
+          ? html`
+              <resizable-divider
+                class="sidebar-resizer"
+                .label=${t("nav.resize")}
+                .splitRatio=${this.navWidth / shellWidth}
+                .minRatio=${NAV_WIDTH_MIN / shellWidth}
+                .maxRatio=${NAV_WIDTH_MAX / shellWidth}
+                aria-valuetext=${`${this.navWidth} pixels`}
+                title=${t("nav.resize")}
+                @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+                  this.resizeNavigation(event.detail.splitRatio)}
+              ></resizable-divider>
+            `
+          : nothing}
         <main
           class="content ${activeRoute === "chat" ? "content--chat" : ""} ${activeRoute ===
           "workboard"
