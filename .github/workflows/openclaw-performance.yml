@@ -289,7 +289,7 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Allow live auth for OpenAI candidate state
+      - name: Prepare live OpenAI candidate state
         if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
         shell: bash
         run: |
@@ -307,6 +307,19 @@ jobs:
           // This ephemeral checkout must honor the lane's explicit --auth live selection.
           state.auth.mode = "default";
           state.auth.reason = "Honor the workflow lane's explicit run-level auth selection.";
+          state.setup = [
+            ...(state.setup ?? []),
+            {
+              id: "force-openclaw-agent-runtime",
+              title: "Force OpenClaw Agent Runtime",
+              intent: "Keep live provider requests inside the OpenClaw harness for timeline evidence.",
+              afterPhase: "provision",
+              commands: [
+                "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw"
+              ],
+              evidence: ["OpenAI provider runtime is pinned to the OpenClaw harness"]
+            }
+          ];
           fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
           NODE
 

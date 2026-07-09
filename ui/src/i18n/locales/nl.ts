@@ -445,6 +445,11 @@ export const nl: TranslationMap = {
     noEvents: "Nog geen gebeurtenissen.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Kreeftbezoeken",
+      lobsterVisitsOn: "Komt af en toe langs",
+      lobsterVisitsOff: "Komt nooit langs",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -487,6 +492,10 @@ export const nl: TranslationMap = {
     settingsGroupConnections: "Verbindingen",
     settingsGroupAgents: "Agents en tools",
     settingsGroupSystem: "Systeem",
+    settingsSearchLabel: "Instellingen doorzoeken",
+    settingsSearchPlaceholder: "Instellingen doorzoeken…",
+    settingsSearchNoResults: "Geen overeenkomende instellingen.",
+    settingsSearchClear: "Zoekopdracht in instellingen wissen",
     exitSettings: "Terug naar app",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
@@ -605,7 +614,9 @@ export const nl: TranslationMap = {
   },
   tasksPage: {
     active: "Actief",
+    activeSub: "In wachtrij geplaatste en actieve achtergrondtaken.",
     recent: "Recent",
+    recentSub: "Meest recente voltooide, mislukte en geannuleerde taken.",
     loading: "Taken laden…",
     empty: "Nog geen achtergrondtaken.",
     emptyActive: "Geen taken in de wachtrij of actief.",
@@ -1746,10 +1757,6 @@ export const nl: TranslationMap = {
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
     },
-    modelPicker: {
-      faster: "Sneller",
-      smarter: "Slimmer",
-    },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",
       reason: "Voer /pair qr opnieuw uit om een nieuwe installatiecode te genereren.",
@@ -1947,8 +1954,7 @@ export const nl: TranslationMap = {
     },
     summary: {
       enabled: "Ingeschakeld",
-      yes: "Ja",
-      no: "Nee",
+      scheduler: "Planner",
       jobs: "Taken",
       nextWake: "Volgende wake",
       refreshing: "Vernieuwen...",

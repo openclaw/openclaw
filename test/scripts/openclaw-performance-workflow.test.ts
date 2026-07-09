@@ -560,8 +560,8 @@ esac
     expect(sanity.run).not.toContain("--include scenario:fresh-install");
   });
 
-  it("makes the live lane honor explicit live auth in the ephemeral Kova checkout", () => {
-    const override = findStep("Allow live auth for OpenAI candidate state");
+  it("makes the live lane use live auth through the OpenClaw runtime", () => {
+    const override = findStep("Prepare live OpenAI candidate state");
 
     expect(override.if).toContain("matrix.live == 'true'");
     expect(override.run).toContain("states/mock-openai-provider.json");
@@ -573,6 +573,12 @@ esac
     expect(override.run).toContain(
       'state.auth.reason = "Honor the workflow lane\'s explicit run-level auth selection."',
     );
+    expect(override.run).toContain('id: "force-openclaw-agent-runtime"');
+    expect(override.run).toContain('afterPhase: "provision"');
+    expect(override.run).toContain(
+      "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw",
+    );
+    expect(override.run).not.toContain("agents.defaults.agentRuntime");
   });
 
   it("runs the trusted lane evidence validator before tolerating gate failures", () => {
