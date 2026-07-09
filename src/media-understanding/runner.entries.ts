@@ -53,7 +53,6 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { fileExists } from "./fs.js";
 import {
   resolveImageDescriptionCompressionPolicy,
   resolveImageDescriptionPreCompressionMaxBytes,
