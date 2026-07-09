@@ -20,14 +20,13 @@ const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_
 const DISCORD_GATEWAY_METADATA_MAX_BYTES = 4 * 1024 * 1024;
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
-type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };
 export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
-) => Promise<DiscordGatewayMetadataResponse>;
+) => Promise<Response>;
 type DiscordGatewayMetadataFetchOptions = {
   capture?: false | { flowId: string; meta: Record<string, unknown> };
   proxyUrl?: string;
@@ -179,7 +178,7 @@ export async function fetchDiscordGatewayInfo(params: {
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
-  let response: DiscordGatewayMetadataResponse;
+  let response: Response;
   try {
     response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
@@ -198,7 +197,7 @@ export async function fetchDiscordGatewayInfo(params: {
 
   let body: string;
   try {
-    body = new TextDecoder().decode(await readDiscordGatewayMetadataBody(response as Response));
+    body = new TextDecoder().decode(await readDiscordGatewayMetadataBody(response));
   } catch (error) {
     throw createGatewayMetadataError({
       detail: formatErrorMessage(error),
