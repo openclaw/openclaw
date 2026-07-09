@@ -694,6 +694,26 @@ export function createFollowupRunner(params: {
           await Promise.all(pendingProgressDeliveries);
         }
       };
+      const pendingFailedProgressDeliveries: Array<() => Promise<void>> = [];
+      const shouldBufferFailedFollowupProgress = () =>
+        run.sourceReplyDeliveryMode !== "message_tool_only" &&
+        !isRoomEventFollowup() &&
+        resolveCurrentVerboseLevel() === "on" &&
+        shouldEmitToolResultProgress();
+      const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<void>) => {
+        pendingFailedProgressDeliveries.push(deliver);
+      };
+      const discardPendingFailedProgressDeliveries = () => {
+        pendingFailedProgressDeliveries.length = 0;
+      };
+      const flushPendingFailedProgressDeliveries = async (): Promise<boolean> => {
+        const deliveries = pendingFailedProgressDeliveries.splice(0);
+        for (const deliver of deliveries) {
+          enqueueProgressDelivery(deliver);
+        }
+        await drainProgressDeliveries();
+        return observedVisibleToolErrorProgress;
+      };
       const admission = await admitReplyTurn({
         sessionId: effectiveQueued.admissionSessionId ?? run.sessionId,
         sessionKey: replySessionKey ?? "",
@@ -1098,35 +1118,60 @@ export function createFollowupRunner(params: {
             };
             // Shared by the embedded onToolResult callback and the CLI tool
             // summary tracker so both runners deliver identical durable summaries.
-            const deliverFollowupToolSummary = (payload: ReplyPayload) =>
-              enqueueProgressDelivery(async () => {
-                // room_event turns are ambient; only an explicit message tool call
-                // may post back into the source chat.
-                if (isRoomEventFollowup()) {
-                  return;
-                }
-                if (payload.isError === true && !shouldEmitFailedToolProgress()) {
-                  return;
-                }
+            const deliverVisibleFollowupToolSummary = async (payload: ReplyPayload) => {
+              // room_event turns are ambient; only an explicit message tool call
+              // may post back into the source chat.
+              if (isRoomEventFollowup()) {
+                return;
+              }
+              if (
+                payload.isError === true &&
+                !shouldEmitFailedToolProgress() &&
+                !shouldBufferFailedFollowupProgress()
+              ) {
+                return;
+              }
+              if (
+                run.sourceReplyDeliveryMode === "message_tool_only" &&
+                !shouldEmitToolResultProgress()
+              ) {
+                return;
+              }
+              const delivered = await sendRunPayloads(
+                [payload],
+                effectiveQueued,
+                {
+                  provider,
+                  modelId: model,
+                },
+                { kind: "tool", mirror: false, runId },
+              );
+              if (payload.isError === true && delivered) {
+                markVisibleToolErrorProgress();
+              }
+            };
+            const deliverFollowupToolSummary = (payload: ReplyPayload) => {
+              if (
+                payload.isError === true &&
+                !shouldEmitFailedToolProgress() &&
+                shouldBufferFailedFollowupProgress()
+              ) {
+                enqueuePendingFailedProgressDelivery(() =>
+                  deliverVisibleFollowupToolSummary(payload),
+                );
+                return Promise.resolve();
+              }
+              return enqueueProgressDelivery(async () => {
                 if (
-                  run.sourceReplyDeliveryMode === "message_tool_only" &&
-                  !shouldEmitToolResultProgress()
+                  payload.isError === true &&
+                  !shouldEmitFailedToolProgress() &&
+                  !shouldBufferFailedFollowupProgress()
                 ) {
                   return;
                 }
-                await sendRunPayloads(
-                  [payload],
-                  effectiveQueued,
-                  {
-                    provider,
-                    modelId: model,
-                  },
-                  { kind: "tool", mirror: false, runId },
-                );
-                if (payload.isError === true) {
-                  markVisibleToolErrorProgress();
-                }
+                await deliverVisibleFollowupToolSummary(payload);
               });
+            };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
                 const cliSessionBinding = getCliSessionBinding(
@@ -1454,14 +1499,16 @@ export function createFollowupRunner(params: {
                 onAgentEvent: (evt) => {
                   replyOperation?.recordActivity();
                   lifecycleBackstop.note(evt);
-                  return enqueueProgressDelivery(async () => {
+                  const isFailedProgressEvent = hasFailedFollowupProgressEvent(evt);
+                  const emitProgressImmediately =
+                    shouldEmitToolResultProgress() &&
+                    (!isFailedProgressEvent || shouldEmitFailedToolProgress());
+                  const deliverProgressEvent = async (emitChannelProgress: boolean) => {
                     const visible = await forwardFollowupProgressEvent({
                       evt,
                       opts: progressOpts,
                       detailMode: toolProgressDetail,
-                      emitChannelProgress:
-                        shouldEmitToolResultProgress() &&
-                        (!hasFailedFollowupProgressEvent(evt) || shouldEmitFailedToolProgress()),
+                      emitChannelProgress,
                       onCompactionComplete: () => {
                         attemptCompactionCount += 1;
                       },
@@ -1470,9 +1517,20 @@ export function createFollowupRunner(params: {
                       onCompactionNoticePayload: (payload) =>
                         sendCompactionNoticePayload(payload, { provider, modelId: model }),
                     });
-                    if (visible && hasFailedFollowupProgressEvent(evt)) {
+                    if (visible && isFailedProgressEvent) {
                       markVisibleToolErrorProgress();
                     }
+                  };
+                  if (
+                    isFailedProgressEvent &&
+                    !shouldEmitFailedToolProgress() &&
+                    shouldBufferFailedFollowupProgress()
+                  ) {
+                    enqueuePendingFailedProgressDelivery(() => deliverProgressEvent(true));
+                    return Promise.resolve();
+                  }
+                  return enqueueProgressDelivery(async () => {
+                    await deliverProgressEvent(emitProgressImmediately);
                   });
                 },
               });
@@ -1589,6 +1647,7 @@ export function createFollowupRunner(params: {
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         if (!shouldRouteFallbackExhaustion) {
           await drainProgressDeliveries();
+          await flushPendingFailedProgressDeliveries();
           return;
         }
         // Fallback exhaustion can throw without preserving a candidate result.
@@ -1855,6 +1914,7 @@ export function createFollowupRunner(params: {
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
           return;
         }
+        await flushPendingFailedProgressDeliveries();
         return;
       }
       if (
@@ -1868,6 +1928,26 @@ export function createFollowupRunner(params: {
           "run_failed",
           new Error("interactive follow-up completed without a visible reply"),
         );
+      }
+
+      if (
+        finalPayloads.some(
+          (payload) =>
+            payload.isError !== true && hasOutboundReplyContent(payload, { trimText: true }),
+        )
+      ) {
+        discardPendingFailedProgressDeliveries();
+      } else {
+        const flushedVisibleFailure = await flushPendingFailedProgressDeliveries();
+        if (
+          flushedVisibleFailure &&
+          fallbackPayload &&
+          finalPayloads.length === 1 &&
+          finalPayloads[0]?.isError === true &&
+          finalPayloads[0].text === fallbackPayload.text
+        ) {
+          return;
+        }
       }
 
       let deliveryPayloads = finalPayloads;

@@ -5278,13 +5278,13 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps tool-error fallbacks eligible when a channel declines failed progress", async () => {
+  it("keeps tool-error fallbacks eligible when a channel declines full-verbose failed progress", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
       sendPolicy: "allow",
-      verboseLevel: "on",
+      verboseLevel: "full",
     };
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn(async () => false as const);
@@ -5328,6 +5328,78 @@ describe("dispatchReplyFromConfig", () => {
     expect(itemEventResult).toBe(false);
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("flushes buffered regular-verbose failed command progress when no final reply is visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
+    const failedCommand = {
+      phase: "end",
+      name: "exec",
+      status: "failed",
+      exitCode: 1,
+    } as const;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onCommandOutput?.(failedCommand);
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("flushes buffered regular-verbose failed tool payloads when no final reply is visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const failedPayload = {
+      text: "⚠️ 🛠️ Exec failed",
+      isError: true,
+    } satisfies ReplyPayload;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(failedPayload);
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedPayload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("keeps terminal tool-error fallbacks available when regular verbose failed item progress is hidden", async () => {

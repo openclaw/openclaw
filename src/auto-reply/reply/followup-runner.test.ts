@@ -3199,6 +3199,91 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("drops queued regular-verbose failed tool payloads after a visible final success", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({
+          text: "🛠️ Exec: recovered helper failure",
+          isError: true,
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "final",
+        payload: expect.objectContaining({ text: "final reply" }),
+      }),
+    );
+  });
+
+  it("flushes queued regular-verbose failed tool payloads when no final payload is visible", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({
+          text: "🛠️ Exec: terminal helper failure",
+          isError: true,
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "tool",
+        payload: expect.objectContaining({
+          text: "🛠️ Exec: terminal helper failure",
+          isError: true,
+        }),
+      }),
+    );
+  });
+
   it("delivers queued fast auto progress for non-room-event message-tool-only turns", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -3998,7 +4083,7 @@ describe("createFollowupRunner progress forwarding", () => {
         run: {
           messageProvider: "discord",
           sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "on",
+          verboseLevel: "full",
         },
       }),
     );

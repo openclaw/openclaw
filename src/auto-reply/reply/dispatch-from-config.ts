@@ -3121,11 +3121,31 @@ export async function dispatchReplyFromConfig(
       (typeof payload.exitCode === "number" && payload.exitCode !== 0);
     const shouldForwardFailedProgress = (options?: { force?: boolean }) =>
       options?.force === true || shouldEmitFullVerboseProgress();
+    const shouldBufferFailedProgress = (options?: { force?: boolean }) =>
+      sourceReplyDeliveryMode !== "message_tool_only" &&
+      !shouldForwardFailedProgress(options) &&
+      hasVisibleRegularVerboseToolProgress();
     const shouldForwardFailedProgressStatus = (payload: {
       phase?: string;
       status?: string;
       exitCode?: number | null;
     }) => shouldForwardFailedProgress() || !hasFailedProgressStatus(payload);
+    const pendingFailedProgressDeliveries: Array<() => Promise<void>> = [];
+    const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<void>) => {
+      pendingFailedProgressDeliveries.push(deliver);
+    };
+    const discardPendingFailedProgressDeliveries = () => {
+      pendingFailedProgressDeliveries.length = 0;
+    };
+    const flushPendingFailedProgressDeliveries = async () => {
+      const deliveries = pendingFailedProgressDeliveries.splice(0);
+      for (const deliver of deliveries) {
+        if (isDispatchOperationAborted()) {
+          return;
+        }
+        await deliver();
+      }
+    };
     const shouldSuppressToolErrorWarnings = () => {
       if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
         return params.replyOptions.suppressToolErrorWarnings;
@@ -3148,17 +3168,10 @@ export async function dispatchReplyFromConfig(
       const text = normalizeOptionalString(payload.text);
       return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
     };
-    const shouldForwardToolResultProgressCallback = (
+    const shouldForwardToolResultProgressCallbackBase = (
       payload: ReplyPayload,
       isFastModeAutoProgress: boolean,
-      isForcedToolProgress: boolean,
     ) => {
-      if (
-        payload.isError === true &&
-        !shouldForwardFailedProgress({ force: isForcedToolProgress })
-      ) {
-        return false;
-      }
       if (isFastModeAutoProgress) {
         return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
       }
@@ -3170,6 +3183,13 @@ export async function dispatchReplyFromConfig(
       }
       return shouldSendToolSummaries() && shouldForwardProgressCallback();
     };
+    const shouldForwardToolResultProgressCallback = (
+      payload: ReplyPayload,
+      isFastModeAutoProgress: boolean,
+      isForcedToolProgress: boolean,
+    ) =>
+      (payload.isError !== true || shouldForwardFailedProgress({ force: isForcedToolProgress })) &&
+      shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress);
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
@@ -3229,6 +3249,7 @@ export async function dispatchReplyFromConfig(
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
         onVisible?: (...args: Args) => Promise<void> | void;
+        deferWhenShouldForwardFalse?: boolean;
         shouldForward?: (...args: Args) => boolean;
         waitForDirectBlockReplyDelivery?: boolean;
       },
@@ -3253,7 +3274,19 @@ export async function dispatchReplyFromConfig(
             }
           }
           if (options?.shouldForward?.(...args) === false) {
-            return;
+            if (options.deferWhenShouldForwardFalse === true && shouldBufferFailedProgress()) {
+              enqueuePendingFailedProgressDelivery(async () => {
+                if (shouldForwardProgressCallback(options)) {
+                  await options?.onForward?.(...args);
+                  const result = await callback(...args);
+                  if (result === false) {
+                    return;
+                  }
+                  await options?.onVisible?.(...args);
+                }
+              });
+            }
+            return undefined;
           }
           if (shouldForwardProgressCallback(options)) {
             if (preserveProgressCallbackStartOrder && options?.onForward) {
@@ -3308,6 +3341,7 @@ export async function dispatchReplyFromConfig(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
+          deferWhenShouldForwardFalse: true,
           shouldForward: shouldForwardFailedProgressStatus,
           onForward: (payload) =>
             preserveProgressCallbackStartOrder &&
@@ -3413,6 +3447,7 @@ export async function dispatchReplyFromConfig(
                     forwardWhenSourceDeliverySuppressed: true,
                     requiresToolSummaryVisibility: true,
                     waitForDirectBlockReplyDelivery: true,
+                    deferWhenShouldForwardFalse: true,
                     shouldForward: shouldForwardFailedProgressStatus,
                     onVisible: (payload) => {
                       if (hasFailedProgressStatus(payload)) {
@@ -3473,6 +3508,16 @@ export async function dispatchReplyFromConfig(
                       );
                       if (progressCallbackForwarded) {
                         await onToolResultFromReplyOptions?.(payload);
+                      } else if (
+                        onToolResultFromReplyOptions &&
+                        payload.isError === true &&
+                        shouldBufferFailedProgress({ force: isForcedToolProgress }) &&
+                        shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress)
+                      ) {
+                        enqueuePendingFailedProgressDelivery(async () => {
+                          markVisibleToolErrorProgress();
+                          await onToolResultFromReplyOptions?.(payload);
+                        });
                       }
                       if (isDispatchOperationAborted()) {
                         return;
@@ -3534,6 +3579,20 @@ export async function dispatchReplyFromConfig(
                         deliveryPayload.isError === true &&
                         !shouldForwardFailedProgress({ force: isForcedToolProgress })
                       ) {
+                        if (shouldBufferFailedProgress({ force: isForcedToolProgress })) {
+                          enqueuePendingFailedProgressDelivery(async () => {
+                            if (isDispatchOperationAborted()) {
+                              return;
+                            }
+                            markVisibleToolErrorProgress();
+                            if (shouldRouteToOriginating) {
+                              await sendPayloadAsync(deliveryPayload, undefined, false);
+                            } else {
+                              markInboundDedupeReplayUnsafe();
+                              dispatcher.sendToolResult(deliveryPayload);
+                            }
+                          });
+                        }
                         return;
                       }
                       if (
@@ -3792,7 +3851,11 @@ export async function dispatchReplyFromConfig(
             ),
           trackDispatchLifecycleWork,
         ),
-    );
+    ).catch(async (err) => {
+      await flushPendingCommentaryProgress();
+      await flushPendingFailedProgressDeliveries();
+      throw err;
+    });
     const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
     notifySessionMetadataChanges(sessionMetadataChanges);
     const finalDispatchAcquisition = await ensureDispatchReplyOperation("dispatch");
@@ -3883,7 +3946,9 @@ export async function dispatchReplyFromConfig(
     let queuedFinal = false;
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
+    let attemptedCleanFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let cleanFinalDeliverySucceeded = false;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -3929,12 +3994,18 @@ export async function dispatchReplyFromConfig(
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
+      if (reply.isError !== true && hasOutboundReplyContent(reply, { trimText: true })) {
+        attemptedCleanFinalDelivery = true;
+      }
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
+    }
+    if (attemptedCleanFinalDelivery && !finalDeliveryFailed) {
+      cleanFinalDeliverySucceeded = true;
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
@@ -4007,12 +4078,15 @@ export async function dispatchReplyFromConfig(
                 logVerbose(
                   `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
                 );
+              } else {
+                cleanFinalDeliverySucceeded = true;
               }
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
+              cleanFinalDeliverySucceeded = didQueue || cleanFinalDeliverySucceeded;
             }
           }
         } catch (err) {
@@ -4027,6 +4101,11 @@ export async function dispatchReplyFromConfig(
     }
 
     await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
+    if (cleanFinalDeliverySucceeded || observedReplyDelivery || blockCount > 0) {
+      discardPendingFailedProgressDeliveries();
+    } else {
+      await flushPendingFailedProgressDeliveries();
+    }
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     commitInboundDedupeIfClaimed();
