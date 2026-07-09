@@ -1309,12 +1309,23 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
+    // Track session-level aggregates across every matched session, so profile
+    // stats stay correct when the row list is truncated by `limit`.
+    let longestSessionDurationMs = 0;
+    let activeSessionCount = 0;
+
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
+        longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
+        // Discovery admits transcripts modified after endMs (they can still hold
+        // in-range activity), so count only sessions whose filtered usage does.
+        if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+          activeSessionCount += 1;
+        }
       }
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
@@ -1471,6 +1482,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     const aggregates: SessionsUsageAggregates = {
+      sessionCount: activeSessionCount,
+      ...(longestSessionDurationMs > 0 ? { longestSessionDurationMs } : {}),
       messages: aggregateMessages,
       tools: {
         totalCalls: Array.from(toolAggregateMap.values()).reduce((sum, count) => sum + count, 0),

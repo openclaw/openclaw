@@ -3,12 +3,12 @@ import { property } from "lit/decorators.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
-import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./dashboard-header.ts";
 import "./tooltip.ts";
 
-class AppTopbar extends OpenClawLightDomElement {
+class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) routeId?: NavigationRouteId;
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) onboarding = false;
@@ -19,11 +19,6 @@ class AppTopbar extends OpenClawLightDomElement {
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) searchDisabled = false;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
     this.onNavigate?.(event.detail);
