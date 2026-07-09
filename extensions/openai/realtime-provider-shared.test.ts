@@ -141,7 +141,6 @@ describe("createOpenAIRealtimeClientSecret", () => {
       socket.on("close", () => sockets.delete(socket));
     });
     const baseUrl = await listen(server);
-    const realFetch = globalThis.fetch;
 
     try {
       await expectFetchWithoutDeadlineToStayPending(`${baseUrl}/control`, {
@@ -173,29 +172,15 @@ describe("createOpenAIRealtimeClientSecret", () => {
       );
 
       fetchWithSsrFGuardMock.mockImplementationOnce(
-        async (params: { init?: RequestInit; timeoutMs?: number }) => {
-          const controller = new AbortController();
-          const timeout = setTimeout(
-            () => {
-              const error = new Error(
-                `simulated hanging POST timed out after ${String(params.timeoutMs)}ms`,
-              );
-              error.name = "TimeoutError";
-              controller.abort(error);
-            },
-            Math.min(params.timeoutMs ?? 0, 50),
-          );
-          try {
-            return {
-              response: await realFetch(`${baseUrl}/realtime/client_secrets`, {
-                ...params.init,
-                signal: controller.signal,
-              }),
-              release: vi.fn(async () => {}),
-            };
-          } finally {
-            clearTimeout(timeout);
-          }
+        async (params: Parameters<typeof realSsrFRuntime.fetchWithSsrFGuard>[0]) => {
+          expect(params.url).toBe("https://api.openai.com/v1/realtime/client_secrets");
+          return await realSsrFRuntime.fetchWithSsrFGuard({
+            ...params,
+            url: `${baseUrl}/realtime/client_secrets`,
+            policy: { hostnameAllowlist: ["127.0.0.1"], allowPrivateNetwork: true },
+            timeoutMs: Math.min(params.timeoutMs ?? 0, 50),
+            auditContext: "openai-realtime-client-secret-test-helper",
+          });
         },
       );
 
@@ -205,7 +190,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
           auditContext: "test",
           session: { model: "gpt-4o-realtime-preview" },
         }),
-      ).rejects.toThrow("simulated hanging POST timed out after 20000ms");
+      ).rejects.toThrow(/timeout|timed out|aborted/i);
 
       expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
