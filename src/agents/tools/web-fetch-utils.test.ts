@@ -22,7 +22,6 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   });
 
   it("decodes &amp; last so an escaped entity is not double-decoded", () => {
-    // "&amp;#39;" is the correct HTML encoding of the literal text "&#39;" and must survive intact.
     expect(htmlToMarkdown(`<p>Tom &amp;#39;s pub</p>`).text).toBe("Tom &#39;s pub");
   });
 
@@ -31,12 +30,8 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   });
 
   it("preserves the prior contract: uppercase named entities decode, malformed numeric stays literal", () => {
-    // web_fetch historically matched named entities case-insensitively, so
-    // uppercase forms must keep decoding rather than leaking through as text.
     expect(htmlToMarkdown(`<p>a &AMP; b</p>`).text).toBe("a & b");
     expect(htmlToMarkdown(`<p>x &QUOT;y&QUOT;</p>`).text).toBe('x "y"');
-    // A malformed numeric reference is not an entity and must survive as text,
-    // not be consumed by a lenient parseInt (e.g. "&#39x;" must not become "'").
     expect(htmlToMarkdown(`<p>&#39x; end</p>`).text).toBe("&#39x; end");
   });
 
@@ -47,5 +42,10 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(result.truncated).toBe(true);
     expect(result.text).toBe(prefix);
     expect(result.text).not.toContain(String.fromCharCode(0xd83d));
+  });
+
+  it("truncates extracted text without splitting surrogate pairs", () => {
+    expect(truncateText("😀abc", 1)).toEqual({ text: "", truncated: true });
+    expect(truncateText("😀😀x", 3)).toEqual({ text: "😀", truncated: true });
   });
 });

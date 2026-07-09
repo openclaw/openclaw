@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "../utils.js";
 /**
  * Compact references for active background bash sessions.
  * These references are surfaced in agent context so follow-up turns can
@@ -28,9 +29,9 @@ function truncate(value: string, maxChars: number): string {
     return value;
   }
   if (maxChars <= 1) {
-    return value.slice(0, maxChars);
+    return truncateUtf16Safe(value, maxChars);
   }
-  return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+  return `${truncateUtf16Safe(value, Math.max(0, maxChars - 3))}...`;
 }
 
 /** List active background process sessions for one scope key, newest first. */
