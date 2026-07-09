@@ -1,9 +1,9 @@
-import { truncateUtf16Safe } from "../utils.js";
 /**
  * Compact references for active background bash sessions.
  * These references are surfaced in agent context so follow-up turns can
  * reconnect to prior long-running work.
  */
+import { truncateUtf16Safe } from "../utils.js";
 import { listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
