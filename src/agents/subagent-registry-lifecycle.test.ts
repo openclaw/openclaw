@@ -3469,6 +3469,48 @@ describe("requester settle wake trigger", () => {
     );
   });
 
+  it("preserves delete-mode child results for the settle wake after delivered cleanup clears them", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "delete-mode findings" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      runSubagentAnnounceFlow,
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+    await vi.waitFor(() => expect(settleWake).toHaveBeenCalledTimes(1));
+
+    // The real delivered-finalize path clears the live entry's result text
+    // right before delete-mode bookkeeping retires the row...
+    expect(entry.completion?.resultText).toBeUndefined();
+    expect(runs.has(entry.runId)).toBe(false);
+    // ...so the wake must receive a pre-clearing snapshot that still carries
+    // the child's output for the requester findings.
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledRowRetired: true,
+        settledEntry: expect.objectContaining({
+          runId: entry.runId,
+          completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+        }),
+      }),
+    );
+  });
+
   it("fires the settle wake with the retired-row hint when a reconciled killed row is retired", () => {
     const entry = createRunEntry({
       endedAt: 4_000,

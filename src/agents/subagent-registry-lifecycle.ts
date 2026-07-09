@@ -843,6 +843,10 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     const deliveryError = getDeliveryLastError(giveUpParams.entry) ?? giveUpParams.reason;
+    const settledEntrySnapshot =
+      giveUpParams.entry.cleanup === "delete"
+        ? captureSettledEntrySnapshot(giveUpParams.entry)
+        : undefined;
     clearPendingFinalDelivery(giveUpParams.entry);
     const failedDelivery = ensureDeliveryState(giveUpParams.entry);
     failedDelivery.status = "failed";
@@ -874,6 +878,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry: giveUpParams.entry,
       cleanup: giveUpParams.entry.cleanup,
       completedAt: Date.now(),
+      settledEntrySnapshot,
     });
     await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason, () =>
       isEndedHookOwnerCurrent(giveUpParams.runId, giveUpParams.entry),
@@ -996,6 +1001,23 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
+  // The delivered/give-up finalize paths clear the completion result text and
+  // frozen delivery payload before cleanup bookkeeping runs, and delete-mode
+  // bookkeeping then retires the registry row. The requester-settle wake reads
+  // child findings from the record it ledgers, so it needs a snapshot taken
+  // before that clearing — otherwise a delete-mode fan-out wakes its requester
+  // with "(no output)" instead of the children's results.
+  const captureSettledEntrySnapshot = (entry: SubagentRunRecord): SubagentRunRecord => ({
+    ...entry,
+    completion: entry.completion ? { ...entry.completion } : undefined,
+    delivery: entry.delivery
+      ? {
+          ...entry.delivery,
+          payload: entry.delivery.payload ? { ...entry.delivery.payload } : undefined,
+        }
+      : undefined,
+  });
+
   const completeCleanupBookkeeping = (cleanupParams: {
     runId: string;
     entry: SubagentRunRecord;
@@ -1007,6 +1029,9 @@ export function createSubagentRegistryLifecycleController(params: {
     // when the delivery was suspended, so a discard hours later must not
     // re-evaluate the requester drain.
     skipRequesterSettleWake?: boolean;
+    // Pre-clearing copy of the entry for the settle wake's findings; the live
+    // entry has lost its result text by the time this funnel runs.
+    settledEntrySnapshot?: SubagentRunRecord;
   }) => {
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // These best-effort tails can outlive the durable registry transition,
@@ -1054,7 +1079,11 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       if (!cleanupParams.skipRequesterSettleWake) {
-        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry, { rowRetired: true });
+        scheduleRequesterSettleWake(
+          cleanupParams.runId,
+          cleanupParams.settledEntrySnapshot ?? cleanupParams.entry,
+          { rowRetired: true },
+        );
       }
       return;
     }
@@ -1079,7 +1108,11 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       if (!cleanupParams.skipRequesterSettleWake) {
-        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry, { rowRetired: true });
+        scheduleRequesterSettleWake(
+          cleanupParams.runId,
+          cleanupParams.settledEntrySnapshot ?? cleanupParams.entry,
+          { rowRetired: true },
+        );
       }
       return;
     }
@@ -1134,6 +1167,10 @@ export function createSubagentRegistryLifecycleController(params: {
       await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
       return;
     }
+    // Taken before any of this function's clearing so the delete-mode settle
+    // wake still sees the child's result text and frozen delivery payload.
+    const settledEntrySnapshot =
+      cleanup === "delete" ? captureSettledEntrySnapshot(entry) : undefined;
     if (entry.expectsCompletionMessage === false || options?.skipRequesterDelivery) {
       clearPendingFinalDelivery(entry);
       if (options?.skipRequesterDelivery) {
@@ -1154,6 +1191,7 @@ export function createSubagentRegistryLifecycleController(params: {
         entry,
         cleanup,
         completedAt: Date.now(),
+        settledEntrySnapshot,
       });
       await emitCompletionEndedHookIfNeeded(entry, resolveCleanupCompletionReason(entry), () =>
         isEndedHookOwnerCurrent(runId, entry),
@@ -1213,6 +1251,7 @@ export function createSubagentRegistryLifecycleController(params: {
         entry,
         cleanup,
         completedAt: Date.now(),
+        settledEntrySnapshot,
       });
       // Hook loading is best-effort; durable delivery and cleanup must already
       // be terminal before plugin code can fail or stall.
@@ -1293,6 +1332,7 @@ export function createSubagentRegistryLifecycleController(params: {
         entry,
         cleanup,
         completedAt: now,
+        settledEntrySnapshot,
       });
       await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
         isEndedHookOwnerCurrent(runId, entry),
