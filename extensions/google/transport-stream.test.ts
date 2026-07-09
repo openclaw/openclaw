@@ -39,6 +39,7 @@ let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-strea
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let resolveGoogleGemini3FirstResponseRetryMs: typeof import("./transport-stream.js").resolveGoogleGemini3FirstResponseRetryMs;
+let supportsMultimodalFunctionResponse: typeof import("./transport-stream.js").supportsMultimodalFunctionResponse;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
 let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
@@ -330,6 +331,7 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
       resolveGoogleGemini3FirstResponseRetryMs,
+      supportsMultimodalFunctionResponse,
     } = await import("./transport-stream.js"));
     ({
       hasGoogleVertexAuthorizedUserAdcSync,
@@ -2761,6 +2763,31 @@ describe("google transport stream", () => {
       { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzE=" },
       { type: "text", text: "answer" },
     ]);
+  });
+
+  describe("supportsMultimodalFunctionResponse", () => {
+    it("returns false for bare Gemini 2.x model ids", () => {
+      expect(supportsMultimodalFunctionResponse("gemini-2.5-pro")).toBe(false);
+      expect(supportsMultimodalFunctionResponse("gemini-2.0-flash")).toBe(false);
+    });
+
+    it("returns false for provider-prefixed Gemini 2.x ids", () => {
+      // Provider-prefixed ids like google/gemini-2.5-pro must also be
+      // recognized as Gemini 2.x, which does NOT support media parts
+      // inside functionResponse.
+      expect(supportsMultimodalFunctionResponse("google/gemini-2.5-pro")).toBe(false);
+      expect(supportsMultimodalFunctionResponse("google/gemini-2.0-flash")).toBe(false);
+    });
+
+    it("returns true for Gemini 3.x model ids", () => {
+      expect(supportsMultimodalFunctionResponse("gemini-3-pro")).toBe(true);
+      expect(supportsMultimodalFunctionResponse("google/gemini-3-pro")).toBe(true);
+    });
+
+    it("returns true for non-Gemini model ids", () => {
+      expect(supportsMultimodalFunctionResponse("claude-sonnet-5")).toBe(true);
+      expect(supportsMultimodalFunctionResponse("gpt-5")).toBe(true);
+    });
   });
 });
 

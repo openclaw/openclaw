@@ -164,8 +164,8 @@ function requiresToolCallThoughtSignature(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
-function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+export function supportsMultimodalFunctionResponse(modelId: string): boolean {
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }
