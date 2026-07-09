@@ -6,6 +6,7 @@ import { printDaemonStatus } from "./status.print.js";
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
 }));
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
@@ -93,10 +94,46 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    runtime.writeJson.mockReset();
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
+  });
+
+  it("omits service environment maps from JSON status", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+          command: {
+            programArguments: ["openclaw", "gateway", "--port", "18789"],
+            environment: {
+              OPENCLAW_STATE_DIR: "/tmp/openclaw",
+              PRIVATE_TEST_VALUE: "redacted-fixture",
+            },
+            environmentValueSources: {
+              PRIVATE_TEST_VALUE: "file",
+            },
+          } as NonNullable<Parameters<typeof printDaemonStatus>[0]["service"]["command"]> & {
+            environmentValueSources: Record<string, string>;
+          },
+        },
+        extraServices: [],
+      },
+      { json: true },
+    );
+
+    const payload = runtime.writeJson.mock.calls[0]?.[0] as {
+      service?: { command?: Record<string, unknown> };
+    };
+    expect(payload.service?.command).toEqual({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+    });
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
