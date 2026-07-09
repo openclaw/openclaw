@@ -81,6 +81,8 @@ class CronRuntimeGuardTest {
     val runtime = createTestRuntime()
     val detailState = readField<MutableStateFlow<GatewayCronJobDetailState>>(runtime, "_cronJobDetailState")
     val historyState = readField<MutableStateFlow<GatewayCronRunHistoryState>>(runtime, "_cronRunHistoryState")
+    requireNotNull(readField<CronJobDetailRequestGuard>(runtime, "cronJobDetailRequestGuard").begin("job-b"))
+    requireNotNull(readField<CronJobDetailRequestGuard>(runtime, "cronRunHistoryRequestGuard").begin("job-b"))
     detailState.value = GatewayCronJobDetailState.Loading("job-b")
     historyState.value = GatewayCronRunHistoryState.Loading("job-b")
 

@@ -89,11 +89,37 @@ internal class CronJobDetailRequestGuard {
     }
   }
 
+  fun beginIfCurrent(
+    rawId: String,
+    onBegin: (CronJobDetailRequest) -> Unit,
+  ): CronJobDetailRequest? {
+    val id = rawId.trim().takeIf { it.isNotEmpty() } ?: return null
+    return synchronized(lock) {
+      if (selectedId != id) return@synchronized null
+      generation += 1
+      CronJobDetailRequest(id = id, generation = generation).also(onBegin)
+    }
+  }
+
   fun cancel(onCancel: () -> Unit = {}) {
     synchronized(lock) {
       generation += 1
       selectedId = null
       onCancel()
+    }
+  }
+
+  fun cancelIfCurrent(
+    rawId: String,
+    onCancel: () -> Unit,
+  ): Boolean {
+    val id = rawId.trim().takeIf { it.isNotEmpty() } ?: return false
+    return synchronized(lock) {
+      if (selectedId != id) return@synchronized false
+      generation += 1
+      selectedId = null
+      onCancel()
+      true
     }
   }
 

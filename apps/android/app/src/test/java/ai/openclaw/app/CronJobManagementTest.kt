@@ -102,6 +102,28 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun commandPayloadRejectsClearingAnExistingWorkingDirectory() {
+    val original =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(payload = """{"kind":"command","argv":["echo"],"cwd":"/tmp"}"""),
+        ),
+      )
+    val initial = original.toCronJobEdit()
+    val payload = initial.payload as GatewayCronPayloadEdit.Command
+
+    val error =
+      runCatching {
+        buildCronUpdateParams(
+          original = original,
+          edit = initial.copy(payload = payload.copy(cwd = "")),
+        )
+      }.exceptionOrNull()
+
+    assertEquals("The gateway does not support clearing a command working directory.", error?.message)
+  }
+
+  @Test
   fun historyParserRequiresTimestampAndKeepsUsefulFields() {
     val entries =
       Json
@@ -138,9 +160,88 @@ class CronJobManagementTest {
     assertEquals("b", historyPublished)
   }
 
+  @Test
+  fun editorDraftPreservesDirtyFieldsAndMarksIncomingRevisionConflict() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
+    var draft = CronEditorDraftState.from(original)
+    draft = draft.withEdit(draft.edit.copy(name = "Unsaved name"))
+    val unrelated =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(name = "Gateway revision"),
+        ),
+      )
+
+    draft = draft.observeJob(unrelated)
+
+    assertEquals("Unsaved name", draft.edit.name)
+    assertTrue(draft.isDirty)
+    assertTrue(draft.hasIncomingConflict)
+    assertTrue(draft.requiresResolution)
+    val returnedToBaseline = draft.withEdit(draft.baseline)
+    assertFalse(returnedToBaseline.isDirty)
+    assertTrue(returnedToBaseline.requiresResolution)
+    val reverted = CronEditorDraftState.from(unrelated)
+    assertEquals("Gateway revision", reverted.edit.name)
+    assertFalse(reverted.isDirty)
+    assertFalse(reverted.hasIncomingConflict)
+  }
+
+  @Test
+  fun editorDraftIgnoresRuntimeOnlyTimestampUpdates() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
+    val draft =
+      CronEditorDraftState
+        .from(original)
+        .withEdit(original.toCronJobEdit().copy(name = "Unsaved name"))
+    val runtimeUpdate =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(updatedAtMs = 3000),
+        ),
+      )
+
+    val observed = draft.observeJob(runtimeUpdate)
+
+    assertEquals("Unsaved name", observed.edit.name)
+    assertEquals(3000, observed.baselineRevision)
+    assertTrue(observed.isDirty)
+    assertFalse(observed.hasIncomingConflict)
+  }
+
+  @Test
+  fun editorDraftAdoptsOnlyTheNewRevisionAfterSuccessfulSave() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
+    var draft = CronEditorDraftState.from(original)
+    draft = draft.withEdit(draft.edit.copy(name = "Saved name"))
+
+    draft = draft.saveStarted().saveAborted()
+    assertFalse(draft.savePending)
+    assertEquals("Saved name", draft.edit.name)
+    draft = draft.saveStarted().observeSaveNotice(GatewayCronNoticeKind.Error)
+    assertEquals("Saved name", draft.edit.name)
+    draft = draft.saveStarted().observeSaveNotice(GatewayCronNoticeKind.Success)
+    assertEquals("Saved name", draft.observeJob(original).edit.name)
+
+    val saved =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(name = "Saved name", updatedAtMs = 4000),
+        ),
+      )
+    draft = draft.observeJob(saved)
+
+    assertEquals("Saved name", draft.baseline.name)
+    assertEquals(draft.baseline, draft.edit)
+    assertFalse(draft.savePending)
+    assertFalse(draft.saveSucceeded)
+  }
+
   private fun objectJson(raw: String) = Json.parseToJsonElement(raw).jsonObject
 
   private fun jobJson(
+    name: String = "Daily report",
+    updatedAtMs: Long = 2000,
     schedule: String = """{"kind":"cron","expr":"0 9 * * *","tz":"UTC"}""",
     payload: String =
       """{"kind":"agentTurn","message":"Summarize the day","model":"openai/gpt-5.5","thinking":"high"}""",
@@ -148,12 +249,12 @@ class CronJobManagementTest {
     """
     {
       "id":"job-1",
-      "name":"Daily report",
+      "name":"$name",
       "description":"Daily digest",
       "enabled":true,
       "deleteAfterRun":false,
       "createdAtMs":1000,
-      "updatedAtMs":2000,
+      "updatedAtMs":$updatedAtMs,
       "schedule":$schedule,
       "sessionTarget":"isolated",
       "wakeMode":"next-heartbeat",

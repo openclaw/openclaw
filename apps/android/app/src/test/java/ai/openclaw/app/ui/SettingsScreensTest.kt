@@ -92,6 +92,30 @@ class SettingsScreensTest {
     assertEquals(null, gatewayNodeApprovalCommand(GatewayNodeCapabilityApproval.Approved))
   }
 
+  @Test
+  fun cronDetailRefreshRecoversWhenDirtyDraftHasNoLoadedJob() {
+    assertEquals(
+      true,
+      cronDetailRefreshEnabled(
+        isConnected = true,
+        loading = false,
+        hasCurrentJob = false,
+        draftRequiresResolution = true,
+        saveSucceeded = false,
+      ),
+    )
+    assertEquals(
+      false,
+      cronDetailRefreshEnabled(
+        isConnected = true,
+        loading = false,
+        hasCurrentJob = true,
+        draftRequiresResolution = true,
+        saveSucceeded = false,
+      ),
+    )
+  }
+
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(
       code = code,

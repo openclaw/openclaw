@@ -3893,7 +3893,7 @@ class NodeRuntime private constructor(
         }
         if (result.refresh) {
           refreshCronFromGateway()
-          if (!result.deleted && selectedCronJobId() == jobId) loadCronJobDetail(jobId)
+          if (!result.deleted) reloadCronJobIfSelected(jobId)
         }
         completionState =
           GatewayCronActionState.Notice(
@@ -3924,34 +3924,29 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun selectedCronJobId(): String? =
-    when (val state = _cronJobDetailState.value) {
-      GatewayCronJobDetailState.Idle -> null
-      is GatewayCronJobDetailState.Loading -> state.id
-      is GatewayCronJobDetailState.Loaded -> state.job.id
-      is GatewayCronJobDetailState.Error -> state.id
-    }
-
-  private fun selectedCronRunHistoryJobId(): String? =
-    when (val state = _cronRunHistoryState.value) {
-      GatewayCronRunHistoryState.Idle -> null
-      is GatewayCronRunHistoryState.Loading -> state.id
-      is GatewayCronRunHistoryState.Loaded -> state.id
-      is GatewayCronRunHistoryState.Error -> state.id
-    }
+  private fun reloadCronJobIfSelected(jobId: String) {
+    // Ownership checks and loading publication stay under each guard's lock;
+    // navigation that wins afterward invalidates these requests before publish.
+    val detailRequest =
+      cronJobDetailRequestGuard.beginIfCurrent(jobId) { request ->
+        _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
+      }
+    val historyRequest =
+      cronRunHistoryRequestGuard.beginIfCurrent(jobId) { request ->
+        _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(request.id)
+      }
+    detailRequest?.let { scope.launch { loadCronJobDetailFromGateway(it) } }
+    historyRequest?.let { scope.launch { loadCronRunHistoryFromGateway(it) } }
+  }
 
   private fun clearDeletedCronSelection(jobId: String) {
     // A completed delete can race navigation to another job. Clear only state
     // still owned by the deleted id so the newer detail/history survives.
-    if (selectedCronJobId() == jobId) {
-      cronJobDetailRequestGuard.cancel {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Idle
-      }
+    cronJobDetailRequestGuard.cancelIfCurrent(jobId) {
+      _cronJobDetailState.value = GatewayCronJobDetailState.Idle
     }
-    if (selectedCronRunHistoryJobId() == jobId) {
-      cronRunHistoryRequestGuard.cancel {
-        _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
-      }
+    cronRunHistoryRequestGuard.cancelIfCurrent(jobId) {
+      _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
     }
   }
 

@@ -120,6 +120,66 @@ data class GatewayCronJobEdit(
   val payload: GatewayCronPayloadEdit,
 )
 
+internal data class CronEditorDraftState(
+  val baselineRevision: Long,
+  val baseline: GatewayCronJobEdit,
+  val edit: GatewayCronJobEdit,
+  val savePending: Boolean = false,
+  val saveSucceeded: Boolean = false,
+  val hasIncomingConflict: Boolean = false,
+) {
+  val isDirty: Boolean
+    get() = edit != baseline
+
+  val requiresResolution: Boolean
+    get() = isDirty || hasIncomingConflict
+
+  fun withEdit(value: GatewayCronJobEdit): CronEditorDraftState = copy(edit = value)
+
+  fun saveStarted(): CronEditorDraftState = copy(savePending = true, saveSucceeded = false)
+
+  fun saveAborted(): CronEditorDraftState = copy(savePending = false, saveSucceeded = false)
+
+  fun observeSaveNotice(kind: GatewayCronNoticeKind): CronEditorDraftState {
+    if (!savePending) return this
+    return if (kind == GatewayCronNoticeKind.Success) {
+      copy(saveSucceeded = true)
+    } else {
+      copy(savePending = false, saveSucceeded = false)
+    }
+  }
+
+  fun observeJob(job: GatewayCronJobDetail): CronEditorDraftState {
+    val incoming = job.toCronJobEdit()
+    if (incoming == baseline) {
+      return copy(
+        baselineRevision = job.updatedAtMs,
+        hasIncomingConflict = false,
+      )
+    }
+    val canAdopt = !isDirty || saveSucceeded
+    if (!canAdopt) {
+      return copy(hasIncomingConflict = true)
+    }
+    return CronEditorDraftState(
+      baselineRevision = job.updatedAtMs,
+      baseline = incoming,
+      edit = incoming,
+    )
+  }
+
+  companion object {
+    fun from(job: GatewayCronJobDetail): CronEditorDraftState {
+      val edit = job.toCronJobEdit()
+      return CronEditorDraftState(
+        baselineRevision = job.updatedAtMs,
+        baseline = edit,
+        edit = edit,
+      )
+    }
+  }
+}
+
 internal enum class GatewayCronRunSkipReason(
   val message: String,
 ) {

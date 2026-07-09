@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobEdit
@@ -8,7 +9,6 @@ import ai.openclaw.app.GatewayCronPayloadEdit
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
-import ai.openclaw.app.toCronJobEdit
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -48,6 +48,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.text.DateFormat
@@ -56,6 +58,8 @@ import java.util.Date
 @Composable
 internal fun CronJobManagementPanel(
   job: GatewayCronJobDetail,
+  editorDraft: CronEditorDraftState,
+  onEditorDraftChange: (CronEditorDraftState) -> Unit,
   historyState: GatewayCronRunHistoryState,
   actionState: GatewayCronActionState,
   operatorAdminScopeAvailable: Boolean,
@@ -108,10 +112,24 @@ internal fun CronJobManagementPanel(
   }
 
   if (!operatorAdminScopeAvailable) CronAdminAccessPanel()
+  if (editorDraft.requiresResolution) {
+    ClawPanel {
+      Text(
+        text =
+          if (editorDraft.hasIncomingConflict) {
+            "This job changed while you were editing. Revert to the latest gateway version before saving."
+          } else {
+            "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."
+          },
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.warning,
+      )
+    }
+  }
 
   CronActionPanel(
     job = job,
-    enabled = operatorAdminScopeAvailable && !busy,
+    enabled = operatorAdminScopeAvailable && !busy && !editorDraft.requiresResolution,
     busy = busy,
     onRun = onRun,
     onToggleEnabled = onToggleEnabled,
@@ -119,7 +137,14 @@ internal fun CronJobManagementPanel(
   )
   CronEditorPanel(
     job = job,
-    enabled = operatorAdminScopeAvailable && !busy,
+    draft = editorDraft,
+    onDraftChange = onEditorDraftChange,
+    enabled =
+      operatorAdminScopeAvailable &&
+        !busy &&
+        !editorDraft.savePending &&
+        !editorDraft.saveSucceeded,
+    canRevert = !busy && !editorDraft.savePending && !editorDraft.saveSucceeded,
     busy = busy,
     onSave = onSave,
   )
@@ -202,12 +227,14 @@ private fun CronActionPanel(
 @Composable
 private fun CronEditorPanel(
   job: GatewayCronJobDetail,
+  draft: CronEditorDraftState,
+  onDraftChange: (CronEditorDraftState) -> Unit,
   enabled: Boolean,
+  canRevert: Boolean,
   busy: Boolean,
   onSave: (GatewayCronJobEdit) -> Unit,
 ) {
-  val initialEdit = remember(job.id, job.updatedAtMs) { job.toCronJobEdit() }
-  var edit by remember(job.id, job.updatedAtMs) { mutableStateOf(initialEdit) }
+  val edit = draft.edit
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
       Row(
@@ -226,26 +253,26 @@ private fun CronEditorPanel(
         title = "Enabled",
         subtitle = "Allow the scheduler to run this job.",
         checked = edit.enabled,
-        onCheckedChange = { edit = edit.copy(enabled = it) },
+        onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(enabled = it))) },
         enabled = enabled,
       )
       CronSwitchRow(
         title = "Delete after run",
         subtitle = "Remove this job after a successful one-shot run.",
         checked = edit.deleteAfterRun,
-        onCheckedChange = { edit = edit.copy(deleteAfterRun = it) },
+        onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
         enabled = enabled,
       )
       ClawTextField(
         value = edit.name,
-        onValueChange = { edit = edit.copy(name = it) },
+        onValueChange = { onDraftChange(draft.withEdit(edit.copy(name = it))) },
         placeholder = "Job name",
         label = "Name",
         enabled = enabled,
       )
       ClawTextField(
         value = edit.description,
-        onValueChange = { edit = edit.copy(description = it) },
+        onValueChange = { onDraftChange(draft.withEdit(edit.copy(description = it))) },
         placeholder = "Optional description",
         label = "Description",
         enabled = enabled,
@@ -254,11 +281,11 @@ private fun CronEditorPanel(
       CronScheduleEditor(
         schedule = edit.schedule,
         enabled = enabled,
-        onChange = { edit = edit.copy(schedule = it) },
+        onChange = { onDraftChange(draft.withEdit(edit.copy(schedule = it))) },
       )
       ClawTextField(
         value = edit.sessionTarget,
-        onValueChange = { edit = edit.copy(sessionTarget = it) },
+        onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
         placeholder = "main, isolated, current, or session:<id>",
         label = "Session target",
         enabled = enabled,
@@ -266,22 +293,39 @@ private fun CronEditorPanel(
       ClawSegmentedControl(
         options = listOf("next-heartbeat", "now"),
         selected = edit.wakeMode,
-        onSelect = { edit = edit.copy(wakeMode = it) },
+        onSelect = { onDraftChange(draft.withEdit(edit.copy(wakeMode = it))) },
         modifier = Modifier.fillMaxWidth(),
         enabledOptions = if (enabled) setOf("next-heartbeat", "now") else emptySet(),
       )
       CronPayloadEditor(
         payload = edit.payload,
+        originalCommandCwd = job.payloadCommandCwd,
         enabled = enabled,
-        onChange = { edit = edit.copy(payload = it) },
+        onChange = { onDraftChange(draft.withEdit(edit.copy(payload = it))) },
       )
       ClawPrimaryButton(
         text = if (busy) "Working" else "Save Changes",
-        onClick = { onSave(edit) },
+        onClick = {
+          onDraftChange(draft.saveStarted())
+          onSave(edit)
+        },
         modifier = Modifier.fillMaxWidth(),
-        enabled = enabled && edit != initialEdit,
+        enabled =
+          enabled &&
+            draft.isDirty &&
+            !draft.hasIncomingConflict &&
+            !draft.savePending &&
+            !draft.saveSucceeded,
         icon = Icons.Default.Save,
       )
+      if (draft.requiresResolution) {
+        ClawSecondaryButton(
+          text = "Revert Changes",
+          onClick = { onDraftChange(CronEditorDraftState.from(job)) },
+          modifier = Modifier.fillMaxWidth(),
+          enabled = canRevert,
+        )
+      }
     }
   }
 }
@@ -309,7 +353,12 @@ private fun CronSwitchRow(
         overflow = TextOverflow.Ellipsis,
       )
     }
-    Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    Switch(
+      checked = checked,
+      onCheckedChange = onCheckedChange,
+      enabled = enabled,
+      modifier = Modifier.semantics { contentDescription = title },
+    )
   }
 }
 
@@ -398,6 +447,7 @@ private fun CronScheduleEditor(
 @Composable
 private fun CronPayloadEditor(
   payload: GatewayCronPayloadEdit,
+  originalCommandCwd: String?,
   enabled: Boolean,
   onChange: (GatewayCronPayloadEdit) -> Unit,
 ) {
@@ -445,6 +495,7 @@ private fun CronPayloadEditor(
       }
     }
     is GatewayCronPayloadEdit.Command -> {
+      val commandCwdCanBeCleared = originalCommandCwd == null
       ClawTextField(
         value = payload.argvJson,
         onValueChange = { onChange(payload.copy(argvJson = it)) },
@@ -455,11 +506,27 @@ private fun CronPayloadEditor(
       )
       ClawTextField(
         value = payload.cwd,
-        onValueChange = { onChange(payload.copy(cwd = it)) },
+        onValueChange = { value ->
+          if (commandCwdCanBeCleared || value.isNotBlank()) {
+            onChange(payload.copy(cwd = value))
+          }
+        },
         placeholder = "Optional path",
-        label = "Command working directory",
+        label =
+          if (commandCwdCanBeCleared) {
+            "Command working directory"
+          } else {
+            "Command working directory · cannot clear"
+          },
         enabled = enabled,
       )
+      if (!commandCwdCanBeCleared) {
+        Text(
+          text = "The gateway can change this path but cannot clear an existing path.",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
     }
   }
 }

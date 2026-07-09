@@ -82,6 +82,24 @@ class CronJobDetailTest {
     assertNull(guard.begin("   "))
   }
 
+  @Test
+  fun requestGuardConditionsReloadAndCancellationOnCurrentSelection() {
+    val guard = CronJobDetailRequestGuard()
+    requireNotNull(guard.begin("job-a"))
+    requireNotNull(guard.begin("job-b"))
+    var loadingId = "none"
+    var cancelled = false
+
+    assertNull(guard.beginIfCurrent("job-a") { loadingId = it.id })
+    val reload = guard.beginIfCurrent("job-b") { loadingId = it.id }
+    assertEquals("job-b", reload?.id)
+    assertEquals("job-b", loadingId)
+    assertFalse(guard.cancelIfCurrent("job-a") { cancelled = true })
+    assertFalse(cancelled)
+    assertTrue(guard.cancelIfCurrent("job-b") { cancelled = true })
+    assertTrue(cancelled)
+  }
+
   private fun parseJob(
     payload: String =
       """{"kind":"agentTurn","message":"Summarize the day","model":"openai/gpt-5.5","thinking":"high"}""",

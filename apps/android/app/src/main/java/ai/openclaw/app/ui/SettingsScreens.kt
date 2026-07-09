@@ -4,6 +4,7 @@ import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
@@ -352,6 +353,25 @@ private fun CronJobDetailSettingsScreen(
   }
 
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
+  var editorDraft by remember(jobId) { mutableStateOf<CronEditorDraftState?>(null) }
+  LaunchedEffect(isConnected) {
+    if (!isConnected) editorDraft = editorDraft?.saveAborted()
+  }
+  LaunchedEffect(current) {
+    current?.let { job ->
+      editorDraft = editorDraft?.observeJob(job) ?: CronEditorDraftState.from(job)
+    }
+  }
+  LaunchedEffect(actionState, current) {
+    val notice = actionState as? GatewayCronActionState.Notice
+    if (notice?.id == jobId) {
+      val observed = editorDraft?.observeSaveNotice(notice.kind)
+      editorDraft =
+        current?.let { job ->
+          observed?.observeJob(job) ?: CronEditorDraftState.from(job)
+        } ?: observed
+    }
+  }
   val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
   val errorText = (detailState as? GatewayCronJobDetailState.Error)?.takeIf { it.id == jobId }?.message
   val deleted =
@@ -371,7 +391,14 @@ private fun CronJobDetailSettingsScreen(
     ClawSecondaryButton(
       text = if (loading) "Refreshing" else "Refresh",
       onClick = { viewModel.loadCronJobDetail(jobId) },
-      enabled = isConnected && !loading,
+      enabled =
+        cronDetailRefreshEnabled(
+          isConnected = isConnected,
+          loading = loading,
+          hasCurrentJob = current != null,
+          draftRequiresResolution = editorDraft?.requiresResolution == true,
+          saveSucceeded = editorDraft?.saveSucceeded == true,
+        ),
       modifier = Modifier.fillMaxWidth(),
     )
 
@@ -391,6 +418,8 @@ private fun CronJobDetailSettingsScreen(
       else ->
         CronJobDetailPanel(
           job = current,
+          editorDraft = editorDraft ?: CronEditorDraftState.from(current),
+          onEditorDraftChange = { editorDraft = it },
           historyState = historyState,
           actionState = actionState,
           operatorAdminScopeAvailable = operatorAdminScopeAvailable,
@@ -405,6 +434,17 @@ private fun CronJobDetailSettingsScreen(
     }
   }
 }
+
+internal fun cronDetailRefreshEnabled(
+  isConnected: Boolean,
+  loading: Boolean,
+  hasCurrentJob: Boolean,
+  draftRequiresResolution: Boolean,
+  saveSucceeded: Boolean,
+): Boolean =
+  isConnected &&
+    !loading &&
+    (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
 
 @Composable
 private fun AgentsSettingsScreen(
@@ -1946,6 +1986,8 @@ private fun CronJobListRow(
 @Composable
 private fun CronJobDetailPanel(
   job: GatewayCronJobDetail,
+  editorDraft: CronEditorDraftState,
+  onEditorDraftChange: (CronEditorDraftState) -> Unit,
   historyState: GatewayCronRunHistoryState,
   actionState: GatewayCronActionState,
   operatorAdminScopeAvailable: Boolean,
@@ -1957,6 +1999,8 @@ private fun CronJobDetailPanel(
 ) {
   CronJobManagementPanel(
     job = job,
+    editorDraft = editorDraft,
+    onEditorDraftChange = onEditorDraftChange,
     historyState = historyState,
     actionState = actionState,
     operatorAdminScopeAvailable = operatorAdminScopeAvailable,
