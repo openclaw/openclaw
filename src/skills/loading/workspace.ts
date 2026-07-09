@@ -33,7 +33,11 @@ import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
@@ -78,19 +82,20 @@ function resolveCompactHomePrefixes(): string[] {
   return uniqueStrings([...resolvedHomes, ...realHomes]).toSorted((a, b) => b.length - a.length);
 }
 
-function compactSkillPaths(skills: Skill[]): Skill[] {
+function compactSkillPaths<T extends Skill>(skills: T[]): T[] {
   const homes = resolveCompactHomePrefixes();
   if (homes.length === 0) {
     return skills;
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots();
   const tildeRoots = resolvePromptTildeRoots();
-  return skills.map((s) => ({
-    ...s,
-    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
-      ? s.filePath
-      : compactHomePath(s.filePath, homes),
-  }));
+  return skills.map((s) =>
+    Object.assign({}, s, {
+      filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
+        ? s.filePath
+        : compactHomePath(s.filePath, homes),
+    }),
+  );
 }
 
 function resolvePreservedPromptSkillPathRoots(): string[] {
@@ -1329,77 +1334,86 @@ export function formatSkillsCompact(skills: Skill[]): string {
   return lines.join("\n");
 }
 
-function buildSkillsLimitNote(params: {
+// Budget reserved for the compact-mode warning line prepended by the caller.
+const COMPACT_WARNING_OVERHEAD = 150;
+
+type PromptSkill = Skill & {
+  skillKey: string;
+};
+
+type SkillsPromptLimitResult = {
+  skillsForPrompt: PromptSkill[];
+  omittedSkillKeys: string[];
   truncated: boolean;
   compact: boolean;
-  included: number;
-  total: number;
-}): string {
-  if (params.truncated) {
-    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${params.compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`;
-  }
-  if (params.compact) {
-    return `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`;
-  }
-  return "";
+};
+
+function stringifySkillKeysForPrompt(skillKeys: readonly string[]): string {
+  return JSON.stringify(skillKeys).replace(/[<>&]/g, (char) => {
+    switch (char) {
+      case "<":
+        return "\\u003c";
+      case ">":
+        return "\\u003e";
+      case "&":
+        return "\\u0026";
+      default:
+        return char;
+    }
+  });
 }
 
-function buildRenderedSkillsPrompt(params: {
-  remoteNote?: string;
-  skills: Skill[];
-  total: number;
-  compact: boolean;
-}): string {
-  const truncated = params.skills.length < params.total;
-  const limitNote = buildSkillsLimitNote({
-    truncated,
-    compact: params.compact,
-    included: params.skills.length,
-    total: params.total,
-  });
-  const catalog = params.compact
-    ? formatSkillsCompact(params.skills)
-    : formatSkillsForPrompt(params.skills);
-  return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
+function formatOmittedSkillKeysSegment(skillKeys: readonly string[], maxChars: number): string {
+  if (skillKeys.length === 0 || maxChars <= 0) {
+    return "";
+  }
+  const prefix =
+    " Omitted skill lookup keys for `openclaw skills info <name>` (JSON data; use exact string values): <omitted_skill_keys>";
+  const suffix = "</omitted_skill_keys>";
+  let included = 0;
+  let best = "";
+  while (included < skillKeys.length) {
+    included += 1;
+    const remaining = skillKeys.length - included;
+    const more = remaining > 0 ? ` (+${remaining} more)` : "";
+    const candidate = `${prefix}${stringifySkillKeysForPrompt(
+      skillKeys.slice(0, included),
+    )}${suffix}${more}`;
+    if (candidate.length > maxChars) {
+      break;
+    }
+    best = candidate;
+  }
+  return best;
 }
 
 function applySkillsPromptLimits(params: {
-  skills: Skill[];
+  skills: PromptSkill[];
   config?: OpenClawConfig;
   agentId?: string;
-  remoteNote?: string;
-}): {
-  skillsForPrompt: Skill[];
-  compact: boolean;
-} {
+}): SkillsPromptLimitResult {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
+  let truncated = total > byCount.length;
   let compact = false;
 
   const fitsFull = (skills: Skill[]): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      compact: false,
-    }).length <= limits.maxSkillsPromptChars;
+    formatSkillsForPrompt(skills).length <= limits.maxSkillsPromptChars;
 
+  // Reserve space for the warning line the caller prepends in compact mode.
+  const compactBudget = limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD;
   const fitsCompact = (skills: Skill[]): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      compact: true,
-    }).length <= limits.maxSkillsPromptChars;
+    formatSkillsCompact(skills).length <= compactBudget;
 
   if (!fitsFull(skillsForPrompt)) {
     // Full format exceeds budget. Try compact (name + location, no description)
     // to preserve awareness of all skills before dropping any.
     if (fitsCompact(skillsForPrompt)) {
       compact = true;
+      // No skills dropped; preserve count-truncation state from maxSkillsInPrompt.
     } else {
       // Compact still too large — binary search the largest prefix that fits.
       compact = true;
@@ -1414,10 +1428,183 @@ function applySkillsPromptLimits(params: {
         }
       }
       skillsForPrompt = skillsForPrompt.slice(0, lo);
+      truncated = true;
     }
   }
 
-  return { skillsForPrompt, compact };
+  const omittedSkillKeys = params.skills
+    .slice(skillsForPrompt.length)
+    .map((skill) => skill.skillKey);
+
+  return { skillsForPrompt, omittedSkillKeys, truncated, compact };
+}
+
+function assembleSkillsPrompt(components: {
+  remoteNote?: string;
+  truncationNote: string;
+  skillsBlock: string;
+}): string {
+  return [components.remoteNote, components.truncationNote, components.skillsBlock]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatNoticeWithinBudget(candidates: readonly string[], maxChars: number): string {
+  if (maxChars <= 0) {
+    return "";
+  }
+  return candidates.find((candidate) => candidate.length <= maxChars) ?? "";
+}
+
+function countNoticeBudget(params: {
+  maxPromptChars: number;
+  remoteNote?: string;
+  skillsBlock: string;
+}): number {
+  const withoutNotice = assembleSkillsPrompt({
+    remoteNote: params.remoteNote,
+    truncationNote: "",
+    skillsBlock: params.skillsBlock,
+  });
+  const separatorCost = params.remoteNote || params.skillsBlock ? 1 : 0;
+  return params.maxPromptChars - withoutNotice.length - separatorCost;
+}
+
+function buildTruncationNote(params: {
+  included: number;
+  total: number;
+  compact: boolean;
+  omittedSkillKeys: readonly string[];
+  maxChars: number;
+}): string {
+  const compactSuffix = params.compact ? " (compact format, descriptions omitted)" : "";
+  const prefix = `⚠️ Skills truncated: included ${params.included} of ${params.total}${compactSuffix}.`;
+  const suffix = " Run `openclaw skills check` to audit.";
+  const base = `${prefix}${suffix}`;
+  const shortBase = `⚠️ Skills truncated: included ${params.included} of ${params.total}.`;
+  const terse = "⚠️ Skills truncated.";
+  const candidates = [
+    { prefix, suffix },
+    { prefix, suffix: "" },
+  ];
+  for (const candidate of candidates) {
+    const baseNotice = `${candidate.prefix}${candidate.suffix}`;
+    if (baseNotice.length > params.maxChars) {
+      continue;
+    }
+    const segmentBudget = params.maxChars - baseNotice.length;
+    const omittedSegment = formatOmittedSkillKeysSegment(params.omittedSkillKeys, segmentBudget);
+    if (omittedSegment) {
+      return `${candidate.prefix}${omittedSegment}${candidate.suffix}`;
+    }
+  }
+  return formatNoticeWithinBudget([base, shortBase, terse, "⚠️"], params.maxChars);
+}
+
+function buildCompactNote(maxChars: number): string {
+  return formatNoticeWithinBudget(
+    [
+      "⚠️ Skills catalog using compact format (descriptions omitted). Run `openclaw skills check` to audit.",
+      "⚠️ Skills catalog using compact format.",
+      "⚠️",
+    ],
+    maxChars,
+  );
+}
+
+function renderLimitedSkillsPrompt(params: {
+  limit: SkillsPromptLimitResult;
+  total: number;
+  maxPromptChars: number;
+  remoteNote?: string;
+}): string {
+  const skillsBlock = params.limit.compact
+    ? formatSkillsCompact(params.limit.skillsForPrompt)
+    : formatSkillsForPrompt(params.limit.skillsForPrompt);
+  const noticeBudget = countNoticeBudget({
+    maxPromptChars: params.maxPromptChars,
+    remoteNote: params.remoteNote,
+    skillsBlock,
+  });
+  const truncationNote = params.limit.truncated
+    ? buildTruncationNote({
+        included: params.limit.skillsForPrompt.length,
+        total: params.total,
+        compact: params.limit.compact,
+        omittedSkillKeys: params.limit.omittedSkillKeys,
+        maxChars: noticeBudget,
+      })
+    : params.limit.compact
+      ? buildCompactNote(noticeBudget)
+      : "";
+  return assembleSkillsPrompt({
+    remoteNote: params.remoteNote,
+    truncationNote,
+    skillsBlock,
+  });
+}
+
+function limitPromptToIncludedCount(
+  skills: PromptSkill[],
+  included: number,
+  compact: boolean,
+): SkillsPromptLimitResult {
+  const skillsForPrompt = skills.slice(0, Math.max(0, included));
+  return {
+    skillsForPrompt,
+    omittedSkillKeys: skills.slice(skillsForPrompt.length).map((skill) => skill.skillKey),
+    truncated: skillsForPrompt.length < skills.length,
+    compact,
+  };
+}
+
+function withCompactPromptFormat(limit: SkillsPromptLimitResult): SkillsPromptLimitResult {
+  return { ...limit, compact: true };
+}
+
+function renderSkillsPromptWithinBudget(params: {
+  initialLimit: SkillsPromptLimitResult;
+  promptSkills: PromptSkill[];
+  total: number;
+  maxPromptChars: number;
+  remoteNote?: string;
+}): string {
+  if (params.maxPromptChars <= 0) {
+    return "";
+  }
+
+  const renderWithRemoteNote = (remoteNote?: string): string => {
+    let limit = params.initialLimit;
+    let prompt = renderLimitedSkillsPrompt({
+      limit,
+      total: params.total,
+      maxPromptChars: params.maxPromptChars,
+      remoteNote,
+    });
+    while (prompt.length > params.maxPromptChars && limit.skillsForPrompt.length > 0) {
+      limit = limit.compact
+        ? limitPromptToIncludedCount(
+            params.promptSkills,
+            limit.skillsForPrompt.length - 1,
+            limit.compact,
+          )
+        : withCompactPromptFormat(limit);
+      prompt = renderLimitedSkillsPrompt({
+        limit,
+        total: params.total,
+        maxPromptChars: params.maxPromptChars,
+        remoteNote,
+      });
+    }
+    return prompt;
+  };
+
+  const prompt = renderWithRemoteNote(params.remoteNote);
+  if (prompt.length <= params.maxPromptChars || !params.remoteNote) {
+    return prompt;
+  }
+
+  return renderWithRemoteNote();
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -1502,20 +1689,25 @@ function resolveWorkspaceSkillPromptState(
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
-    a.name.localeCompare(b.name, "en"),
-  );
-  const { skillsForPrompt, compact } = applySkillsPromptLimits({
+  const promptSkills = compactSkillPaths(
+    promptEntries.map((entry) =>
+      Object.assign({}, entry.skill, {
+        skillKey: resolveSkillKey(entry.skill, entry),
+      }),
+    ),
+  ).toSorted((a, b) => a.name.localeCompare(b.name, "en"));
+  const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+  const limit = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
-    remoteNote,
   });
-  const prompt = buildRenderedSkillsPrompt({
-    remoteNote,
-    skills: skillsForPrompt,
+  const prompt = renderSkillsPromptWithinBudget({
+    initialLimit: limit,
+    promptSkills,
     total: resolvedSkills.length,
-    compact,
+    maxPromptChars: limits.maxSkillsPromptChars,
+    remoteNote,
   });
   return { eligible, prompt, resolvedSkills };
 }
