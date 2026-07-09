@@ -69,6 +69,12 @@ function fileKindFromStats(stats: {
   return undefined;
 }
 
+function basenameFromPath(path: string): string {
+  const isWindows = process.platform === "win32";
+  const normalized = path.replace(isWindows ? /[\\/]+$/ : /\/+$/, "");
+  return normalized.split(isWindows ? /[\\/]/ : /\//).pop() ?? path;
+}
+
 function fileInfoFromStats(
   path: string,
   stats: {
@@ -84,7 +90,7 @@ function fileInfoFromStats(
     return err(new FileError("invalid", "Unsupported file type", path));
   }
   return ok({
-    name: path.replace(/\/+$/, "").split("/").pop() ?? path,
+    name: basenameFromPath(path),
     path,
     kind,
     size: stats.size,

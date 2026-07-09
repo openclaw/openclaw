@@ -4,11 +4,22 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeExecutionEnv } from "./nodejs.js";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { lstatMock, spawnMock } = vi.hoisted(() => ({
+  lstatMock: vi.fn(),
+  spawnMock: vi.fn(),
+}));
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
 }));
+
+vi.mock("node:fs/promises", async (importActual) => {
+  const actual = await importActual<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: lstatMock,
+  };
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -31,6 +42,20 @@ function mockSpawnChild() {
   };
 }
 
+function mockFileStats() {
+  lstatMock.mockResolvedValue({
+    isFile: () => true,
+    isDirectory: () => false,
+    isSymbolicLink: () => false,
+    size: 12,
+    mtimeMs: 34,
+  });
+}
+
+function createMockExecEnv(): NodeExecutionEnv {
+  return new NodeExecutionEnv({ cwd: process.cwd(), shellPath: process.execPath });
+}
+
 async function waitForSpawnCall(): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
@@ -44,11 +69,34 @@ async function waitForSpawnCall(): Promise<void> {
   throw new Error("expected spawn to be called");
 }
 
+describe("NodeExecutionEnv file metadata", () => {
+  it("reports the basename for Windows-style addressed paths", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockFileStats();
+    try {
+      const env = new NodeExecutionEnv({ cwd: process.cwd() });
+
+      const result = await env.fileInfo("C:\\workspace\\notes\\todo.txt");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.name).toBe("todo.txt");
+        expect(result.value.path).toContain("C:\\workspace\\notes\\todo.txt");
+      }
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+});
+
 describe("NodeExecutionEnv timeout handling", () => {
   let env: NodeExecutionEnv;
 
   beforeEach(() => {
-    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
+    env = createMockExecEnv();
   });
 
   it.each([
@@ -88,7 +136,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
   let env: NodeExecutionEnv;
 
   beforeEach(() => {
-    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
+    env = createMockExecEnv();
   });
 
   it.each(["stdout", "stderr"] as const)(
