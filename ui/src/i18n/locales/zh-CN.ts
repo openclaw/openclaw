@@ -81,6 +81,12 @@ export const zh_CN: TranslationMap = {
     waitForScan: "等待扫描",
     logout: "退出登录",
   },
+  nativeLinkMenu: {
+    label: "链接操作",
+    openInline: "在边栏中打开",
+    openExternal: "在默认浏览器中打开",
+    copy: "复制链接",
+  },
   channels: {
     health: {
       title: "频道健康状态",

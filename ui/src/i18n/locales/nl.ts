@@ -81,6 +81,12 @@ export const nl: TranslationMap = {
     waitForScan: "Wachten op scan",
     logout: "Uitloggen",
   },
+  nativeLinkMenu: {
+    label: "Linkacties",
+    openInline: "Openen in zijbalk",
+    openExternal: "Openen in standaardbrowser",
+    copy: "Link kopiëren",
+  },
   channels: {
     health: {
       title: "Kanaalstatus",

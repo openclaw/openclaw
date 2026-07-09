@@ -81,6 +81,12 @@ export const uk: TranslationMap = {
     waitForScan: "Очікування сканування",
     logout: "Вийти",
   },
+  nativeLinkMenu: {
+    label: "Дії з посиланням",
+    openInline: "Відкрити на бічній панелі",
+    openExternal: "Відкрити у браузері за замовчуванням",
+    copy: "Копіювати посилання",
+  },
   channels: {
     health: {
       title: "Стан каналу",

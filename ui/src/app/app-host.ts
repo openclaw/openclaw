@@ -1,6 +1,6 @@
 import { consume, ContextProvider } from "@lit/context";
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { hasStoredGatewayAuth, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
@@ -31,6 +31,8 @@ import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts"
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -134,7 +136,7 @@ function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
 }
 
-class OpenClawApp extends LitElement {
+class OpenClawApp extends OpenClawLightDomElement {
   @state() private gatewayConnected = false;
   @state() private gatewayReconnecting = false;
   @state() private gatewayLastError: string | null = null;
@@ -162,64 +164,90 @@ class OpenClawApp extends LitElement {
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
   });
-  private stopGatewaySubscription: (() => void) | undefined;
-  private stopConfigSubscription: (() => void) | undefined;
+  private readonly subscriptions = new SubscriptionsController(this);
+  private loginGatewaySource: ApplicationContext["gateway"] | null = null;
+  private loginConnectionClient: GatewayBrowserClient | null = null;
 
-  override createRenderRoot() {
-    return this;
+  constructor() {
+    super();
+    this.subscriptions
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.synchronizeGateway(gateway),
+      )
+      .watch(
+        () => (this.terminalOnly ? this.context?.config : undefined),
+        (config, notify) => config.subscribe(notify),
+        () => this.updateTerminalSurface(),
+      );
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     this.context = this.runtime.context;
     this.initialAuthPresent = hasStoredGatewayAuth(this.context.gateway.connection);
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
+    // Context identity changes only across a full app-tree connection epoch;
+    // descendants reconnect and rebuild their controller-owned state afterward.
     this.contextProvider.setValue(this.context);
     this.syncLoginConnection();
-    let gatewayClient = this.context.gateway.snapshot.client;
-    this.updateGatewayStatus(this.context.gateway.snapshot);
-    this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
-      if (snapshot.client !== gatewayClient) {
-        gatewayClient = snapshot.client;
-        this.syncLoginConnection();
-      }
-      this.updateGatewayStatus(snapshot);
-      this.updateTerminalSurface();
-    });
-    if (this.terminalOnly) {
-      // Terminal availability also depends on config.terminalEnabled, which
-      // can arrive after the gateway snapshot; track it for this document mode.
-      this.updateTerminalSurface();
-      this.stopConfigSubscription = this.context.config.subscribe(() => {
-        this.updateTerminalSurface();
-      });
-    }
+    // The runtime is created after controller hostConnected hooks run. Ensure
+    // their lazy source getters bind on both the initial mount and reconnect.
+    this.requestUpdate();
     void this.runtime.start().catch((error: unknown) => {
       console.error("[openclaw] application start failed", error);
     });
   }
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
+    // Stop reactive subscriptions before disposing their application sources.
+    this.subscriptions.clear();
     this.runtime?.stop();
     this.runtime = undefined;
     this.context = undefined;
+    this.loginGatewaySource = null;
+    this.loginConnectionClient = null;
     this.pendingGatewayUrl = null;
+    this.resetLoginSensitivePresentation();
     super.disconnectedCallback();
   }
 
-  private syncLoginConnection() {
-    const connection = this.context?.gateway.connection;
+  private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
+    const sourceChanged = gateway !== this.loginGatewaySource;
+    if (sourceChanged) {
+      this.loginGatewaySource = gateway;
+      this.loginConnectionClient = null;
+      this.resetLoginSensitivePresentation();
+    }
+    const snapshot = gateway.snapshot;
+    const clientChanged = snapshot.client !== this.loginConnectionClient;
+    if (clientChanged) {
+      this.loginConnectionClient = snapshot.client;
+      this.resetLoginSensitivePresentation();
+    }
+    if (sourceChanged || clientChanged) {
+      this.syncLoginConnection(gateway);
+    }
+    this.updateGatewayStatus(snapshot);
+    this.updateTerminalSurface();
+  }
+
+  private syncLoginConnection(gateway = this.context?.gateway) {
+    const connection = gateway?.connection;
     if (!connection) {
       return;
     }
     this.loginGatewayUrl = connection.gatewayUrl;
     this.loginToken = connection.token;
     this.loginPassword = connection.password;
+  }
+
+  private resetLoginSensitivePresentation() {
+    this.loginShowGatewayToken = false;
+    this.loginShowGatewayPassword = false;
   }
 
   private readonly updateGatewayStatus = (snapshot: {
@@ -368,10 +396,10 @@ class OpenClawApp extends LitElement {
   }
 }
 
-class OpenClawShell extends LitElement {
+class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) runtime?: ApplicationRuntime;
   @property({ attribute: false }) onboarding = false;
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
 
   @state() private navCollapsed = false;
@@ -406,116 +434,120 @@ class OpenClawShell extends LitElement {
   // chat (the app default route) when settings was the entry point.
   private lastWorkspaceLocation: { routeId: RouteId; search: string } | null = null;
   private agentsListClient: GatewayBrowserClient | null = null;
+  private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
-  private stopAgentsSubscription: (() => void) | undefined;
-  private stopConfigSubscription: (() => void) | undefined;
-  private stopGatewaySubscription: (() => void) | undefined;
-  private stopNavigationSubscription: (() => void) | undefined;
-  private stopRouteSubscription: (() => void) | undefined;
-  private stopOverlaySubscription: (() => void) | undefined;
-  private stopRuntimeConfigSubscription: (() => void) | undefined;
-  private stopThemeSubscription: (() => void) | undefined;
+  private runtimeConfigClient: GatewayBrowserClient | null = null;
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private readonly settingsPreloadTimers = new Map<
+    EventTarget,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
+  private readonly subscriptions = new SubscriptionsController(this);
 
-  override createRenderRoot() {
-    return this;
+  constructor() {
+    super();
+    this.subscriptions
+      .effect(
+        () => this.context,
+        () => () => this.resetShellEpochState(),
+      )
+      .watch(
+        () => this.context?.navigation,
+        (navigation, notify) => navigation.subscribe(notify),
+        (navigation) => this.updateNavigationPreferences(navigation.snapshot),
+      )
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.synchronizeGateway(gateway.snapshot),
+      )
+      .watch(
+        () => this.context?.config,
+        (config, notify) => config.subscribe(notify),
+        () => {
+          const snapshot = this.context?.gateway.snapshot;
+          if (snapshot) {
+            this.updateTerminalSurface(snapshot);
+          }
+        },
+      )
+      .watch(
+        () => this.context?.theme,
+        (theme, notify) => theme.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+        (agents) => {
+          this.updateAgentLabel();
+          const snapshot = this.context?.gateway.snapshot;
+          if (snapshot) {
+            this.ensureAgentsList(snapshot, agents);
+          }
+        },
+      )
+      .effect(
+        () => this.runtime?.router,
+        (router) => {
+          this.updateRouteState(selectShellRouteState(router.getState()));
+          return router.subscribeSelector(
+            selectShellRouteState,
+            (routeState) => this.updateRouteState(routeState),
+            equalShellRouteState,
+          );
+        },
+      )
+      .watch(
+        () => this.context?.overlays,
+        (overlays, notify) => overlays.subscribe(notify),
+        (overlays) => {
+          this.overlaySnapshot = overlays.snapshot;
+        },
+      )
+      .watch(
+        () => this.context?.runtimeConfig,
+        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+        (runtimeConfig) => {
+          const snapshot = this.context?.gateway.snapshot;
+          if (snapshot) {
+            this.ensureRuntimeConfig(snapshot, runtimeConfig);
+          }
+        },
+      );
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
-  }
-
-  override updated() {
-    this.startSubscriptions();
-  }
-
-  private startSubscriptions() {
-    const runtime = this.runtime;
-    const context = this.context;
-    if (
-      !runtime ||
-      !context ||
-      this.stopAgentsSubscription ||
-      this.stopConfigSubscription ||
-      this.stopGatewaySubscription ||
-      this.stopNavigationSubscription ||
-      this.stopRouteSubscription ||
-      this.stopOverlaySubscription ||
-      this.stopRuntimeConfigSubscription ||
-      this.stopThemeSubscription
-    ) {
-      return;
-    }
-    this.updateNavigationPreferences(context.navigation.snapshot);
-    this.stopNavigationSubscription = context.navigation.subscribe((snapshot) => {
-      this.updateNavigationPreferences(snapshot);
-    });
-    this.updateGatewaySessionKey(context.gateway.snapshot);
-    this.updateGatewayStatus(context.gateway.snapshot);
-    this.updateTerminalSurface(context.gateway.snapshot);
-    this.updateAgentLabel();
-    this.ensureRuntimeConfig(context.gateway.snapshot);
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateGatewaySessionKey(snapshot);
-      this.updateGatewayStatus(snapshot);
-      this.updateTerminalSurface(snapshot);
-      this.updateAgentLabel();
-      this.ensureAgentsList(snapshot);
-      this.ensureRuntimeConfig(snapshot);
-    });
-    this.stopConfigSubscription = context.config.subscribe(() => {
-      this.updateTerminalSurface(context.gateway.snapshot);
-    });
-    this.stopThemeSubscription = context.theme.subscribe(() => this.requestUpdate());
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.updateAgentLabel();
-    });
-    this.updateRouteState(selectShellRouteState(runtime.router.getState()));
-    this.stopRouteSubscription = runtime.router.subscribeSelector(
-      selectShellRouteState,
-      (routeState) => {
-        this.updateRouteState(routeState);
-      },
-      equalShellRouteState,
-    );
-    this.overlaySnapshot = context.overlays.snapshot;
-    this.stopOverlaySubscription = context.overlays.subscribe((snapshot) => {
-      this.overlaySnapshot = snapshot;
-    });
-    this.stopRuntimeConfigSubscription = context.runtimeConfig.subscribe(() => {
-      // Route enablement (e.g. Workboard) derives from the config snapshot.
-      this.requestUpdate();
-    });
   }
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopNavigationSubscription?.();
-    this.stopNavigationSubscription = undefined;
-    this.stopRouteSubscription?.();
-    this.stopRouteSubscription = undefined;
-    this.stopOverlaySubscription?.();
-    this.stopOverlaySubscription = undefined;
-    this.stopRuntimeConfigSubscription?.();
-    this.stopRuntimeConfigSubscription = undefined;
-    this.stopThemeSubscription?.();
-    this.stopThemeSubscription = undefined;
-    this.agentsListClient = null;
-    this.sessionKeyClient = null;
-    this.terminalClient = null;
-    this.navDrawerTrigger = null;
+    this.resetShellEpochState();
     super.disconnectedCallback();
+  }
+
+  private resetShellEpochState() {
+    this.navDrawerOpen = false;
+    this.navDrawerTrigger = null;
+    this.lastWorkspaceLocation = null;
+    this.activeSessionKey = "";
+    this.agentLabel = "";
+    this.commandPaletteTarget = undefined;
+    this.agentsListClient = null;
+    this.agentsListSource = null;
+    this.sessionKeyClient = null;
+    this.runtimeConfigClient = null;
+    this.runtimeConfigSource = null;
+    this.terminalClient = null;
+    for (const timer of this.settingsPreloadTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.settingsPreloadTimers.clear();
   }
 
   private readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
@@ -524,7 +556,6 @@ class OpenClawShell extends LitElement {
       return;
     }
     context.theme.setMode(event.detail.mode, event.detail.element);
-    this.requestUpdate();
   };
 
   private chatNavigationOptions(options?: ApplicationNavigationOptions) {
@@ -709,6 +740,15 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
+  private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    this.updateGatewaySessionKey(snapshot);
+    this.updateGatewayStatus(snapshot);
+    this.updateTerminalSurface(snapshot);
+    this.updateAgentLabel();
+    this.ensureAgentsList(snapshot);
+    this.ensureRuntimeConfig(snapshot);
+  }
+
   private readonly updateGatewayStatus = (snapshot: {
     connected: boolean;
     lastError: string | null;
@@ -731,15 +771,28 @@ class OpenClawShell extends LitElement {
     );
   }
 
-  private ensureRuntimeConfig(snapshot: {
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-  }) {
+  private ensureRuntimeConfig(
+    snapshot: {
+      client: GatewayBrowserClient | null;
+      connected: boolean;
+    },
+    runtimeConfig = this.context?.runtimeConfig,
+  ) {
     // The sidebar hides config-gated routes (Workboard), so the snapshot must
     // load eagerly instead of waiting for a page that happens to fetch it.
-    if (snapshot.connected && snapshot.client) {
-      void this.context?.runtimeConfig.ensureLoaded();
+    if (!snapshot.connected || !snapshot.client || !runtimeConfig) {
+      this.runtimeConfigClient = null;
+      return;
     }
+    if (
+      this.runtimeConfigClient === snapshot.client &&
+      this.runtimeConfigSource === runtimeConfig
+    ) {
+      return;
+    }
+    this.runtimeConfigClient = snapshot.client;
+    this.runtimeConfigSource = runtimeConfig;
+    void runtimeConfig.ensureLoaded();
   }
 
   private enabledRouteIds(): readonly RouteId[] {
@@ -748,20 +801,24 @@ class OpenClawShell extends LitElement {
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
-  private ensureAgentsList(snapshot: { client: GatewayBrowserClient | null; connected: boolean }) {
+  private ensureAgentsList(
+    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    agents = this.context?.agents,
+  ) {
     if (!snapshot.connected || !snapshot.client) {
       this.agentsListClient = null;
       return;
     }
     const routeId = this.routeState.routeId;
-    if (!routeId || routeId === "chat" || this.context?.agents.state.agentsList) {
+    if (!agents || !routeId || routeId === "chat" || agents.state.agentsList) {
       return;
     }
-    if (this.agentsListClient === snapshot.client) {
+    if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
       return;
     }
     this.agentsListClient = snapshot.client;
-    void this.context?.agents.ensureList();
+    this.agentsListSource = agents;
+    void agents.ensureList();
   }
 
   private updateGatewaySessionKey(snapshot: {
@@ -891,6 +948,7 @@ class OpenClawShell extends LitElement {
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
                 onPreload: (routeId) => context.preload(routeId),
+                preloadTimers: this.settingsPreloadTimers,
               })
             : html`<openclaw-app-sidebar
                 .basePath=${context.basePath}

@@ -81,6 +81,12 @@ export const ar: TranslationMap = {
     waitForScan: "انتظار المسح",
     logout: "تسجيل الخروج",
   },
+  nativeLinkMenu: {
+    label: "إجراءات الرابط",
+    openInline: "فتح في الشريط الجانبي",
+    openExternal: "فتح في المتصفح الافتراضي",
+    copy: "نسخ الرابط",
+  },
   channels: {
     health: {
       title: "صحة القنوات",
