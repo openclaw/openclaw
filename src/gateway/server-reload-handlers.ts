@@ -33,10 +33,8 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
-import {
-  formatActiveTaskRestartBlocker,
-  getInspectableActiveTaskRestartBlockers,
-} from "../tasks/task-registry.maintenance.js";
+import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
+import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";

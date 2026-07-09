@@ -4,10 +4,10 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
-  formatActiveTaskRestartBlocker,
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
+import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1

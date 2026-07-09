@@ -45,9 +45,6 @@ export {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
-export {
-  formatActiveTaskRestartBlocker,
-  getInspectableActiveTaskRestartBlockers,
-} from "../../tasks/task-registry.maintenance.js";
+export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";

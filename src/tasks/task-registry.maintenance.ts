@@ -3,7 +3,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
@@ -65,6 +64,7 @@ import {
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import {
   resolveEffectiveTaskCleanupAfter,
   resolveTaskCleanupAfter,
@@ -912,27 +912,7 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
-export type ActiveTaskRestartBlocker = {
-  taskId: string;
-  status: Extract<TaskStatus, "running">;
-  runtime: TaskRecord["runtime"];
-  runId?: string;
-  label?: string;
-  title?: string;
-};
-
-export function formatActiveTaskRestartBlocker(task: ActiveTaskRestartBlocker): string {
-  return [
-    `taskId=${task.taskId}`,
-    task.runId ? `runId=${task.runId}` : null,
-    `status=${task.status}`,
-    `runtime=${task.runtime}`,
-    task.label ? `label=${task.label}` : null,
-    task.title ? `title=${truncateUtf16Safe(task.title, 80)}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
-}
+export type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
