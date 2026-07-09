@@ -1416,6 +1416,14 @@ openclaw-native-link-menu[popover] {
   color: var(--muted);
 }
 
+.session-menu__shortcut {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+}
+
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
