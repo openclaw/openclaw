@@ -489,10 +489,20 @@ async function resolveSlackConversationContext(params: {
     topic?: string;
     purpose?: string;
   } = {};
-  let resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
+  // Resolve channel type from event metadata or channel info API.
+  // When channel_type is missing on the event, fetch channel info first to avoid
+  // premature inference from ID prefix — modern C-prefixed Slack channel IDs can
+  // be either channels or MPIMs, and inferSlackChannelType cannot disambiguate.
+  let resolvedChannelType: ReturnType<typeof normalizeSlackChannelType>;
+  if (message.channel_type) {
+    resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
+  } else {
+    channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
+    resolvedChannelType = normalizeSlackChannelType(channelInfo.type, message.channel);
+  }
   // D-prefixed channels are always direct messages. Skip channel lookups in
   // that common path to avoid an unnecessary API round-trip.
-  if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
+  if (resolvedChannelType !== "im" && message.channel_type && message.channel_type !== "im") {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
     resolvedChannelType = normalizeSlackChannelType(
       message.channel_type ?? channelInfo.type,

@@ -1858,6 +1858,72 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("classifies C-prefixed MPIM with explicit channel_type as group", async () => {
+    // Modern Slack MPIMs use C-prefixed channel IDs. Explicit channel_type
+    // must still route as group (not channel) for these rooms.
+    const slackCtx = createReplyToAllSlackCtx();
+    slackCtx.resolveChannelName = async () => ({ name: "mpdm-c-prefix", type: "mpim" });
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "C0AJUGWG5L6",
+        channel_type: "mpim",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.isRoomish).toBe(true);
+    expect(prepared.ctxPayload.ChatType).toBe("group");
+    expect(prepared.ctxPayload.From).toBe("slack:group:C0AJUGWG5L6");
+  });
+
+  it("classifies C-prefixed MPIM from channel info when channel_type is missing (bot-authored message)", async () => {
+    // Bot-authored Slack messages may arrive without channel_type.
+    // The resolver must consult channel info before inferring from ID prefix,
+    // because modern C-prefixed MPIMs would be misclassified as "channel".
+    const slackCtx = createReplyToAllSlackCtx();
+    slackCtx.resolveChannelName = async () => ({ name: "mpdm-bot-room", type: "mpim" });
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "C0BOTMPDM1",
+        channel_type: undefined,
+        // Simulates bot-authored message ingress without channel_type
+        text: "bot reply in mpdm",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.isRoomish).toBe(true);
+    expect(prepared.ctxPayload.ChatType).toBe("group");
+    expect(prepared.ctxPayload.From).toBe("slack:group:C0BOTMPDM1");
+  });
+
+  it("falls back to ID prefix inference when channel info provides no type", async () => {
+    // When both channel_type and channel info are unavailable, fall back
+    // to ID-prefix inference without crashing. C-prefix infers "channel".
+    const slackCtx = createReplyToAllSlackCtx({ defaultRequireMention: false });
+    slackCtx.resolveChannelName = async () => ({});
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "C0UNKNOWN1",
+        channel_type: undefined,
+        // channel info fails → falls back to C-prefix → "channel"
+        text: "message in unknown channel type",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.isRoomish).toBe(true);
+    // C-prefix without channel_type or channel info falls back to "channel"
+    expect(prepared.ctxPayload.ChatType).toBe("channel");
+    expect(prepared.ctxPayload.From).toBe("slack:channel:C0UNKNOWN1");
+  });
+
   it.each([
     {
       peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
