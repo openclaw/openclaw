@@ -47,6 +47,10 @@ describe("stepfun provider registration", () => {
 
     expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
     expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+    expect(
+      standard.models?.find((model) => model.id === "step-3.5-flash")?.compat
+        ?.supportsReasoningEffort,
+    ).not.toBe(true);
     expect(standardModel).toMatchObject({
       reasoning: true,
       input: ["text", "image"],
