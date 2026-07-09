@@ -17,6 +17,7 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
+  resolveExecApprovalsLocked,
   resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
@@ -232,7 +233,7 @@ export async function resolveExecHostApprovalContext(params: {
   ask: ExecAsk;
   host: "gateway" | "node";
 }): Promise<ExecHostApprovalContext> {
-  const approvals = await resolveExecApprovals(params.agentId, {
+  const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: params.security,
     ask: params.ask,
   });

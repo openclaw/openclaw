@@ -1,6 +1,6 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { ensureExecApprovals, loadExecApprovals } from "../infra/exec-approvals.js";
+import { ensureExecApprovalsSnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -23,7 +23,7 @@ function readSharedAgentRuntimeIdentitySecret(): string | null {
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
-  const token = (await ensureExecApprovals()).socket?.token?.trim();
+  const token = (await ensureExecApprovalsSnapshot()).file.socket?.token?.trim();
   if (!token) {
     throw new Error(
       "Unable to mint agent runtime identity token without local socket credentials.",

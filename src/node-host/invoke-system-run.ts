@@ -13,11 +13,12 @@ import {
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
-  persistAllowAlwaysDecision,
-  recordAllowlistMatchesUse,
+  persistAllowAlwaysDecisionLocked,
+  recordAllowlistMatchesUseLocked,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovals,
+  resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -217,7 +218,7 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
     security: layeredPolicy.security,
     ask: layeredPolicy.ask,
   });
-  const approvals = await resolveExecApprovals(params.agentId, {
+  const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: modePolicy.security,
     ask: modePolicy.ask,
     requireSocket: params.requireSocket,
@@ -838,7 +839,7 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always") {
-    await persistAllowAlwaysDecision({
+    await persistAllowAlwaysDecisionLocked({
       agentId: phase.agentId,
       decision: resolveAllowAlwaysPersistenceDecision({
         segments: phase.segments,
@@ -853,7 +854,7 @@ async function executeSystemRunPhase(
     });
   }
 
-  await recordAllowlistMatchesUse({
+  await recordAllowlistMatchesUseLocked({
     agentId: phase.agentId,
     matches: phase.allowlistMatches,
     command: phase.commandText,

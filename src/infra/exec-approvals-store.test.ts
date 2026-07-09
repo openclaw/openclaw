@@ -16,14 +16,18 @@ import type { ExecApprovalsFile } from "./exec-approvals.js";
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
+let ensureExecApprovalsSnapshot: ExecApprovalsModule["ensureExecApprovalsSnapshot"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
-let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecision"];
-let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
+let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecisionLocked"];
+let persistAllowAlwaysDecisionSync: ExecApprovalsModule["persistAllowAlwaysDecision"];
+let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatternsLocked"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
-let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
+let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUseLocked"];
+let recordAllowlistMatchesUseSync: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
-let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
+let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovalsLocked"];
+let resolveExecApprovalsSync: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsDisplayPath: ExecApprovalsModule["resolveExecApprovalsDisplayPath"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
@@ -35,23 +39,26 @@ const tempDirs: string[] = [];
 const testEnvSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 beforeAll(async () => {
-  ({
-    ensureExecApprovals,
-    mergeExecApprovalsSocketDefaults,
-    normalizeExecApprovals,
-    persistAllowAlwaysDecision,
-    persistAllowAlwaysPatterns,
-    readExecApprovalsSnapshot,
-    recordAllowlistMatchesUse,
-    requestExecApprovalViaSocket,
-    resolveExecApprovals,
-    resolveExecApprovalsDisplayPath,
-    resolveExecApprovalsPath,
-    resolveExecApprovalsSocketPath,
-    resolveExecApprovalsTranscriptPath,
-    saveExecApprovals,
-    updateExecApprovals,
-  } = await import("./exec-approvals.js"));
+  const module = await import("./exec-approvals.js");
+  ensureExecApprovals = module.ensureExecApprovals;
+  ensureExecApprovalsSnapshot = module.ensureExecApprovalsSnapshot;
+  mergeExecApprovalsSocketDefaults = module.mergeExecApprovalsSocketDefaults;
+  normalizeExecApprovals = module.normalizeExecApprovals;
+  persistAllowAlwaysDecision = module.persistAllowAlwaysDecisionLocked;
+  persistAllowAlwaysDecisionSync = module.persistAllowAlwaysDecision;
+  persistAllowAlwaysPatterns = module.persistAllowAlwaysPatternsLocked;
+  readExecApprovalsSnapshot = module.readExecApprovalsSnapshot;
+  recordAllowlistMatchesUse = module.recordAllowlistMatchesUseLocked;
+  recordAllowlistMatchesUseSync = module.recordAllowlistMatchesUse;
+  requestExecApprovalViaSocket = module.requestExecApprovalViaSocket;
+  resolveExecApprovals = module.resolveExecApprovalsLocked;
+  resolveExecApprovalsSync = module.resolveExecApprovals;
+  resolveExecApprovalsDisplayPath = module.resolveExecApprovalsDisplayPath;
+  resolveExecApprovalsPath = module.resolveExecApprovalsPath;
+  resolveExecApprovalsSocketPath = module.resolveExecApprovalsSocketPath;
+  resolveExecApprovalsTranscriptPath = module.resolveExecApprovalsTranscriptPath;
+  saveExecApprovals = module.saveExecApprovals;
+  updateExecApprovals = module.updateExecApprovals;
 });
 
 beforeEach(() => {
@@ -147,6 +154,29 @@ describe("exec approvals store helpers", () => {
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("keeps the deprecated plugin compatibility APIs synchronous", () => {
+    createHomeDir();
+    const approvals = ensureExecApprovals();
+
+    expect(approvals).not.toBeInstanceOf(Promise);
+    expect(resolveExecApprovalsSync("main")).not.toBeInstanceOf(Promise);
+    expect(
+      persistAllowAlwaysDecisionSync({
+        approvals,
+        agentId: "main",
+        decision: { kind: "one-shot", reasons: ["unplanned"] },
+      }),
+    ).toBeUndefined();
+    expect(
+      recordAllowlistMatchesUseSync({
+        approvals,
+        agentId: "main",
+        matches: [],
+        command: "true",
+      }),
+    ).toBeUndefined();
   });
 
   it("fails closed without writing target approvals before state migration runs", async () => {
@@ -488,10 +518,25 @@ describe("exec approvals store helpers", () => {
         return actualChmodSync(target, mode);
       });
 
-      await expect(ensureExecApprovals()).rejects.toThrow("chmod denied");
+      expect(() => ensureExecApprovals()).toThrow("chmod denied");
       expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
     },
   );
+
+  it("breaks a hard link when an otherwise unchanged file is ensured", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const linkedPath = path.join(dir, "linked-approvals.json");
+    ensureExecApprovals();
+    fs.linkSync(approvalsPath, linkedPath);
+
+    await ensureExecApprovalsSnapshot();
+
+    expect(fs.statSync(approvalsPath).ino).not.toBe(fs.statSync(linkedPath).ino);
+    expect(JSON.parse(fs.readFileSync(approvalsPath, "utf8"))).toEqual(
+      JSON.parse(fs.readFileSync(linkedPath, "utf8")),
+    );
+  });
 
   it("falls back to copying when rename cannot overwrite the approvals file", () => {
     const dir = createHomeDir();
@@ -899,7 +944,7 @@ describe("exec approvals store helpers", () => {
         },
       }),
     });
-    const ensure = ensureExecApprovals();
+    const ensure = ensureExecApprovalsSnapshot();
     const usage = recordAllowlistMatchesUse({
       agentId: "main",
       matches: [{ pattern: "/usr/bin/rg", id: "rg-id" }],

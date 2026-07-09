@@ -16,7 +16,7 @@ import {
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
+  restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
@@ -352,7 +352,7 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
       nextConfig,
     });
   } catch (err) {
-    await restoreExecApprovalsSnapshot(approvalsSnapshot, writtenApprovals.hash);
+    await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash);
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();
