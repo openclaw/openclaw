@@ -55,6 +55,7 @@ const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
   /^ai\.openclaw\.[A-Za-z0-9._-]+\.update\.[A-Za-z0-9._-]+$/;
+const OPENCLAW_DIRECT_CLI_NAMES = new Set(["openclaw", "openclaw.mjs"]);
 const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe"]);
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
@@ -415,10 +416,8 @@ function hasOpenClawUpdateLaunchdMarker(env: Record<string, string | undefined> 
 
 function isOpenClawUpdateCommandPrefix(programArguments: string[], updateIndex: number): boolean {
   if (updateIndex === 1) {
-    return path
-      .basename(programArguments[0] ?? "")
-      .toLowerCase()
-      .startsWith("openclaw");
+    const cliName = path.basename(programArguments[0] ?? "").toLowerCase();
+    return OPENCLAW_DIRECT_CLI_NAMES.has(cliName);
   }
   if (updateIndex !== 2) {
     return false;
@@ -445,11 +444,7 @@ function isOpenClawUpdateProgramArguments(programArguments: string[] | undefined
 async function isLaunchdJobConfirmedOpenClawUpdater(params: {
   label: string;
   env: NodeJS.ProcessEnv;
-  trustCurrentEnvMarker?: boolean;
 }): Promise<boolean> {
-  if (params.trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(params.env)) {
-    return true;
-  }
   const plistPath = resolveLaunchAgentPlistPathForLabel(params.env, params.label);
   const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
   return (
@@ -490,37 +485,62 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   return jobs;
 }
 
+async function disableOpenClawUpdateLaunchdJobCandidate(params: {
+  candidate: OpenClawUpdateLaunchdLabelCandidate;
+  env: NodeJS.ProcessEnv;
+  trustCurrentEnvMarker: boolean;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  if (
+    params.candidate.requiresMetadata &&
+    !(
+      (params.trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(params.env)) ||
+      (await isLaunchdJobConfirmedOpenClawUpdater({
+        label: params.candidate.label,
+        env: params.env,
+      }))
+    )
+  ) {
+    return false;
+  }
+  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(params.candidate.label)}`;
+  const result = await execLaunchctl(["disable", serviceTarget]);
+  return result.code === 0;
+}
+
 export async function disableOpenClawUpdateLaunchdJob(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
   const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
-  if (process.platform !== "darwin" || !candidate) {
+  if (!candidate) {
     return false;
   }
-  if (
-    candidate.requiresMetadata &&
-    !(await isLaunchdJobConfirmedOpenClawUpdater({
-      label: candidate.label,
-      env,
-      trustCurrentEnvMarker: true,
-    }))
-  ) {
-    return false;
-  }
-  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(candidate.label)}`;
-  const result = await execLaunchctl(["disable", serviceTarget]);
-  return result.code === 0;
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    trustCurrentEnvMarker: false,
+  });
 }
 
 export async function disableCurrentOpenClawUpdateLaunchdJob(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const label = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
-  if (!label) {
+  const candidate = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
+  if (!candidate) {
     return false;
   }
-  return await disableOpenClawUpdateLaunchdJob(label.label, env);
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    // Detached handoffs preserve the configured label, so only launchd-backed
+    // current-process identity may turn the ambient marker into proof.
+    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env, {
+      allowConfiguredLabelFallback: false,
+    }),
+  });
 }
 
 function parseGatewayPortFromProgramArguments(

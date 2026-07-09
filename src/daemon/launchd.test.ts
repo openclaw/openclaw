@@ -570,10 +570,12 @@ describe("launchctl list detection", () => {
       const updaterLabel = "ai.openclaw.tayoun.update.20260625T201026-0400";
       const gatewayLikeLabel = "ai.openclaw.dev.team.update.20260625T201026-0400";
       const nonOpenClawLabel = "ai.openclaw.fake.update.20260625T201026-0400";
+      const prefixedCliLabel = "ai.openclaw.helper.update.20260625T201026-0400";
       state.listOutput = [
         `4321 0 ${updaterLabel}`,
         `9876 0 ${gatewayLikeLabel}`,
         `2468 0 ${nonOpenClawLabel}`,
+        `1357 0 ${prefixedCliLabel}`,
       ].join("\n");
       setLaunchAgentPlist({
         env,
@@ -589,6 +591,11 @@ describe("launchctl list detection", () => {
         env,
         label: nonOpenClawLabel,
         programArguments: ["/bin/echo", "update", "--yes"],
+      });
+      setLaunchAgentPlist({
+        env,
+        label: prefixedCliLabel,
+        programArguments: ["/usr/local/bin/openclaw-helper", "update", "--yes"],
       });
 
       const jobs = await findStaleOpenClawUpdateLaunchdJobs(env as NodeJS.ProcessEnv);
@@ -621,6 +628,76 @@ describe("launchctl list detection", () => {
       expect(jobs).toEqual([
         {
           label: updaterLabel,
+          pid: 4321,
+          lastExitStatus: 0,
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "unwraps generated environment-wrapper metadata for profile-scoped updater jobs",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
+      const envDir = "/Users/test/.openclaw-tayoun/service-env";
+      const wrapperPath = `${envDir}/${label}-env-wrapper.sh`;
+      const envFilePath = `${envDir}/${label}.env`;
+      state.listOutput = `4321 0 ${label}`;
+      state.files.set(envFilePath, "export PATH='/opt/homebrew/bin:/usr/bin'\n");
+      setLaunchAgentPlist({
+        env,
+        label,
+        programArguments: [
+          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+          wrapperPath,
+          envFilePath,
+          "/opt/homebrew/bin/openclaw",
+          "update",
+          "--yes",
+        ],
+      });
+
+      const jobs = await findStaleOpenClawUpdateLaunchdJobs(env as NodeJS.ProcessEnv);
+
+      expect(jobs).toEqual([
+        {
+          label,
+          pid: 4321,
+          lastExitStatus: 0,
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "reads the updater marker from a generated environment file",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
+      const envDir = "/Users/test/.openclaw-tayoun/service-env";
+      const wrapperPath = `${envDir}/${label}-env-wrapper.sh`;
+      const envFilePath = `${envDir}/${label}.env`;
+      state.listOutput = `4321 0 ${label}`;
+      state.files.set(envFilePath, "export OPENCLAW_UPDATE_RUN_HANDOFF='1'\n");
+      setLaunchAgentPlist({
+        env,
+        label,
+        programArguments: [
+          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+          wrapperPath,
+          envFilePath,
+          "/opt/homebrew/bin/openclaw",
+          "gateway",
+          "run",
+        ],
+      });
+
+      const jobs = await findStaleOpenClawUpdateLaunchdJobs(env as NodeJS.ProcessEnv);
+
+      expect(jobs).toEqual([
+        {
+          label,
           pid: 4321,
           lastExitStatus: 0,
         },
@@ -810,6 +887,72 @@ describe("launchctl list detection", () => {
   );
 
   it.runIf(process.platform === "darwin")(
+    "lets a profile-scoped updater self-disarm from launchd runtime metadata",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
+
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          ...env,
+          LAUNCH_JOB_LABEL: label,
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        }),
+      ).resolves.toBe(true);
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${label}`]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "requires plist proof for a configured label preserved by an update handoff",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.dev.team.update.20260625T201026-0400";
+      setLaunchAgentPlist({
+        env,
+        label,
+        programArguments: ["/opt/homebrew/bin/openclaw", "gateway", "run"],
+      });
+
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          ...env,
+          OPENCLAW_LAUNCHD_LABEL: label,
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        }),
+      ).resolves.toBe(false);
+
+      expect(state.launchctlCalls).toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "disables a configured profile-scoped updater only with confirming plist metadata",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
+      setLaunchAgentPlist({
+        env,
+        label,
+        programArguments: ["/opt/homebrew/bin/openclaw", "update", "--yes"],
+      });
+
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          ...env,
+          OPENCLAW_LAUNCHD_LABEL: label,
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        }),
+      ).resolves.toBe(true);
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${label}`]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
     "does not disable profile-scoped gateway labels without updater metadata",
     async () => {
       const env = createDefaultLaunchdEnv();
@@ -883,6 +1026,23 @@ describe("launchctl list detection", () => {
       `${domain}/ai.openclaw.manual-update.1717168800`,
     ]);
   });
+
+  it.runIf(process.platform === "darwin")(
+    "does not let the process marker bypass metadata for an explicit profile job",
+    async () => {
+      const env = createDefaultLaunchdEnv();
+      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
+
+      await expect(
+        disableOpenClawUpdateLaunchdJob(label, {
+          ...env,
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        }),
+      ).resolves.toBe(false);
+
+      expect(state.launchctlCalls).toEqual([]);
+    },
+  );
 });
 
 describe("launchd bootstrap repair", () => {
