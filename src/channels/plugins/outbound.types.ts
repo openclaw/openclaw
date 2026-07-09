@@ -39,8 +39,6 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
-  /** Cancellation owned by the current outbound delivery attempt. */
-  abortSignal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
@@ -140,7 +138,10 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
-export type ChannelOutboundFormattedContext = ChannelOutboundContext;
+/** Context for channel-native formatting sends that can observe delivery cancellation. */
+export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+  abortSignal?: AbortSignal;
+};
 
 export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;

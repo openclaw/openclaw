@@ -18,6 +18,7 @@ import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
@@ -405,8 +406,9 @@ function createPluginHandler(
     threadId?: string | number | null;
     audioAsVoice?: boolean;
     formatting?: OutboundDeliveryFormattingOptions;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+  }): Omit<ChannelOutboundFormattedContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
+    abortSignal: params.abortSignal,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
       overrides && "replyToIdSource" in overrides
@@ -652,7 +654,6 @@ function createChannelOutboundContextBase(
     forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
-    abortSignal: params.abortSignal,
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
