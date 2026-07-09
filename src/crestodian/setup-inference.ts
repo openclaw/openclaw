@@ -269,6 +269,16 @@ function mapFailoverReasonToSetupStatus(reason?: string | null): SetupInferenceS
   return "unknown";
 }
 
+const CODEX_CLI_RUNTIME_PATCH = {
+  agents: {
+    defaults: {
+      models: {
+        [CODEX_APP_SERVER_DEFAULT_MODEL_REF]: { agentRuntime: { id: "codex" } },
+      },
+    },
+  },
+} as const;
+
 async function buildTestPlan(params: {
   kind: InferenceBackendKind | "api-key";
   authChoice?: string;
@@ -321,6 +331,7 @@ async function buildTestPlan(params: {
         modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
         config: buildCodexAppServerPlannerConfig(workspaceDir),
         agentHarnessId: "codex",
+        agentDir: params.agentDir,
         persistModelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       };
     }
@@ -562,6 +573,7 @@ export async function activateSetupInference(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // oxlint-disable-next-line preserve-caught-error -- The original cause can contain the submitted setup secret.
     throw new Error(await redactSetupInferenceError(message, params.apiKey));
   }
 }
@@ -629,15 +641,17 @@ async function activateSetupInferenceUnredacted(
               : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
         };
       }
-      if (ensured.required) {
-        // The install record is a transient discovery input. Stage it only in
-        // the probe config; persist the same delta after the completion passes.
-        codexPluginPatch = createMergePatch(cfg, ensured.cfg);
-        testPlan = {
-          ...plan,
-          config: applyMergePatch(plan.config, codexPluginPatch) as OpenClawConfig,
-        };
-      }
+      // The install record and model-scoped runtime pin are transient probe
+      // inputs. Persist the same delta only after the completion passes.
+      const stagedCodexConfig = applyMergePatch(
+        ensured.cfg,
+        CODEX_CLI_RUNTIME_PATCH,
+      ) as OpenClawConfig;
+      codexPluginPatch = createMergePatch(cfg, stagedCodexConfig);
+      testPlan = {
+        ...plan,
+        config: applyMergePatch(plan.config, codexPluginPatch) as OpenClawConfig,
+      };
     }
 
     if (plan.manualAuth) {

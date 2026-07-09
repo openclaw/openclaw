@@ -561,13 +561,41 @@ describe("activateSetupInference", () => {
   it("installs the codex runtime before exercising its harness", async () => {
     const events: string[] = [];
     const installedConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              alias: "Codex CLI",
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+      },
       plugins: {
-        entries: { codex: { enabled: true } },
+        entries: {
+          codex: {
+            enabled: true,
+            config: { appServer: { command: "codex", mode: "yolo" } },
+          },
+        },
         installs: {
           codex: {
             source: "npm" as const,
             spec: "@openclaw/codex",
             installPath: "/tmp/plugins/codex",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const expectedConfig = {
+      ...installedConfig,
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              alias: "Codex CLI",
+              agentRuntime: { id: "codex" },
+            },
           },
         },
       },
@@ -614,10 +642,11 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
+      agentDir: expect.stringContaining("setup-inference-test-"),
       provider: "openai",
-      config: installedConfig,
+      config: expectedConfig,
     });
-    expect(persistedConfig).toEqual(installedConfig);
+    expect(persistedConfig).toEqual(expectedConfig);
   });
 
   it("does not run or persist when the codex runtime install fails", async () => {
