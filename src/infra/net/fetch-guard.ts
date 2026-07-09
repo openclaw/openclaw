@@ -532,6 +532,15 @@ async function fetchWithSsrFGuardInternal(
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
       if (canUseTrustedEnvProxy || canUseManagedProxy || params.pinDns === false) {
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
+        // When forwarding through a proxy, the proxy resolves DNS. Still re-check
+        // resolved addresses locally so DNS rebinding cannot pivot a public
+        // hostname to a private target after the initial hostname check passes.
+        if (mode === GUARDED_FETCH_MODE.STRICT) {
+          await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+            lookupFn: params.lookupFn,
+            policy: policyForUrl,
+          });
+        }
       }
 
       if (canUseTrustedEnvProxy) {
