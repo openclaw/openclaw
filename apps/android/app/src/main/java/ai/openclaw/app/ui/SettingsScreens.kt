@@ -26,8 +26,6 @@ import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
-import ai.openclaw.app.decodeCronEditorDraftState
-import ai.openclaw.app.encodeCronEditorDraftState
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -339,6 +337,7 @@ private fun CronJobDetailSettingsScreen(
   onBack: () -> Unit,
 ) {
   fun leaveDetail() {
+    viewModel.cronEditorDraftMemory.clear(jobId)
     viewModel.dismissCronActionNotice(jobId)
     onBack()
   }
@@ -354,7 +353,8 @@ private fun CronJobDetailSettingsScreen(
   DisposableEffect(activity, viewModel, jobId) {
     onDispose {
       viewModel.clearCronJobDetail()
-      if (cronDetailDisposalDismissesAction(activity?.isChangingConfigurations == true)) {
+      if (cronDetailDisposalClearsTransientState(activity?.isChangingConfigurations == true)) {
+        viewModel.cronEditorDraftMemory.clear(jobId)
         viewModel.dismissCronActionNotice(jobId)
       }
     }
@@ -367,19 +367,16 @@ private fun CronJobDetailSettingsScreen(
   }
 
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
-  var savedEditorDraft by rememberSaveable(jobId) { mutableStateOf<String?>(null) }
-  // Mirror every transition into saved state so retained runtime actions survive Activity
-  // recreation; the restored-action check aborts pending state after process death.
-  var editorDraft by remember(jobId) {
-    mutableStateOf(savedEditorDraft?.let(::decodeCronEditorDraftState))
+  var editorDraft by remember(viewModel, jobId) {
+    mutableStateOf(viewModel.cronEditorDraftMemory.get(jobId))
   }
-  var restoredDraftNeedsActionCheck by remember(jobId) {
+  var restoredDraftNeedsActionCheck by remember(viewModel, jobId) {
     mutableStateOf(editorDraft?.savePending == true)
   }
 
   fun updateEditorDraft(value: CronEditorDraftState?) {
     editorDraft = value
-    savedEditorDraft = value?.let(::encodeCronEditorDraftState)
+    viewModel.cronEditorDraftMemory.set(jobId, value)
   }
   LaunchedEffect(isConnected, actionState, restoredDraftNeedsActionCheck) {
     if (restoredDraftNeedsActionCheck) {
@@ -486,7 +483,7 @@ internal fun cronDetailRefreshEnabled(
     !loading &&
     (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
 
-internal fun cronDetailDisposalDismissesAction(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
+internal fun cronDetailDisposalClearsTransientState(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
 @Composable
 private fun AgentsSettingsScreen(

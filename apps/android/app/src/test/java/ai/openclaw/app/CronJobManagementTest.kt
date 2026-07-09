@@ -257,49 +257,6 @@ class CronJobManagementTest {
   }
 
   @Test
-  fun editorDraftSavedStateRoundTripsEveryScheduleAndPayloadShape() {
-    val schedules =
-      listOf(
-        GatewayCronScheduleEdit.At("2026-07-10T09:00:00Z"),
-        GatewayCronScheduleEdit.Every(everyMs = "60000", anchorMs = "1000"),
-        GatewayCronScheduleEdit.Cron(expression = "0 9 * * *", timezone = "UTC", staggerMs = "3000"),
-        GatewayCronScheduleEdit.OnExit(command = "build", cwd = "/tmp"),
-      )
-    val payloads =
-      listOf(
-        GatewayCronPayloadEdit.SystemEvent("Wake up"),
-        GatewayCronPayloadEdit.AgentTurn(message = "Summarize", model = "openai/gpt-5.5", thinking = "high"),
-        GatewayCronPayloadEdit.Command(argvJson = """["printf"," "]""", cwd = "/tmp"),
-        GatewayCronPayloadEdit.Command(argvJson = """["true"]""", cwd = ""),
-      )
-
-    schedules.zip(payloads).forEachIndexed { index, (schedule, payload) ->
-      val baseline =
-        GatewayCronJobEdit(
-          name = "Job $index",
-          description = "Saved draft",
-          enabled = index % 2 == 0,
-          deleteAfterRun = index % 2 != 0,
-          schedule = schedule,
-          sessionTarget = "isolated",
-          wakeMode = "now",
-          payload = payload,
-        )
-      val state =
-        CronEditorDraftState(
-          baselineRevision = index.toLong(),
-          baseline = baseline,
-          edit = baseline.copy(name = "Unsaved $index"),
-          savePending = true,
-          saveSucceeded = false,
-          hasIncomingConflict = true,
-        )
-
-      assertEquals(state, decodeCronEditorDraftState(encodeCronEditorDraftState(state)))
-    }
-  }
-
-  @Test
   fun restoredPendingSaveTracksRetainedRuntimeAndRecoversAfterProcessDeath() {
     val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
     val pending =

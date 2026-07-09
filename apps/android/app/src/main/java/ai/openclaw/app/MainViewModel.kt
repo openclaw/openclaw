@@ -51,6 +51,27 @@ internal fun shouldStartRuntimeOnForeground(
   onboardingCompleted: Boolean,
 ): Boolean = foreground && onboardingCompleted
 
+internal class CronEditorDraftMemory {
+  private var retained: Pair<String, CronEditorDraftState>? = null
+
+  fun get(jobId: String): CronEditorDraftState? = retained?.takeIf { it.first == jobId }?.second
+
+  fun set(
+    jobId: String,
+    state: CronEditorDraftState?,
+  ) {
+    if (state == null) {
+      clear(jobId)
+    } else {
+      retained = jobId to state
+    }
+  }
+
+  fun clear(jobId: String) {
+    if (retained?.first == jobId) retained = null
+  }
+}
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -63,6 +84,10 @@ class MainViewModel(
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
+
+  // One bounded heap-only slot follows the ViewModel across Activity recreation.
+  // Detail disposal clears it; process death drops it with the ViewModel.
+  internal val cronEditorDraftMemory = CronEditorDraftMemory()
 
   @Volatile private var permissionRequester: PermissionRequester? = null
 
