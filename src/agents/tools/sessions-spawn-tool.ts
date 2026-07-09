@@ -27,6 +27,7 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
+import { resolveConfiguredSubagentStallPolicy } from "../subagent-spawn-plan.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -439,6 +440,7 @@ export function createSessionsSpawnTool(
             ? false
             : expectsCompletionMessage;
           try {
+            const stallPolicy = resolveConfiguredSubagentStallPolicy({ cfg });
             registerSubagentRun({
               runId: childRunId,
               childSessionKey,
@@ -452,6 +454,7 @@ export function createSessionsSpawnTool(
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds: result.runTimeoutSeconds,
+              ...stallPolicy,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });

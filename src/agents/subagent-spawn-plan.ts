@@ -50,6 +50,21 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
     : cfgSubagentTimeout;
 }
 
+function normalizeOptionalSeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
+}
+
+/** Resolves configured subagent stall recovery thresholds. */
+export function resolveConfiguredSubagentStallPolicy(params: { cfg: OpenClawConfig }) {
+  const subagents = params.cfg?.agents?.defaults?.subagents;
+  return {
+    stallNudgeSeconds: normalizeOptionalSeconds(subagents?.stallNudgeSeconds),
+    stallTimeoutSeconds: normalizeOptionalSeconds(subagents?.stallTimeoutSeconds),
+  };
+}
+
 /** Resolves the subagent model plus thinking patch to apply to the spawned session. */
 export function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;

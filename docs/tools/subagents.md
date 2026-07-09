@@ -143,6 +143,7 @@ session to confirm the effective tool list.
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
+- **Stall recovery:** OpenClaw can watch process-local child-run activity with `agents.defaults.subagents.stallNudgeSeconds` and `stallTimeoutSeconds`. A stalled child is nudged once, then killed if no further activity is observed before the kill threshold. Both default to `0` (disabled).
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 Accepted native sub-agent spawns include the resolved child model metadata
@@ -394,6 +395,8 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
+        stallNudgeSeconds: 600, // nudge after 10m without child activity (0 = disabled)
+        stallTimeoutSeconds: 900, // kill after 15m without child activity (0 = disabled)
         announceTimeoutMs: 120000, // per-call gateway announce timeout
       },
     },

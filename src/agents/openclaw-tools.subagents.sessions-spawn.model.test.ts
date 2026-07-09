@@ -5,6 +5,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveConfiguredSubagentStallPolicy,
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "./subagent-spawn-plan.js";
@@ -245,5 +246,33 @@ describe("subagent spawn model + thinking plan", () => {
         }),
       }),
     ).toBe(0);
+  });
+
+  it("resolves configured stall recovery thresholds", () => {
+    expect(
+      resolveConfiguredSubagentStallPolicy({
+        cfg: createConfig({
+          agents: {
+            defaults: { subagents: { stallNudgeSeconds: 30.9, stallTimeoutSeconds: 90.1 } },
+          },
+        }),
+      }),
+    ).toEqual({
+      stallNudgeSeconds: 30,
+      stallTimeoutSeconds: 90,
+    });
+  });
+
+  it("omits stall recovery thresholds when config omits them", () => {
+    expect(
+      resolveConfiguredSubagentStallPolicy({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { maxConcurrent: 8 } } },
+        }),
+      }),
+    ).toEqual({
+      stallNudgeSeconds: undefined,
+      stallTimeoutSeconds: undefined,
+    });
   });
 });

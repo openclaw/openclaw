@@ -110,6 +110,10 @@ export type SubagentRunRecord = {
   agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
+  stallNudgeSeconds?: number;
+  stallTimeoutSeconds?: number;
+  stallNudgedAt?: number;
+  stallNudgeError?: string;
   spawnMode?: SpawnSubagentMode;
   /** Monotonic ownership generation within one child session. */
   generation?: number;

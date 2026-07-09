@@ -480,6 +480,10 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
+    /** Seconds of no observed child-run activity before injecting a stall recovery nudge (0 = disabled). */
+    stallNudgeSeconds?: number;
+    /** Seconds of no observed child-run activity before killing the stalled sub-agent (0 = disabled). */
+    stallTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */

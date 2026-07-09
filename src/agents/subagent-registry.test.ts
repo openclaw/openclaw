@@ -173,6 +173,16 @@ const mocks = vi.hoisted(() => ({
   removeInternalSessionEffectsTranscript: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
   scheduleOrphanRecovery: vi.fn(),
+  stallAbortEmbeddedAgentRun: vi.fn(() => true),
+  stallClearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+  stallIsEmbeddedAgentRunActive: vi.fn(() => true),
+  stallQueueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(async (sessionId: string) => ({
+    queued: true,
+    sessionId,
+    target: "embedded_run" as const,
+    gatewayHealth: "live" as const,
+  })),
+  stallResolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -281,6 +291,16 @@ describe("subagent registry seam flow", () => {
       onSubagentEnded: mocks.onSubagentEnded,
     });
     mocks.scheduleOrphanRecovery.mockReset();
+    mocks.stallAbortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.stallClearSessionQueues.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+    mocks.stallIsEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.stallQueueEmbeddedAgentMessageWithOutcomeAsync.mockResolvedValue({
+      queued: true,
+      sessionId: "sess-child",
+      target: "embedded_run",
+      gatewayHealth: "live",
+    });
+    mocks.stallResolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
     mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
@@ -303,6 +323,15 @@ describe("subagent registry seam flow", () => {
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
       restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+      loadSubagentStallRuntime: async () =>
+        ({
+          abortEmbeddedAgentRun: mocks.stallAbortEmbeddedAgentRun,
+          clearSessionQueues: mocks.stallClearSessionQueues,
+          isEmbeddedAgentRunActive: mocks.stallIsEmbeddedAgentRunActive,
+          queueEmbeddedAgentMessageWithOutcomeAsync:
+            mocks.stallQueueEmbeddedAgentMessageWithOutcomeAsync,
+          resolveActiveEmbeddedRunSessionId: mocks.stallResolveActiveEmbeddedRunSessionId,
+        }) as never,
       ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
       ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
       resolveContextEngine: mocks.resolveContextEngine,
@@ -3932,6 +3961,106 @@ describe("subagent registry seam flow", () => {
           elapsedMs: 55_000,
         },
         "swept session store observed start outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("nudges a live subagent once after configured inactivity", async () => {
+    const startedAt = Date.parse("2026-03-24T12:00:00Z");
+    const nudgedAt = startedAt + 70_000;
+    const childSessionKey = "agent:main:subagent:stall-nudge";
+    mocks.loadSessionStore.mockReturnValue({
+      [childSessionKey]: {
+        sessionId: "sess-stall-nudge",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+    mocks.getAgentRunContext.mockImplementation((runId: string) =>
+      runId === "run-stall-nudge" ? ({ lastActiveAt: startedAt } as never) : undefined,
+    );
+    mod.addSubagentRunForTests({
+      runId: "run-stall-nudge",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stall nudge task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: startedAt,
+      startedAt,
+      stallNudgeSeconds: 60,
+      stallTimeoutSeconds: 180,
+    });
+
+    vi.setSystemTime(nudgedAt);
+    await mod.testing.sweepOnceForTests();
+
+    expect(mocks.stallQueueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
+      "sess-stall-nudge",
+      expect.stringContaining("Your parent session has not observed progress"),
+      { steeringMode: "all" },
+    );
+    expect(mocks.stallAbortEmbeddedAgentRun).not.toHaveBeenCalled();
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-stall-nudge");
+    expect(run?.stallNudgedAt).toBe(nudgedAt);
+    expect(run?.endedAt).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("kills a still-idle subagent after the configured stall timeout", async () => {
+    const startedAt = Date.parse("2026-03-24T12:00:00Z");
+    const killedAt = startedAt + 190_000;
+    const childSessionKey = "agent:main:subagent:stall-kill";
+    mocks.loadSessionStore.mockReturnValue({
+      [childSessionKey]: {
+        sessionId: "sess-stall-kill",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+    mocks.getAgentRunContext.mockImplementation((runId: string) =>
+      runId === "run-stall-kill" ? ({ lastActiveAt: startedAt } as never) : undefined,
+    );
+    mod.addSubagentRunForTests({
+      runId: "run-stall-kill",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stall kill task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: startedAt,
+      startedAt,
+      stallNudgeSeconds: 60,
+      stallTimeoutSeconds: 180,
+      stallNudgedAt: startedAt + 70_000,
+    });
+
+    vi.setSystemTime(killedAt);
+    await mod.testing.sweepOnceForTests();
+
+    expect(mocks.stallAbortEmbeddedAgentRun).toHaveBeenCalledWith("sess-stall-kill");
+    expect(mocks.stallClearSessionQueues).toHaveBeenCalledWith([
+      childSessionKey,
+      "sess-stall-kill",
+    ]);
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-stall-kill");
+      expect(run?.endedAt).toBe(killedAt);
+      expect(run?.endedReason).toBe(SUBAGENT_ENDED_REASON_ERROR);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "error",
+          error: "subagent run killed after 190s without activity",
+        },
+        "stalled subagent outcome",
       );
     });
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);

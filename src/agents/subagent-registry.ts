@@ -114,6 +114,11 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-registry-helpers.js";
 const log = createSubsystemLogger("agents/subagent-registry");
+const SUBAGENT_STALL_NUDGE_MESSAGE = [
+  "[OpenClaw runtime event] Your parent session has not observed progress from this subagent run recently.",
+  "If you are still working, send a brief progress update or continue the task.",
+  "If you are stuck, explain the blocker and stop waiting silently.",
+].join("\n");
 
 type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
@@ -122,6 +127,14 @@ type SubagentAnnounceModule = Pick<
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
   "cleanupBrowserSessionsForLifecycleEnd"
+>;
+type SubagentStallRuntimeModule = Pick<
+  typeof import("./subagent-control.runtime.js"),
+  | "abortEmbeddedAgentRun"
+  | "clearSessionQueues"
+  | "isEmbeddedAgentRunActive"
+  | "queueEmbeddedAgentMessageWithOutcomeAsync"
+  | "resolveActiveEmbeddedRunSessionId"
 >;
 
 type SubagentRegistryDeps = {
@@ -136,6 +149,7 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
+  loadSubagentStallRuntime: () => Promise<SubagentStallRuntimeModule>;
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: (
     params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
@@ -152,6 +166,9 @@ const subagentAnnounceLoader = createLazyImportLoader<SubagentAnnounceModule>(
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
 );
+const subagentStallRuntimeLoader = createLazyImportLoader<SubagentStallRuntimeModule>(
+  () => import("./subagent-control.runtime.js"),
+);
 
 async function loadSubagentAnnounceModule(): Promise<SubagentAnnounceModule> {
   return await subagentAnnounceLoader.load();
@@ -161,6 +178,10 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
+}
+
+async function loadSubagentStallRuntime(): Promise<SubagentStallRuntimeModule> {
+  return await subagentStallRuntimeLoader.load();
 }
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
@@ -178,6 +199,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
+  loadSubagentStallRuntime,
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
@@ -869,6 +891,153 @@ function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: n
   });
 }
 
+function normalizePositiveSecondsToMs(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value * 1000)
+    : undefined;
+}
+
+function formatStallRuntimeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function resolveLastActivityAt(
+  entry: SubagentRunRecord,
+  runContext: { lastActiveAt?: unknown } | undefined,
+): number {
+  const lastActiveAt = runContext?.lastActiveAt;
+  return typeof lastActiveAt === "number" && Number.isFinite(lastActiveAt)
+    ? lastActiveAt
+    : (entry.startedAt ?? entry.createdAt);
+}
+
+async function recoverStalledSubagentRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  runContext?: { lastActiveAt?: unknown };
+  storeCache: SubagentSessionStoreCache;
+  now: number;
+}): Promise<{ handled: boolean; mutated: boolean }> {
+  const { entry, now, runId } = params;
+  const nudgeMs = normalizePositiveSecondsToMs(entry.stallNudgeSeconds);
+  const timeoutMs = normalizePositiveSecondsToMs(entry.stallTimeoutSeconds);
+  if (nudgeMs === undefined && timeoutMs === undefined) {
+    return { handled: false, mutated: false };
+  }
+
+  const lastActivityAt = resolveLastActivityAt(entry, params.runContext);
+  const idleMs = now - lastActivityAt;
+  if (idleMs < 0) {
+    return { handled: false, mutated: false };
+  }
+
+  let mutated = false;
+  if (typeof entry.stallNudgedAt === "number" && lastActivityAt > entry.stallNudgedAt) {
+    entry.stallNudgedAt = undefined;
+    entry.stallNudgeError = undefined;
+    mutated = true;
+  }
+
+  const shouldNudge =
+    nudgeMs !== undefined &&
+    idleMs >= nudgeMs &&
+    typeof entry.stallNudgedAt !== "number" &&
+    (timeoutMs === undefined || nudgeMs < timeoutMs);
+  if (shouldNudge) {
+    const runtime = await subagentRegistryDeps.loadSubagentStallRuntime();
+    const sessionEntry = loadSubagentSessionEntry({
+      childSessionKey: entry.childSessionKey,
+      storeCache: params.storeCache,
+    });
+    const sessionId =
+      runtime.resolveActiveEmbeddedRunSessionId(entry.childSessionKey) ?? sessionEntry?.sessionId;
+    entry.stallNudgedAt = now;
+    entry.stallNudgeError = undefined;
+    if (!sessionId) {
+      entry.stallNudgeError = "nudge failed: no active session id";
+    } else {
+      try {
+        const outcome = await runtime.queueEmbeddedAgentMessageWithOutcomeAsync(
+          sessionId,
+          SUBAGENT_STALL_NUDGE_MESSAGE,
+          { steeringMode: "all" },
+        );
+        if (!outcome.queued) {
+          const detail = outcome.errorMessage ? `: ${outcome.errorMessage}` : "";
+          entry.stallNudgeError = `nudge failed: ${outcome.reason}${detail}`;
+        }
+      } catch (error) {
+        entry.stallNudgeError = `nudge failed: ${formatStallRuntimeError(error)}`;
+      }
+    }
+    if (entry.stallNudgeError) {
+      log.warn("subagent stall nudge failed", {
+        runId,
+        childSessionKey: entry.childSessionKey,
+        error: entry.stallNudgeError,
+      });
+    } else {
+      log.warn("subagent stall nudge injected", {
+        runId,
+        childSessionKey: entry.childSessionKey,
+        idleMs,
+      });
+    }
+    return { handled: true, mutated: true };
+  }
+
+  if (timeoutMs === undefined || idleMs < timeoutMs) {
+    return { handled: false, mutated };
+  }
+  if (nudgeMs !== undefined && nudgeMs < timeoutMs && typeof entry.stallNudgedAt !== "number") {
+    return { handled: false, mutated };
+  }
+
+  const runtime = await subagentRegistryDeps.loadSubagentStallRuntime();
+  const sessionEntry = loadSubagentSessionEntry({
+    childSessionKey: entry.childSessionKey,
+    storeCache: params.storeCache,
+  });
+  const sessionId =
+    runtime.resolveActiveEmbeddedRunSessionId(entry.childSessionKey) ?? sessionEntry?.sessionId;
+  const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
+  const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
+  const cleared = runtime.clearSessionQueues([entry.childSessionKey, sessionId]);
+  if (active && !aborted) {
+    log.warn("subagent stall kill deferred; active run could not be aborted", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      sessionId,
+      idleMs,
+    });
+    return { handled: true, mutated };
+  }
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    log.warn("subagent stall kill cleared queued work", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      followupCleared: cleared.followupCleared,
+      laneCleared: cleared.laneCleared,
+    });
+  }
+  await completeSubagentRunWithRecovery(
+    {
+      runId,
+      endedAt: now,
+      outcome: {
+        status: "error",
+        error: `subagent run killed after ${Math.floor(idleMs / 1000)}s without activity`,
+      },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    "sweeper-stall-timeout",
+  );
+  return { handled: true, mutated: true };
+}
+
 function startSweeper() {
   if (sweeper) {
     return;
@@ -1043,7 +1212,8 @@ async function sweepSubagentRuns() {
         continue;
       }
       if (typeof entry.endedAt !== "number") {
-        const hasLiveRunContext = Boolean(getAgentRunContext(runId));
+        const runContext = getAgentRunContext(runId) as { lastActiveAt?: unknown } | undefined;
+        const hasLiveRunContext = Boolean(runContext);
         const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
         if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
           const orphanReason = resolveSubagentRunOrphanReason({
@@ -1110,6 +1280,21 @@ async function sweepSubagentRuns() {
             "sweeper-lost-context",
           );
           continue;
+        }
+        if (hasLiveRunContext) {
+          const recovered = await recoverStalledSubagentRun({
+            runId,
+            entry,
+            runContext,
+            storeCache,
+            now,
+          });
+          if (recovered.mutated) {
+            mutated = true;
+          }
+          if (recovered.handled) {
+            continue;
+          }
         }
       }
 
