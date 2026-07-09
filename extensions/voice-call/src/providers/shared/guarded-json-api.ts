@@ -8,6 +8,12 @@ import {
 
 // Shared guarded JSON API client for voice-call providers.
 
+// Owner-controlled request deadline so a telephony API that accepts the
+// connection but never returns response headers cannot hang voice-call
+// operations (dial, hangup, status polling) forever. Callers cannot override
+// or disable it. Matches the 30s voice-call gateway operation budget.
+const VOICE_CALL_API_REQUEST_TIMEOUT_MS = 30_000;
+
 /** Parameters for an SSRF-guarded provider JSON request. */
 type GuardedJsonApiRequestParams = {
   url: string;
@@ -33,6 +39,7 @@ export async function guardedJsonApiRequest<T = unknown>(
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
+    timeoutMs: VOICE_CALL_API_REQUEST_TIMEOUT_MS,
   });
 
   try {
