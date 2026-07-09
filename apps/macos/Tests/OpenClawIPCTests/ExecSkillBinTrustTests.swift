@@ -1,6 +1,6 @@
 import Foundation
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 struct ExecSkillBinTrustTests {
     @Test func `build trust index resolves skill bin paths`() throws {
@@ -9,8 +9,7 @@ struct ExecSkillBinTrustTests {
 
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
-            searchPaths: [fixture.root.path]
-        )
+            searchPaths: [fixture.root.path])
 
         #expect(trust.names == ["jq"])
         #expect(trust.pathsByName["jq"] == [fixture.path])
@@ -22,14 +21,12 @@ struct ExecSkillBinTrustTests {
 
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
-            searchPaths: [fixture.root.path]
-        )
+            searchPaths: [fixture.root.path])
         let resolution = ExecCommandResolution(
             rawExecutable: "jq",
             resolvedPath: fixture.path,
             executableName: "jq",
-            cwd: nil
-        )
+            cwd: nil)
 
         #expect(ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
@@ -44,14 +41,12 @@ struct ExecSkillBinTrustTests {
 
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
-            searchPaths: [trusted.root.path]
-        )
+            searchPaths: [trusted.root.path])
         let resolution = ExecCommandResolution(
             rawExecutable: "jq",
             resolvedPath: untrusted.path,
             executableName: "jq",
-            cwd: nil
-        )
+            cwd: nil)
 
         #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
@@ -61,15 +56,13 @@ struct ExecSkillBinTrustTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
-            searchPaths: [fixture.root.path]
-        )
+            searchPaths: [fixture.root.path])
         let resolution = ExecCommandResolution(
             rawExecutable: fixture.path,
             resolvedPath: fixture.path,
             resolvedRealPath: fixture.path,
             executableName: "jq",
-            cwd: nil
-        )
+            cwd: nil)
 
         #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
@@ -91,15 +84,13 @@ struct ExecSkillBinTrustTests {
 
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
-            searchPaths: [root.path]
-        )
+            searchPaths: [root.path])
         try FileManager.default.removeItem(at: alias)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: second)
         let resolution = try #require(ExecCommandResolution.resolve(
             command: ["jq"],
             cwd: nil,
-            env: ["PATH": root.path]
-        ))
+            env: ["PATH": root.path]))
 
         #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
@@ -113,18 +104,15 @@ struct ExecSkillBinTrustTests {
         let alias = root.appendingPathComponent("skill-shell")
         try FileManager.default.createSymbolicLink(
             at: alias,
-            withDestinationURL: URL(fileURLWithPath: "/bin/sh")
-        )
+            withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
 
         let trust = SkillBinsCache._testBuildTrustIndex(
             report: Self.makeReport(bins: ["skill-shell"]),
-            searchPaths: [root.path]
-        )
+            searchPaths: [root.path])
         let resolution = try #require(ExecCommandResolution.resolve(
             command: ["skill-shell", "-c", "/usr/bin/printf ok"],
             cwd: nil,
-            env: ["PATH": root.path]
-        ))
+            env: ["PATH": root.path]))
 
         #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
@@ -137,8 +125,7 @@ struct ExecSkillBinTrustTests {
         try "#!/bin/sh\nexit 0\n".write(to: file, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o755))],
-            ofItemAtPath: file.path
-        )
+            ofItemAtPath: file.path)
         return (root, file.path)
     }
 
@@ -163,9 +150,7 @@ struct ExecSkillBinTrustTests {
                     requirements: SkillRequirements(bins: bins, env: [], config: []),
                     missing: SkillMissing(bins: [], env: [], config: []),
                     configChecks: [],
-                    install: []
-                ),
-            ]
-        )
+                    install: []),
+            ])
     }
 }

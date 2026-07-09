@@ -889,6 +889,35 @@ struct ExecAllowlistTests {
         #expect(evaluation.boundCommand == ["/usr/bin/printf", "ok"])
     }
 
+    @Test func `approval evaluator preserves login shell while pinning its executable`() async {
+        let rawCommand = "/usr/bin/printf 'safe value'"
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: ["/bin/sh", "-lc", rawCommand],
+            rawCommand: rawCommand,
+            cwd: nil,
+            envOverrides: ["PATH": "/usr/bin:/bin"],
+            agentId: nil)
+
+        #expect(evaluation.boundCommand == [
+            "/bin/sh",
+            "-lc",
+            "'/usr/bin/printf' 'safe value'",
+        ])
+    }
+
+    @Test func `approval evaluator rejects non-system login shell transport`() async {
+        let rawCommand = "/usr/bin/printf ok"
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: ["/tmp/sh", "-lc", rawCommand],
+            rawCommand: rawCommand,
+            cwd: nil,
+            envOverrides: ["PATH": "/usr/bin:/bin"],
+            agentId: nil)
+
+        #expect(evaluation.boundCommand == nil)
+        #expect(!evaluation.allowlistSatisfied)
+    }
+
     @Test func `allow always patterns unwrap env wrapper modifiers to the inner executable`() {
         let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],

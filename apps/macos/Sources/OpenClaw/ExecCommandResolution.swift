@@ -129,7 +129,14 @@ struct ExecCommandResolution {
               FileManager().isExecutableFile(atPath: realPath)
         else { return nil }
         guard !self.isUnsafeReusableExecutionTarget(resolution) else { return nil }
-        return [realPath] + Array(argv.dropFirst())
+        let boundArgv = [realPath] + Array(argv.dropFirst())
+        if shell.isWrapper, command[1] == "-lc" {
+            // The node transport intentionally requests a login shell. Keep its
+            // startup semantics, but pin the approved executable inside it.
+            guard command[0] == "/bin/sh" else { return nil }
+            return ["/bin/sh", "-lc", boundArgv.map(self.shellQuote).joined(separator: " ")]
+        }
+        return boundArgv
     }
 
     /// The macOS node receives ordinary POSIX commands through this exact
@@ -155,6 +162,13 @@ struct ExecCommandResolution {
         return first.range(
             of: #"^[A-Za-z_][A-Za-z0-9_]*\+?="#,
             options: .regularExpression) != nil
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        if value.isEmpty {
+            return "''"
+        }
+        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func isStaticShellPayload(_ payload: String) -> Bool {
