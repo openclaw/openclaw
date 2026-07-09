@@ -467,6 +467,10 @@ function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
 }
 
 describe("browser tool description", () => {
+  afterEach(() => {
+    configMocks.loadConfig.mockImplementation(() => ({ browser: {} }));
+  });
+
   it("warns agents about existing-session act timeout limits", () => {
     const tool = createBrowserTool();
 
@@ -474,6 +478,38 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+  });
+
+  it("recommends the configured default profile when CDP attach-only is set", () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: { cdpPort: 9222, attachOnly: true },
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain("default profile (`openclaw`)");
+    expect(tool.description).toContain("CDP direct attach");
+    expect(tool.description).not.toContain('profile="user"');
+  });
+
+  it("still suggests profile=user when defaultProfile lacks CDP attach", () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "my-profile",
+        profiles: {
+          "my-profile": { attachOnly: false },
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('profile="user"');
   });
 });
 
