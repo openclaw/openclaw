@@ -142,28 +142,29 @@ function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
+const rgiEmojiPattern = new RegExp("^\\p{RGI_Emoji}$", "v");
 const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
-const extendedPictographicPattern = /\p{Extended_Pictographic}/u;
 const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
-const flagSequencePattern = /^\p{Regional_Indicator}{2}$/u;
-const keycapSequencePattern = /^(?:[#*0-9]\uFE0F?\u20E3)$/u;
+const unqualifiedKeycapPattern = /^[#*0-9]\u20E3$/u;
+const extendedPictographicPattern = /\p{Extended_Pictographic}/gu;
 
 function isWideEmojiGrapheme(grapheme: string): boolean {
-  // Regional indicators are wide only as the exact pair that forms a flag.
+  const isRgiEmoji = rgiEmojiPattern.test(grapheme);
+  // RGI recognizes paired flags while keeping a lone regional indicator narrow.
   if (regionalIndicatorPattern.test(grapheme)) {
-    return flagSequencePattern.test(grapheme);
+    return isRgiEmoji;
   }
   if (
-    keycapSequencePattern.test(grapheme) ||
-    emojiPresentationPattern.test(grapheme)
+    emojiPresentationPattern.test(grapheme) ||
+    isRgiEmoji ||
+    unqualifiedKeycapPattern.test(grapheme)
   ) {
     return true;
   }
-  // Extended_Pictographic also includes narrow text-default symbols such as ©.
-  // They become emoji-width only when a selector or joiner requests emoji shaping.
+  // Minimally qualified ZWJ sequences still shape as one wide emoji in terminals.
   return (
-    (grapheme.includes("\uFE0F") || grapheme.includes("\u200D")) &&
-    extendedPictographicPattern.test(grapheme)
+    grapheme.includes("\u200D") &&
+    (grapheme.match(extendedPictographicPattern)?.length ?? 0) >= 2
   );
 }
 
