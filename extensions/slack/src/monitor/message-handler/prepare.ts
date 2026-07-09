@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare behavior.
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -34,7 +35,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-// Slack plugin module implements prepare behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";

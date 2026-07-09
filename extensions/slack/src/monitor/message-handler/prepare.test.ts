@@ -188,6 +188,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.BodyForAgent).toContain(body);
   });
 
+  it("keeps inbound previews UTF-16 safe at the truncation boundary", async () => {
+    const prefix = "a".repeat(159);
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: `${prefix}😀tail` }));
+
+    assertPrepared(prepared);
+    expect(prepared.preview).toBe(prefix);
+  });
+
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);
