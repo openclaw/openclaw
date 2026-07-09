@@ -258,6 +258,29 @@ describe("Crestodian rescue message", () => {
     });
   });
 
+  it("drops stale pending rescue changes before a new non-persistent command", async () => {
+    await withRescueStateDir("intervening-command-", async () => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = {
+        runGatewayRestart: vi.fn(async () => {}),
+        runPluginsList: vi.fn(async (runtime: RuntimeEnv) => {
+          runtime.log("plugin rows");
+        }),
+      };
+
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+      ).resolves.toContain("Reply /crestodian yes to apply");
+      await expect(
+        runRescue("/crestodian plugins list", cfg, commandContext(), deps),
+      ).resolves.toContain("plugin rows");
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
+        "No pending Crestodian rescue change is waiting for approval.",
+      );
+      expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses plugin install from remote rescue", async () => {
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
     const deps = {

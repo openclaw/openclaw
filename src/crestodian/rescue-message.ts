@@ -217,6 +217,9 @@ export async function runCrestodianRescueMessage(
   }
 
   const operation = parseCrestodianOperation(rescueMessage);
+  // A new rescue command supersedes any older proposal for this sender. Persistent
+  // operations below replace it with a fresh plan; read-only/unsupported commands leave none.
+  await fs.rm(pendingPath, { force: true });
   const unsupported = formatUnsupportedRemoteOperation(operation);
   if (unsupported) {
     return unsupported;
