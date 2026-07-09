@@ -1447,6 +1447,89 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("closes streaming final text before sending regular media attachments", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver(
+      {
+        text: "final report\n\nSee the attached image.",
+        mediaUrls: ["https://example.com/report.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "final report\n\nSee the attached image.",
+      { note: "Agent: agent" },
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      mediaUrl: "https://example.com/report.png",
+    });
+
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("falls back to plain final text when streaming close accepts no content before media", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      return false;
+    });
+
+    await options.deliver(
+      {
+        text: "final report\n\nSee the attached image.",
+        mediaUrls: ["https://example.com/report.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "final report\n\nSee the attached image.",
+      { note: "Agent: agent" },
+    );
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "final report\n\nSee the attached image.",
+    });
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      mediaUrl: "https://example.com/report.png",
+    });
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0],
+    );
+
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
   it("sends attachments after streaming final markdown replies", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
