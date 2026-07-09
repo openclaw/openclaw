@@ -764,7 +764,13 @@ export async function verifySetupInference(params: {
       return { ok: false, status: "unavailable", error: plan.error };
     }
     const test = await runSetupInferenceTest({ plan, tempDir, deps });
-    return test.ok ? { ...test, modelRef: plan.modelRef } : test;
+    if (test.ok) {
+      return { ...test, modelRef: plan.modelRef };
+    }
+    return {
+      ...test,
+      error: await redactSetupInferenceError(test.error),
+    };
   } finally {
     await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
       tempDir,

@@ -819,16 +819,17 @@ describe("verifySetupInference", () => {
     expect(updateConfig).not.toHaveBeenCalled();
   });
 
-  it("maps live-check failures without writing config or auth", async () => {
+  it("redacts live-check failures without writing config or auth", async () => {
     const applySetup = vi.fn();
     const updateConfig = vi.fn();
+    const secret = "sk-verifysetupsecret123"; // pragma: allowlist secret
     const result = await verifySetupInference({
       runtime,
       timeoutMs: 50,
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configuredSnapshot()) as never,
         runEmbeddedAgent: vi.fn(async () => {
-          throw new Error("401 invalid_api_key");
+          throw new Error(`401 invalid_api_key OPENAI_API_KEY=${secret}`);
         }) as never,
         applySetup: applySetup as never,
         updateConfig: updateConfig as never,
@@ -837,6 +838,10 @@ describe("verifySetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: false, status: "auth" });
+    if (!result.ok) {
+      expect(result.error).not.toContain(secret);
+      expect(result.error).toContain("OPENAI_API_KEY=");
+    }
     expect(applySetup).not.toHaveBeenCalled();
     expect(updateConfig).not.toHaveBeenCalled();
   });
