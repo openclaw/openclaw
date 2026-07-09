@@ -323,6 +323,10 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
     parameterCount += 1;
     cursor = parameter.end;
   }
+  // Reject zero-parameter bracket markers but accept explicit <function=...></function> calls
+  if (parameterCount === 0 && opening.allowsOptionalXmlishClose) {
+    return null;
+  }
   return opening.allowsOptionalXmlishClose
     ? consumeOptionalXmlishFunctionClose(text, cursor)
     : consumeXmlishFunctionClose(text, cursor);
@@ -365,6 +369,10 @@ function parseXmlishPlainTextToolCallBlockAt(
     args[parameter.name] = parameter.value;
     parameterCount += 1;
     cursor = parameter.end;
+  }
+  // Reject zero-parameter bracket markers but accept explicit <function=...></function> calls
+  if (parameterCount === 0 && opening.allowsOptionalXmlishClose) {
+    return null;
   }
 
   const end = opening.allowsOptionalXmlishClose

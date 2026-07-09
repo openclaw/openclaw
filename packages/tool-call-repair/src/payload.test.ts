@@ -1,6 +1,6 @@
 // Tests for plain-text tool call payload parsing.
 import { describe, expect, test } from "vitest";
-import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
+import { parseStandalonePlainTextToolCallBlocks, stripPlainTextToolCallBlocks } from "./payload.js";
 
 describe("parseStandalonePlainTextToolCallBlocks", () => {
   test("parses a function call with zero parameters", () => {
@@ -48,5 +48,27 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
   test("returns null for non-tool-call text", () => {
     const blocks = parseStandalonePlainTextToolCallBlocks("hello world");
     expect(blocks).toBeNull();
+  });
+});
+
+describe("bracket-only marker rejection", () => {
+  test("rejects bare [tool:name] bracket markers without JSON body", () => {
+    const blocks = parseStandalonePlainTextToolCallBlocks("[tool:exec]\n");
+    expect(blocks).toBeNull();
+  });
+
+  test("rejects bare [name] bracket markers without JSON body", () => {
+    const blocks = parseStandalonePlainTextToolCallBlocks("[exec]");
+    expect(blocks).toBeNull();
+  });
+
+  test("preserves bracket markers when stripping visible text", () => {
+    const result = stripPlainTextToolCallBlocks("[tool:exec]\n");
+    expect(result).toBe("[tool:exec]\n");
+  });
+
+  test("strips zero-parameter XML function calls from visible text", () => {
+    const result = stripPlainTextToolCallBlocks("<function=get_info></function>");
+    expect(result).toBe("");
   });
 });
