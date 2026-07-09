@@ -889,6 +889,10 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
+        // Setup-code bootstrap handoff is deliberately least-privilege. It never
+        // persists operator.admin, so Skill Workshop lifecycle actions remain
+        // disabled until shared token/password auth or an owner-approved scope
+        // upgrade issues an admin-scoped operator device token.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(

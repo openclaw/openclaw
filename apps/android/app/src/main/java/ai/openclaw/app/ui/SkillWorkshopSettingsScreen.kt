@@ -502,7 +502,7 @@ private fun SkillWorkshopProposalDetail(
       )
       if (!operatorAdminScopeAvailable) {
         Text(
-          text = "Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator scope upgrade to enable lifecycle actions.",
+          text = "Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator.admin device scope upgrade to enable lifecycle actions.",
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.warning,
         )
