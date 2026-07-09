@@ -84,6 +84,7 @@
       "groupId": "meta-model-api",
       "groupLabel": "Meta Model API",
       "groupHint": "Meta Model API (Responses API)",
+      "onboardingFeatured": true,
       "optionKey": "metaModelApiKey",
       "cliFlag": "--meta-model-api-key",
       "cliOption": "--meta-model-api-key <key>",
