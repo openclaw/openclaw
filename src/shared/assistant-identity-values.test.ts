@@ -20,6 +20,10 @@ describe("shared/assistant-identity-values", () => {
 
   it("returns an empty string when truncating to a zero-length limit", () => {
     expect(coerceIdentityValue("  OpenClaw  ", 0)).toBe("");
-    expect(coerceIdentityValue("  OpenClaw  ", -1)).toBe("OpenCla");
+    expect(coerceIdentityValue("  OpenClaw  ", -1)).toBe("");
+  });
+
+  it("does not split surrogate pairs at the truncation boundary", () => {
+    expect(coerceIdentityValue(`OpenClaw${"🚀".repeat(5)}`, 11)).toBe("OpenClaw🚀");
   });
 });
