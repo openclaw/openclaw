@@ -246,6 +246,7 @@ type HeredocMarker = {
 function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
+    command[operatorIndex - 1] === "<" ||
     command[operatorIndex + 1] !== "<" ||
     command[operatorIndex + 2] === "<"
   ) {

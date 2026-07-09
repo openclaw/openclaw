@@ -575,6 +575,20 @@ describe("tool display details", () => {
     ]);
   });
 
+  it("does not treat the overlapping end of a here-string as a heredoc", () => {
+    const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
+
+    expect(splitTopLevelStages(command)).toEqual([
+      ["cat <<<true", "npm test"].join("\n"),
+      ["npm build", "true", "pnpm test"].join("\n"),
+    ]);
+
+    const detail = formatToolDetail(
+      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+    );
+    expect(detail).toContain("run build");
+  });
+
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
