@@ -93,6 +93,7 @@ type GoogleGenerateContentRequest = {
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+const GOOGLE_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -1175,6 +1176,7 @@ async function* parseGoogleSseChunks(
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
+  let totalBytes = 0;
   const abortHandler = () => {
     void reader.cancel().catch(() => undefined);
   };
@@ -1188,6 +1190,13 @@ async function* parseGoogleSseChunks(
       if (done) {
         completed = true;
         break;
+      }
+      const chunkLen = value.byteLength;
+      totalBytes += chunkLen;
+      if (totalBytes > GOOGLE_SSE_STREAM_MAX_BYTES) {
+        throw new Error(
+          `Google SSE stream exceeds ${GOOGLE_SSE_STREAM_MAX_BYTES} bytes (received ${totalBytes})`,
+        );
       }
       buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
       let boundary = buffer.indexOf("\n\n");

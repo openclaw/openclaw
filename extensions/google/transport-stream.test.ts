@@ -948,6 +948,29 @@ describe("google transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
+  it("rejects oversized Google SSE bodies", async () => {
+    const bigPayload = "x".repeat(16 * 1024 * 1024 + 1);
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(`data: ${bigPayload}\n\n`));
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("exceeds 16777216 bytes");
+  });
+
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
