@@ -109,6 +109,9 @@ export class ChatPage extends LitElement {
 
   private readonly handleViewportChange = (event: MediaQueryListEvent) => {
     this.narrow = event.matches;
+    // Mode flips remount .chat-split-view with scrollLeft 0 and no scroll
+    // event; drop the mirrored offset so the toolbar track is not left shifted.
+    this.splitScrollLeft = 0;
     if (event.matches) {
       this.clearDropIndicator();
     }

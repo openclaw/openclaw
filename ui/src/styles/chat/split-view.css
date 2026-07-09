@@ -126,7 +126,9 @@ openclaw-chat-pane {
 .chat-split-toolbar {
   position: fixed;
   top: var(--safe-area-top);
-  right: var(--safe-area-right);
+  /* The docked terminal reshapes .content with margin-right; the pane edges
+     end there, so the fixed toolbar has to reserve the same space. */
+  right: calc(var(--safe-area-right) + var(--oc-terminal-reserve-right, 0px));
   left: calc(var(--shell-nav-width) + var(--safe-area-left));
   z-index: 41;
   display: flex;
@@ -253,11 +255,15 @@ openclaw-chat-pane {
    match .content's 20px padding so segments stay on the pane edges. */
 @media (min-width: 1101px) and (max-width: 1120px) {
   .chat-split-toolbar {
-    right: calc(20px + var(--safe-area-right));
+    right: calc(20px + var(--safe-area-right) + var(--oc-terminal-reserve-right, 0px));
     left: calc(var(--shell-nav-width) + 20px + var(--safe-area-left));
   }
 }
 
+/* At <=1100px the drawer toggle and search action own the topbar row's edges,
+   so the toolbar is inset to clear them instead of tracking pane edges. This
+   covers the JS narrow mode (<=1099px) plus the pinned 1100px boundary, where
+   the full column toolbar still renders (chat-flow e2e asserts both). */
 @media (max-width: 1100px) {
   .chat-split-toolbar {
     right: calc(62px + var(--safe-area-right));
