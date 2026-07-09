@@ -107,14 +107,18 @@ function hasExplicitKeylessProviderCandidate(params: {
   if (manifestRecords.length === 0) {
     return false;
   }
-  const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
-    onlyPluginIds: manifestRecords.map((plugin) => plugin.id),
-  });
-  return (
-    providers?.some(
-      (provider) => provider.id === providerId && provider.requiresCredential === false,
-    ) ?? false
-  );
+  try {
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: manifestRecords.map((plugin) => plugin.id),
+    });
+    return (
+      providers?.some(
+        (provider) => provider.id === providerId && provider.requiresCredential === false,
+      ) ?? false
+    );
+  } catch {
+    return false;
+  }
 }
 
 function hasManifestWebSearchEnvCredentialCandidate(params: {

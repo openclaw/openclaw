@@ -332,6 +332,33 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(false);
   });
 
+  it("does not throw when explicit provider public artifact loading fails", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockImplementation(
+      () => {
+        throw new Error("artifact unavailable");
+      },
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "duckduckgo" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
   it("treats manifest env var values as resolved literal credentials", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
