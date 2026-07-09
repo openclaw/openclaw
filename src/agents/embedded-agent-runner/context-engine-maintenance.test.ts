@@ -9,7 +9,10 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
+import {
+  getTaskFlowById,
+  resetTaskFlowRegistryForTests,
+} from "../../tasks/task-flow-registry.js";
 import {
   getTaskById,
   listTasksForOwnerKey,
@@ -1567,6 +1570,14 @@ describe("runContextEngineMaintenance", () => {
             "Background task update: Context engine turn maintenance.",
           ),
         );
+        const [task] = listTasksForOwnerKey(sessionKey).filter(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        const parentFlowId = task?.parentFlowId;
+        if (!parentFlowId) {
+          throw new Error("Expected visible maintenance to have a task flow");
+        }
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("running");
 
         if (!releaseMaintenance) {
           throw new Error("Expected maintenance release callback to be initialized");
@@ -1578,6 +1589,7 @@ describe("runContextEngineMaintenance", () => {
             "Background task done: Context engine turn maintenance",
           ),
         );
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("succeeded");
       } finally {
         vi.useRealTimers();
       }
@@ -1624,6 +1636,14 @@ describe("runContextEngineMaintenance", () => {
             "Background task failed: Context engine turn maintenance",
           ),
         );
+        const [task] = listTasksForOwnerKey(sessionKey).filter(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        const parentFlowId = task?.parentFlowId;
+        if (!parentFlowId) {
+          throw new Error("Expected failed maintenance to have a task flow");
+        }
+        expect(getTaskFlowById(parentFlowId)?.status).toBe("failed");
       } finally {
         vi.useRealTimers();
       }
