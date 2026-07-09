@@ -83,21 +83,27 @@ jobs:
             repeat: input
             deep_profile: "false"
             live: "false"
+            managed_service: "true"
             include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
             repeat: "1"
             deep_profile: "true"
             live: "false"
+            managed_service: "true"
             include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: live-openai-candidate
             title: Kova live OpenAI GPT 5.5 agent turn
             auth: live
             repeat: "1"
             deep_profile: "false"
             live: "true"
+            managed_service: "false"
             include_filters: "scenario:agent-cold-warm-message"
+            expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
       KOVA_REF: ${{ inputs.kova_ref || '4f146016583018bad9e24f8e64a6af5f963bb7ee' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
@@ -112,6 +118,7 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
       FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
       INCLUDE_FILTERS: ${{ matrix.include_filters }}
+      EXPECTED_RELEASE_ENTRIES: ${{ matrix.expected_release_entries }}
       AUTH_MODE: ${{ matrix.auth }}
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
@@ -216,6 +223,35 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Prepare systemd user session
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          user="$(id -un)"
+          uid="$(id -u)"
+
+          test "$(ps -p 1 -o comm= | xargs)" = systemd
+          sudo systemctl is-active --quiet systemd-logind.service
+          sudo loginctl enable-linger "$user"
+          sudo systemctl start "user@${uid}.service"
+
+          runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"
+          test -n "$runtime_dir"
+          test -d "$runtime_dir"
+          test -O "$runtime_dir"
+
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          test -S "$XDG_RUNTIME_DIR/systemd/private"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+
+          if [[ -S "$runtime_dir/bus" ]]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus"
+            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          fi
+
+          systemctl --user show-environment >/dev/null
 
       - name: Install OCM and Kova
         if: steps.lane.outputs.run == 'true'
@@ -329,6 +365,41 @@ jobs:
             --parallel 1 \
             --repeat "$repeat" \
             --json >"$plan_json"
+          node --input-type=module - "$plan_json" <<'NODE'
+          import fs from "node:fs";
+
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          const expectedFilters = process.env.INCLUDE_FILTERS.split(",");
+          const actualFilters = plan.controls?.include;
+          if (
+            !Array.isArray(actualFilters) ||
+            actualFilters.length !== expectedFilters.length ||
+            actualFilters.some((filter, index) => filter !== expectedFilters[index])
+          ) {
+            throw new Error("Kova plan did not preserve the requested include filters");
+          }
+
+          if (process.env.PROFILE === "release") {
+            const expectedEntries = process.env.EXPECTED_RELEASE_ENTRIES.split(",").sort();
+            if (!Array.isArray(plan.entries)) {
+              throw new Error("Kova release plan did not contain entries");
+            }
+            const actualEntries = plan.entries
+              .map((entry) => {
+                if (entry.status !== "SELECTED" || !entry.scenario?.id || !entry.state?.id) {
+                  throw new Error("Kova release plan contained an invalid selected entry");
+                }
+                return `${entry.scenario.id}:${entry.state.id}`;
+              })
+              .sort();
+            if (
+              actualEntries.length !== expectedEntries.length ||
+              actualEntries.some((entry, index) => entry !== expectedEntries[index])
+            ) {
+              throw new Error("Kova release plan entries did not match the required lane coverage");
+            }
+          }
+          NODE
           echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"
           echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
 
