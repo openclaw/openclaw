@@ -63,6 +63,17 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
   };
   params.chatQueuedTurns.set(runId, entry);
+  params.controller.signal.addEventListener(
+    "abort",
+    () => {
+      // Queued entries can outlive active-run cleanup. Retired collect entries
+      // stay as idempotency guards until aggregate completion removes them.
+      if (params.chatQueuedTurns.get(runId) === entry && entry.abortable !== false) {
+        params.chatQueuedTurns.delete(runId);
+      }
+    },
+    { once: true },
+  );
   return true;
 }
 

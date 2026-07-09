@@ -34,6 +34,76 @@ describe("chat-queued-turns", () => {
     expect(getQueuedChatTurn(map, "run-a")).toBeUndefined();
   });
 
+  it("removes the queued entry when its controller aborts", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-abort",
+        controller,
+        sessionId: "sess-abort",
+        sessionKey: "main",
+      }),
+    ).toBe(true);
+
+    controller.abort();
+
+    expect(getQueuedChatTurn(map, "run-abort")).toBeUndefined();
+  });
+
+  it("does not let a stale abort listener remove a reused run id", () => {
+    const map = emptyMap();
+    const first = new AbortController();
+    const second = new AbortController();
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-reused",
+        controller: first,
+        sessionId: "sess-a",
+        sessionKey: "main",
+      }),
+    ).toBe(true);
+    expect(completeQueuedChatTurn(map, "run-reused")).toBe(true);
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-reused",
+        controller: second,
+        sessionId: "sess-b",
+        sessionKey: "main",
+      }),
+    ).toBe(true);
+
+    first.abort();
+
+    expect(getQueuedChatTurn(map, "run-reused")?.controller).toBe(second);
+    second.abort();
+    expect(getQueuedChatTurn(map, "run-reused")).toBeUndefined();
+  });
+
+  it("keeps retired collect identities until completion after abort", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-retired",
+        controller,
+        sessionId: "sess-retired",
+        sessionKey: "main",
+      }),
+    ).toBe(true);
+    expect(retireQueuedChatTurnCancellation(map, "run-retired")).toBe(true);
+
+    controller.abort();
+
+    expect(getQueuedChatTurn(map, "run-retired")?.abortable).toBe(false);
+    expect(completeQueuedChatTurn(map, "run-retired")).toBe(true);
+    expect(getQueuedChatTurn(map, "run-retired")).toBeUndefined();
+  });
+
   it("rejects re-register with a different controller", () => {
     const map = emptyMap();
     const first = new AbortController();
