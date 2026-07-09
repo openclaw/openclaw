@@ -1920,12 +1920,10 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
 }
 
 function truncatePreviewText(text: string, maxChars: number): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
+  if (text.length <= maxChars) {
     return text;
   }
-  if (maxChars <= 3) {
-    return truncateUtf16Safe(text, maxChars);
-  }
+  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
   return `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
