@@ -935,7 +935,7 @@ export function resolveCodexComputerUseConfig(
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
-    "shared";
+    "independent";
   const strictReadiness =
     params.overrides?.strictReadiness ??
     config.strictReadiness ??

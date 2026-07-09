@@ -249,14 +249,13 @@ per-agent `CODEX_HOME` directories. Without reconciliation, one agent can keep
 a stale cached Computer Use plugin even after the desktop app is updated
 elsewhere.
 
-When Computer Use is enabled, `pluginCacheMode: "shared"` is the default.
-Before app-server startup, OpenClaw reads the locally installed bundled
-Computer Use plugin version from ChatGPT.app, or from legacy Codex.app when
-ChatGPT.app is absent, removes stale per-agent Computer Use cache versions for
-that marketplace/plugin, and refreshes the active per-agent cache entry as a
-real copied directory that Codex can discover. Set `pluginCacheMode:
-"independent"` only when a runtime intentionally needs its own unmanaged plugin
-cache.
+Computer Use defaults to `pluginCacheMode: "independent"`, leaving each
+per-agent Codex plugin cache unmanaged. Set `pluginCacheMode: "shared"` to opt
+in to reconciliation. Before app-server startup, shared mode reads the locally
+installed bundled Computer Use plugin version from ChatGPT.app, or from legacy
+Codex.app when ChatGPT.app is absent, removes stale per-agent Computer Use cache
+versions for that marketplace/plugin, and refreshes the active per-agent cache
+entry as a real copied directory that Codex can discover.
 
 ## Remote catalog limit
 
@@ -286,7 +285,7 @@ remote install is unsupported, run install with a local source or path:
 | `leaseTimeoutMs`                | 300000         | Default timeout used by the shared window-scope Computer Use lease manager.    |
 | `healthCheckEnabled`            | false          | Run periodic Computer Use health probes.                                       |
 | `healthCheckIntervalMinutes`    | 60             | Periodic health cadence when health checks are enabled: 30, 60, 120, or 240.   |
-| `pluginCacheMode`               | `shared`       | Refresh a Codex-discoverable cache copy, or use `independent` cache handling.  |
+| `pluginCacheMode`               | `independent`  | Leave caches unmanaged, or opt in to `shared` cache reconciliation.            |
 | `strictReadiness`               | false          | Set true to block startup when the live readiness probe fails.                 |
 | `autoRepair`                    | false          | Repair scoped stale Computer Use MCP children before retrying a failed probe.  |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |

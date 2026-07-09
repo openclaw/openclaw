@@ -101,7 +101,7 @@
           "pluginCacheMode": {
             "type": "string",
             "enum": ["shared", "independent"],
-            "default": "shared"
+            "default": "independent"
           },
           "strictReadiness": {
             "type": "boolean",
@@ -380,7 +380,7 @@
     },
     "computerUse.pluginCacheMode": {
       "label": "Plugin Cache Mode",
-      "help": "Use shared for a Codex-discoverable copied Computer Use plugin cache or independent for per-runtime copies.",
+      "help": "The default independent mode leaves each Codex home unmanaged. Choose shared to opt in to a refreshed Codex-discoverable cache copy.",
       "advanced": true
     },
     "computerUse.strictReadiness": {
