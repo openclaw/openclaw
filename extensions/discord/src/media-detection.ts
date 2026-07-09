@@ -10,10 +10,13 @@ function normalizeMediaPathForExtension(mediaUrl: string): string {
   }
   try {
     const parsed = new URL(trimmed);
+    const fileName = parsed.pathname.slice(parsed.pathname.lastIndexOf("/") + 1);
+    // Mirror media-loader filename decoding without reinterpreting escapes in
+    // earlier URL path segments, which are irrelevant to the file extension.
     try {
-      return normalizeLowercaseStringOrEmpty(decodeURIComponent(parsed.pathname));
+      return normalizeLowercaseStringOrEmpty(decodeURIComponent(fileName));
     } catch {
-      return normalizeLowercaseStringOrEmpty(parsed.pathname);
+      return normalizeLowercaseStringOrEmpty(fileName);
     }
   } catch {
     const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
