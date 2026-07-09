@@ -790,13 +790,28 @@ struct RootTabsSourceGuardTests {
             sectionsSource,
             from: "var privacyDestination: some View",
             to: "var notificationsDestination: some View")
+        let locationCard = try Self.extract(
+            sectionsSource,
+            from: "var locationModeCard: some View",
+            to: "var agentSelectionCard: some View")
 
         #expect(!settingsList.contains("route: .notifications"))
         #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(privacyDestination.contains("title: \"Camera Access\""))
+        #expect(privacyDestination.contains("self.locationModeCard"))
+        #expect(privacyDestination.contains("title: \"Background Listening\""))
+        #expect(!privacyDestination.contains("title: \"Privacy\""))
         #expect(sectionsSource.contains("Toggle(\"Notifications\", isOn: self.notificationToggleBinding)"))
+        #expect(locationCard.contains("Text(\"Location Sharing\")"))
+        #expect(locationCard.contains("Text(\"Access Level\")"))
+        #expect(locationCard.contains("Text(\"Open iOS Settings\")"))
+        #expect(!locationCard.contains("Picker(\"Location\""))
+        #expect(!locationCard.contains("Text(\"While Using\")"))
+        #expect(!locationCard.contains("Choose a location mode"))
+        #expect(actionsSource.contains("self.pendingLocationMode ?? self.selectedLocationMode"))
         #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
         #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
-        #expect(!actionsSource.contains("UIApplication.openSettingsURLString"))
+        #expect(actionsSource.contains("UIApplication.openSettingsURLString"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {

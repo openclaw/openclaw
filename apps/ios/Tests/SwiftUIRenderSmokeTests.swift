@@ -61,6 +61,22 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `settings Privacy destination builds in light and dark mode`() {
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let root = SettingsProTab(directRoute: .privacy)
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+        }
+    }
+
     @Test @MainActor func `settings Licenses destination builds in light and dark mode`() {
         var windows: [UIWindow] = []
         defer { windows.forEach { $0.isHidden = true } }
@@ -188,7 +204,7 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func gatewayQuickSetupBuildsCandidateAndEmptyStates() {
+    @Test @MainActor func `gateway quick setup builds candidate and empty states`() {
         let gateways: [GatewayDiscoveryModel.DiscoveredGateway?] = [
             .previewGateway,
             nil,
@@ -211,7 +227,7 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func onboardingActivationScreensBuildAcrossAppearanceAndTypeSize() {
+    @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
