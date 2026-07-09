@@ -38,7 +38,6 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
-    mainKey: "main",
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -49,6 +48,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
+    sessionMenu: null,
     expandedSessionKey: null,
     checkpointItemsByKey: {},
     checkpointLoadingKey: null,
@@ -70,7 +70,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
-    onFork: () => undefined,
+    onOpenSessionMenu: () => undefined,
     onToggleDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
@@ -235,9 +235,9 @@ describe("sessions view", () => {
     expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 
-  it("offers workboard capture for dashboard sessions", async () => {
+  it("opens the session menu from the kebab and row context menu", async () => {
     const container = document.createElement("div");
-    const onAddToWorkboard = vi.fn();
+    const onOpenSessionMenu = vi.fn();
     const session = {
       key: "agent:main:dashboard:1",
       kind: "direct",
@@ -246,65 +246,45 @@ describe("sessions view", () => {
     render(
       renderSessions({
         ...buildProps(buildResult(session)),
-        onAddToWorkboard,
+        onOpenSessionMenu,
       }),
       container,
     );
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Add to Workboard"]',
+      'button[aria-label="Open session menu"]',
     );
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected Add to Workboard button");
+    if (!button) {
+      throw new Error("Expected session menu button");
     }
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
     button.click();
-
-    expect(onAddToWorkboard).toHaveBeenCalledWith(session);
-  });
-
-  it("pins, archives, and restores sessions from row actions", async () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            pinned: false,
-            archived: false,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
     );
-    await Promise.resolve();
 
-    container.querySelector<HTMLButtonElement>('button[title="Pin session"]')!.click();
-    container.querySelector<HTMLButtonElement>('button[title="Archive session"]')!.click();
-    expect(onPatch).toHaveBeenNthCalledWith(1, "agent:main:dashboard:1", { pinned: true });
-    expect(onPatch).toHaveBeenNthCalledWith(2, "agent:main:dashboard:1", { archived: true });
-
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            archived: true,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    const row = container.querySelector(".session-data-row");
+    if (!row) {
+      throw new Error("Expected session row");
+    }
+    const contextMenu = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 123,
+      clientY: 45,
+    });
+    row.dispatchEvent(contextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ key: session.key }),
+      { x: 123, y: 45 },
+      null,
     );
-    await Promise.resolve();
-    container.querySelector<HTMLButtonElement>('button[title="Restore session"]')!.click();
-    expect(onPatch).toHaveBeenLastCalledWith("agent:main:dashboard:1", { archived: false });
+    expect(contextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -326,27 +306,6 @@ describe("sessions view", () => {
       row.querySelector(".session-key-cell")?.textContent?.trim(),
     );
     expect(keys).toEqual(["pinned", "newer"]);
-  });
-
-  it("marks sessions that already have workboard cards", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-        workboardSessionKeys: new Set(["agent:main:dashboard:1"]),
-        onAddToWorkboard: () => undefined,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector('button[aria-label="Open Workboard card"]')).not.toBeNull();
   });
 
   it("uses the shared tooltip component for session filters", async () => {

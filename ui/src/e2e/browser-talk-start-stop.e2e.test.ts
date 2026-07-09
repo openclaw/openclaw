@@ -281,6 +281,74 @@ describeControlUiE2e("Control UI browser Talk", () => {
     }
   });
 
+  it("renders streamed relay assistant transcript deltas as readable text", async () => {
+    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ permissions: ["microphone"] });
+    const page = await context.newPage();
+    const relaySessionId = "relay-e2e-transcript";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.client.create": {
+          provider: "openai",
+          transport: "gateway-relay",
+          relaySessionId,
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+        "talk.session.appendAudio": {},
+        "talk.session.close": {},
+      },
+    });
+    await installTalkBrowserFixtures(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+      await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId,
+        type: "transcript",
+        role: "user",
+        text: "Hey, what model are you using?",
+        final: true,
+      });
+      // Assistant audio transcripts stream as verbatim fragments that can split
+      // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
+      // the merge injected spaces mid-word and the turn collapsed while streaming.
+      const assistantText =
+        "I'm ChatGPT, a conversational AI model designed to help answer questions, brainstorm ideas, and chat about pretty much anything you want to talk about today.";
+      for (const char of assistantText) {
+        await gateway.emitGatewayEvent("talk.event", {
+          relaySessionId,
+          type: "transcript",
+          role: "assistant",
+          text: char,
+          final: false,
+        });
+      }
+
+      const assistantTurnText = page.locator(
+        ".agent-chat__voice-turn--assistant .agent-chat__voice-turn-text",
+      );
+      await expect.poll(() => assistantTurnText.textContent()).toBe(assistantText);
+
+      const turnBounds = await page.locator(".agent-chat__voice-turn--assistant").boundingBox();
+      expect(turnBounds).not.toBeNull();
+      // A collapsed turn renders one character per line (tall, sliver-wide box).
+      expect(turnBounds?.width ?? 0).toBeGreaterThanOrEqual(500);
+      expect(turnBounds?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(120);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
   it("keeps blocked microphone guidance readable in a narrow viewport", async () => {
     const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext();

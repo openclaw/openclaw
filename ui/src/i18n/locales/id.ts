@@ -284,6 +284,7 @@ export const id: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Buka obrolan",
     archiveSession: "Arsipkan sesi",
     restoreSession: "Pulihkan sesi",
     deleteSessionMenu: "Delete…",

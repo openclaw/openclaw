@@ -282,6 +282,7 @@ export const th: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "เปิดแชท",
     archiveSession: "เก็บเซสชันถาวร",
     restoreSession: "กู้คืนเซสชัน",
     deleteSessionMenu: "Delete…",

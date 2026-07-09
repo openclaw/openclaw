@@ -282,6 +282,7 @@ export const en: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Open chat",
     archiveSession: "Archive session",
     restoreSession: "Restore session",
     deleteSessionMenu: "Delete…",

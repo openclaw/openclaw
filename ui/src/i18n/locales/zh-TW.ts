@@ -282,6 +282,7 @@ export const zh_TW: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "開啟聊天",
     archiveSession: "封存工作階段",
     restoreSession: "還原工作階段",
     deleteSessionMenu: "Delete…",

@@ -1392,7 +1392,7 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-session-menu {
+.session-menu {
   position: fixed;
   z-index: 121;
   min-width: 224px;
@@ -1425,7 +1425,7 @@
   text-transform: uppercase;
 }
 
-.sidebar-session-menu__item,
+.session-menu__item,
 .sidebar-session-sort-menu__item {
   display: flex;
   align-items: center;
@@ -1443,24 +1443,24 @@
   cursor: pointer;
 }
 
-.sidebar-session-menu__item:hover:not(:disabled),
-.sidebar-session-menu__item:focus-visible,
+.session-menu__item:hover:not(:disabled),
+.session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-session-menu__item:disabled {
+.session-menu__item:disabled {
   opacity: 0.42;
   cursor: not-allowed;
 }
 
-.sidebar-session-menu__item--destructive {
+.session-menu__item--destructive {
   color: var(--danger);
 }
 
-.sidebar-session-menu__icon,
-.sidebar-session-menu__check {
+.session-menu__icon,
+.session-menu__check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1469,13 +1469,13 @@
   flex: 0 0 auto;
 }
 
-.sidebar-session-menu__check {
+.session-menu__check {
   color: var(--accent);
 }
 
-.sidebar-session-menu__icon svg,
-.sidebar-session-menu__check svg,
-.sidebar-session-menu__chevron svg {
+.session-menu__icon svg,
+.session-menu__check svg,
+.session-menu__chevron svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -1485,7 +1485,7 @@
   stroke-linejoin: round;
 }
 
-.sidebar-session-menu__text {
+.session-menu__text {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1493,21 +1493,21 @@
   white-space: nowrap;
 }
 
-.sidebar-session-menu__chevron {
+.session-menu__chevron {
   display: inline-flex;
   color: var(--muted);
 }
 
-.sidebar-session-menu__separator {
+.session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-session-menu__submenu-host {
+.session-menu__submenu-host {
   position: relative;
 }
 
-.sidebar-session-menu__submenu {
+.session-menu__submenu {
   position: absolute;
   top: -6px;
   left: calc(100% + 4px);
@@ -1515,7 +1515,7 @@
   overflow-y: auto;
 }
 
-.sidebar-session-menu__submenu--left {
+.session-menu__submenu--left {
   right: calc(100% + 4px);
   left: auto;
 }
