@@ -71,6 +71,27 @@ describe("active-memory plugin", () => {
     expect(query).not.toContain("\uD83D");
   });
 
+  it("keeps recent recall query turn snippets UTF-16 well-formed", () => {
+    const query = testing.buildQuery({
+      latestUserMessage: "what now?",
+      recentTurns: [
+        { role: "user", text: `${"u".repeat(39)}🚀 user tail` },
+        { role: "assistant", text: `${"a".repeat(39)}🚀 assistant tail` },
+      ],
+      config: testing.normalizePluginConfig({
+        queryMode: "recent",
+        recentUserTurns: 1,
+        recentAssistantTurns: 1,
+        recentUserChars: 40,
+        recentAssistantChars: 40,
+      }),
+    });
+
+    expect(query).toContain(`user: ${"u".repeat(39)}`);
+    expect(query).toContain(`assistant: ${"a".repeat(39)}`);
+    expect(query).not.toContain("\uD83D");
+  });
+
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};

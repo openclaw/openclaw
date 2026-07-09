@@ -2640,7 +2640,10 @@ function buildQuery(params: {
       remainingUser -= 1;
       selected.push({
         role: "user",
-        text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentUserChars),
+        text: truncateUtf16Safe(
+          turn.text.trim().replace(/\s+/g, " "),
+          params.config.recentUserChars,
+        ),
       });
       continue;
     }
@@ -2650,7 +2653,10 @@ function buildQuery(params: {
     remainingAssistant -= 1;
     selected.push({
       role: "assistant",
-      text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentAssistantChars),
+      text: truncateUtf16Safe(
+        turn.text.trim().replace(/\s+/g, " "),
+        params.config.recentAssistantChars,
+      ),
     });
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
@@ -3754,6 +3760,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildQuery,
   buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
