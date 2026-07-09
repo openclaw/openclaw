@@ -131,6 +131,7 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testCanOpenWindowsAutomatically)
         #expect(controller._testLinkBrowserNavigationObservationCount == 3)
         #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
+        let initialBrowserIdentity = controller._testLinkBrowserWebViewIdentity
 
         let report = try #require(URL(string: "http://127.0.0.1:1/report"))
         controller._testOpenLinkBrowser(report)
@@ -139,17 +140,26 @@ struct DashboardWindowSmokeTests {
         controller._testCloseLinkBrowser()
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == nil)
+        #expect(controller._testLinkBrowserWebViewIdentity != initialBrowserIdentity)
+        #expect(controller._testLinkBrowserNavigationObservationCount == 3)
+        #expect(controller._testLinkBrowserWebViewURL == nil)
+        #expect(controller._testLinkBrowserHistoryIsEmpty)
+        #expect(controller._testLinkBrowserDelegatesAreInstalled)
+        #expect(controller._testLinkBrowserWebViewIsInstalled)
+        #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
     }
 
-    @Test func `sidebar browser keeps web navigations in its top level context`() throws {
+    @Test func `sidebar browser reserves auxiliary schemes for subframes`() throws {
         let webURL = try #require(URL(string: "https://github.com/openclaw/openclaw"))
         let blankURL = try #require(URL(string: "about:blank"))
         let fileURL = try #require(URL(string: "file:///tmp/private"))
         let mailURL = try #require(URL(string: "mailto:hello@example.com"))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: fileURL))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: mailURL))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
+        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
+        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: fileURL, isMainFrame: false))
+        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: mailURL, isMainFrame: false))
     }
 
     @Test func `external pointer fallback rejects synthetic link activation`() throws {

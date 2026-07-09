@@ -4,10 +4,12 @@ import WebKit
 
 @MainActor
 final class DashboardLinkBrowserView: NSView {
-    let webView: WKWebView
+    private(set) var webView: WKWebView
     var onClose: (() -> Void)?
     var onOpenExternal: ((URL) -> Void)?
 
+    private let websiteDataStore: WKWebsiteDataStore
+    private let toolbar = NSVisualEffectView()
     private let backButton = DashboardLinkBrowserView.makeButton(symbol: "chevron.left", label: "Back")
     private let forwardButton = DashboardLinkBrowserView.makeButton(symbol: "chevron.right", label: "Forward")
     private let reloadButton = DashboardLinkBrowserView.makeButton(symbol: "arrow.clockwise", label: "Reload")
@@ -16,6 +18,7 @@ final class DashboardLinkBrowserView: NSView {
         label: "Open in Default Browser")
     private let closeButton = DashboardLinkBrowserView.makeButton(symbol: "xmark", label: "Close Sidebar")
     private var navigationObservations: [NSKeyValueObservation] = []
+    private var webViewConstraints: [NSLayoutConstraint] = []
     private var representedURL: URL?
     private let addressLabel: NSTextField = {
         let label = NSTextField(labelWithString: "")
@@ -28,16 +31,10 @@ final class DashboardLinkBrowserView: NSView {
     }()
 
     init(websiteDataStore: WKWebsiteDataStore) {
-        // External pages share persisted browser sessions, but never inherit the
-        // dashboard's auth scripts or privileged message handler.
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = websiteDataStore
-        configuration.preferences.isElementFullscreenEnabled = true
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        self.webView = WKWebView(frame: .zero, configuration: configuration)
+        self.websiteDataStore = websiteDataStore
+        self.webView = Self.makeWebView(websiteDataStore: websiteDataStore)
         super.init(frame: .zero)
 
-        self.webView.setValue(true, forKey: "drawsBackground")
         self.configureActions()
         self.buildView()
         self.observeNavigationState()
@@ -55,9 +52,8 @@ final class DashboardLinkBrowserView: NSView {
     }
 
     func closeBrowser() {
-        self.webView.stopLoading()
         self.representedURL = nil
-        self.webView.load(URLRequest(url: URL(string: "about:blank")!))
+        self.replaceWebView()
         self.updateChrome()
     }
 
@@ -79,6 +75,39 @@ final class DashboardLinkBrowserView: NSView {
     func navigationDidFinish() {
         self.representedURL = self.webView.url
         self.updateChrome()
+    }
+
+    private static func makeWebView(websiteDataStore: WKWebsiteDataStore) -> WKWebView {
+        // External pages share persisted browser sessions, but never inherit the
+        // dashboard's auth scripts or privileged message handler.
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = websiteDataStore
+        configuration.preferences.isElementFullscreenEnabled = true
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.setValue(true, forKey: "drawsBackground")
+        return webView
+    }
+
+    private func replaceWebView() {
+        let previousWebView = self.webView
+        let navigationDelegate = previousWebView.navigationDelegate
+        let uiDelegate = previousWebView.uiDelegate
+        let replacement = Self.makeWebView(websiteDataStore: self.websiteDataStore)
+
+        self.navigationObservations.forEach { $0.invalidate() }
+        self.navigationObservations.removeAll()
+        NSLayoutConstraint.deactivate(self.webViewConstraints)
+        previousWebView.navigationDelegate = nil
+        previousWebView.uiDelegate = nil
+        previousWebView.stopLoading()
+        previousWebView.removeFromSuperview()
+
+        self.webView = replacement
+        self.installWebView()
+        replacement.navigationDelegate = navigationDelegate
+        replacement.uiDelegate = uiDelegate
+        self.observeNavigationState()
     }
 
     private func configureActions() {
@@ -117,12 +146,11 @@ final class DashboardLinkBrowserView: NSView {
     }
 
     private func buildView() {
-        let toolbar = NSVisualEffectView()
-        toolbar.material = .headerView
-        toolbar.blendingMode = .withinWindow
-        toolbar.state = .active
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(toolbar)
+        self.toolbar.material = .headerView
+        self.toolbar.blendingMode = .withinWindow
+        self.toolbar.state = .active
+        self.toolbar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(self.toolbar)
 
         let controls = NSStackView(views: [
             backButton,
@@ -139,37 +167,42 @@ final class DashboardLinkBrowserView: NSView {
         controls.setCustomSpacing(10, after: self.reloadButton)
         controls.setCustomSpacing(10, after: self.addressLabel)
         controls.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.addSubview(controls)
+        self.toolbar.addSubview(controls)
 
         let separator = NSBox()
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.addSubview(separator)
-
-        self.webView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(self.webView)
+        self.toolbar.addSubview(separator)
+        self.installWebView()
 
         NSLayoutConstraint.activate([
-            toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            toolbar.topAnchor.constraint(equalTo: topAnchor),
+            self.toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            self.toolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            self.toolbar.topAnchor.constraint(equalTo: topAnchor),
             // The top 32 points stay clear of the dashboard window's drag overlay.
-            toolbar.heightAnchor.constraint(equalToConstant: 68),
+            self.toolbar.heightAnchor.constraint(equalToConstant: 68),
 
-            controls.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 10),
-            controls.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -10),
-            controls.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: -8),
+            controls.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor, constant: 10),
+            controls.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor, constant: -10),
+            controls.bottomAnchor.constraint(equalTo: self.toolbar.bottomAnchor, constant: -8),
             controls.heightAnchor.constraint(equalToConstant: 28),
 
-            separator.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            separator.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: self.toolbar.bottomAnchor),
+        ])
+    }
 
+    private func installWebView() {
+        self.webView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(self.webView)
+        self.webViewConstraints = [
             self.webView.leadingAnchor.constraint(equalTo: leadingAnchor),
             self.webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            self.webView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            self.webView.topAnchor.constraint(equalTo: self.toolbar.bottomAnchor),
             self.webView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        ]
+        NSLayoutConstraint.activate(self.webViewConstraints)
     }
 
     private static func makeButton(symbol: String, label: String) -> NSButton {

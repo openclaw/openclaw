@@ -120,11 +120,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     /// `NSOpenPanel`; without a `WKUIDelegate`, WebKit silently drops the request
     /// and "Choose image" / file-picker buttons do nothing.
     func webView(
-        _: WKWebView,
+        _ webView: WKWebView,
         runOpenPanelWith parameters: WKOpenPanelParameters,
         initiatedByFrame _: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)
     {
+        guard webView === self.webView || webView === self.linkBrowser.webView else {
+            completionHandler(nil)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories
@@ -142,14 +146,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func webView(
-        _: WKWebView,
+        _ webView: WKWebView,
         createWebViewWith _: WKWebViewConfiguration,
         for navigationAction: WKNavigationAction,
         windowFeatures _: WKWindowFeatures) -> WKWebView?
     {
         // WebKit reaches this callback only for user-allowed new-window requests;
         // both configurations disable automatic JavaScript windows.
-        guard navigationAction.targetFrame == nil,
+        guard webView === self.webView || webView === self.linkBrowser.webView,
+              navigationAction.targetFrame == nil,
               let url = navigationAction.request.url,
               Self.isHTTPURL(url)
         else {
@@ -584,11 +589,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.allow)
+        let isDashboardWebView = webView === self.webView
+        let isLinkBrowserWebView = webView === self.linkBrowser.webView
+        guard isDashboardWebView || isLinkBrowserWebView else {
+            decisionHandler(.cancel)
             return
         }
-        if webView === self.linkBrowser.webView {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(isDashboardWebView ? .allow : .cancel)
+            return
+        }
+        if isLinkBrowserWebView {
             // The lightweight sidebar has no download destination UI. Preserve
             // direct pointer-activated downloads by handing them to the default browser.
             if navigationAction.shouldPerformDownload {
@@ -611,8 +622,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                     decisionHandler: decisionHandler)
                 return
             }
-            if Self.shouldAllowBrowserNavigation(to: url) {
-                self.linkBrowser.navigationWillStart(url)
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
+            if Self.shouldAllowBrowserNavigation(to: url, isMainFrame: isMainFrame) {
+                if isMainFrame {
+                    self.linkBrowser.navigationWillStart(url)
+                }
                 decisionHandler(.allow)
                 return
             }
@@ -672,6 +686,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.linkBrowser.updateChrome()
             return
         }
+        guard webView === self.webView else { return }
         self.showLoadFailure(error)
     }
 
@@ -684,6 +699,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.linkBrowser.updateChrome()
             return
         }
+        guard webView === self.webView else { return }
         self.showLoadFailure(error)
     }
 
@@ -698,9 +714,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             url.port == dashboardURL.port
     }
 
-    static func shouldAllowBrowserNavigation(to url: URL) -> Bool {
+    static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
+        if isMainFrame {
+            return self.isHTTPURL(url)
+        }
         guard let scheme = url.scheme?.lowercased() else { return false }
-        return scheme == "about" || scheme == "blob" || scheme == "data" || Self.isHTTPURL(url)
+        return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
     }
 
     static func shouldOpenExternalDashboardNavigation(
@@ -894,6 +913,7 @@ extension DashboardWindowController {
     var _testUserScripts: [WKUserScript] {
         self.webView.configuration.userContentController.userScripts
     }
+
     var _testLinkBrowserIsCollapsed: Bool {
         self.linkBrowserItem.isCollapsed
     }
@@ -908,6 +928,27 @@ extension DashboardWindowController {
 
     var _testLinkBrowserNavigationObservationCount: Int {
         self.linkBrowser._testNavigationObservationCount
+    }
+
+    var _testLinkBrowserWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.linkBrowser.webView)
+    }
+
+    var _testLinkBrowserWebViewURL: URL? {
+        self.linkBrowser.webView.url
+    }
+
+    var _testLinkBrowserHistoryIsEmpty: Bool {
+        let history = self.linkBrowser.webView.backForwardList
+        return history.currentItem == nil && history.backItem == nil && history.forwardItem == nil
+    }
+
+    var _testLinkBrowserDelegatesAreInstalled: Bool {
+        self.linkBrowser.webView.navigationDelegate === self && self.linkBrowser.webView.uiDelegate === self
+    }
+
+    var _testLinkBrowserWebViewIsInstalled: Bool {
+        self.linkBrowser.webView.superview === self.linkBrowser
     }
 
     var _testDashboardDataStore: WKWebsiteDataStore {
