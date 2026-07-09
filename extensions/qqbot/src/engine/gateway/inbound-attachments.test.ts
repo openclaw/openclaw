@@ -74,7 +74,8 @@ describe("engine/gateway/inbound-attachments", () => {
   });
 
   it("classifies image content types case-insensitively when download succeeds", async () => {
-    downloadFileMock.mockResolvedValue("/tmp/openclaw-qqbot-downloads/a.png");
+    downloadFileMock.mockResolvedValueOnce("/tmp/openclaw-qqbot-downloads/a.png");
+    downloadFileMock.mockResolvedValueOnce("/tmp/openclaw-qqbot-downloads/b.png");
 
     const result = await processAttachments(
       [
@@ -86,7 +87,7 @@ describe("engine/gateway/inbound-attachments", () => {
 
     expect(result.imageUrls).toEqual([
       "/tmp/openclaw-qqbot-downloads/a.png",
-      "/tmp/openclaw-qqbot-downloads/a.png",
+      "/tmp/openclaw-qqbot-downloads/b.png",
     ]);
     // The raw content_type passes through unchanged.
     expect(result.imageMediaTypes).toEqual(["image/png", "Image/PNG"]);
