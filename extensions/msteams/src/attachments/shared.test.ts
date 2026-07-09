@@ -698,6 +698,12 @@ describe("normalizeContentType case-insensitivity", () => {
     expect(normalizeContentType("  Image/PNG  ")).toBe("image/png");
   });
 
+  it("preserves case-sensitive parameter values", () => {
+    expect(normalizeContentType('  Text/HTML ; charset="X-Custom"  ')).toBe(
+      'text/html; charset="X-Custom"',
+    );
+  });
+
   it("returns undefined for non-string, empty, or whitespace input", () => {
     expect(normalizeContentType(undefined)).toBeUndefined();
     expect(normalizeContentType(123 as unknown as string)).toBeUndefined();
