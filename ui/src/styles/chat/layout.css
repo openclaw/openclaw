@@ -1135,12 +1135,6 @@ openclaw-chat-page {
   order: 3;
 }
 
-/* openclaw-tooltip renders as display: contents, so this button participates
-   directly in the parent flex layout. */
-.agent-chat__composer-controls .chat-open-split-view {
-  order: 1;
-}
-
 .agent-chat__composer-run-status .agent-chat__run-status {
   max-width: min(240px, 30vw);
 }

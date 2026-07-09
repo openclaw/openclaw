@@ -136,6 +136,8 @@ fun VoiceScreen(
   // Talk mode and dictation use different managers, so choose the transcript
   // from the mode the user is actually seeing.
   val activeConversation = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) talkModeConversation else micConversation
+  val showTranscriptThinking =
+    micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
   val voiceAttentionStatus =
@@ -252,11 +254,13 @@ fun VoiceScreen(
       )
     }
 
-    VoiceTranscript(
-      entries = activeConversation,
-      showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
-      modifier = Modifier.weight(1f),
-    )
+    if (activeConversation.isNotEmpty() || showTranscriptThinking) {
+      VoiceTranscript(
+        entries = activeConversation,
+        showThinking = showTranscriptThinking,
+        modifier = Modifier.weight(1f),
+      )
+    }
   }
 }
 
@@ -1030,24 +1034,6 @@ private fun VoiceTranscript(
 
     items(entries.asReversed(), key = { it.id }) { entry ->
       VoiceTurnCard(entry = entry)
-    }
-
-    if (entries.isEmpty() && !showThinking) {
-      item {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-          ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              Text(text = "No transcript yet", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-              Text(
-                text = "Your words and OpenClaw replies will appear here.",
-                style = ClawTheme.type.body,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
-          }
-        }
-      }
     }
   }
 }

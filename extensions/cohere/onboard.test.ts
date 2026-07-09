@@ -1,12 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { buildCohereCatalogModels, COHERE_BASE_URL, COHERE_MODEL_CATALOG } from "./models.js";
 import {
-  applyCohereConfig,
-  COHERE_DEFAULT_MODEL_ID,
-  COHERE_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+  buildCohereCatalogModels,
+  COHERE_BASE_URL,
+  COHERE_MODEL_CATALOG,
+  COHERE_NORTH_MINI_CODE_MODEL_ID,
+} from "./models.js";
+import { applyCohereConfig, COHERE_DEFAULT_MODEL_ID, COHERE_DEFAULT_MODEL_REF } from "./onboard.js";
 
 describe("Cohere onboarding", () => {
   it("registers the manifest catalog through the onboarding preset", () => {
@@ -17,7 +18,10 @@ describe("Cohere onboarding", () => {
       baseUrl: COHERE_BASE_URL,
       api: "openai-completions",
     });
-    expect(provider?.models?.map((model) => model.id)).toEqual([COHERE_DEFAULT_MODEL_ID]);
+    expect(provider?.models?.map((model) => model.id)).toEqual([
+      COHERE_DEFAULT_MODEL_ID,
+      COHERE_NORTH_MINI_CODE_MODEL_ID,
+    ]);
     expect(buildCohereCatalogModels()).toHaveLength(COHERE_MODEL_CATALOG.length);
   });
 
