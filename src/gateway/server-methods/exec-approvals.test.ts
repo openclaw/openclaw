@@ -78,6 +78,33 @@ describe("exec approvals gateway methods", () => {
     );
   });
 
+  it("responds with a conflict when the locked approvals update loses a race", async () => {
+    ensureExecApprovalsSnapshotMock.mockResolvedValue(makeSnapshot());
+    // A concurrent rollback can restore the caller's old hash after the CAS
+    // already failed; the failed CAS remains authoritative for this request.
+    readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
+    updateExecApprovalsMock.mockResolvedValueOnce(null);
+    const respond = vi.fn();
+
+    await execApprovalsHandlers["exec.approvals.set"]({
+      req: { type: "req", id: "req-conflict", method: "exec.approvals.set", params: {} },
+      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed since last load"),
+      }),
+    );
+  });
+
   it.each([
     {
       method: "exec.approvals.node.get" as const,

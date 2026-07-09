@@ -62,17 +62,21 @@ function requireApprovalsBaseHash(
     return false;
   }
   if (baseHash !== snapshot.hash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "exec approvals changed since last load; re-run exec.approvals.get and retry",
-      ),
-    );
+    respondApprovalsChanged(respond);
     return false;
   }
   return true;
+}
+
+function respondApprovalsChanged(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "exec approvals changed since last load; re-run exec.approvals.get and retry",
+    ),
+  );
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -195,7 +199,9 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
       });
       if (!nextSnapshot) {
-        requireApprovalsBaseHash(params, readExecApprovalsSnapshot(), respond);
+        // The locked CAS already proved this write lost a race. A later read can
+        // observe bytes restored to the old hash and must not suppress the reply.
+        respondApprovalsChanged(respond);
         return;
       }
       respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
