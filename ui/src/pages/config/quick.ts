@@ -10,7 +10,7 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
-import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
+import type { TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
@@ -90,12 +90,10 @@ export type QuickSettingsProps = {
   themeMode: ThemeMode;
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
-  borderRadius: number;
   textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  setBorderRadius: (value: number) => void;
   setTextScale: (value: number) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
@@ -137,14 +135,6 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw" },
   { id: "knot", label: "Knot" },
   { id: "dash", label: "Dash" },
-];
-
-const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
-  { value: 0, label: "None" },
-  { value: 25, label: "Slight" },
-  { value: 50, label: "Default" },
-  { value: 75, label: "Round" },
-  { value: 100, label: "Full" },
 ];
 
 const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
@@ -705,23 +695,6 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                   }}
                 >
                   ${mode.charAt(0).toUpperCase() + mode.slice(1)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">Roundness</span>
-          <div class="qs-segmented">
-            ${BORDER_RADIUS_STOPS.map(
-              (stop) => html`
-                <button
-                  class="qs-segmented__btn ${stop.value === props.borderRadius
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${() => props.setBorderRadius(stop.value)}
-                >
-                  ${stop.label}
                 </button>
               `,
             )}

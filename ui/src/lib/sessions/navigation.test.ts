@@ -91,7 +91,7 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:recent-11");
   });
 
-  it("keeps every pinned session when pins exceed the recent-session cap", () => {
+  it("keeps every pinned session when many sessions are pinned", () => {
     const pinnedSessions = Array.from({ length: 10 }, (_, index) => ({
       key: `agent:main:pinned-${index}`,
       kind: "direct" as const,

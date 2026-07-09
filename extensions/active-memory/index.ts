@@ -1434,7 +1434,7 @@ function toSingleLineLogValue(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
-    ? `${singleLine.slice(0, MAX_LOG_VALUE_CHARS)}...`
+    ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;
 }
 
