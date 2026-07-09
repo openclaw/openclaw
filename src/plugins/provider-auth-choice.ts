@@ -8,6 +8,7 @@ import {
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import type { RuntimePluginInstallResult } from "../commands/runtime-plugin-install.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openUrl } from "../infra/browser-open.js";
@@ -115,6 +116,10 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
   return undefined;
 }
 
+function isMissingRequiredRuntimePlugin(result: RuntimePluginInstallResult): boolean {
+  return result.required && !result.installed;
+}
+
 async function noteDefaultModelResult(params: {
   previousPrimary: string | undefined;
   selectedModel: string;
@@ -181,7 +186,9 @@ async function applyDefaultModelFromAuthChoice(params: {
       ...(params.acknowledgeNonClawHubInstall ? { acknowledgeNonClawHubInstall: true } : {}),
     });
     nextConfig = codexInstall.cfg;
-    await params.runSelectedModelHook(nextConfig);
+    if (isMissingRequiredRuntimePlugin(codexInstall)) {
+      return restoreConfiguredPrimaryModel(nextConfig, defaultModelBaseConfig);
+    }
     if (codexInstall.installed) {
       // Offer Codex CLI state migration whenever the harness is in place for
       // the selected model, regardless of whether this run was a fresh install
@@ -209,6 +216,10 @@ async function applyDefaultModelFromAuthChoice(params: {
       ...(params.acknowledgeNonClawHubInstall ? { acknowledgeNonClawHubInstall: true } : {}),
     });
     nextConfig = copilotInstall.cfg;
+    if (isMissingRequiredRuntimePlugin(copilotInstall)) {
+      return restoreConfiguredPrimaryModel(nextConfig, defaultModelBaseConfig);
+    }
+    await params.runSelectedModelHook(nextConfig);
   }
   await noteDefaultModelResult({
     previousPrimary,

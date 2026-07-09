@@ -34,8 +34,13 @@ import {
 import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+import type { RuntimePluginInstallResult } from "../../runtime-plugin-install.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+
+function isMissingRequiredRuntimePlugin(result: RuntimePluginInstallResult): boolean {
+  return result.required && !result.installed;
+}
 
 async function loadPluginProviderRuntime() {
   return import("./auth-choice.plugin-providers.runtime.js");
@@ -268,6 +273,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     workspaceDir,
     acknowledgeNonClawHubInstall: params.opts.acknowledgeNonClawHubInstall === true,
   });
+  if (isMissingRequiredRuntimePlugin(codexInstall)) {
+    params.runtime.exit(1);
+    return null;
+  }
   if (codexInstall.installed) {
     // Non-interactive onboarding never auto-applies migration; emit a hint so
     // the operator knows Codex CLI state is available to import deliberately.
@@ -290,5 +299,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     workspaceDir,
     acknowledgeNonClawHubInstall: params.opts.acknowledgeNonClawHubInstall === true,
   });
+  if (isMissingRequiredRuntimePlugin(copilotInstall)) {
+    params.runtime.exit(1);
+    return null;
+  }
   return copilotInstall.cfg;
 }

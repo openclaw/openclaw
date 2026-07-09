@@ -23,7 +23,7 @@ vi.mock("../wizard/setup.post-install-migration.js", () => ({
 
 const { testing, applyAuthChoicePluginProvider } = await import("./provider-auth-choice.js");
 
-function buildProvider(): ProviderPlugin {
+function buildProvider(defaultModel = "gpt-5.5"): ProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
@@ -35,7 +35,7 @@ function buildProvider(): ProviderPlugin {
         run: vi.fn(async () => ({
           profiles: [],
           notes: [],
-          defaultModel: "gpt-5.5",
+          defaultModel,
         })),
       },
     ],
@@ -158,5 +158,97 @@ describe("applyAuthChoicePluginProvider", () => {
         pluginName: "gmail",
       },
     });
+  });
+
+  it("keeps the previous default model when Codex runtime install is declined", async () => {
+    const provider = buildProvider("openai/gpt-5.5");
+    const runProviderModelSelectedHook = vi.fn(async () => undefined);
+    testing.setDepsForTest({
+      loadPluginProviderRuntime: async () =>
+        ({
+          resolvePluginProviders: () => [provider],
+          runProviderModelSelectedHook,
+        }) as never,
+    });
+    ensureCodexRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: true,
+        installed: false,
+        status: "failed",
+      }),
+    );
+
+    const result = await applyAuthChoicePluginProvider(
+      {
+        authChoice: "openai-api-key",
+        config: { agents: { defaults: { model: { primary: "ollama/llama3" } } } },
+        runtime: createNonExitingRuntime(),
+        prompter: createWizardPrompter(),
+        setDefaultModel: true,
+        opts: {},
+      },
+      {
+        authChoice: "openai-api-key",
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        label: "OpenAI",
+      },
+    );
+
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(ensureCopilotRuntimePluginForModelSelection).not.toHaveBeenCalled();
+    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+    expect(result?.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3" });
+  });
+
+  it("keeps the previous default model when Copilot runtime install is declined", async () => {
+    const provider = buildProvider("github-copilot/gpt-5.5");
+    const runProviderModelSelectedHook = vi.fn(async () => undefined);
+    testing.setDepsForTest({
+      loadPluginProviderRuntime: async () =>
+        ({
+          resolvePluginProviders: () => [provider],
+          runProviderModelSelectedHook,
+        }) as never,
+    });
+    ensureCodexRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: false,
+        installed: false,
+      }),
+    );
+    ensureCopilotRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: true,
+        installed: false,
+        status: "failed",
+      }),
+    );
+
+    const result = await applyAuthChoicePluginProvider(
+      {
+        authChoice: "openai-api-key",
+        config: { agents: { defaults: { model: { primary: "ollama/llama3" } } } },
+        runtime: createNonExitingRuntime(),
+        prompter: createWizardPrompter(),
+        setDefaultModel: true,
+        opts: {},
+      },
+      {
+        authChoice: "openai-api-key",
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        label: "OpenAI",
+      },
+    );
+
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+    expect(result?.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3" });
   });
 });

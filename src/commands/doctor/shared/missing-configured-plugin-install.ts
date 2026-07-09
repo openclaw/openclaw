@@ -1106,6 +1106,35 @@ async function installCandidate(params: {
   const existingNpmPackageVersion = existingNpmPackagePath
     ? await readNpmPackageVersion(existingNpmPackagePath)
     : undefined;
+  const npmInstallSpecLabel = npmInstallSpec ? sanitizeTerminalText(npmInstallSpec) : "";
+  const acknowledgeNpmInstall = async (): Promise<boolean> =>
+    params.acknowledgeNonClawHubInstall === true ||
+    (params.onNonClawHubInstall
+      ? await params.onNonClawHubInstall({
+          pluginId: candidate.pluginId,
+          sourceClass: "npm",
+          spec: npmInstallSpec ?? "",
+        })
+      : false);
+  const unacknowledgedNpmResult = (): {
+    records: Record<string, PluginInstallRecord>;
+    changes: string[];
+    notices: string[];
+    warnings: string[];
+    failedPluginId: string;
+  } => {
+    const shellSpec = shellQuotePosixArg(`npm:${npmInstallSpec ?? ""}`);
+    return {
+      records: params.records,
+      changes: [],
+      notices: [],
+      warnings: [
+        ...warnings,
+        `Skipped installing missing configured plugin "${candidate.pluginId}" from npm ${npmInstallSpecLabel}: non-ClawHub install acknowledgement is required. Review the source, then run \`openclaw plugins install ${shellSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}\` or rerun repair with ${NON_CLAWHUB_INSTALL_ACK_FLAG}.`,
+      ],
+      failedPluginId: candidate.pluginId,
+    };
+  };
   if (
     existingNpmPackagePath &&
     existingNpmPackageVersion &&
@@ -1113,6 +1142,9 @@ async function installCandidate(params: {
     params.mode !== "update" &&
     isPostCoreConvergencePass(params.env)
   ) {
+    if (!(await acknowledgeNpmInstall())) {
+      return unacknowledgedNpmResult();
+    }
     return await adoptExistingNpmPackage({
       candidate,
       records: params.records,
@@ -1202,28 +1234,8 @@ async function installCandidate(params: {
       failedPluginId: candidate.pluginId,
     };
   }
-  const npmInstallSpecLabel = sanitizeTerminalText(npmInstallSpec);
-  const acknowledgedNonClawHubInstall =
-    params.acknowledgeNonClawHubInstall === true ||
-    (params.onNonClawHubInstall
-      ? await params.onNonClawHubInstall({
-          pluginId: candidate.pluginId,
-          sourceClass: "npm",
-          spec: npmInstallSpec,
-        })
-      : false);
-  if (!acknowledgedNonClawHubInstall) {
-    const shellSpec = shellQuotePosixArg(`npm:${npmInstallSpec}`);
-    return {
-      records: params.records,
-      changes: [],
-      notices: [],
-      warnings: [
-        ...warnings,
-        `Skipped installing missing configured plugin "${candidate.pluginId}" from npm ${npmInstallSpecLabel}: non-ClawHub install acknowledgement is required. Review the source, then run \`openclaw plugins install ${shellSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}\` or rerun repair with ${NON_CLAWHUB_INSTALL_ACK_FLAG}.`,
-      ],
-      failedPluginId: candidate.pluginId,
-    };
+  if (!(await acknowledgeNpmInstall())) {
+    return unacknowledgedNpmResult();
   }
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
   let result = await installPluginFromNpmSpec({

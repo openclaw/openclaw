@@ -708,6 +708,40 @@ function logInstallWarningWithLineBreaks(runtime: RuntimeEnv, message: string): 
   runtime.log?.(`${sanitized}\n`);
 }
 
+async function acknowledgeOnboardingNonClawHubSource(params: {
+  acknowledgeNonClawHubInstall?: boolean;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  sourceClass: "local-path" | "npm" | "npm-pack";
+  spec: string;
+  installCommandSpec: string;
+}): Promise<boolean> {
+  const nonClawHubWarning = formatNonClawHubInstallWarning({
+    sourceClass: params.sourceClass,
+    spec: params.spec,
+  });
+  params.runtime.log?.(nonClawHubWarning);
+  if (params.acknowledgeNonClawHubInstall) {
+    return true;
+  }
+  let acknowledged = false;
+  try {
+    acknowledged = await params.prompter.confirm({
+      message: "Install this non-ClawHub plugin source?",
+      initialValue: false,
+    });
+  } catch (error) {
+    params.runtime.error?.(error instanceof Error ? error.message : String(error));
+  }
+  if (!acknowledged) {
+    params.runtime.error?.(
+      `Install cancelled; install the plugin with ${sanitizeTerminalText(`openclaw plugins install ${params.installCommandSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} after reviewing the source, then rerun setup.`,
+    );
+    return false;
+  }
+  return true;
+}
+
 function isReviewRequiredClawHubTrustWarning(message: string): boolean {
   return message.includes("WARNING - ClawHub found security risks");
 }
@@ -865,11 +899,33 @@ async function installPluginFromOverride(params: {
   override: PluginInstallOverride;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  acknowledgeNonClawHubInstall?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime } = params;
   runtime.log?.(
     `Using plugin install override for ${sanitizeTerminalText(entry.pluginId)} from ${PLUGIN_INSTALL_OVERRIDES_ENV} (${ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV}=1).`,
   );
+  const displaySpec =
+    params.override.kind === "npm"
+      ? params.override.spec
+      : `npm-pack:${params.override.archivePath}`;
+  if (
+    !(await acknowledgeOnboardingNonClawHubSource({
+      acknowledgeNonClawHubInstall: params.acknowledgeNonClawHubInstall,
+      prompter,
+      runtime,
+      sourceClass: params.override.kind === "npm" ? "npm" : "npm-pack",
+      spec: displaySpec,
+      installCommandSpec: displaySpec,
+    }))
+  ) {
+    return {
+      cfg: params.cfg,
+      installed: false,
+      pluginId: entry.pluginId,
+      status: "failed",
+    };
+  }
   // Overrides are explicit operator/developer input and intentionally bypass
   // catalog trust defaults while still recording the resulting install source.
   const installOutcome =
@@ -890,10 +946,6 @@ async function installPluginFromOverride(params: {
           runtime,
         });
 
-  const displaySpec =
-    params.override.kind === "npm"
-      ? params.override.spec
-      : `npm-pack:${params.override.archivePath}`;
   if (installOutcome.status === "timed_out") {
     await prompter.note(
       formatPluginInstallTimedOutNote(sanitizeTerminalText(displaySpec)),
@@ -1118,6 +1170,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       override: installOverride,
       prompter,
       runtime,
+      acknowledgeNonClawHubInstall: params.acknowledgeNonClawHubInstall,
     });
   }
   const allowLocal = hasGitWorkspace(workspaceDir);
@@ -1189,42 +1242,14 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
   assertConfigWriteAllowedInCurrentMode();
 
-  const acknowledgeNonClawHubSource = async (paramsToAcknowledge: {
-    sourceClass: "local-path" | "npm";
-    spec: string;
-    installCommandSpec: string;
-  }): Promise<boolean> => {
-    const nonClawHubWarning = formatNonClawHubInstallWarning({
-      sourceClass: paramsToAcknowledge.sourceClass,
-      spec: paramsToAcknowledge.spec,
-    });
-    runtime.log?.(nonClawHubWarning);
-    if (params.acknowledgeNonClawHubInstall) {
-      return true;
-    }
-    let acknowledged = false;
-    try {
-      acknowledged = await prompter.confirm({
-        message: "Install this non-ClawHub plugin source?",
-        initialValue: false,
-      });
-    } catch (error) {
-      runtime.error?.(error instanceof Error ? error.message : String(error));
-    }
-    if (!acknowledged) {
-      runtime.error?.(
-        `Install cancelled; install the plugin with ${sanitizeTerminalText(`openclaw plugins install ${paramsToAcknowledge.installCommandSpec} ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} after reviewing the source, then rerun setup.`,
-      );
-      return false;
-    }
-    return true;
-  };
-
   if (choice === "local" && localPath) {
     const isBundledLocalPath = pathsReferToSameDirectory(localPath, bundledLocalPath);
     if (
       !isBundledLocalPath &&
-      !(await acknowledgeNonClawHubSource({
+      !(await acknowledgeOnboardingNonClawHubSource({
+        acknowledgeNonClawHubInstall: params.acknowledgeNonClawHubInstall,
+        prompter,
+        runtime,
         sourceClass: "local-path",
         spec: localPath,
         installCommandSpec: localPath,
@@ -1398,7 +1423,10 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
 
   if (
-    !(await acknowledgeNonClawHubSource({
+    !(await acknowledgeOnboardingNonClawHubSource({
+      acknowledgeNonClawHubInstall: params.acknowledgeNonClawHubInstall,
+      prompter,
+      runtime,
       sourceClass: "npm",
       spec: npmInstallSpec,
       installCommandSpec: `npm:${npmInstallSpec}`,
@@ -1503,7 +1531,10 @@ export async function ensureOnboardingPluginInstalled(params: {
       const isBundledLocalPath = pathsReferToSameDirectory(localPath, bundledLocalPath);
       if (
         !isBundledLocalPath &&
-        !(await acknowledgeNonClawHubSource({
+        !(await acknowledgeOnboardingNonClawHubSource({
+          acknowledgeNonClawHubInstall: params.acknowledgeNonClawHubInstall,
+          prompter,
+          runtime,
           sourceClass: "local-path",
           spec: localPath,
           installCommandSpec: localPath,

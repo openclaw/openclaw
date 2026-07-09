@@ -1822,6 +1822,54 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("does not adopt an existing npm payload during post-core repair without non-ClawHub acknowledgement", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "matrix");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/matrix", version: "1.2.3" }),
+    );
+    mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/matrix",
+          npmSpec: "@openclaw/matrix",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
+        channels: {
+          matrix: { enabled: true },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(result.records.matrix).toBeUndefined();
+    expect(result.failedPluginIds).toEqual(["matrix"]);
+    expect(result.warnings).toEqual([
+      'Skipped installing missing configured plugin "matrix" from npm @openclaw/matrix: non-ClawHub install acknowledgement is required. Review the source, then run `openclaw plugins install npm:@openclaw/matrix --acknowledge-non-clawhub-install` or rerun repair with --acknowledge-non-clawhub-install.',
+    ]);
+  });
+
   it("passes the post-core compatibility host version to ClawHub repair", async () => {
     const npmRoot = makeTempDir();
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);

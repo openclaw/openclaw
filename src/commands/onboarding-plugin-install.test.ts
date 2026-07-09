@@ -472,6 +472,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       } as never,
       runtime: { log: vi.fn() } as never,
+      acknowledgeNonClawHubInstall: true,
     });
 
     const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
@@ -481,6 +482,72 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(npmCall.spec).toBe("@openclaw/codex@2026.5.8");
     expect(npmCall.expectedPluginId).toBe("codex");
   });
+
+  it.each([
+    {
+      label: "npm",
+      override: "npm:@openclaw/codex@2026.5.8",
+      expectNoInstallerSideEffects: () => expect(installPluginFromNpmSpec).not.toHaveBeenCalled(),
+    },
+    {
+      label: "npm-pack",
+      override: "npm-pack:/tmp/codex.tgz",
+      expectNoInstallerSideEffects: () =>
+        expect(installPluginFromNpmPackArchive).not.toHaveBeenCalled(),
+    },
+  ])(
+    "blocks $label install overrides until non-ClawHub source acknowledgement",
+    async (scenario) => {
+      process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES = "1";
+      process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES = JSON.stringify({
+        codex: scenario.override,
+      });
+      const confirm = vi.fn(async () => false);
+      const progress = vi.fn(() => ({ update: vi.fn(), stop: vi.fn() }));
+      const log = vi.fn();
+      const error = vi.fn();
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "codex",
+          label: "Codex",
+          install: {
+            npmSpec: "@openclaw/codex",
+          },
+          trustedSourceLinkedOfficialInstall: true,
+        },
+        prompter: {
+          confirm,
+          select: vi.fn(async () => "npm"),
+          note: vi.fn(),
+          progress,
+        } as never,
+        runtime: { error, log } as never,
+      });
+
+      expect(result).toEqual({
+        cfg: {},
+        installed: false,
+        pluginId: "codex",
+        status: "failed",
+      });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Using plugin install override"));
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("outside ClawHub review and trust metadata"),
+      );
+      expect(confirm).toHaveBeenCalledWith({
+        message: "Install this non-ClawHub plugin source?",
+        initialValue: false,
+      });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("--acknowledge-non-clawhub-install"),
+      );
+      scenario.expectNoInstallerSideEffects();
+      expect(progress).not.toHaveBeenCalled();
+      expect(recordPluginInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it("installs and records ClawHub provider plugins with source facts", async () => {
     const cfg: OpenClawConfig = {
