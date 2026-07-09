@@ -44,7 +44,6 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
   scopeCdpPolicyToConfiguredEndpoint,
-  stripCdpUrlCredentials,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
@@ -53,7 +52,7 @@ import {
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
-  readChromeVersion,
+  readChromeVersionWithCredentialFallback,
   safeChromeCdpErrorMessage,
 } from "./chrome.diagnostics.js";
 import {
@@ -896,10 +895,9 @@ async function fetchChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
-  versionPath?: string,
 ): Promise<ChromeVersion | null> {
   try {
-    return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, versionPath);
+    return await readChromeVersionWithCredentialFallback(cdpUrl, timeoutMs, ssrfPolicy);
   } catch {
     return null;
   }
@@ -924,14 +922,8 @@ export async function getChromeWebSocketUrl(
   const discoveryUrl = isWebSocketUrl(cdpUrl)
     ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
     : cdpUrl;
-  let version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
-  let wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
-  if (!wsUrl && stripCdpUrlCredentials(cdpUrl) !== cdpUrl) {
-    // Playwright historically discovered authenticated endpoints through the
-    // trailing-slash route. Keep that compatibility inside the guarded fetch.
-    version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy, "/json/version/");
-    wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
-  }
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
+  const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     // /json/version unavailable or returned no WebSocket URL. For bare
     // ws/wss inputs, the URL itself may be a direct WebSocket endpoint

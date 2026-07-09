@@ -618,9 +618,14 @@ describe("browser chrome helpers", () => {
 
     try {
       const addr = server.address() as AddressInfo;
-      await expect(
-        getChromeWebSocketUrl(`http://browser-user:browser-password@127.0.0.1:${addr.port}`, 1000),
-      ).resolves.toBe(
+      const credentialedUrl = `http://browser-user:browser-password@127.0.0.1:${addr.port}`;
+      await expect(isChromeReachable(credentialedUrl, 1000)).resolves.toBe(true);
+      expect(requests).toEqual([
+        { authorization, url: "/json/version" },
+        { authorization, url: "/json/version/" },
+      ]);
+      requests.length = 0;
+      await expect(getChromeWebSocketUrl(credentialedUrl, 1000)).resolves.toBe(
         `ws://browser-user:browser-password@127.0.0.1:${addr.port}/devtools/browser/authenticated`,
       );
       expect(requests).toEqual([
