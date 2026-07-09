@@ -56,7 +56,7 @@ describe("createTelegramMiniAppDashboardCommand", () => {
     resolveTelegramMiniAppUrls.mockResolvedValue({
       pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
       controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-      gatewayUrl: "wss://host.tailnet.ts.net/openclaw",
+      gatewayUrl: "wss://host.tailnet.ts.net",
     });
     const command = createTelegramMiniAppDashboardCommand(
       createTestPluginApi({

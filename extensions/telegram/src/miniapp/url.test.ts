@@ -18,7 +18,7 @@ describe("resolveTelegramMiniAppUrls", () => {
     await expect(resolveTelegramMiniAppUrls({ cfg, runCommand })).resolves.toEqual({
       pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
       controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-      gatewayUrl: "wss://host.tailnet.ts.net/openclaw",
+      gatewayUrl: "wss://host.tailnet.ts.net",
     });
     expect(runCommand).toHaveBeenCalledWith(["tailscale", "status", "--json"], {
       timeoutMs: 5000,

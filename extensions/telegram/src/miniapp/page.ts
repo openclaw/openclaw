@@ -4,11 +4,9 @@ export const TELEGRAM_MINIAPP_EXPIRED_MESSAGE =
 
 export function renderTelegramMiniAppPage(params: {
   accountId: string;
-  controlUiUrl: string;
   scriptNonce: string;
 }): string {
   const accountId = JSON.stringify(params.accountId);
-  const controlUiUrl = JSON.stringify(params.controlUiUrl);
   const nonce = escapeHtml(params.scriptNonce);
   return `<!doctype html>
 <html lang="en">
@@ -33,7 +31,6 @@ export function renderTelegramMiniAppPage(params: {
   </main>
   <script nonce="${nonce}">
     const accountId = ${accountId};
-    const controlUiUrl = ${controlUiUrl};
     const status = document.getElementById("status");
     const showExpired = () => {
       status.textContent = ${JSON.stringify(TELEGRAM_MINIAPP_EXPIRED_MESSAGE)};
@@ -55,7 +52,7 @@ export function renderTelegramMiniAppPage(params: {
         }
         return await response.json();
       }).then((payload) => {
-        const next = new URL(controlUiUrl);
+        const next = new URL(payload.controlUiUrl);
         next.hash = "gatewayUrl=" + encodeURIComponent(payload.gatewayUrl) +
           "&bootstrapToken=" + encodeURIComponent(payload.bootstrapToken);
         location.replace(next.toString());

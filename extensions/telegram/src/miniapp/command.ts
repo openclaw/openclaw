@@ -59,6 +59,8 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
 }
 
 function isTelegramDirectCommand(ctx: PluginCommandContext): boolean {
+  // Parses OpenClaw's canonical telegram:<id> / telegram:group:<id> from/sessionKey encoding.
+  // DM-only because Telegram permits web_app inline buttons only in private chats.
   const from = ctx.from?.trim() ?? "";
   const sessionKey = ctx.sessionKey?.trim() ?? "";
   if (from.startsWith("telegram:group:") || sessionKey.includes(":telegram:group:")) {

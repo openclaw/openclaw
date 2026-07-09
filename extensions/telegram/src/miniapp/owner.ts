@@ -15,6 +15,8 @@ export async function isTelegramMiniAppOwner(params: {
   }
   const account = mergeTelegramAccountConfig(params.cfg, params.accountId);
   const allowFrom = [...(account.allowFrom ?? []), ...(params.cfg.commands?.ownerAllowFrom ?? [])];
+  // Dashboard access is stricter than core senderIsOwner: wildcard and username
+  // allowFrom entries never grant the numeric-id match that mints an operator credential.
   const expanded = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     accountId: params.accountId,

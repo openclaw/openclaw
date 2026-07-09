@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Telegram Mini App published URL resolution.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -43,7 +43,7 @@ export async function resolveTelegramMiniAppUrls(params: {
   return {
     pageUrl: `https://${publishedHost}${TELEGRAM_MINIAPP_PATH_PREFIX}`,
     controlUiUrl,
-    gatewayUrl: `wss://${publishedHost}${controlUiPath}`,
+    gatewayUrl: `wss://${publishedHost}`,
   };
 }
 

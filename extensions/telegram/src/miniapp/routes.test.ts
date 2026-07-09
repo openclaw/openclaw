@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../../src/plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginHttpRouteParams } from "../../../../src/plugins/types.js";
 
@@ -13,7 +13,7 @@ const resolveTelegramMiniAppUrls = vi.hoisted(() =>
   vi.fn(async () => ({
     pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
     controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-    gatewayUrl: "wss://host.tailnet.ts.net/openclaw",
+    gatewayUrl: "wss://host.tailnet.ts.net",
   })),
 );
 
@@ -108,6 +108,25 @@ function signedInitData(userId: string, nonce: string): string {
 }
 
 describe("registerTelegramMiniAppRoutes", () => {
+  beforeEach(() => {
+    issueDeviceBootstrapToken.mockClear();
+    resolveTelegramMiniAppUrls.mockClear();
+  });
+
+  it("serves the page without resolving published URLs", async () => {
+    const route = createRoute({});
+    const res = await callRoute({
+      route,
+      method: "GET",
+      url: "/__openclaw_tg_miniapp/?accountId=ops",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('const accountId = "ops";');
+    expect(res.body).toContain("new URL(payload.controlUiUrl)");
+    expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+  });
+
   it("mints a control-ui bootstrap token for a valid owner request", async () => {
     const route = createRoute(config());
     const res = await callRoute({
@@ -124,7 +143,8 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({
       bootstrapToken: "issued",
-      gatewayUrl: "wss://host.tailnet.ts.net/openclaw",
+      controlUiUrl: "https://host.tailnet.ts.net/openclaw",
+      gatewayUrl: "wss://host.tailnet.ts.net",
     });
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
@@ -136,7 +156,6 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("rejects replayed init-data without minting again", async () => {
-    issueDeviceBootstrapToken.mockClear();
     const route = createRoute(config());
     const initData = signedInitData("123456", "replay");
     await callRoute({
@@ -162,7 +181,6 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("reserves validated init-data before minting", async () => {
-    issueDeviceBootstrapToken.mockClear();
     const route = createRoute(config());
     const initData = signedInitData("123456", "concurrent");
 
@@ -185,7 +203,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       }),
     ]);
 
-    expect(responses.map((res) => res.statusCode).toSorted()).toEqual([200, 401]);
+    expect(responses.map((res) => res.statusCode).toSorted((a, b) => a - b)).toEqual([200, 401]);
     expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
   });
 

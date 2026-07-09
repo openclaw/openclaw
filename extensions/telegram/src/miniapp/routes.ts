@@ -34,7 +34,7 @@ export function registerTelegramMiniAppRoutes(api: OpenClawPluginApi): void {
     handler: async (req, res) => {
       const url = new URL(req.url ?? "", "http://openclaw.local");
       if (url.pathname === TELEGRAM_MINIAPP_PATH_PREFIX) {
-        await handlePage(api, req, res, url);
+        await handlePage(req, res, url);
         return true;
       }
       if (url.pathname === AUTH_PATH) {
@@ -47,22 +47,9 @@ export function registerTelegramMiniAppRoutes(api: OpenClawPluginApi): void {
   });
 }
 
-async function handlePage(
-  api: OpenClawPluginApi,
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-): Promise<void> {
+async function handlePage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method !== "GET") {
     sendText(res, 405, "Method not allowed");
-    return;
-  }
-  const cfg = currentConfig(api);
-  let urls;
-  try {
-    urls = await resolveTelegramMiniAppUrls({ cfg });
-  } catch {
-    sendText(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
     return;
   }
   const accountId = normalizeAccountId(url.searchParams.get("accountId") ?? DEFAULT_ACCOUNT_ID);
@@ -72,7 +59,6 @@ async function handlePage(
     200,
     renderTelegramMiniAppPage({
       accountId,
-      controlUiUrl: urls.controlUiUrl,
       scriptNonce: nonce,
     }),
     nonce,
@@ -88,7 +74,7 @@ async function handleAuth(
     sendText(res, 405, "Method not allowed");
     return;
   }
-  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  const contentType = (req.headers["content-type"] ?? "").toLowerCase();
   if (contentType.split(";")[0]?.trim() !== "application/json") {
     sendText(res, 415, "Unsupported media type");
     return;
@@ -144,6 +130,7 @@ async function handleAuth(
   });
   sendJson(res, 200, {
     bootstrapToken: issued.token,
+    controlUiUrl: urls.controlUiUrl,
     gatewayUrl: urls.gatewayUrl,
   });
 }
