@@ -150,6 +150,20 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
   });
 
+  it("rejects non-positive offsets instead of reading from the first line", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from("alpha\nbeta\ngamma"),
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: "notes.txt", offset: 0 }, undefined, undefined, {} as never),
+    ).rejects.toThrow("Offset must be an integer at least 1");
+  });
+
   it("uses the shared Windows decoder for local filesystem reads", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-encoding-"));
     const filePath = path.join(tempDir, "legacy.txt");
@@ -214,6 +228,6 @@ describe("read tool", () => {
     );
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3");
+    expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
   });
 });
