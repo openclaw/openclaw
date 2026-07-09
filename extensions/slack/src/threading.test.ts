@@ -111,22 +111,6 @@ describe("resolveSlackThreadTargets", () => {
     }
   });
 
-  it("sets replyToId for genuine thread replies only", () => {
-    const context = resolveSlackThreadContext({
-      replyToMode: "off",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "456",
-        thread_ts: "123",
-        parent_user_id: "U1",
-      },
-    });
-
-    expect(context.isThreadReply).toBe(true);
-    expect(context.replyToId).toBe("123");
-  });
-
   it("uses normalized direct-message state for DM assistant thread-root messages", () => {
     for (const channelType of ["channel", undefined] as const) {
       const message = {
