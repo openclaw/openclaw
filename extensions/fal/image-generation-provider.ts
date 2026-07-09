@@ -125,6 +125,7 @@ const GROK_IMAGINE_SUPPORTED_RESOLUTIONS: readonly ("1K" | "2K" | "4K")[] = ["1K
 const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
@@ -609,6 +610,7 @@ async function fetchImageBuffer(
   })();
   const { response, release } = await falFetchGuard({
     url,
+    timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
     policy: downloadPolicy,
     auditContext: "fal-image-download",
   });

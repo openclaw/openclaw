@@ -29,6 +29,7 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
 function expectFalDownload(params: { call: number; url: string }) {
   expect(fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0]).toEqual({
     url: params.url,
+    timeoutMs: 30_000,
     policy: undefined,
     auditContext: "fal-image-download",
   });
