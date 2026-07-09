@@ -1,9 +1,10 @@
 // Scans plugin manifest metadata without importing runtime entrypoints.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -29,36 +30,6 @@ let manifestMetadataCache:
       records: PluginManifestMetadataRecord[];
     }
   | undefined;
-
-function resolveUserPath(value: string, env: NodeJS.ProcessEnv): string {
-  if (value === "~" || value.startsWith("~/")) {
-    const home =
-      normalizeTrimmedString(env.OPENCLAW_HOME) ??
-      normalizeTrimmedString(env.HOME) ??
-      normalizeTrimmedString(env.USERPROFILE) ??
-      os.homedir();
-    return path.join(home, value.slice(2));
-  }
-  return path.resolve(value);
-}
-
-// Exported so tests can assert the empty/whitespace-home fallback without
-// driving the full filesystem scan (which is module-level cached).
-export function resolveStateDir(env: NodeJS.ProcessEnv): string {
-  const override = normalizeTrimmedString(env.OPENCLAW_STATE_DIR);
-  if (override) {
-    return resolveUserPath(override, env);
-  }
-  // An empty/whitespace HOME or OPENCLAW_HOME is not nullish, so `??` would keep
-  // it and resolve the state dir relative to cwd. Normalize first so an empty
-  // value falls through to os.homedir(), matching the canonical home resolver.
-  const home =
-    normalizeTrimmedString(env.OPENCLAW_HOME) ??
-    normalizeTrimmedString(env.HOME) ??
-    normalizeTrimmedString(env.USERPROFILE) ??
-    os.homedir();
-  return path.join(home, ".openclaw");
-}
 
 function listChildPluginDirs(
   root: string | undefined,
@@ -120,7 +91,7 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
       continue;
     }
     dirs.push({
-      pluginDir: resolveUserPath(rootDir, env),
+      pluginDir: resolveHomeRelativePath(rootDir, { env }),
       rank: plugin.origin === "bundled" ? 3 : 1,
       order: order++,
       origin: normalizeTrimmedString(plugin.origin),

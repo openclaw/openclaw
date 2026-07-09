@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { listOpenClawPluginManifestMetadata, resolveStateDir } from "./manifest-metadata-scan.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 
 const tempRoots: string[] = [];
 
@@ -107,31 +107,23 @@ describe("listOpenClawPluginManifestMetadata", () => {
       hostSuffixes: [".api.openai.com"],
     });
   });
-});
 
-describe("resolveStateDir empty/whitespace home fallback", () => {
-  // An empty or whitespace HOME/OPENCLAW_HOME is not nullish, so the previous
-  // `??` chain kept it and resolved the state dir relative to cwd instead of
-  // falling back to os.homedir().
-  it("falls back to os.homedir() when HOME is an empty string", () => {
-    const dir = resolveStateDir({ HOME: "" });
-    expect(path.isAbsolute(dir)).toBe(true);
-    expect(dir).toBe(path.join(os.homedir(), ".openclaw"));
-  });
+  it("falls through a blank OpenClaw home when scanning global manifests", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const pluginDir = path.join(home, ".openclaw", "extensions", "example");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: "example" });
 
-  it("falls back to os.homedir() when OPENCLAW_HOME is whitespace", () => {
-    const dir = resolveStateDir({ OPENCLAW_HOME: "   " });
-    expect(path.isAbsolute(dir)).toBe(true);
-    expect(dir).toBe(path.join(os.homedir(), ".openclaw"));
-  });
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: "   ",
+      HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+    });
 
-  it("still honors a valid HOME (regression)", () => {
-    const dir = resolveStateDir({ HOME: "/home/someuser" });
-    expect(dir).toBe(path.join("/home/someuser", ".openclaw"));
-  });
-
-  it("honors OPENCLAW_STATE_DIR override even with empty HOME", () => {
-    const dir = resolveStateDir({ OPENCLAW_STATE_DIR: "/custom/state", HOME: "" });
-    expect(dir).toBe(path.resolve("/custom/state"));
+    expect(records).toContainEqual({
+      pluginDir,
+      manifest: { id: "example" },
+      origin: "global",
+    });
   });
 });
