@@ -25,6 +25,18 @@ describe("twitch outbound sanitizeText", () => {
     expect(sanitizeOutboundText(text)).toBe("Stream is live.");
   });
 
+  it("strips multiline tool-response scaffolding leaked into assistant text", () => {
+    const text = [
+      "Checking now.",
+      "<function_response>",
+      'Searching for: "stream status"',
+      "</function_response>",
+      "Stream is live.",
+    ].join("\n");
+
+    expect(sanitizeOutboundText(text)).toBe("Checking now.\n\nStream is live.");
+  });
+
   it("preserves ordinary assistant prose while sanitizing", () => {
     const text = "The pipeline has 3 open deals.";
 
