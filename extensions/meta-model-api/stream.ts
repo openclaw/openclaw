@@ -25,7 +25,7 @@ export function createMetaModelApiResponsesWrapper(baseStreamFn: StreamFn | unde
       if (model.provider !== "meta-model-api" || model.api !== "openai-responses") {
         return;
       }
-      if (model.reasoning !== true) {
+      if (!model.reasoning) {
         return;
       }
       ensureMetaResponsesReplayFields(payloadObj);
