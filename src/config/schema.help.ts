@@ -13,7 +13,17 @@ export const FIELD_HELP: Record<string, string> = {
   "marketplaces.feeds.*.url":
     "HTTPS URL for the marketplace feed profile. Remote feed documents cannot introduce new registry domains or credentials; they only reference locally configured sources by name.",
   "marketplaces.feeds.*.verification":
-    "Feed authenticity policy. This slice accepts only unsigned HTTPS feeds; signed verification is added when envelope enforcement is wired.",
+    "Feed authenticity policy. Use unsigned only as an explicit local opt-in for self-hosted feeds. Use signed to name locally trusted publisher public keys before refresh enforcement consumes verified envelopes.",
+  "marketplaces.feeds.*.verification.mode":
+    'Feed verification mode: "unsigned" for explicit unsigned opt-in, or "signed" for local direct-key verification once refresh enforcement is wired.',
+  "marketplaces.feeds.*.verification.keys":
+    "Trusted publisher public keys for signed feed envelopes. These non-secret local trust anchors belong in source-profile config; remote feed documents cannot introduce or rotate them by themselves.",
+  "marketplaces.feeds.*.verification.keys[].keyId":
+    "Stable publisher key identifier expected in a signed feed envelope signature.",
+  "marketplaces.feeds.*.verification.keys[].publicKey":
+    "Ed25519 publisher public key for feed envelope verification, encoded as PEM or raw base64url. Feed signing private keys are publisher-side secrets managed outside this config; do not reuse platform signing identities or certificates here.",
+  "marketplaces.feeds.*.verification.threshold":
+    "Optional number of trusted signatures required for a signed feed. Defaults to one in the later refresh enforcement slice.",
   "marketplaces.sources":
     "Named package source profiles that feed entries can reference using sourceRef. Keep credentials and registry endpoints local so remote feeds cannot bootstrap trust roots.",
   "marketplaces.sources.*.type":

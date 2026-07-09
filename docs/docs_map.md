@@ -7485,6 +7485,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/github-copilot
 - Headings:
   - H2: Three ways to use Copilot in OpenClaw
+  - H2: GitHub Enterprise (data residency)
   - H2: Optional flags
   - H2: Non-interactive onboarding
   - H2: Memory search embeddings
