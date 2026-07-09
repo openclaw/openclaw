@@ -271,6 +271,19 @@ describe("gateway/node-command-policy", () => {
     expect(familyOnly.has("system.run")).toBe(false);
   });
 
+  it("keeps plugin defaults out of the fixed watchOS command surface", () => {
+    installCanvasPluginDefaults();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "Apple Watch",
+    });
+
+    expect(allowlist.has("device.info")).toBe(true);
+    expect(allowlist.has("canvas.snapshot")).toBe(false);
+    expect(allowlist.has("canvas.present")).toBe(false);
+  });
+
   it("keeps explicitly approved host commands for desktop platforms", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [

@@ -777,7 +777,7 @@ final class WatchDirectNode {
     }
 }
 
-private struct WatchNetworkMetricsSnapshot: Sendable {
+private struct WatchNetworkMetricsSnapshot {
     let isCellular: Bool
     let isExpensive: Bool
     let isConstrained: Bool

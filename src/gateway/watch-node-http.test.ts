@@ -187,7 +187,7 @@ describe("watch node HTTP transport", () => {
     expect(
       testing.isCanonicalWatchNode({
         ...bounded,
-        permissions: { ...(bounded.permissions ?? {}), canvas: true },
+        permissions: { ...bounded.permissions, canvas: true },
       }),
     ).toBe(false);
     expect(

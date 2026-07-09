@@ -248,6 +248,11 @@ export function listDangerousPluginNodeCommands(): string[] {
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
+  // The direct watch transport has a fixed, minimal command surface. Do not let
+  // generic plugin defaults silently expand it when plugins are installed.
+  if (platformId === "watchos") {
+    return [];
+  }
   const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
