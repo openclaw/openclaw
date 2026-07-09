@@ -8,8 +8,8 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { ChatScope } from "../types.js";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { ChatScope } from "../types.js";
 import { debugLog } from "./log.js";
 
 interface CacheEntry {
@@ -56,7 +56,9 @@ export function getCachedFileInfo(
     return null;
   }
 
-  debugLog(`[upload-cache] Cache HIT: key=${truncateUtf16Safe(key, 40)}..., fileUuid=${entry.fileUuid}`);
+  debugLog(
+    `[upload-cache] Cache HIT: key=${truncateUtf16Safe(key, 40)}..., fileUuid=${entry.fileUuid}`,
+  );
   return entry.fileInfo;
 }
 

@@ -194,7 +194,9 @@ export async function getImageSizeFromUrl(
       clearTimeout(timeoutId);
     }
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${truncateUtf16Safe(url, 60)}...: ${formatErrorMessage(err)}`);
+    debugLog(
+      `[image-size] Error fetching ${truncateUtf16Safe(url, 60)}...: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }
