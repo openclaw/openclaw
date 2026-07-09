@@ -3,6 +3,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   floatToPcm16,
+  RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmOutputQueue,
 } from "./realtime-talk-audio.ts";
 import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
@@ -81,6 +82,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private media: MediaStream | null = null;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
+  private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private inputProcessor: ScriptProcessorNode | null = null;
   private closed = false;
@@ -105,9 +107,26 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
-    this.media = await openRealtimeTalkInput(this.ctx.inputDeviceId);
+    let media: MediaStream;
+    try {
+      media = await openRealtimeTalkInput(this.ctx.inputDeviceId);
+    } catch (error) {
+      if (this.closed) {
+        return;
+      }
+      throw error;
+    }
+    if (this.closed) {
+      media.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
+    if (this.ctx.callbacks.onInputLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
+      this.inputMeter.start(this.media, this.inputContext);
+    }
     this.ws = new WebSocket(wsUrl);
     this.ws.binaryType = "arraybuffer";
     this.ws.addEventListener("open", () => {
@@ -146,6 +165,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputProcessor = null;
     this.inputSource?.disconnect();
     this.inputSource = null;
+    this.inputMeter?.stop();
+    this.inputMeter = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
     this.stopOutput();
@@ -167,7 +188,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       if (this.ws?.readyState !== WebSocket.OPEN) {
         return;
       }
-      const pcm = floatToPcm16(event.inputBuffer.getChannelData(0));
+      const samples = event.inputBuffer.getChannelData(0);
+      const pcm = floatToPcm16(samples);
       this.send({
         realtimeInput: {
           audio: {

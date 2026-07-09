@@ -159,6 +159,7 @@ function createRuntimeCore(
     shouldHandleTextCommands?: () => boolean;
     textHasControlCommand?: (text?: string) => boolean;
     createInboundDebouncer?: typeof createInboundDebouncer;
+    verboseDebug?: (message: string) => void;
   } = {},
 ) {
   const dispatchPreparedForTest = vi.fn(
@@ -223,9 +224,9 @@ function createRuntimeCore(
       current: () => cfg,
     },
     logging: {
-      shouldLogVerbose: () => false,
+      shouldLogVerbose: () => Boolean(overrides.verboseDebug),
       getChildLogger: () => ({
-        debug: vi.fn(),
+        debug: overrides.verboseDebug ?? vi.fn(),
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
@@ -445,6 +446,53 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("keeps verbose inbound previews on complete UTF-16 boundaries", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    const verboseDebug = vi.fn();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-verbose-preview",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: `${"a".repeat(199)}😀tail`,
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(verboseDebug).toHaveBeenCalledWith(
+      `mattermost inbound: from=mattermost:channel:chan-1 len=205 preview="${"a".repeat(199)}"`,
+    );
   });
 
   it("dispatches a bare bot mention whose body is empty after normalization as a wake event", async () => {

@@ -25,6 +25,16 @@ class NodeApp : Application() {
       runtimeInstance ?: NodeRuntime(this, prefs).also { runtimeInstance = it }
     }
 
+  internal fun ensureScreenshotFixtureRuntime(): NodeRuntime =
+    synchronized(runtimeLock) {
+      check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+      runtimeInstance?.also { runtime ->
+        check(runtime.mode == NodeRuntimeMode.ScreenshotFixture) {
+          "NodeRuntime already started in live mode"
+        }
+      } ?: NodeRuntime(this, prefs, NodeRuntimeMode.ScreenshotFixture).also { runtimeInstance = it }
+    }
+
   /**
    * Reads the runtime without forcing startup, used by lifecycle probes and services.
    */

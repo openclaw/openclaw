@@ -318,23 +318,9 @@ describe("skills-clawhub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: undefined,
-      root: "/tmp/workspace",
-      skills: expect.objectContaining({
-        agentreceipt: expect.objectContaining({
-          version: "1.0.0",
-          installedAt: expect.any(Number),
-          registry: "https://clawhub.ai",
-        }),
-      }),
+      slug: "agentreceipt",
+      version: "1.0.0",
     });
-    const telemetrySkills = reportClawHubSkillInstallTelemetryMock.mock.calls[0]?.[0]?.skills as
-      | Record<string, Record<string, unknown>>
-      | undefined;
-    expect(Object.keys(telemetrySkills?.agentreceipt ?? {}).toSorted()).toEqual([
-      "installedAt",
-      "registry",
-      "version",
-    ]);
   });
 
   it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
@@ -894,6 +880,12 @@ describe("skills-clawhub", () => {
       slug: "weather",
       ownerHandle: "demo-owner",
       installedVersion: "1.0.0",
+    });
+    expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.0.0",
     });
   });
 

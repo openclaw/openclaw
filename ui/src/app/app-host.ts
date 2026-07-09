@@ -11,16 +11,18 @@ import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
+import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import type { SidebarNavRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
+import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -41,6 +43,7 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
+import { NAV_WIDTH_DEFAULT, NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -372,6 +375,7 @@ class OpenClawShell extends LitElement {
   private context?: ApplicationContext<RouteId>;
 
   @state() private navCollapsed = false;
+  @state() private navWidth = NAV_WIDTH_DEFAULT;
   @state() private sidebarPinnedRoutes: readonly SidebarNavRoute[] = [];
   @state() private sidebarMoreExpanded = false;
   @state() private navDrawerOpen = false;
@@ -398,6 +402,9 @@ class OpenClawShell extends LitElement {
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
+  // Where "Back to app" / Escape leaves the settings takeover; falls back to
+  // chat (the app default route) when settings was the entry point.
+  private lastWorkspaceLocation: { routeId: RouteId; search: string } | null = null;
   private agentsListClient: GatewayBrowserClient | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private stopAgentsSubscription: (() => void) | undefined;
@@ -418,6 +425,7 @@ class OpenClawShell extends LitElement {
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
+    window.addEventListener("resize", this.handleWindowResize);
   }
 
   override updated() {
@@ -486,6 +494,7 @@ class OpenClawShell extends LitElement {
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
+    window.removeEventListener("resize", this.handleWindowResize);
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
     this.stopConfigSubscription?.();
@@ -539,9 +548,25 @@ class OpenClawShell extends LitElement {
     this.context?.replace("chat", this.chatNavigationOptions());
   }
 
+  private isSettingsTakeover(): boolean {
+    const routeId = this.routeState.routeId;
+    return routeId !== undefined && isSettingsNavigationRoute(routeId);
+  }
+
+  private exitSettings() {
+    const previous = this.lastWorkspaceLocation;
+    if (previous) {
+      this.navigate(previous.routeId, previous.search ? { search: previous.search } : undefined);
+      return;
+    }
+    this.navigate("chat");
+  }
+
   private toggleNavigationSurface(trigger?: HTMLElement) {
     const context = this.context;
-    if (!context || this.onboarding) {
+    // Desktop settings takeover has no app nav to collapse; the mobile drawer
+    // hosts the settings sidebar and must keep toggling.
+    if (!context || this.onboarding || (this.isSettingsTakeover() && !isMobileNavLayout())) {
       return;
     }
     if (isMobileNavLayout()) {
@@ -553,8 +578,12 @@ class OpenClawShell extends LitElement {
       this.navDrawerOpen = true;
       return;
     }
+    // A drawer that survived a breakpoint change is visually expanded even
+    // when the persisted desktop preference says collapsed.
+    const nextNavCollapsed = this.navDrawerOpen || !this.navCollapsed;
+    this.closeNavDrawer();
     context.navigation.update({
-      navCollapsed: !this.navCollapsed,
+      navCollapsed: nextNavCollapsed,
     });
   }
 
@@ -572,6 +601,22 @@ class OpenClawShell extends LitElement {
     });
   }
 
+  private resizeNavigation(splitRatio: number) {
+    const shell = this.querySelector<HTMLElement>(".shell");
+    const context = this.context;
+    if (!shell || !context) {
+      return;
+    }
+    const navWidth = Math.round(
+      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
+    );
+    context.navigation.update({ navWidth });
+  }
+
+  private readonly handleWindowResize = () => {
+    this.requestUpdate();
+  };
+
   private readonly handleShellKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
       return;
@@ -581,8 +626,24 @@ class OpenClawShell extends LitElement {
   };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+    const plainKey = !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey;
+    if (plainKey && event.key === "Escape" && this.isSettingsTakeover()) {
+      if (this.navDrawerOpen) {
+        event.preventDefault();
+        this.closeNavDrawer({ restoreFocus: true });
+        return;
+      }
+      if (this.shouldIgnoreSettingsEscape(event)) {
+        return;
+      }
+      event.preventDefault();
+      this.exitSettings();
+      return;
+    }
     if (
-      event.defaultPrevented ||
       event.altKey ||
       event.shiftKey ||
       !event.metaKey ||
@@ -594,6 +655,28 @@ class OpenClawShell extends LitElement {
     event.preventDefault();
     this.toggleNavigationSurface();
   };
+
+  /**
+   * Escape only exits settings when nothing else claims it: open dialogs,
+   * palette, menus, and text inputs keep their native dismiss/blur behavior.
+   */
+  private shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
+    if (
+      this.commandPalette?.isOpen ||
+      this.overlaySnapshot.devicePairSetupOpen ||
+      this.overlaySnapshot.approvalQueue.length > 0 ||
+      document.querySelector("dialog[open]")
+    ) {
+      return true;
+    }
+    const target = event.target;
+    return (
+      target instanceof Element &&
+      target.closest(
+        "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+      ) !== null
+    );
+  }
 
   private readonly openPalette = () => {
     this.commandPalette?.openPalette();
@@ -713,6 +796,12 @@ class OpenClawShell extends LitElement {
     if (context) {
       this.ensureAgentsList(context.gateway.snapshot);
     }
+    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+      this.lastWorkspaceLocation = {
+        routeId: routeState.routeId,
+        search: routeState.location?.search ?? "",
+      };
+    }
     if (routeState.routeId !== "chat") {
       return;
     }
@@ -727,6 +816,7 @@ class OpenClawShell extends LitElement {
     snapshot: ApplicationRuntime["context"]["navigation"]["snapshot"],
   ) => {
     this.navCollapsed = snapshot.navCollapsed;
+    this.navWidth = snapshot.navWidth;
     this.sidebarPinnedRoutes = snapshot.sidebarPinnedRoutes;
     this.sidebarMoreExpanded = snapshot.sidebarMoreExpanded;
   };
@@ -743,10 +833,13 @@ class OpenClawShell extends LitElement {
       activeRoute === "plugin"
         ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
         : "";
+    const settingsTakeover = isSettingsNavigationRoute(activeRoute);
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
-    const navCollapsed = this.navCollapsed && !navDrawerOpen;
+    // The settings sidebar has a fixed width, so the collapse state pauses too.
+    const navCollapsed = this.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -761,7 +854,8 @@ class OpenClawShell extends LitElement {
           ? "shell--nav-collapsed"
           : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
-          : ""}"
+          : ""} ${settingsTakeover ? "shell--settings" : ""}"
+        style=${`--shell-nav-expanded-width: ${this.navWidth}px`}
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
@@ -785,34 +879,62 @@ class OpenClawShell extends LitElement {
             this.navigate(routeId, options)}
         ></openclaw-app-topbar>
         <div class="shell-nav">
-          <openclaw-app-sidebar
-            .basePath=${context.basePath}
-            .activeRouteId=${activeRoute}
-            .activePluginTabId=${activePluginTabId}
-            .enabledRouteIds=${this.enabledRouteIds()}
-            .sessionKey=${this.activeSessionKey}
-            .collapsed=${navCollapsed}
-            .connected=${this.gatewayConnected}
-            .canPairDevice=${this.gatewayConnected &&
-            hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)}
-            .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
-            .sidebarMoreExpanded=${this.sidebarMoreExpanded}
-            .themeMode=${context.theme.mode}
-            .onOpenPalette=${this.openPalette}
-            .onToggleSidebar=${() => this.toggleNavigationSurface()}
-            .onToggleMore=${() =>
-              context.navigation.update({
-                sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
-              })}
-            .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
-              context.navigation.update({ sidebarPinnedRoutes: routes })}
-            .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
-            .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-              this.navigate(routeId, options)}
-            .onPreloadRoute=${(routeId: string) =>
-              isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
-          ></openclaw-app-sidebar>
+          ${settingsTakeover
+            ? renderSettingsSidebar({
+                basePath: context.basePath,
+                activeRouteId: activeRoute,
+                connected: this.gatewayConnected,
+                version:
+                  context.config.current.serverVersion ??
+                  context.gateway.snapshot.hello?.server?.version ??
+                  "",
+                onExit: () => this.exitSettings(),
+                onNavigate: (routeId) => this.navigate(routeId),
+                onPreload: (routeId) => context.preload(routeId),
+              })
+            : html`<openclaw-app-sidebar
+                .basePath=${context.basePath}
+                .activeRouteId=${activeRoute}
+                .activePluginTabId=${activePluginTabId}
+                .enabledRouteIds=${this.enabledRouteIds()}
+                .sessionKey=${this.activeSessionKey}
+                .collapsed=${navCollapsed}
+                .connected=${this.gatewayConnected}
+                .canPairDevice=${this.gatewayConnected &&
+                hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)}
+                .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
+                .sidebarMoreExpanded=${this.sidebarMoreExpanded}
+                .themeMode=${context.theme.mode}
+                .onOpenPalette=${this.openPalette}
+                .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onToggleMore=${() =>
+                  context.navigation.update({
+                    sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
+                  })}
+                .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
+                  context.navigation.update({ sidebarPinnedRoutes: routes })}
+                .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
+                .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+                  this.navigate(routeId, options)}
+                .onPreloadRoute=${(routeId: string) =>
+                  isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
+              ></openclaw-app-sidebar>`}
         </div>
+        ${!navCollapsed && !this.onboarding && !settingsTakeover
+          ? html`
+              <resizable-divider
+                class="sidebar-resizer"
+                .label=${t("nav.resize")}
+                .splitRatio=${this.navWidth / shellWidth}
+                .minRatio=${NAV_WIDTH_MIN / shellWidth}
+                .maxRatio=${NAV_WIDTH_MAX / shellWidth}
+                aria-valuetext=${`${this.navWidth} pixels`}
+                title=${t("nav.resize")}
+                @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+                  this.resizeNavigation(event.detail.splitRatio)}
+              ></resizable-divider>
+            `
+          : nothing}
         <main
           class="content ${activeRoute === "chat" ? "content--chat" : ""} ${activeRoute ===
           "workboard"

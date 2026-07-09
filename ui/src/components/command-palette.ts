@@ -461,6 +461,10 @@ export class CommandPalette extends LitElement {
     this.clearSessionSearch();
   }
 
+  get isOpen(): boolean {
+    return this.open;
+  }
+
   private readonly togglePalette = () => {
     if (this.open) {
       this.open = false;

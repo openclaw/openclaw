@@ -139,6 +139,22 @@ export type OfficialExternalPluginCatalogSourceProfile =
 
 export type OfficialExternalPluginCatalogFeedProfile = {
   url: string;
+  verification?: OfficialExternalPluginCatalogFeedVerification;
+};
+
+export type OfficialExternalPluginCatalogFeedVerification =
+  | {
+      mode: "unsigned";
+    }
+  | {
+      mode: "signed";
+      keys: readonly OfficialExternalPluginCatalogFeedSigningKey[];
+      threshold?: number;
+    };
+
+export type OfficialExternalPluginCatalogFeedSigningKey = {
+  keyId: string;
+  publicKey: string;
 };
 
 export type OfficialExternalPluginCatalogProfileConfig = {
@@ -336,7 +352,11 @@ function resolveHostedCatalogFeedSource(params: {
   feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-}): { url: URL; hostnameAllowlist: string[] } {
+}): {
+  url: URL;
+  hostnameAllowlist: string[];
+  verification?: OfficialExternalPluginCatalogFeedVerification;
+} {
   const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
   const explicitFeedUrl = normalizeOptionalString(params.feedUrl);
   if (explicitFeedUrl) {
@@ -344,7 +364,10 @@ function resolveHostedCatalogFeedSource(params: {
     if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(url.hostname)) {
       throw new Error("hosted catalog feed URL hostname is not allowed");
     }
-    return { url, hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST };
+    return {
+      url,
+      hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
+    };
   }
   const profileName =
     normalizeOptionalString(params.feedProfile) ??
@@ -360,6 +383,7 @@ function resolveHostedCatalogFeedSource(params: {
       ...OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
       url.hostname,
     ]),
+    verification: profile.verification,
   };
 }
 
@@ -804,7 +828,11 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   stateDatabasePath?: string;
   now?: () => Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  let source: { url: URL; hostnameAllowlist: string[] };
+  let source: {
+    url: URL;
+    hostnameAllowlist: string[];
+    verification?: OfficialExternalPluginCatalogFeedVerification;
+  };
   try {
     source = resolveHostedCatalogFeedSource({
       feedUrl: params?.feedUrl,
@@ -815,6 +843,9 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     return bundledFallbackResult(err);
   }
   const { url } = source;
+  if (source.verification?.mode === "signed") {
+    throw new Error("hosted catalog signed feed verification is not wired yet");
+  }
   const snapshotStore = await resolveHostedCatalogSnapshotStore({
     snapshotStore: params?.snapshotStore,
     env: params?.env,
