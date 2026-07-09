@@ -20,6 +20,15 @@ read_when:
 | Default model   | `cohere/command-a-03-2025`                           |
 | Context window  | 256,000 tokens                                       |
 
+## Built-in catalog
+
+| Model ref                    | Input       | Context | Max output | Notes                                  |
+| ---------------------------- | ----------- | ------- | ---------- | -------------------------------------- |
+| `cohere/command-a-03-2025`   | text        | 256,000 | 8,000      | Default model                          |
+| `cohere/north-mini-code-1-0` | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits |
+
+North Mini Code supports Cohere's two Compatibility API reasoning modes. OpenClaw maps **off** to `none` and every enabled thinking level to `high`.
+
 ## Get started
 
 1. Cohere ships with current OpenClaw packages. If it is missing, install the external package and restart the Gateway:

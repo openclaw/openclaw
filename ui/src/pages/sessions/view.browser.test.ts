@@ -1,6 +1,6 @@
 // Control UI tests cover sessions behavior.
-import { chromium, type Browser, type Page } from "playwright";
-import { describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -20,7 +20,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 type BrowserFixture = {
-  browser: Browser;
+  context: BrowserContext;
   page: Page;
 };
 
@@ -163,30 +163,43 @@ function sessionsTableHtml() {
   `;
 }
 
-async function openFixture(width: number, height: number): Promise<BrowserFixture> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+async function openFixture(
+  browser: Browser,
+  width: number,
+  height: number,
+): Promise<BrowserFixture> {
+  const context = await browser.newContext({ viewport: { width, height } });
   let page: Page | undefined;
   try {
-    page = await browser.newPage({ viewport: { width, height } });
+    page = await context.newPage();
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
     );
-    return { browser, page };
+    return { context, page };
   } catch (error) {
-    await page?.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await context.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeFixture(fixture: BrowserFixture): Promise<void> {
-  await fixture.page.close().catch(() => {});
-  await fixture.browser.close().catch(() => {});
+  await fixture.context.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    // Browser startup dominates this suite; fresh contexts keep viewport state isolated.
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  });
+
+  afterAll(async () => {
+    await browser?.close().catch(() => {});
+  });
+
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
-    const fixture = await openFixture(width, height);
+    const fixture = await openFixture(browser, width, height);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {
