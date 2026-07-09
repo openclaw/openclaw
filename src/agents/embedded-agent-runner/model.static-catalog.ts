@@ -111,9 +111,9 @@ function modelFromProviderStaticCatalog(params: {
   const mergedParams =
     (model?.params ?? params.model.params ?? params.providerConfig.params)
       ? {
-          ...(params.providerConfig.params ?? {}),
-          ...(params.model.params ?? {}),
-          ...(model?.params ?? {}),
+          ...params.providerConfig.params,
+          ...params.model.params,
+          ...model?.params,
         }
       : undefined;
   return {
