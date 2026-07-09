@@ -609,13 +609,32 @@
   gap: 10px;
   margin: 0 -8px;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 0;
+  min-height: 28px;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__group--session-drop {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.sidebar-recent-sessions__group--group-drop-before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.sidebar-recent-sessions__group--group-drop-after {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
 .sidebar-recent-sessions__head {
@@ -627,8 +646,68 @@
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
+.sidebar-recent-sessions__head--root {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
+}
+
+.sidebar-session-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-session-group-toggle__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.sidebar-session-group-toggle__icon svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-group-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.sidebar-session-group-drag-handle {
+  width: 8px;
+  height: 18px;
+  flex: 0 0 8px;
+  border-radius: 3px;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
+  background-position: 0 0;
+  background-size: 4px 4px;
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: grab;
+}
+
+.sidebar-session-group-drag-handle:active {
+  cursor: grabbing;
 }
 
 .sidebar-session-sort {
@@ -786,46 +865,7 @@
 .sidebar-recent-sessions__list {
   display: grid;
   gap: 2px;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.sidebar-recent-sessions__all {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 9px;
-  border-radius: var(--radius-md);
-  color: var(--muted);
-  font-size: 12px;
-  text-decoration: none;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__all:hover {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-  text-decoration: none;
-}
-
-.sidebar-recent-sessions__all-icon {
-  display: inline-flex;
-  opacity: 0.6;
-}
-
-.sidebar-recent-sessions__all-icon svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  min-height: 12px;
 }
 
 .sidebar-recent-session--dragging {

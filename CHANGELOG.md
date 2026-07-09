@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI sidebar session groups:** keep every loaded active session inline instead of hiding older rows behind All Sessions, and add collapsible, drag-reorderable custom groups with direct session drop targets and browser-persisted group layout.
 - **Android chat agent selector:** switch the active agent directly from the live chat screen while keeping chat, Talk mode, and home canvas on the same canonical session. (#80422) Thanks @bcperry.
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)

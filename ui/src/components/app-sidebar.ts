@@ -34,10 +34,18 @@ import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   dissolveSessionGroup,
   loadStoredSessionCustomGroups,
+  reorderSessionCustomGroups,
   renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
-import { writeSessionDragData } from "../lib/sessions/drag.ts";
+import {
+  readSessionDragData,
+  readSessionGroupDragData,
+  sessionDragActive,
+  sessionGroupDragActive,
+  writeSessionDragData,
+  writeSessionGroupDragData,
+} from "../lib/sessions/drag.ts";
 import {
   groupSidebarSessionRows,
   normalizeSidebarSessionsGrouping,
@@ -92,8 +100,14 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionGroupDropTarget = {
+  group: string;
+  position: "before" | "after";
+};
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
+  "openclaw:sidebar:sessions:collapsed-sections";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -103,6 +117,20 @@ function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
     getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
   );
+}
+
+function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 const SIDEBAR_SESSION_SORT_OPTIONS = [
@@ -165,6 +193,10 @@ class AppSidebar extends LitElement {
   @state() private sessionGroupSubmenuOpen = false;
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   @state() private draggingSessionKey: string | null = null;
+  @state() private draggingSessionGroup: string | null = null;
+  @state() private sessionDropTarget: string | null = null;
+  @state() private sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
+  @state() private collapsedSessionSections = loadStoredCollapsedSessionSections();
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
@@ -376,13 +408,13 @@ class AppSidebar extends LitElement {
       category: normalizeOptionalString(row.category),
       unread: row.unread === true,
     });
-    const recentSessions = navigation.recentSessions.map(toSidebarSession);
+    const visibleSessions = navigation.visibleSessions.map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
-      recentSessions,
+      visibleSessions,
       newSessionDisabled,
       newSessionTitle: !this.connected
         ? "Connect to create a new session"
@@ -649,12 +681,13 @@ class AppSidebar extends LitElement {
   }
 
   private knownSessionGroups(): string[] {
-    const loaded = (this.sessionsResult?.sessions ?? [])
+    const stored = loadStoredSessionCustomGroups();
+    const storedSet = new Set(stored);
+    const discovered = (this.sessionsResult?.sessions ?? [])
       .map((row) => normalizeOptionalString(row.category))
-      .filter((name): name is string => Boolean(name));
-    return [...new Set([...loadStoredSessionCustomGroups(), ...loaded])].toSorted((a, b) =>
-      a.localeCompare(b),
-    );
+      .filter((name): name is string => typeof name === "string" && !storedSet.has(name))
+      .toSorted((a, b) => a.localeCompare(b));
+    return [...stored, ...new Set(discovered)];
   }
 
   private rememberSessionGroup(name: string) {
@@ -695,7 +728,19 @@ class AppSidebar extends LitElement {
     if (!next || next === group) {
       return;
     }
-    void renameSessionGroup(context.sessions, group, next).finally(() => this.requestUpdate());
+    // Seed browser-local order with server-discovered groups so rename replaces
+    // the existing slot instead of promoting the renamed group to the front.
+    saveStoredSessionCustomGroups(this.knownSessionGroups());
+    void renameSessionGroup(context.sessions, group, next).finally(() => {
+      const from = `category:${group}`;
+      if (this.collapsedSessionSections.has(from)) {
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(from);
+        collapsed.add(`category:${next}`);
+        this.saveCollapsedSessionSections(collapsed);
+      }
+      this.requestUpdate();
+    });
   }
 
   private deleteSessionGroupFromMenu(group: string) {
@@ -706,7 +751,113 @@ class AppSidebar extends LitElement {
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    void dissolveSessionGroup(context.sessions, group).finally(() => this.requestUpdate());
+    void dissolveSessionGroup(context.sessions, group).finally(() => {
+      const collapsed = new Set(this.collapsedSessionSections);
+      collapsed.delete(`category:${group}`);
+      this.saveCollapsedSessionSections(collapsed);
+      this.requestUpdate();
+    });
+  }
+
+  private saveCollapsedSessionSections(sections: ReadonlySet<string>) {
+    this.collapsedSessionSections = new Set(sections);
+    try {
+      getSafeLocalStorage()?.setItem(
+        SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
+        JSON.stringify([...sections]),
+      );
+    } catch {
+      // Group membership and ordering remain usable without local persistence.
+    }
+  }
+
+  private toggleSessionSection(sectionId: string) {
+    const collapsed = new Set(this.collapsedSessionSections);
+    if (collapsed.has(sectionId)) {
+      collapsed.delete(sectionId);
+    } else {
+      collapsed.add(sectionId);
+    }
+    this.saveCollapsedSessionSections(collapsed);
+  }
+
+  private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
+    const groups = reorderSessionCustomGroups(this.knownSessionGroups(), source, target, position);
+    saveStoredSessionCustomGroups(groups);
+    this.requestUpdate();
+  }
+
+  private handleSessionSectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+    const dataTransfer = event.dataTransfer;
+    if (
+      category &&
+      sessionGroupDragActive(dataTransfer) &&
+      this.draggingSessionGroup !== category
+    ) {
+      event.preventDefault();
+      if (dataTransfer) {
+        dataTransfer.dropEffect = "move";
+      }
+      const target = event.currentTarget as HTMLElement;
+      const bounds = target.getBoundingClientRect();
+      const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+      this.sessionGroupDropTarget = { group: category, position };
+      this.sessionDropTarget = null;
+      return;
+    }
+    if (!sessionDragActive(dataTransfer) || sectionId === "pinned") {
+      return;
+    }
+    event.preventDefault();
+    if (dataTransfer) {
+      dataTransfer.dropEffect = "move";
+    }
+    this.sessionDropTarget = sectionId;
+    this.sessionGroupDropTarget = null;
+  }
+
+  private handleSessionSectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
+    const current = event.currentTarget as HTMLElement;
+    if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
+      return;
+    }
+    if (this.sessionDropTarget === sectionId) {
+      this.sessionDropTarget = null;
+    }
+    if (category && this.sessionGroupDropTarget?.group === category) {
+      this.sessionGroupDropTarget = null;
+    }
+  }
+
+  private handleSessionSectionDrop(event: DragEvent, category?: string) {
+    event.preventDefault();
+    const sourceGroup = readSessionGroupDragData(event.dataTransfer);
+    if (sourceGroup && category && sourceGroup !== category) {
+      const position =
+        this.sessionGroupDropTarget?.group === category
+          ? this.sessionGroupDropTarget.position
+          : "before";
+      this.reorderSessionGroup(sourceGroup, category, position);
+    } else {
+      const sessionKey = readSessionDragData(event.dataTransfer);
+      const session = this.getSessionNavigationState().visibleSessions.find(
+        (candidate) => candidate.key === sessionKey,
+      );
+      const nextCategory = category ?? null;
+      if (session && (session.category !== nextCategory || session.pinned)) {
+        if (category) {
+          this.rememberSessionGroup(category);
+        }
+        void this.patchSession(session, {
+          category: nextCategory,
+          ...(session.pinned ? { pinned: false } : {}),
+        });
+      }
+    }
+    this.draggingSessionKey = null;
+    this.draggingSessionGroup = null;
+    this.sessionDropTarget = null;
+    this.sessionGroupDropTarget = null;
   }
 
   private setSessionsGrouping(grouping: SidebarSessionsGrouping) {
@@ -1282,6 +1433,7 @@ class AppSidebar extends LitElement {
         }}
         @dragend=${() => {
           this.draggingSessionKey = null;
+          this.sessionDropTarget = null;
         }}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
@@ -1364,12 +1516,129 @@ class AppSidebar extends LitElement {
     return keyed(session.key, row);
   }
 
+  private renderSessionSection(
+    section: {
+      id: string;
+      category?: string;
+      rows: SidebarRecentSession[];
+    },
+    showFallback = false,
+  ) {
+    const group = section.category;
+    const isPinned = section.id === "pinned";
+    const showHeader = isPinned || this.sessionsGrouping === "category";
+    const collapsed = showHeader && this.collapsedSessionSections.has(section.id);
+    const label = isPinned ? t("sessionsView.pinned") : group ? group : t("sessionsView.ungrouped");
+    const acceptsSessions = !isPinned && this.sessionsGrouping === "category";
+    const sectionClass = [
+      "sidebar-recent-sessions__group",
+      collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
+      this.sessionDropTarget === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
+      group && this.sessionGroupDropTarget?.group === group
+        ? `sidebar-recent-sessions__group--group-drop-${this.sessionGroupDropTarget.position}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return html`
+      <div
+        class=${sectionClass}
+        data-session-section=${section.id}
+        @dragover=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDragOver(event, section.id, group)
+          : nothing}
+        @dragleave=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDragLeave(event, section.id, group)
+          : nothing}
+        @drop=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDrop(event, group)
+          : nothing}
+      >
+        ${showHeader
+          ? html`
+              <div
+                class="sidebar-recent-sessions__head"
+                @contextmenu=${group
+                  ? (event: MouseEvent) => {
+                      event.preventDefault();
+                      this.openSessionGroupMenu(group, event.clientX, event.clientY, null);
+                    }
+                  : nothing}
+              >
+                ${group
+                  ? html`
+                      <span
+                        class="sidebar-session-group-drag-handle"
+                        draggable="true"
+                        aria-hidden="true"
+                        @dragstart=${(event: DragEvent) => {
+                          if (event.dataTransfer) {
+                            writeSessionGroupDragData(event.dataTransfer, group);
+                            this.draggingSessionGroup = group;
+                          }
+                        }}
+                        @dragend=${() => {
+                          this.draggingSessionGroup = null;
+                          this.sessionGroupDropTarget = null;
+                        }}
+                      ></span>
+                    `
+                  : nothing}
+                <button
+                  type="button"
+                  class="sidebar-session-group-toggle"
+                  aria-expanded=${String(!collapsed)}
+                  aria-label=${label}
+                  @click=${() => this.toggleSessionSection(section.id)}
+                >
+                  <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
+                  <span class="sidebar-recent-sessions__label-text">${label}</span>
+                  <span class="sidebar-session-group-count">${section.rows.length}</span>
+                </button>
+                ${group
+                  ? html`
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions"
+                        title=${t("sessionsView.groupMenu", { group })}
+                        aria-label=${t("sessionsView.groupMenu", { group })}
+                        aria-haspopup="menu"
+                        aria-expanded=${String(this.sessionGroupMenu?.group === group)}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          const trigger = event.currentTarget as HTMLElement;
+                          const rect = trigger.getBoundingClientRect();
+                          this.openSessionGroupMenu(group, rect.right, rect.bottom + 4, trigger);
+                        }}
+                      >
+                        ${icons.moreHorizontal}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+        ${collapsed
+          ? nothing
+          : html`
+              <div class="sidebar-recent-sessions__list">
+                ${showFallback
+                  ? this.renderChatFallback()
+                  : section.rows.map((session) => this.renderRecentSession(session))}
+              </div>
+            `}
+      </div>
+    `;
+  }
+
   private renderSessions() {
     const context = this.context;
     const {
       routeSessionKey,
       selectedAgentId,
-      recentSessions,
+      visibleSessions,
       newSessionDisabled,
       newSessionTitle,
     } = this.getSessionNavigationState();
@@ -1412,13 +1681,12 @@ class AppSidebar extends LitElement {
       : newSessionButton;
     // Stable navigation ordering carries through each pinned/category bucket;
     // selecting a visible row only moves the active highlight.
-    const sections = groupSidebarSessionRows(recentSessions, {
+    const sections = groupSidebarSessionRows(visibleSessions, {
       grouping: this.sessionsGrouping,
       // Stored-but-empty groups stay visible as sections so a freshly created
       // group is usable as a move target before its first session arrives.
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
     });
-    const hasCategorySections = sections.some((section) => section.category !== undefined);
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
         ${this.collapsed
@@ -1430,110 +1698,46 @@ class AppSidebar extends LitElement {
           ? nothing
           : html`
               <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
-                ${sections.map((section) => {
-                  if (section.id === "pinned" || section.category !== undefined) {
-                    const group = section.category;
-                    return html`
-                      <div class="sidebar-recent-sessions__group">
-                        <div
-                          class="sidebar-recent-sessions__head"
-                          @contextmenu=${group
-                            ? (event: MouseEvent) => {
-                                event.preventDefault();
-                                this.openSessionGroupMenu(
-                                  group,
-                                  event.clientX,
-                                  event.clientY,
-                                  null,
-                                );
-                              }
-                            : nothing}
-                        >
-                          <span class="sidebar-recent-sessions__label-text"
-                            >${section.id === "pinned"
-                              ? t("sessionsView.pinned")
-                              : section.category}</span
-                          >
-                          ${group
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="sidebar-session-group-actions"
-                                  title=${t("sessionsView.groupMenu", { group })}
-                                  aria-label=${t("sessionsView.groupMenu", { group })}
-                                  aria-haspopup="menu"
-                                  aria-expanded=${String(this.sessionGroupMenu?.group === group)}
-                                  @click=${(event: MouseEvent) => {
-                                    event.stopPropagation();
-                                    const trigger = event.currentTarget as HTMLElement;
-                                    const rect = trigger.getBoundingClientRect();
-                                    this.openSessionGroupMenu(
-                                      group,
-                                      rect.right,
-                                      rect.bottom + 4,
-                                      trigger,
-                                    );
-                                  }}
-                                >
-                                  ${icons.moreHorizontal}
-                                </button>
-                              `
-                            : nothing}
-                        </div>
-                        <div class="sidebar-recent-sessions__list">
-                          ${section.rows.map((session) => this.renderRecentSession(session))}
-                        </div>
-                      </div>
-                    `;
-                  }
-                  return html`
-                    <div class="sidebar-recent-sessions__group">
-                      <div class="sidebar-recent-sessions__head">
-                        <span class="sidebar-recent-sessions__label-text"
-                          >${hasCategorySections && section.rows.length > 0
-                            ? t("sessionsView.ungrouped")
-                            : t("sessionsView.title")}</span
-                        >
-                        ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
+                <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
+                  <span class="sidebar-recent-sessions__label-text"
+                    >${t("sessionsView.title")}</span
+                  >
+                  ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
+                  ${this.sessionsGrouping === "category"
+                    ? html`
                         <button
                           type="button"
                           class="sidebar-session-sort"
-                          title=${t("chat.sidebar.sortSessions")}
-                          aria-label=${t("chat.sidebar.sortSessions")}
-                          aria-haspopup="menu"
-                          aria-expanded=${String(this.sessionSortMenuPosition !== null)}
-                          @click=${(event: MouseEvent) => {
-                            const trigger = event.currentTarget as HTMLElement;
-                            this.toggleSessionSortMenu(trigger);
-                          }}
+                          title=${t("sessionsView.newGroup")}
+                          aria-label=${t("sessionsView.newGroup")}
+                          ?disabled=${!this.connected}
+                          @click=${() => this.createSessionGroup()}
                         >
-                          ${icons.listFilter}
+                          ${icons.plus}
                         </button>
-                      </div>
-                      <div class="sidebar-recent-sessions__list">
-                        ${recentSessions.length === 0
-                          ? this.renderChatFallback()
-                          : section.rows.map((session) => this.renderRecentSession(session))}
-                      </div>
-                      <a
-                        href=${pathForRoute("sessions", this.basePath)}
-                        class="sidebar-recent-sessions__all"
-                        @click=${(event: MouseEvent) => {
-                          if (!shouldHandleNavigationClick(event)) {
-                            return;
-                          }
-                          event.preventDefault();
-                          this.onNavigate?.("sessions");
-                        }}
-                      >
-                        <span>${t("chat.sidebar.allSessions")}</span>
-                        <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
-                          >${icons.chevronRight}</span
-                        >
-                      </a>
-                    </div>
-                  `;
-                })}
+                      `
+                    : nothing}
+                  <button
+                    type="button"
+                    class="sidebar-session-sort"
+                    title=${t("chat.sidebar.sortSessions")}
+                    aria-label=${t("chat.sidebar.sortSessions")}
+                    aria-haspopup="menu"
+                    aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+                    @click=${(event: MouseEvent) => {
+                      const trigger = event.currentTarget as HTMLElement;
+                      this.toggleSessionSortMenu(trigger);
+                    }}
+                  >
+                    ${icons.listFilter}
+                  </button>
+                </div>
+                ${sections.map((section) =>
+                  this.renderSessionSection(
+                    section,
+                    visibleSessions.length === 0 && section.id === "ungrouped",
+                  ),
+                )}
               </div>
             `}
       </section>
