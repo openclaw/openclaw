@@ -299,6 +299,19 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
+/* Party days: confetti-colored z's. */
+.lobster-pet--party .lobster-pet__z:nth-of-type(1) {
+  color: #ffd166;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(2) {
+  color: #5cd9c4;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(3) {
+  color: #ff5c8a;
+}
+
 /* ---- Bubbles ---- */
 
 .lobster-pet__bubble {

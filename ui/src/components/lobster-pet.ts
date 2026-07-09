@@ -44,7 +44,14 @@ export type LobsterPetPalette = {
   claw: string;
 };
 
-export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
+export type LobsterPetAccessory =
+  | "none"
+  | "crown"
+  | "sprout"
+  | "patch"
+  | "santa"
+  | "pumpkin"
+  | "party";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
@@ -184,6 +191,29 @@ const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
   ["patch", 14],
   ["crown", 10],
 ];
+
+// OpenClaw's repository was born 2025-11-24 (GitHub created_at); on the
+// anniversary every visitor dresses as the classic logo and parties.
+const ANNIVERSARY = { month: 10, day: 24 } as const;
+
+function isLobsterAnniversary(now: Date): boolean {
+  return now.getMonth() === ANNIVERSARY.month && now.getDate() === ANNIVERSARY.day;
+}
+
+// Seasonal wardrobe: extra accessory entries join the pool on the right
+// dates. One weighted roll either way, so the rest of the look sequence is
+// unchanged on any given seed.
+function seasonalAccessories(now: Date): Array<[LobsterPetAccessory, number]> {
+  const month = now.getMonth();
+  const day = now.getDate();
+  if (month === 11) {
+    return [["santa", 18]];
+  }
+  if (month === 9 && day >= 20) {
+    return [["pumpkin", 18]];
+  }
+  return [];
+}
 
 const PERSONALITY_IDS: Array<[LobsterPetPersonalityId, number]> = [
   ["sleepy", 25],
@@ -351,11 +381,11 @@ export function lobsterPetSeed(sessionKey: string): number {
   return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
-export function createLobsterPetLook(seed: number): LobsterPetLook {
+export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
   const rng = mulberry32(seed);
   const palette = pickWeighted(rng, PALETTES);
   const scale = pickWeighted(rng, SCALES);
-  const accessory = pickWeighted(rng, ACCESSORIES);
+  const accessory = pickWeighted(rng, [...ACCESSORIES, ...seasonalAccessories(now)]);
   const antennae: LobsterPetAntennae = rng() < 0.6 ? "perky" : "droopy";
   const side = rng() < 0.5 ? "left" : "right";
   const zone = SPOT_ZONES[side];
@@ -368,6 +398,24 @@ export function createLobsterPetLook(seed: number): LobsterPetLook {
   const build = pickWeighted(rng, BUILDS);
   const clawSize = pickWeighted(rng, CLAW_SIZES);
   const tailFan = rng() < 0.3;
+  if (isLobsterAnniversary(now)) {
+    // Birthday dress code: everyone is the classic logo, party hats on.
+    const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
+    return {
+      palette: retro ?? palette,
+      scale,
+      accessory: "party",
+      antennae,
+      side,
+      spotPct,
+      facing,
+      personality,
+      blinkDelayS,
+      build,
+      clawSize,
+      tailFan,
+    };
+  }
   return {
     palette,
     scale,
@@ -419,6 +467,27 @@ const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateRe
     <g>
       <path d="M28 27 Q60 14 92 22" stroke="#101820" stroke-width="4" stroke-linecap="round" fill="none" />
       <circle cx="75" cy="32" r="9" fill="#101820" />
+    </g>
+  `,
+  santa: svg`
+    <g>
+      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
+      <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
+      <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
+    </g>
+  `,
+  pumpkin: svg`
+    <g>
+      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
+      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
+      <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
+    </g>
+  `,
+  party: svg`
+    <g>
+      <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
+      <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
+      <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
     </g>
   `,
 };
@@ -973,6 +1042,7 @@ export class LobsterPet extends LitElement {
       `lobster-pet--${this.mode}`,
       `lobster-pet--palette-${look.palette.id}`,
       twin ? "lobster-pet--twin" : "",
+      look.accessory === "party" ? "lobster-pet--party" : "",
       this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
       this.grumpy ? "lobster-pet--grumpy" : "",
