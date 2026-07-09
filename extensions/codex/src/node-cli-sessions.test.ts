@@ -319,7 +319,9 @@ describe("runCodexExecResume stream error handling", () => {
         }),
       );
       await new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), 100);
+        setTimeout(() => {
+          resolve();
+        }, 100);
       });
       const child = captured[0];
       expect(child).toBeDefined();
@@ -348,7 +350,9 @@ describe("runCodexExecResume stream error handling", () => {
         }),
       );
       await new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), 100);
+        setTimeout(() => {
+          resolve();
+        }, 100);
       });
       const child = captured[0];
       expect(child).toBeDefined();
@@ -383,7 +387,11 @@ describe("runCodexExecResume stream error handling", () => {
       );
 
       // Wait for the real child to attach so we can wrap its kill.
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          resolve();
+        }, 100);
+      });
       const child = captured[0];
       expect(child).toBeDefined();
       const realKill = child!.kill.bind(child!);
