@@ -77,6 +77,42 @@
           "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
           "providerConfigApiIn": ["qwen", "modelstudio"]
         }
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3.7-max",
+        "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.7-max",
+        "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3.7-plus",
+        "reason": "qwen3.7-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.7-plus",
+        "reason": "qwen3.7-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
       }
     ],
     "providers": {

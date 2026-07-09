@@ -6,6 +6,8 @@ import {
   QWEN_BASE_URL,
   QWEN_STANDARD_GLOBAL_BASE_URL,
   QWEN_DEFAULT_MODEL_ID,
+  QWEN_37_MAX_MODEL_ID,
+  QWEN_37_PLUS_MODEL_ID,
 } from "./api.js";
 
 type QwenProvider = ReturnType<typeof buildQwenProvider>;
@@ -36,6 +38,16 @@ describe("qwen provider catalog", () => {
     expect(getQwenModelIds(coding)).not.toContain("qwen3.6-plus");
     expect(getQwenModelIds(codingTrailingDot)).not.toContain("qwen3.6-plus");
     expect(getQwenModelIds(standard)).toContain("qwen3.6-plus");
+  });
+
+  it("only advertises qwen3.7 models on Standard endpoints", () => {
+    const coding = buildQwenProvider({ baseUrl: QWEN_BASE_URL });
+    const standard = buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL });
+
+    expect(getQwenModelIds(coding)).not.toContain(QWEN_37_MAX_MODEL_ID);
+    expect(getQwenModelIds(coding)).not.toContain(QWEN_37_PLUS_MODEL_ID);
+    expect(getQwenModelIds(standard)).toContain(QWEN_37_MAX_MODEL_ID);
+    expect(getQwenModelIds(standard)).toContain(QWEN_37_PLUS_MODEL_ID);
   });
 
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {

@@ -68,8 +68,20 @@ describe("mistral model definitions", () => {
     const smallLatest = catalogModelById(models, "mistral-small-latest");
     expect(smallLatest.reasoning).toBe(true);
     expect(smallLatest.input).toEqual(["text", "image"]);
-    expect(smallLatest.contextWindow).toBe(128000);
+    expect(smallLatest.contextWindow).toBe(256000);
     expect(smallLatest.maxTokens).toBe(16384);
+
+    const small2603 = catalogModelById(models, "mistral-small-2603");
+    expect(small2603.reasoning).toBe(true);
+    expect(small2603.input).toEqual(["text"]);
+    expect(small2603.contextWindow).toBe(256000);
+    expect(small2603.maxTokens).toBe(16384);
+    expect(small2603.cost).toEqual({
+      input: 0.15,
+      output: 0.6,
+      cacheRead: 0.015,
+      cacheWrite: 0,
+    });
 
     const pixtralLarge = catalogModelById(models, "pixtral-large-latest");
     expect(pixtralLarge.input).toEqual(["text", "image"]);

@@ -19,6 +19,10 @@ export const QWEN_OAUTH_BASE_URL = "https://portal.qwen.ai/v1";
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
+export const QWEN_37_MAX_MODEL_ID = "qwen3.7-max";
+export const QWEN_37_PLUS_MODEL_ID = "qwen3.7-plus";
+
+const QWEN_37_MODEL_IDS = new Set([QWEN_37_MAX_MODEL_ID, QWEN_37_PLUS_MODEL_ID]);
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -43,6 +47,24 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     name: QWEN_36_PLUS_MODEL_ID,
     reasoning: false,
     input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_37_MAX_MODEL_ID,
+    name: QWEN_37_MAX_MODEL_ID,
+    reasoning: false,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_37_PLUS_MODEL_ID,
+    name: QWEN_37_PLUS_MODEL_ID,
+    reasoning: false,
+    input: ["text"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,
     maxTokens: 65_536,
@@ -137,7 +159,9 @@ export function buildQwenModelCatalogForBaseUrl(
 ): ReadonlyArray<ModelDefinitionConfig> {
   return isQwen36PlusSupportedBaseUrl(baseUrl)
     ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+    : QWEN_MODEL_CATALOG.filter(
+        (model) => model.id !== QWEN_36_PLUS_MODEL_ID && !QWEN_37_MODEL_IDS.has(model.id),
+      );
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
@@ -183,7 +207,10 @@ export function buildQwenDefaultModelDefinition(): ModelDefinitionConfig {
 }
 
 export function buildQwenOAuthModelCatalog(): ReadonlyArray<ModelDefinitionConfig> {
-  return QWEN_MODEL_CATALOG.map((model) => ({ ...model, maxTokens: 65_536 }));
+  return QWEN_MODEL_CATALOG.filter((model) => !QWEN_37_MODEL_IDS.has(model.id)).map((model) => ({
+    ...model,
+    maxTokens: 65_536,
+  }));
 }
 
 /** @deprecated Use QWEN_BASE_URL. */

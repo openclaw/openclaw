@@ -89,6 +89,18 @@ describe("Cohere provider plugin", () => {
             maxTokensField: "max_tokens",
           },
         }),
+        expect.objectContaining({
+          id: "north-mini-code-1-0",
+          contextWindow: 256000,
+          maxTokens: 64000,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          compat: {
+            supportsStore: false,
+            supportsUsageInStreaming: false,
+            maxTokensField: "max_tokens",
+          },
+        }),
       ],
     });
   });
