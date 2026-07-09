@@ -186,6 +186,7 @@ export async function fetchWithTimeout(
     timeoutMs: Math.max(1, timeoutMs),
     operation: "fetchWithTimeout",
     url,
+    signal: init.signal,
   });
   try {
     return await fetchFn(url, { ...init, signal });
