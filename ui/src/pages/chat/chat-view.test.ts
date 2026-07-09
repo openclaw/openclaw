@@ -1784,19 +1784,41 @@ describe("chat voice controls", () => {
       realtimeTalkInputLevel: inputLevel,
     });
 
-    const statusRegion = container.querySelector('[role="status"].agent-chat__talk-status');
-    const visualizer = statusRegion?.querySelector<HTMLElement>(
+    const stopVoiceButton = container.querySelector('button[aria-label="Stop voice input"]');
+    const visualizer = stopVoiceButton?.querySelector<HTMLElement>(
       `.agent-chat__voice-activity[data-status="${status}"]`,
     );
     expect(visualizer?.getAttribute("data-level")).toBe("0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
-    expect(visualizer?.getAttribute("role")).toBe("img");
-    expect(visualizer?.getAttribute("aria-label")).toBe(t("chat.composer.microphoneInput"));
+    expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
     expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
+    const statusRegion = container.querySelector('[role="status"].agent-chat__voice-status');
     expect(statusRegion?.getAttribute("aria-live")).toBe("polite");
     expect(statusRegion?.getAttribute("aria-atomic")).toBe("true");
-    expect(statusRegion?.querySelector(".agent-chat__sr-only")?.textContent?.trim()).toBe(label);
-    expect(statusRegion?.querySelector(".agent-chat__talk-status-text")).toBeNull();
+    expect(statusRegion?.textContent?.trim()).toBe(label);
+    expect(container.querySelector(".agent-chat__talk-status")).toBeNull();
+  });
+
+  it("keeps the stop control without a live meter when a running session errors", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: "Microphone unavailable",
+    });
+
+    const stopVoiceButton = requireElement(
+      container,
+      '[aria-label="Stop voice input"]',
+      "stop voice input button",
+    );
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-error")).toBe(true);
+    expect(stopVoiceButton.querySelector(".agent-chat__voice-activity")).toBeNull();
+    expect(container.querySelector(".agent-chat__voice-status")).toBeNull();
+    expect(
+      container
+        .querySelector('[role="alert"].agent-chat__talk-status .agent-chat__talk-status-text')
+        ?.textContent?.trim(),
+    ).toBe("Microphone unavailable");
   });
 
   it("clamps the rendered microphone level", () => {
