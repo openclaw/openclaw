@@ -583,9 +583,7 @@ describe("qa cli runtime", () => {
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
-    expect(suiteArgs.scenarioIds).toEqual(
-      expect.arrayContaining(["dm-chat-baseline", "thread-follow-up", "thread-isolation"]),
-    );
+    expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",

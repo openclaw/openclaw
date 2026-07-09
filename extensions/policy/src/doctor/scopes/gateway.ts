@@ -3,6 +3,7 @@ import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
 import { CHECK_IDS } from "../metadata.js";
+import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
@@ -16,6 +17,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNonLoopbackBind,
+      );
     },
   };
   const policyGatewayAuthDisabledCheck: HealthCheck = {
@@ -107,6 +115,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNodeCommandDenied);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNodeCommandDenied,
+      );
     },
   };
 

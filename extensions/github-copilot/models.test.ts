@@ -200,6 +200,30 @@ describe("resolveCopilotForwardCompatModel", () => {
 });
 
 describe("fetchCopilotUsage", () => {
+  it("targets the public github.com usage endpoint by default", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "pro" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(calledUrl).toBe("https://api.github.com/copilot_internal/user");
+  });
+
+  it("routes usage through the tenant host for *.ghe.com domains", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "business" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch, "acme.ghe.com");
+
+    expect(calledUrl).toBe("https://api.acme.ghe.com/copilot_internal/user");
+  });
+
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(500, "boom"));
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
@@ -334,6 +358,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      domain: "github.com",
     });
 
     const fetchImpl = vi.fn();
