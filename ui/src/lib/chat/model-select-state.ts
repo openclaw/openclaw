@@ -357,9 +357,10 @@ export function resolveChatFastModeSelectState(
         ? "auto"
         : "off"
     : configuredOverride;
-  const supported = Boolean(
-    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || configuredOverride,
+  const providerSupported = Boolean(
+    effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider),
   );
+  const supported = providerSupported || Boolean(configuredOverride);
   // The picker exposes speed as a two-state toggle: fast on, or back to the
   // provider baseline (explicit off for OpenAI's priority tier, inherited
   // default elsewhere). Auto and explicit standard overrides remain reachable
@@ -375,11 +376,15 @@ export function resolveChatFastModeSelectState(
           : currentOverride === "off"
             ? "Standard"
             : "Default";
-  const nextValue: ChatFastModeSelectValue = active
-    ? isOpenAI || currentOverride === ""
-      ? "off"
-      : ""
-    : "on";
+  // A legacy override on a provider without a wire mapping stays visible so it
+  // can be cleared, but the toggle must not write a new no-op fast override.
+  const nextValue: ChatFastModeSelectValue = !providerSupported
+    ? ""
+    : active
+      ? isOpenAI || currentOverride === ""
+        ? "off"
+        : ""
+      : "on";
   return {
     active,
     currentOverride,

@@ -372,7 +372,19 @@ describe("chat-model-select-state", () => {
       supported: false,
       disabled: true,
     });
-    expect(resolveFastModeState({ provider: "openrouter", fastMode: true }).supported).toBe(true);
+    // Legacy overrides stay visible but the toggle is clear-only: it must
+    // never write a fresh no-op fast override for an unmapped provider.
+    expect(resolveFastModeState({ provider: "openrouter", fastMode: true })).toMatchObject({
+      supported: true,
+      active: true,
+      nextValue: "",
+    });
+    expect(resolveFastModeState({ provider: "openrouter", fastMode: false })).toMatchObject({
+      supported: true,
+      active: false,
+      label: "Standard",
+      nextValue: "",
+    });
   });
 
   it("uses a catalog-qualified model provider before a stale session runtime provider", () => {
