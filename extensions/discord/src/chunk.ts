@@ -70,25 +70,29 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   return `${text}${closeLine}`;
 }
 
-function isHighSurrogate(code: number) {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
 function isLowSurrogate(code: number) {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
-function clampToCodePointBoundary(text: string, index: number) {
-  const boundary = Math.min(Math.max(0, index), text.length);
-  if (boundary <= 0 || boundary >= text.length) {
-    return boundary;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Adjusts a slice boundary to the nearest grapheme cluster boundary at or before
+ * the given index, so that ZWJ emoji sequences (like 👨‍👩‍👧‍👦) and other
+ * multi-codepoint grapheme clusters are never split across Discord message chunks.
+ */
+function clampToGraphemeBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) {
+    return index;
   }
-  const previous = text.charCodeAt(boundary - 1);
-  const next = text.charCodeAt(boundary);
-  if (isHighSurrogate(previous) && isLowSurrogate(next)) {
-    return boundary > 1 ? boundary - 1 : boundary + 1;
+  // First adjust to a code-point boundary so text.slice(0, index) doesn't
+  // produce a dangling surrogate, which Intl.Segmenter may treat as an
+  // isolated surrogate — defeating the grapheme check.
+  if (isLowSurrogate(text.charCodeAt(index))) {
+    index -= 1;
   }
-  return boundary;
+  const segments = Array.from(graphemeSegmenter.segment(text.slice(0, index)));
+  return segments.reduce((acc, s) => acc + s.segment.length, 0);
 }
 
 function findWhitespaceBreak(window: string) {
@@ -128,7 +132,7 @@ function splitLongLine(
   let remaining = line;
   while (remaining.length > limit) {
     if (opts.preserveWhitespace) {
-      const breakIdx = clampToCodePointBoundary(remaining, limit);
+      const breakIdx = clampToGraphemeBoundary(remaining, limit);
       out.push(remaining.slice(0, breakIdx));
       remaining = remaining.slice(breakIdx);
       continue;
@@ -139,7 +143,7 @@ function splitLongLine(
       breakIdx = findCjkPunctuationBreak(window);
     }
     if (breakIdx <= 0) {
-      breakIdx = clampToCodePointBoundary(remaining, limit);
+      breakIdx = clampToGraphemeBoundary(remaining, limit);
     }
     out.push(remaining.slice(0, breakIdx));
     // Keep the separator for the next segment so words don't get glued together.
