@@ -10,6 +10,7 @@ import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildImageResizeSideGrid,
+  convertHeicToJpeg,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
@@ -33,6 +34,8 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 // tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
+// ponytail: only Anthropic's four types; extend when other providers add restrictions
+const ANTHROPIC_SUPPORTED_MIME = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const log = createSubsystemLogger("agents/tool-images");
 
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
@@ -180,6 +183,20 @@ async function resizeImageBase64IfNeeded(params: {
   const buf = Buffer.from(params.base64, "base64");
   const headerMeta = readImageMetadataFromHeader(buf);
   if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
+    if (!ANTHROPIC_SUPPORTED_MIME.has(params.mimeType)) {
+      try {
+        const jpegBuf = await convertHeicToJpeg(buf);
+        return {
+          base64: jpegBuf.toString("base64"),
+          mimeType: "image/jpeg",
+          resized: true,
+          width: headerMeta.width,
+          height: headerMeta.height,
+        };
+      } catch {
+        // image processor unavailable — fall through to original
+      }
+    }
     return {
       base64: params.base64,
       mimeType: params.mimeType,
@@ -196,6 +213,20 @@ async function resizeImageBase64IfNeeded(params: {
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
+    if (!ANTHROPIC_SUPPORTED_MIME.has(params.mimeType)) {
+      try {
+        const jpegBuf = await convertHeicToJpeg(buf);
+        return {
+          base64: jpegBuf.toString("base64"),
+          mimeType: "image/jpeg",
+          resized: true,
+          width,
+          height,
+        };
+      } catch {
+        // image processor unavailable — fall through to original
+      }
+    }
     return {
       base64: params.base64,
       mimeType: params.mimeType,
