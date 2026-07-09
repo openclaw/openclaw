@@ -477,6 +477,11 @@ export const ja_JP: TranslationMap = {
   nav: {
     chat: "チャット",
     settings: "設定",
+    settingsGeneral: "一般",
+    settingsGroupConnections: "接続",
+    settingsGroupAgents: "エージェントとツール",
+    settingsGroupSystem: "システム",
+    exitSettings: "アプリに戻る",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
     resize: "サイドバーのサイズを変更",

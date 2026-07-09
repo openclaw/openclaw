@@ -225,6 +225,12 @@ export const icons = {
       <path d="m19 12-7 7-7-7" />
     </svg>
   `,
+  arrowLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m12 19-7-7 7-7" />
+      <path d="M19 12H5" />
+    </svg>
+  `,
   cornerDownRight: html`
     <svg viewBox="0 0 24 24">
       <polyline points="15 10 20 15 15 20" />

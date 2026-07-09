@@ -470,6 +470,11 @@ export const ar: TranslationMap = {
   nav: {
     chat: "الدردشة",
     settings: "الإعدادات",
+    settingsGeneral: "عام",
+    settingsGroupConnections: "الاتصالات",
+    settingsGroupAgents: "الوكلاء والأدوات",
+    settingsGroupSystem: "النظام",
+    exitSettings: "العودة إلى التطبيق",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
     resize: "تغيير حجم الشريط الجانبي",

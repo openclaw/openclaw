@@ -472,6 +472,11 @@ export const fa: TranslationMap = {
   nav: {
     chat: "چت",
     settings: "تنظیمات",
+    settingsGeneral: "عمومی",
+    settingsGroupConnections: "اتصال‌ها",
+    settingsGroupAgents: "عامل‌ها و ابزارها",
+    settingsGroupSystem: "سیستم",
+    exitSettings: "بازگشت به برنامه",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
     resize: "تغییر اندازه نوار کناری",
