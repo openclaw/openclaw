@@ -85,14 +85,26 @@ function clampToGraphemeBoundary(text: string, index: number): number {
   if (index <= 0 || index >= text.length) {
     return index;
   }
-  // First adjust to a code-point boundary so text.slice(0, index) doesn't
-  // produce a dangling surrogate, which Intl.Segmenter may treat as an
-  // isolated surrogate — defeating the grapheme check.
-  if (isLowSurrogate(text.charCodeAt(index))) {
-    index -= 1;
+
+  // Segment the full text and find the last grapheme boundary at or before
+  // `index`.  Segmenting only `text.slice(0, index)` would let Intl.Segmenter
+  // treat a truncated ZWJ sequence as a complete final segment, defeating
+  // the grapheme protection.
+  let bound = 0;
+  for (const seg of graphemeSegmenter.segment(text)) {
+    const segEnd = seg.index + seg.segment.length;
+    if (segEnd > index) {
+      // `index` lands inside this grapheme cluster.  If earlier complete
+      // clusters existed, return the last valid boundary (`bound`).
+      // Otherwise this is the first cluster and it already exceeds `index`
+      // — return its end so the caller makes forward progress.
+      return bound > 0 ? bound : segEnd;
+    }
+    bound = segEnd;
   }
-  const segments = Array.from(graphemeSegmenter.segment(text.slice(0, index)));
-  return segments.reduce((acc, s) => acc + s.segment.length, 0);
+
+  // Unreachable: one segment always continues past index.
+  return bound;
 }
 
 function findWhitespaceBreak(window: string) {

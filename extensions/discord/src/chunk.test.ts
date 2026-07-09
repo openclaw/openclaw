@@ -134,6 +134,43 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("does not split ZWJ family emoji across chunks", () => {
+    // 👨‍👩‍👧‍👦 is 11 UTF-16 code units across 7 codepoints.  A chunk boundary
+    // at index 4 would fall inside the ZWJ sequence without full-text
+    // grapheme segmentation.
+    const text = "ab👨‍👩‍👧‍👦cd👨‍👩‍👧‍👦ef";
+    const chunks = chunkDiscordText(text, { maxChars: 4, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    const familyRe = /👨‍👩‍👧‍👦/g;
+    const found = chunks.reduce((s, c) => s + (c.match(familyRe) || []).length, 0);
+    expect(found).toBe(2);
+  });
+
+  it("does not split skin-tone modifier emoji across chunks", () => {
+    // 👋🏿 (waving hand + dark skin tone) is 4 UTF-16 code units
+    // (U+1F44B + U+1F3FF, two surrogate pairs).
+    const text = "a👋🏿b👋🏿c";
+    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    const toneRe = /👋🏿/g;
+    const found = chunks.reduce((s, c) => s + (c.match(toneRe) || []).length, 0);
+    expect(found).toBe(2);
+  });
+
+  it("does not split flag sequences across chunks", () => {
+    // 🇯🇵 (Japan) is two regional indicator symbols (U+1F1EF + U+1F1F5,
+    // 4 UTF-16 code units total).
+    const text = "a🇯🇵b🇯🇵c";
+    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    const flagRe = /🇯🇵/g;
+    const found = chunks.reduce((s, c) => s + (c.match(flagRe) || []).length, 0);
+    expect(found).toBe(2);
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
