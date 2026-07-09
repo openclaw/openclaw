@@ -490,11 +490,15 @@ struct MenuContent: View {
     }
 
     private var selectedMicLabel: String {
-        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if self.state.voiceWakeMicID.isEmpty {
+            return self.defaultMicLabel
+        }
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
-        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
+        if !self.state.voiceWakeMicName.isEmpty {
+            return self.state.voiceWakeMicName
+        }
         return "Unavailable"
     }
 
@@ -563,7 +567,9 @@ struct MenuContent: View {
             self.loadingMics = false
             return
         }
-        if !force, !self.availableMics.isEmpty { return }
+        if !force, !self.availableMics.isEmpty {
+            return
+        }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],
