@@ -599,7 +599,9 @@ export const en: TranslationMap = {
   },
   tasksPage: {
     active: "Active",
+    activeSub: "Queued and running background work.",
     recent: "Recent",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "Loading tasks…",
     empty: "No background tasks yet.",
     emptyActive: "No queued or running tasks.",
@@ -1687,7 +1689,6 @@ export const en: TranslationMap = {
       splitRight: "Split right",
       splitDown: "Split down",
       closePane: "Close pane",
-      sessionSelect: "Pane session",
       dropSplit: "Split",
       dropOpenHere: "Open here",
     },
@@ -1926,8 +1927,7 @@ export const en: TranslationMap = {
     },
     summary: {
       enabled: "Enabled",
-      yes: "Yes",
-      no: "No",
+      scheduler: "Scheduler",
       jobs: "Jobs",
       nextWake: "Next wake",
       refreshing: "Refreshing...",

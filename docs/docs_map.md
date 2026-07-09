@@ -3575,8 +3575,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/pairing
 - Headings:
-  - H2: Concepts
-  - H2: How pairing works
+  - H2: How capability approval works
   - H2: CLI workflow (headless friendly)
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
@@ -7929,6 +7928,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Plan types and endpoints
   - H2: Built-in catalog
+  - H3: Token Plan catalog
   - H2: Thinking controls
   - H2: Multimodal add-ons
   - H2: Advanced configuration
