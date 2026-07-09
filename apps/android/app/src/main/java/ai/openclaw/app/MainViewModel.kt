@@ -196,6 +196,8 @@ class MainViewModel(
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = runtimeState(initial = GatewayCronJobDetailState.Idle) { it.cronJobDetailState }
+  val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = runtimeState(initial = GatewayCronRunHistoryState.Idle) { it.cronRunHistoryState }
+  val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
   val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
@@ -736,8 +738,34 @@ class MainViewModel(
     ensureRuntime().loadCronJobDetail(id)
   }
 
+  fun refreshCronRunHistory(id: String) {
+    ensureRuntime().refreshCronRunHistory(id)
+  }
+
   fun clearCronJobDetail() {
     ensureRuntime().clearCronJobDetail()
+  }
+
+  fun runCronJob(id: String) {
+    ensureRuntime().runCronJob(id)
+  }
+
+  fun setCronJobEnabled(
+    id: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setCronJobEnabled(id = id, enabled = enabled)
+  }
+
+  fun updateCronJob(
+    original: GatewayCronJobDetail,
+    edit: GatewayCronJobEdit,
+  ) {
+    ensureRuntime().updateCronJob(original = original, edit = edit)
+  }
+
+  fun deleteCronJob(id: String) {
+    ensureRuntime().deleteCronJob(id)
   }
 
   fun refreshUsage() {

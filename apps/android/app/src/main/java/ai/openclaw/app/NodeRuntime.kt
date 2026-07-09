@@ -374,6 +374,13 @@ class NodeRuntime private constructor(
     val generation: Long,
   )
 
+  private data class CronActionResult(
+    val message: String,
+    val kind: GatewayCronNoticeKind,
+    val refresh: Boolean,
+    val deleted: Boolean = false,
+  )
+
   constructor(
     context: Context,
     prefs: SecurePrefs = SecurePrefs(context.applicationContext),
@@ -715,7 +722,13 @@ class NodeRuntime private constructor(
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
   private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
+  private val _cronRunHistoryState = MutableStateFlow<GatewayCronRunHistoryState>(GatewayCronRunHistoryState.Idle)
+  val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = _cronRunHistoryState.asStateFlow()
+  private val _cronActionState = MutableStateFlow<GatewayCronActionState>(GatewayCronActionState.Idle)
+  val cronActionState: StateFlow<GatewayCronActionState> = _cronActionState.asStateFlow()
   private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
+  private val cronRunHistoryRequestGuard = CronJobDetailRequestGuard()
+  private val cronActionMutex = Mutex()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -890,6 +903,8 @@ class NodeRuntime private constructor(
     _cronRefreshing.value = false
     _cronErrorText.value = null
     cronJobDetailRequestGuard.cancel { _cronJobDetailState.value = GatewayCronJobDetailState.Idle }
+    cronRunHistoryRequestGuard.cancel { _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle }
+    _cronActionState.value = GatewayCronActionState.Idle
     _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
     _usageRefreshing.value = false
     _usageErrorText.value = null
@@ -1408,16 +1423,127 @@ class NodeRuntime private constructor(
   }
 
   fun loadCronJobDetail(id: String) {
-    val request = cronJobDetailRequestGuard.begin(id) ?: return
-    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
-    scope.launch {
-      loadCronJobDetailFromGateway(request)
-    }
+    val detailRequest = cronJobDetailRequestGuard.begin(id) ?: return
+    val historyRequest = cronRunHistoryRequestGuard.begin(detailRequest.id) ?: return
+    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(detailRequest.id)
+    _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(historyRequest.id)
+    scope.launch { loadCronJobDetailFromGateway(detailRequest) }
+    scope.launch { loadCronRunHistoryFromGateway(historyRequest) }
+  }
+
+  fun refreshCronRunHistory(id: String) {
+    val request = cronRunHistoryRequestGuard.begin(id) ?: return
+    _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(request.id)
+    scope.launch { loadCronRunHistoryFromGateway(request) }
   }
 
   fun clearCronJobDetail() {
     cronJobDetailRequestGuard.cancel {
       _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+    }
+    cronRunHistoryRequestGuard.cancel {
+      _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
+    }
+    if (_cronActionState.value !is GatewayCronActionState.Running) {
+      _cronActionState.value = GatewayCronActionState.Idle
+    }
+  }
+
+  fun runCronJob(id: String) {
+    launchCronAction(id = id, action = GatewayCronAction.Run) { gatewayScope, jobId ->
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "cron.run",
+          buildJsonObject {
+            put("id", JsonPrimitive(jobId))
+            put("mode", JsonPrimitive("force"))
+          }.toString(),
+        )
+      when (val outcome = parseGatewayCronRunOutcome(json.parseToJsonElement(response).asObjectOrNull())) {
+        is GatewayCronRunOutcome.Started ->
+          CronActionResult(
+            message = if (outcome.runId == null) "Cron job started." else "Cron run queued.",
+            kind = GatewayCronNoticeKind.Success,
+            refresh = true,
+          )
+        is GatewayCronRunOutcome.Skipped ->
+          CronActionResult(
+            message = outcome.reason.message,
+            kind = GatewayCronNoticeKind.Warning,
+            refresh = false,
+          )
+        GatewayCronRunOutcome.Rejected ->
+          CronActionResult(
+            message = "Gateway rejected the cron run.",
+            kind = GatewayCronNoticeKind.Error,
+            refresh = false,
+          )
+        null -> error("Gateway returned an invalid cron run result.")
+      }
+    }
+  }
+
+  fun setCronJobEnabled(
+    id: String,
+    enabled: Boolean,
+  ) {
+    launchCronAction(
+      id = id,
+      action = if (enabled) GatewayCronAction.Enable else GatewayCronAction.Disable,
+    ) { gatewayScope, jobId ->
+      requestGatewayData(
+        gatewayScope,
+        "cron.update",
+        buildJsonObject {
+          put("id", JsonPrimitive(jobId))
+          put(
+            "patch",
+            buildJsonObject {
+              put("enabled", JsonPrimitive(enabled))
+            },
+          )
+        }.toString(),
+      )
+      CronActionResult(
+        message = if (enabled) "Cron job enabled." else "Cron job disabled.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+      )
+    }
+  }
+
+  fun updateCronJob(
+    original: GatewayCronJobDetail,
+    edit: GatewayCronJobEdit,
+  ) {
+    launchCronAction(id = original.id, action = GatewayCronAction.Save) { gatewayScope, _ ->
+      requestGatewayData(
+        gatewayScope,
+        "cron.update",
+        buildCronUpdateParams(original = original, edit = edit),
+      )
+      CronActionResult(
+        message = "Cron job updated.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+      )
+    }
+  }
+
+  fun deleteCronJob(id: String) {
+    launchCronAction(id = id, action = GatewayCronAction.Delete) { gatewayScope, jobId ->
+      requestGatewayData(
+        gatewayScope,
+        "cron.remove",
+        buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
+      )
+      CronActionResult(
+        message = "Cron job deleted.",
+        kind = GatewayCronNoticeKind.Success,
+        refresh = true,
+        deleted = true,
+      )
     }
   }
 
@@ -3665,6 +3791,166 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+      }
+    }
+  }
+
+  private suspend fun loadCronRunHistoryFromGateway(request: CronJobDetailRequest) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!operatorConnected) {
+      cronRunHistoryRequestGuard.publishIfCurrent(request) {
+        _cronRunHistoryState.value =
+          GatewayCronRunHistoryState.Error(
+            id = request.id,
+            message = "Connect the gateway to inspect cron run history.",
+          )
+      }
+      return
+    }
+    try {
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "cron.runs",
+          buildJsonObject {
+            put("id", JsonPrimitive(request.id))
+            put("limit", JsonPrimitive(20))
+            put("sortDir", JsonPrimitive("desc"))
+          }.toString(),
+        )
+      val root = json.parseToJsonElement(response).asObjectOrNull()
+      val runs = parseGatewayCronRunHistory(root?.get("entries") as? JsonArray)
+      publishGatewayData(gatewayScope) {
+        cronRunHistoryRequestGuard.publishIfCurrent(request) {
+          _cronRunHistoryState.value = GatewayCronRunHistoryState.Loaded(id = request.id, runs = runs)
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        cronRunHistoryRequestGuard.publishIfCurrent(request) {
+          _cronRunHistoryState.value =
+            GatewayCronRunHistoryState.Error(
+              id = request.id,
+              message = "Could not load cron run history.",
+            )
+        }
+      }
+    }
+  }
+
+  private fun launchCronAction(
+    id: String,
+    action: GatewayCronAction,
+    perform: suspend (GatewayDataScope, String) -> CronActionResult,
+  ) {
+    val jobId = id.trim().takeIf { it.isNotEmpty() } ?: return
+    if (!operatorAdminScopeAvailable.value) {
+      _cronActionState.value =
+        GatewayCronActionState.Notice(
+          id = jobId,
+          message = "Cron changes require operator.admin access.",
+          kind = GatewayCronNoticeKind.Error,
+        )
+      return
+    }
+    if (!operatorConnected) {
+      _cronActionState.value =
+        GatewayCronActionState.Notice(
+          id = jobId,
+          message = "Connect the gateway to manage cron jobs.",
+          kind = GatewayCronNoticeKind.Error,
+        )
+      return
+    }
+    if (_cronActionState.value is GatewayCronActionState.Running) return
+    // One mutating RPC at a time keeps button taps and programmatic calls from racing.
+    if (!cronActionMutex.tryLock()) {
+      if (_cronActionState.value !is GatewayCronActionState.Running) {
+        _cronActionState.value =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = "Another cron action is still finishing.",
+            kind = GatewayCronNoticeKind.Warning,
+          )
+      }
+      return
+    }
+    scope.launch {
+      val actionScope = captureGatewayDataScope()
+      var completionState: GatewayCronActionState.Notice? = null
+      try {
+        val gatewayScope = actionScope ?: return@launch
+        val started =
+          publishGatewayData(gatewayScope) {
+            _cronActionState.value = GatewayCronActionState.Running(id = jobId, action = action)
+          }
+        if (!started) return@launch
+        val result = perform(gatewayScope, jobId)
+        if (result.deleted) {
+          clearDeletedCronSelection(jobId)
+        }
+        if (result.refresh) {
+          refreshCronFromGateway()
+          if (!result.deleted && selectedCronJobId() == jobId) loadCronJobDetail(jobId)
+        }
+        completionState =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = result.message,
+            kind = result.kind,
+            deleted = result.deleted,
+          )
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        val message = err.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Cron action failed."
+        completionState =
+          GatewayCronActionState.Notice(
+            id = jobId,
+            message = message,
+            kind = GatewayCronNoticeKind.Error,
+          )
+      } finally {
+        cronActionMutex.unlock()
+        val notice = completionState
+        if (actionScope != null && notice != null) {
+          publishGatewayData(actionScope) {
+            _cronActionState.value = notice
+          }
+        }
+      }
+    }
+  }
+
+  private fun selectedCronJobId(): String? =
+    when (val state = _cronJobDetailState.value) {
+      GatewayCronJobDetailState.Idle -> null
+      is GatewayCronJobDetailState.Loading -> state.id
+      is GatewayCronJobDetailState.Loaded -> state.job.id
+      is GatewayCronJobDetailState.Error -> state.id
+    }
+
+  private fun selectedCronRunHistoryJobId(): String? =
+    when (val state = _cronRunHistoryState.value) {
+      GatewayCronRunHistoryState.Idle -> null
+      is GatewayCronRunHistoryState.Loading -> state.id
+      is GatewayCronRunHistoryState.Loaded -> state.id
+      is GatewayCronRunHistoryState.Error -> state.id
+    }
+
+  private fun clearDeletedCronSelection(jobId: String) {
+    // A completed delete can race navigation to another job. Clear only state
+    // still owned by the deleted id so the newer detail/history survives.
+    if (selectedCronJobId() == jobId) {
+      cronJobDetailRequestGuard.cancel {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+      }
+    }
+    if (selectedCronRunHistoryJobId() == jobId) {
+      cronRunHistoryRequestGuard.cancel {
+        _cronRunHistoryState.value = GatewayCronRunHistoryState.Idle
       }
     }
   }

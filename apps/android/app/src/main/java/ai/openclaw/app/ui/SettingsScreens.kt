@@ -7,9 +7,12 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
+import ai.openclaw.app.GatewayCronJobEdit
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
@@ -299,7 +302,7 @@ private fun CronJobsSettingsScreen(
     )
     ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.fillMaxWidth())
     ClawPanel {
-      Text(text = "Android shows scheduled work status. Create and edit schedules from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(text = "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -315,7 +318,7 @@ private fun CronJobsSettingsScreen(
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Create recurring OpenClaw work from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Scheduled work created on the gateway will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> CronJobsPanel(jobs = cronJobs, onJobClick = { selectedJobId = it.id })
@@ -333,6 +336,9 @@ private fun CronJobDetailSettingsScreen(
   BackHandler(onBack = onBack)
 
   val detailState by viewModel.cronJobDetailState.collectAsState()
+  val historyState by viewModel.cronRunHistoryState.collectAsState()
+  val actionState by viewModel.cronActionState.collectAsState()
+  val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
 
   DisposableEffect(viewModel, jobId) {
@@ -348,6 +354,14 @@ private fun CronJobDetailSettingsScreen(
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
   val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
   val errorText = (detailState as? GatewayCronJobDetailState.Error)?.takeIf { it.id == jobId }?.message
+  val deleted =
+    (actionState as? GatewayCronActionState.Notice)
+      ?.takeIf { it.id == jobId }
+      ?.deleted == true
+
+  LaunchedEffect(deleted) {
+    if (deleted) onBack()
+  }
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: "Cron Job",
     subtitle = "Inspect scheduled gateway work.",
@@ -374,7 +388,20 @@ private fun CronJobDetailSettingsScreen(
         ClawPanel {
           Text(text = if (loading) "Loading cron job…" else "Cron job not loaded.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> CronJobDetailPanel(current)
+      else ->
+        CronJobDetailPanel(
+          job = current,
+          historyState = historyState,
+          actionState = actionState,
+          operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+          onRun = { viewModel.runCronJob(current.id) },
+          onToggleEnabled = {
+            viewModel.setCronJobEnabled(id = current.id, enabled = !current.enabled)
+          },
+          onSave = { edit -> viewModel.updateCronJob(original = current, edit = edit) },
+          onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
+          onDelete = { viewModel.deleteCronJob(current.id) },
+        )
     }
   }
 }
@@ -1919,7 +1946,26 @@ private fun CronJobListRow(
 @Composable
 private fun CronJobDetailPanel(
   job: GatewayCronJobDetail,
+  historyState: GatewayCronRunHistoryState,
+  actionState: GatewayCronActionState,
+  operatorAdminScopeAvailable: Boolean,
+  onRun: () -> Unit,
+  onToggleEnabled: () -> Unit,
+  onSave: (GatewayCronJobEdit) -> Unit,
+  onRefreshHistory: () -> Unit,
+  onDelete: () -> Unit,
 ) {
+  CronJobManagementPanel(
+    job = job,
+    historyState = historyState,
+    actionState = actionState,
+    operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+    onRun = onRun,
+    onToggleEnabled = onToggleEnabled,
+    onSave = onSave,
+    onRefreshHistory = onRefreshHistory,
+    onDelete = onDelete,
+  )
   SettingsMetricPanel(
     rows =
       listOf(

@@ -18,10 +18,16 @@ class CronJobDetailTest {
     requireNotNull(detail)
     assertEquals("job-1", detail.id)
     assertEquals("Daily report", detail.name)
+    assertEquals("cron", detail.scheduleKind)
     assertEquals("0 9 * * *", detail.scheduleLabel)
     assertEquals("0 9 * * * · Europe/Vienna · Stagger Every 5m", detail.scheduleDetail)
+    assertEquals("0 9 * * *", detail.scheduleCronExpr)
+    assertEquals("Europe/Vienna", detail.scheduleTimezone)
+    assertEquals(300000L, detail.scheduleStaggerMs)
     assertEquals("Agent turn · openai/gpt-5.5 · Thinking high", detail.payloadLabel)
     assertEquals("Summarize the day", detail.payloadText)
+    assertEquals("openai/gpt-5.5", detail.payloadModel)
+    assertEquals("high", detail.payloadThinking)
     assertEquals("Announce · telegram · chat-42 · Account primary", detail.deliveryLabel)
     assertEquals("After 3 · Announce · telegram · ops · Cooldown Every 1h", detail.failureAlertLabel)
     assertEquals(2L, detail.consecutiveErrors)
@@ -40,6 +46,7 @@ class CronJobDetailTest {
 
     requireNotNull(detail)
     assertEquals("printf done", detail.payloadText)
+    assertEquals(listOf("printf", "done"), detail.payloadCommandArgv)
     assertFalse(detail.payloadText.orEmpty().contains("secret-value"))
   }
 
