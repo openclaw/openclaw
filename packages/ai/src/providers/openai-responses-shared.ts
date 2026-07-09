@@ -65,6 +65,18 @@ import { transformMessages } from "./transform-messages.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 
+function sanitizeImageMediaType(mimeType: string): string {
+  if (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  ) {
+    return mimeType;
+  }
+  return "image/png";
+}
+
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
   return sanitized.trim().length > 0 ? sanitized : fallback;
@@ -324,7 +336,7 @@ export function convertResponsesMessages<TApi extends Api>(
           return {
             type: "input_image",
             detail: "auto",
-            image_url: `data:${item.mimeType};base64,${item.data}`,
+            image_url: `data:${sanitizeImageMediaType(item.mimeType)};base64,${item.data}`,
           } satisfies ResponseInputImage;
         });
         if (content.length === 0) {
@@ -440,7 +452,7 @@ export function convertResponsesMessages<TApi extends Api>(
             contentParts.push({
               type: "input_image",
               detail: "auto",
-              image_url: `data:${block.mimeType};base64,${block.data}`,
+              image_url: `data:${sanitizeImageMediaType(block.mimeType)};base64,${block.data}`,
             });
           }
         }

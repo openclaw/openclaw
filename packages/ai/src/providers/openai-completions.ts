@@ -86,6 +86,18 @@ function hasToolHistory(messages: Message[]): boolean {
   return false;
 }
 
+function sanitizeImageMediaType(mimeType: string): string {
+  if (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  ) {
+    return mimeType;
+  }
+  return "image/png";
+}
+
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
@@ -1056,7 +1068,7 @@ export function convertMessages(
             return {
               type: "image_url",
               image_url: {
-                url: `data:${item.mimeType};base64,${item.data}`,
+                url: `data:${sanitizeImageMediaType(item.mimeType)};base64,${item.data}`,
               },
             } satisfies ChatCompletionContentPartImage;
           },
@@ -1211,7 +1223,7 @@ export function convertMessages(
               imageBlocks.push({
                 type: "image_url",
                 image_url: {
-                  url: `data:${block.mimeType};base64,${block.data}`,
+                  url: `data:${sanitizeImageMediaType(block.mimeType)};base64,${block.data}`,
                 },
               });
             }

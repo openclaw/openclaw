@@ -34,6 +34,18 @@ import { buildBaseOptions } from "./simple-options.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
+function sanitizeImageMediaType(mimeType: string): string {
+  if (
+    mimeType === "image/jpeg" ||
+    mimeType === "image/png" ||
+    mimeType === "image/gif" ||
+    mimeType === "image/webp"
+  ) {
+    return mimeType;
+  }
+  return "image/png";
+}
+
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
 
@@ -643,7 +655,7 @@ function toChatMessages(
           if (item.type === "text") {
             return { type: "text", text: sanitizeSurrogates(item.text) };
           }
-          return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+          return { type: "image_url", imageUrl: `data:${sanitizeImageMediaType(item.mimeType)};base64,${item.data}` };
         });
       if (content.length > 0) {
         result.push({ role: "user", content });
@@ -720,7 +732,7 @@ function toChatMessages(
       }
       toolContent.push({
         type: "image_url",
-        imageUrl: `data:${part.mimeType};base64,${part.data}`,
+        imageUrl: `data:${sanitizeImageMediaType(part.mimeType)};base64,${part.data}`,
       });
     }
     result.push({
