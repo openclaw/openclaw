@@ -89,7 +89,9 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 
 function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
   const dir = makeTempRepoRoot(tempDirs, prefix);
-  git(dir, ["init", "-q", "--initial-branch=main"]);
+  // Use --initial-branch if supported (Git 2.28+), otherwise fall back to checkout -b
+  git(dir, ["init", "-q"]);
+  git(dir, ["checkout", "-q", "-b", "main"]);
   writeRepoFile(dir, "README.md", "base\n");
   git(dir, ["add", "."]);
   git(dir, [
@@ -277,7 +279,8 @@ describe("scripts/changed-lanes", () => {
 
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     git(dir, ["add", "README.md"]);
     git(dir, [
@@ -312,7 +315,8 @@ describe("scripts/changed-lanes", () => {
 
   it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     git(dir, ["add", "README.md"]);
     git(dir, [
@@ -354,7 +358,8 @@ describe("scripts/changed-lanes", () => {
 
   it("prefers raw sync worktree paths over an implausibly broad no-merge-base diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-raw-sync-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     for (let index = 0; index < 250; index += 1) {
       writeFileSync(path.join(dir, `baseline-${index}.txt`), "baseline\n", "utf8");
     }
@@ -425,7 +430,8 @@ describe("scripts/changed-lanes", () => {
 
   it("ignores local Crabbox metadata in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-crabbox-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(path.join(dir, ".gitignore"), ".crabbox/\n", "utf8");
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     git(dir, ["add", ".gitignore", "README.md"]);
@@ -462,7 +468,8 @@ describe("scripts/changed-lanes", () => {
 
   it("includes deleted worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-deleted-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
     writeFileSync(
       path.join(dir, "src", "shared", "obsolete.ts"),
@@ -501,7 +508,8 @@ describe("scripts/changed-lanes", () => {
 
   it("includes deleted staged files in the staged diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-deleted-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
     writeFileSync(
       path.join(dir, "src", "shared", "obsolete.ts"),
@@ -808,7 +816,8 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates staged changed gates as explicit remote paths", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-staged-delegate-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     git(dir, ["add", "README.md"]);
     git(dir, [
@@ -839,7 +848,8 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates empty staged changed gates without rediscovering unstaged paths", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-empty-staged-delegate-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     git(dir, ["add", "README.md"]);
     git(dir, [
@@ -1138,7 +1148,8 @@ describe("scripts/changed-lanes", () => {
 
   it("classifies live Docker package script changes from the git diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-live-docker-package-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(
       path.join(dir, "package.json"),
       `${JSON.stringify(
@@ -1200,7 +1211,8 @@ describe("scripts/changed-lanes", () => {
 
   it("classifies normal package script changes from the git diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-package-scripts-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(
       path.join(dir, "package.json"),
       `${JSON.stringify(
@@ -1354,23 +1366,18 @@ describe("scripts/changed-lanes", () => {
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--staged",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--staged"]);
   });
 
   it("passes release metadata base and head refs as options", () => {
     const result = detectChangedLanes(["CHANGELOG.md"]);
     const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
 
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--base",
-      "main",
-      "--head",
-      "feature",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {
@@ -1475,7 +1482,8 @@ describe("scripts/changed-lanes", () => {
 
   it("guards release metadata package changes to the top-level version field", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["init", "-q"]);
+    git(dir, ["checkout", "-q", "-b", "main"]);
     writeFileSync(
       path.join(dir, "package.json"),
       `${JSON.stringify({ name: "fixture", version: "2026.4.20", dependencies: { leftpad: "1.0.0" } }, null, 2)}\n`,
