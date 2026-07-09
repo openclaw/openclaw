@@ -408,7 +408,6 @@ function createChatHeaderState(
       navWidth: 280,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       chatShowThinking: false,
       chatShowToolCalls: true,
     },

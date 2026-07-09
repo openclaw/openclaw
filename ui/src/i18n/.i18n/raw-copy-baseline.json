@@ -2701,13 +2701,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Roundness"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Saved"
     },
     {
@@ -2778,20 +2771,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Full"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Knot"
     },
     {
@@ -2813,28 +2792,7 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "None"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Round"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "S"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Slight"
     },
     {
       "count": 1,
@@ -2891,13 +2849,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
       "text": "Search settings..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Adjust corner radius across the UI."
     },
     {
       "count": 1,
@@ -3066,13 +3017,6 @@
       "name": "text",
       "path": "ui/src/pages/config/view.ts",
       "text": "Receive browser push notifications from your gateway."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Roundness"
     },
     {
       "count": 2,
