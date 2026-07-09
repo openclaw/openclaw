@@ -46,7 +46,7 @@ async function expectHangingTalkRequestTimesOut(params: {
   );
 }
 
-describe("nextcloud-talk send fetch timeouts", () => {
+describe("nextcloud-talk send error responses", () => {
   it("keeps send error body snippets UTF-16 safe", async () => {
     const prefix = "e".repeat(199);
     const errorBody = `${prefix}\u{1F600}tail`;
@@ -65,11 +65,13 @@ describe("nextcloud-talk send fetch timeouts", () => {
             cfg: createTalkConfig(baseUrl),
             timeoutMs: REQUEST_TIMEOUT_MS,
           }),
-        ).rejects.toThrow(`Nextcloud Talk: bad request - ${prefix}…`);
+        ).rejects.toThrow(new Error(`Nextcloud Talk: bad request - ${prefix}…`));
       },
     );
   });
+});
 
+describe("nextcloud-talk send fetch timeouts", () => {
   it("bounds hanging message and reaction sends", async () => {
     await expectHangingTalkRequestTimesOut({
       path: "/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
