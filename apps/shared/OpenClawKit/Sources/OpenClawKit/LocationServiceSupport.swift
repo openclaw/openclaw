@@ -50,7 +50,9 @@ extension ConcurrentLocationServiceCommon {
                 else {
                     return
                 }
-                if self.locationRequestContinuations.isEmpty {
+                if self.locationRequestContinuations.isEmpty,
+                   self.locationRequestContinuation == nil
+                {
                     self.locationManager.stopUpdatingLocation()
                 }
                 continuation.resume(throwing: CancellationError())
