@@ -8,7 +8,7 @@ describe("markdownToIR tableMode code", () => {
 | Kind | Value |
 | --- | --- |
 | 类型 | Frontend |
-| 📸 | Camera |
+| 👨‍👩‍👧‍👦 | Family |
 `.trim();
 
     const ir = markdownToIR(md, { tableMode: "code" });
@@ -18,7 +18,30 @@ describe("markdownToIR tableMode code", () => {
         "| Kind | Value    |",
         "| ---- | -------- |",
         "| 类型 | Frontend |",
-        "| 📸   | Camera   |",
+        "| 👨‍👩‍👧‍👦   | Family   |",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps text-presentation and incomplete emoji sequences narrow", () => {
+    const md = `
+| I | L |
+| --- | --- |
+| © | text |
+| 1️ | selector |
+| A | ascii |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(
+      [
+        "| I | L        |",
+        "| --- | -------- |",
+        "| © | text     |",
+        "| 1️ | selector |",
+        "| A | ascii    |",
         "",
       ].join("\n"),
     );

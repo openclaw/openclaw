@@ -142,13 +142,32 @@ function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
-const emojiLikePattern = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
+const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
+const extendedPictographicPattern = /\p{Extended_Pictographic}/u;
+const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
+const keycapSequencePattern = /^(?:[#*0-9]\uFE0F?\u20E3)$/u;
+
+function isWideEmojiGrapheme(grapheme: string): boolean {
+  if (
+    keycapSequencePattern.test(grapheme) ||
+    regionalIndicatorPattern.test(grapheme) ||
+    emojiPresentationPattern.test(grapheme)
+  ) {
+    return true;
+  }
+  // Extended_Pictographic also includes narrow text-default symbols such as ©.
+  // They become emoji-width only when a selector or joiner requests emoji shaping.
+  return (
+    (grapheme.includes("\uFE0F") || grapheme.includes("\u200D")) &&
+    extendedPictographicPattern.test(grapheme)
+  );
+}
 
 function graphemeWidth(grapheme: string): number {
   if (!grapheme) {
     return 0;
   }
-  if (emojiLikePattern.test(grapheme)) {
+  if (isWideEmojiGrapheme(grapheme)) {
     return 2;
   }
 
