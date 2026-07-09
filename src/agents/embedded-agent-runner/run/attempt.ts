@@ -3227,13 +3227,6 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
         },
       });
-      if (idleTimeoutMs > 0) {
-        activeSession.agent.streamFn = streamWithIdleTimeout(
-          activeSession.agent.streamFn,
-          idleTimeoutMs,
-          (error) => idleTimeoutTrigger?.(error),
-        );
-      }
       const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
         cfg: params.config,
         runTimeoutMs: resolvedRunTimeoutMs,
@@ -3244,6 +3237,23 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
         },
       });
+      if (idleTimeoutMs > 0) {
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          idleTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+        );
+      } else if (firstEventTimeoutMs > 0) {
+        // Local providers opt out of gap policing, but the transport first-event
+        // guard only arms after stream creation. A request whose headers never
+        // arrive would otherwise wedge until the run budget with no watchdog.
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          firstEventTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+          { scope: "creation-only" },
+        );
+      }
       if (firstEventTimeoutMs > 0) {
         const baseStreamFn = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {

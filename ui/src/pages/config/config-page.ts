@@ -180,7 +180,11 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 }
 
 function configPageTitle(pageId: ConfigPageId): string {
-  return pageId === "config" ? t("nav.settings") : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+  // The takeover sidebar is titled "Settings"; the general page header reads
+  // like its sibling sections instead of repeating it.
+  return pageId === "config"
+    ? t("nav.settingsGeneral")
+    : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function configPageSubtitle(pageId: ConfigPageId): string {
@@ -916,13 +920,7 @@ export class ConfigPage extends LitElement {
       ${this.pageId === "config"
         ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
         : nothing}
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        this.pageId,
-        (routeId) => this.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }

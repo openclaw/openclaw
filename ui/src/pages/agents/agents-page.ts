@@ -506,7 +506,6 @@ class AgentsPage extends LitElement implements AgentsState {
         </div>
       </section>
       ${renderSettingsWorkspace(
-        this.context.basePath,
         renderAgents({
           basePath: this.context.basePath,
           loading: this.agentsLoading,
@@ -741,9 +740,6 @@ class AgentsPage extends LitElement implements AgentsState {
             })();
           },
         }),
-        "agents",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
       )}
     `;
   }

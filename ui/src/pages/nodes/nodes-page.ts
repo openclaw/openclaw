@@ -219,7 +219,6 @@ class NodesPage extends LitElement implements NodesPageDataState {
         </div>
       </section>
       ${renderSettingsWorkspace(
-        this.context.basePath,
         renderNodes({
           loading: this.nodesLoading,
           nodes: this.nodes,
@@ -294,9 +293,6 @@ class NodesPage extends LitElement implements NodesPageDataState {
           onSaveExecApprovals: () =>
             void saveExecApprovals(this, this.resolveExecApprovalsTarget()),
         }),
-        "nodes",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
       )}
     `;
   }
