@@ -177,6 +177,77 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `native writes wait for the shared sidecar lock`() async throws {
+        try await self.withTempStateDir { stateDir in
+            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "pid": Int(getpid()),
+                "createdAt": ISO8601DateFormatter().string(from: Date()),
+            ])
+            try payload.write(to: lockURL)
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
+                try? FileManager().removeItem(at: lockURL)
+            }
+
+            let startedAt = Date()
+            let rejected = ExecApprovalsStore.updateAllowlist(
+                agentId: "main",
+                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
+
+            #expect(Date().timeIntervalSince(startedAt) >= 0.075)
+            #expect(rejected.isEmpty)
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/bin/echo"])
+        }
+    }
+
+    @Test
+    func `native writer reclaims lock from reused pid`() async throws {
+        try await self.withTempStateDir { stateDir in
+            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "pid": Int(getpid()),
+                "createdAt": ISO8601DateFormatter().string(from: Date()),
+                "starttime": 0,
+            ])
+            try payload.write(to: lockURL)
+
+            let rejected = ExecApprovalsStore.updateAllowlist(
+                agentId: "main",
+                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
+
+            #expect(rejected.isEmpty)
+            #expect(!FileManager().fileExists(atPath: lockURL.path))
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/bin/echo"])
+        }
+    }
+
+    @Test
+    func `conditional save cannot restore revoked approvals`() async throws {
+        try await self.withTempStateDir { _ in
+            ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.allowlist = [ExecAllowlistEntry(pattern: "/bin/echo")]
+            }
+            let stale = ExecApprovalsStore.readSnapshot()
+
+            ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .deny
+                entry.allowlist = []
+            }
+
+            let result = ExecApprovalsStore.saveFile(stale.file, ifBaseHash: stale.hash)
+            if case .conflict = result {
+                // Expected: the revocation changed the hash before the stale save.
+            } else {
+                Issue.record("expected stale conditional save to conflict")
+            }
+            let current = ExecApprovalsStore.resolve(agentId: "main")
+            #expect(current.agent.security == .deny)
+            #expect(current.allowlist.isEmpty)
+        }
+    }
+
+    @Test
     func `ensure file hardens state directory permissions`() async throws {
         try await self.withTempStateDir { stateDir in
             try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)

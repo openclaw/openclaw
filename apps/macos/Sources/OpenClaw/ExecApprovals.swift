@@ -10,7 +10,7 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
     case full
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var title: String {
@@ -28,7 +28,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     case allow
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var title: String {
@@ -55,7 +55,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
         }
     }
 
-    static func from(security: ExecSecurity, ask: ExecAsk) -> ExecApprovalQuickMode {
+    static func from(security: ExecSecurity, ask _: ExecAsk) -> ExecApprovalQuickMode {
         switch security {
         case .deny:
             .deny
@@ -73,7 +73,7 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable {
     case always
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var title: String {
@@ -203,6 +203,14 @@ struct ExecApprovalsSnapshot: Codable {
     var file: ExecApprovalsFile
 }
 
+enum ExecApprovalsConditionalSaveResult {
+    case saved(ExecApprovalsSnapshot)
+    case baseHashUnavailable
+    case baseHashRequired
+    case conflict
+    case unavailable
+}
+
 struct ExecApprovalsResolved {
     let url: URL
     let socketPath: String
@@ -229,6 +237,15 @@ enum ExecApprovalsStore {
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
     private static let fileLock = NSRecursiveLock()
+    private static let writeLockAttempts = 11
+    private static let writeLockMaxDelayMicroseconds: useconds_t = 500_000
+
+    private struct WriteLockHandle {
+        let descriptor: Int32
+        let url: URL
+        let device: UInt64
+        let inode: UInt64
+    }
 
     private enum LegacyMigrationResult {
         case notNeeded
@@ -240,6 +257,146 @@ enum ExecApprovalsStore {
         self.fileLock.lock()
         defer { self.fileLock.unlock() }
         return try body()
+    }
+
+    /// Match the TypeScript writer's `<approvals>.lock` protocol. Both processes
+    /// must cover the complete read-modify-write transaction or a stale native
+    /// usage update can restore policy that an administrator just revoked.
+    private static func withWriteLock<T>(_ body: () throws -> T) throws -> T {
+        try self.withFileLock {
+            let handle = try self.acquireWriteLock()
+            defer { self.releaseWriteLock(handle) }
+            return try body()
+        }
+    }
+
+    private static func acquireWriteLock() throws -> WriteLockHandle {
+        self.ensureSecureStateDirectory()
+        let fileURL = self.fileURL()
+        try FileManager().createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let realDirectory = fileURL.deletingLastPathComponent().resolvingSymlinksInPath()
+        let lockURL = realDirectory.appendingPathComponent("\(fileURL.lastPathComponent).lock")
+        var delay: useconds_t = 25000
+
+        for attempt in 0..<self.writeLockAttempts {
+            let descriptor = open(
+                lockURL.path,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                S_IRUSR | S_IWUSR)
+            if descriptor >= 0 {
+                do {
+                    var info = stat()
+                    guard fstat(descriptor, &info) == 0 else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    var lockPayload: [String: Any] = [
+                        "pid": Int(getpid()),
+                        "createdAt": ISO8601DateFormatter().string(from: Date()),
+                    ]
+                    if let starttime = self.processStartTime(getpid()) {
+                        lockPayload["starttime"] = starttime
+                    }
+                    let payload = try JSONSerialization.data(
+                        withJSONObject: lockPayload,
+                        options: [.prettyPrinted, .sortedKeys])
+                    try self.writeAll(payload + Data([0x0A]), to: descriptor)
+                    return WriteLockHandle(
+                        descriptor: descriptor,
+                        url: lockURL,
+                        device: UInt64(info.st_dev),
+                        inode: UInt64(info.st_ino))
+                } catch {
+                    close(descriptor)
+                    _ = unlink(lockURL.path)
+                    throw error
+                }
+            }
+
+            guard errno == EEXIST else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if self.removeDeadWriteLockIfUnchanged(at: lockURL) {
+                continue
+            }
+            guard attempt + 1 < self.writeLockAttempts else {
+                throw POSIXError(.ETIMEDOUT)
+            }
+            usleep(delay)
+            delay = min(delay * 2, self.writeLockMaxDelayMicroseconds)
+        }
+        throw POSIXError(.ETIMEDOUT)
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if count < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                offset += count
+            }
+        }
+    }
+
+    private static func removeDeadWriteLockIfUnchanged(at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawPID = payload["pid"] as? NSNumber
+        else { return false }
+        let owner = pid_t(rawPID.int32Value)
+        guard owner > 0 else { return false }
+        if kill(owner, 0) == 0 || errno == EPERM {
+            guard let storedStarttime = (payload["starttime"] as? NSNumber)?.uint64Value,
+                  let currentStarttime = self.processStartTime(owner),
+                  storedStarttime != currentStarttime
+            else { return false }
+        } else {
+            guard errno == ESRCH else { return false }
+        }
+
+        var observed = stat()
+        guard lstat(url.path, &observed) == 0,
+              let current = try? Data(contentsOf: url),
+              current == data
+        else { return false }
+        var unchanged = stat()
+        guard lstat(url.path, &unchanged) == 0,
+              unchanged.st_dev == observed.st_dev,
+              unchanged.st_ino == observed.st_ino
+        else { return false }
+        return unlink(url.path) == 0 || errno == ENOENT
+    }
+
+    private static func processStartTime(_ pid: pid_t) -> UInt64? {
+        guard pid > 0 else { return nil }
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0,
+              size > 0,
+              info.kp_proc.p_pid == pid
+        else { return nil }
+        let started = info.kp_proc.p_starttime
+        guard started.tv_sec >= 0, started.tv_usec >= 0 else { return nil }
+        return UInt64(started.tv_sec) * 1_000_000 + UInt64(started.tv_usec)
+    }
+
+    private static func releaseWriteLock(_ handle: WriteLockHandle) {
+        close(handle.descriptor)
+        var current = stat()
+        guard lstat(handle.url.path, &current) == 0,
+              UInt64(current.st_dev) == handle.device,
+              UInt64(current.st_ino) == handle.inode
+        else { return }
+        _ = unlink(handle.url.path)
     }
 
     static func fileURL() -> URL {
@@ -301,7 +458,9 @@ enum ExecApprovalsStore {
 
     private static func isLegacyDefaultSocketPath(_ raw: String, legacyFileURL: URL) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
+        if trimmed.isEmpty {
+            return true
+        }
         let expanded = self.expandPath(trimmed)
         let legacySocket = legacyFileURL.deletingLastPathComponent()
             .appendingPathComponent("exec-approvals.sock", isDirectory: false)
@@ -321,7 +480,9 @@ enum ExecApprovalsStore {
                 }
             }
             let parent = cursor.deletingLastPathComponent()
-            if parent.path == cursor.path { return false }
+            if parent.path == cursor.path {
+                return false
+            }
             cursor = parent
         }
     }
@@ -345,7 +506,9 @@ enum ExecApprovalsStore {
         }
         var closed = false
         defer {
-            if !closed { close(fd) }
+            if !closed {
+                close(fd)
+            }
         }
         do {
             try data.withUnsafeBytes { rawBuffer in
@@ -386,7 +549,7 @@ enum ExecApprovalsStore {
     }
 
     private static func migrateLegacyFileIfNeeded() -> LegacyMigrationResult {
-        guard let legacyURL = self.legacyFileURLIfPending() else { return .notNeeded }
+        guard let legacyURL = legacyFileURLIfPending() else { return .notNeeded }
         let targetURL = self.fileURL()
         do {
             if self.hasSymlinkParent(targetURL) {
@@ -415,9 +578,13 @@ enum ExecApprovalsStore {
             try FileManager().createDirectory(
                 at: targetURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            if FileManager().fileExists(atPath: targetURL.path) { return .notNeeded }
-            let created = try self.writeMigratedFileExclusively(migrated, to: targetURL)
-            if !created { return .notNeeded }
+            if FileManager().fileExists(atPath: targetURL.path) {
+                return .notNeeded
+            }
+            let created = try writeMigratedFileExclusively(migrated, to: targetURL)
+            if !created {
+                return .notNeeded
+            }
             try? FileManager().setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: targetURL.path)
@@ -442,7 +609,7 @@ enum ExecApprovalsStore {
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var agents = file.agents ?? [:]
         if let legacyDefault = agents["default"] {
-            if let main = agents[self.defaultAgentId] {
+            if let main = agents[defaultAgentId] {
                 agents[self.defaultAgentId] = self.mergeAgents(current: main, legacy: legacyDefault)
             } else {
                 agents[self.defaultAgentId] = legacyDefault
@@ -472,38 +639,42 @@ enum ExecApprovalsStore {
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
         self.withFileLock {
-            if self.legacyFileURLIfPending() != nil {
-                let file = self.unmigratedLegacyFallbackFile()
-                return ExecApprovalsSnapshot(
-                    path: self.fileURL().path,
-                    exists: false,
-                    hash: self.hashRaw(nil),
-                    file: file)
-            }
-            let url = self.fileURL()
-            guard FileManager().fileExists(atPath: url.path) else {
-                return ExecApprovalsSnapshot(
-                    path: url.path,
-                    exists: false,
-                    hash: self.hashRaw(nil),
-                    file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-            }
-            let raw = try? String(contentsOf: url, encoding: .utf8)
-            let data = raw.flatMap { $0.data(using: .utf8) }
-            let decoded: ExecApprovalsFile = {
-                if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
-                   file.version == 1
-                {
-                    return file
-                }
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }()
+            self.readSnapshotUnlocked()
+        }
+    }
+
+    private static func readSnapshotUnlocked() -> ExecApprovalsSnapshot {
+        if self.legacyFileURLIfPending() != nil {
+            let file = self.unmigratedLegacyFallbackFile()
+            return ExecApprovalsSnapshot(
+                path: self.fileURL().path,
+                exists: false,
+                hash: self.hashRaw(nil),
+                file: file)
+        }
+        let url = self.fileURL()
+        guard FileManager().fileExists(atPath: url.path) else {
             return ExecApprovalsSnapshot(
                 path: url.path,
-                exists: true,
-                hash: self.hashRaw(raw),
-                file: decoded)
+                exists: false,
+                hash: self.hashRaw(nil),
+                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
         }
+        let raw = try? String(contentsOf: url, encoding: .utf8)
+        let data = raw.flatMap { $0.data(using: .utf8) }
+        let decoded: ExecApprovalsFile = {
+            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
+               file.version == 1
+            {
+                return file
+            }
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }()
+        return ExecApprovalsSnapshot(
+            path: url.path,
+            exists: true,
+            hash: self.hashRaw(raw),
+            file: decoded)
     }
 
     static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -523,83 +694,144 @@ enum ExecApprovalsStore {
     }
 
     static func loadFile() -> ExecApprovalsFile {
+        if self.legacyFileURLIfPending() != nil {
+            return self.ensureFile()
+        }
         self.withFileLock {
-            if self.legacyFileURLIfPending() != nil {
-                switch self.migrateLegacyFileIfNeeded() {
-                case .migrated, .notNeeded:
-                    break
-                case .blocked:
-                    return self.unmigratedLegacyFallbackFile()
-                }
-            }
-            let url = self.fileURL()
-            guard FileManager().fileExists(atPath: url.path) else {
+            self.loadFileUnlocked()
+        }
+    }
+
+    private static func loadFileUnlocked() -> ExecApprovalsFile {
+        let url = self.fileURL()
+        guard FileManager().fileExists(atPath: url.path) else {
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+            if decoded.version != 1 {
                 return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
             }
-            do {
-                let data = try Data(contentsOf: url)
-                let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-                if decoded.version != 1 {
-                    return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-                }
-                return decoded
-            } catch {
-                self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }
+            return decoded
+        } catch {
+            self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
         }
     }
 
     static func saveFile(_ file: ExecApprovalsFile) {
-        self.withFileLock {
-            do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let data = try encoder.encode(file)
-                let url = self.fileURL()
-                self.ensureSecureStateDirectory()
-                try FileManager().createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true)
-                try data.write(to: url, options: [.atomic])
-                try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            } catch {
-                self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+        do {
+            try self.withWriteLock {
+                try self.saveFileUnlocked(file)
             }
+        } catch {
+            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    static func ensureFile() -> ExecApprovalsFile {
-        self.withFileLock {
-            if self.legacyFileURLIfPending() != nil {
-                switch self.migrateLegacyFileIfNeeded() {
-                case .migrated, .notNeeded:
-                    break
-                case .blocked:
-                    return self.unmigratedLegacyFallbackFile()
-                }
-            }
-            self.ensureSecureStateDirectory()
-            let url = self.fileURL()
-            let existed = FileManager().fileExists(atPath: url.path)
-            let loaded = self.loadFile()
-            let loadedHash = self.hashFile(loaded)
+    private static func saveFileUnlocked(_ file: ExecApprovalsFile) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(file)
+        let url = self.fileURL()
+        self.ensureSecureStateDirectory()
+        try FileManager().createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try data.write(to: url, options: [.atomic])
+        try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
 
-            var file = self.normalizeIncoming(loaded)
-            if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
-            let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if path.isEmpty {
-                file.socket?.path = self.socketPath()
+    static func ensureFile() -> ExecApprovalsFile {
+        do {
+            return try self.withWriteLock {
+                try self.ensureFileUnlocked()
             }
-            let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if token.isEmpty {
-                file.socket?.token = self.generateToken()
+        } catch {
+            self.logger.error("exec approvals ensure failed: \(error.localizedDescription, privacy: .public)")
+            if self.legacyFileURLIfPending() != nil {
+                return self.unmigratedLegacyFallbackFile()
             }
-            if file.agents == nil { file.agents = [:] }
-            if !existed || loadedHash != self.hashFile(file) {
-                self.saveFile(file)
+            return self.loadFileUnlocked()
+        }
+    }
+
+    private static func ensureFileUnlocked() throws -> ExecApprovalsFile {
+        if self.legacyFileURLIfPending() != nil {
+            switch self.migrateLegacyFileIfNeeded() {
+            case .migrated, .notNeeded:
+                break
+            case .blocked:
+                return self.unmigratedLegacyFallbackFile()
             }
-            return file
+        }
+        self.ensureSecureStateDirectory()
+        let url = self.fileURL()
+        let existed = FileManager().fileExists(atPath: url.path)
+        let loaded = self.loadFileUnlocked()
+        let loadedHash = self.hashFile(loaded)
+
+        var file = self.normalizeIncoming(loaded)
+        if file.socket == nil {
+            file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
+        }
+        let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if path.isEmpty {
+            file.socket?.path = self.socketPath()
+        }
+        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if token.isEmpty {
+            file.socket?.token = self.generateToken()
+        }
+        if file.agents == nil {
+            file.agents = [:]
+        }
+        if !existed || loadedHash != self.hashFile(file) {
+            try self.saveFileUnlocked(file)
+        }
+        return file
+    }
+
+    static func saveFile(
+        _ incoming: ExecApprovalsFile,
+        ifBaseHash baseHash: String?) -> ExecApprovalsConditionalSaveResult
+    {
+        do {
+            return try self.withWriteLock {
+                let current = try self.ensureFileUnlocked()
+                let snapshot = self.readSnapshotUnlocked()
+                if snapshot.exists {
+                    if snapshot.hash.isEmpty {
+                        return .baseHashUnavailable
+                    }
+                    let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if expected.isEmpty {
+                        return .baseHashRequired
+                    }
+                    if expected != snapshot.hash {
+                        return .conflict
+                    }
+                }
+
+                var normalized = self.normalizeIncoming(incoming)
+                let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let resolvedPath = (socketPath?.isEmpty == false)
+                    ? socketPath!
+                    : current.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ??
+                    self.socketPath()
+                let resolvedToken = (token?.isEmpty == false)
+                    ? token!
+                    : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
+
+                try self.saveFileUnlocked(normalized)
+                return .saved(self.readSnapshotUnlocked())
+            }
+        } catch {
+            self.logger.error("exec approvals conditional save failed: \(error.localizedDescription, privacy: .public)")
+            return .unavailable
         }
     }
 
@@ -699,7 +931,9 @@ enum ExecApprovalsStore {
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
             var allowlist = entry.allowlist ?? []
-            if allowlist.contains(where: { $0.pattern == normalizedPattern }) { return }
+            if allowlist.contains(where: { $0.pattern == normalizedPattern }) {
+                return
+            }
             allowlist.append(ExecAllowlistEntry(
                 pattern: normalizedPattern,
                 lastUsedAt: Date().timeIntervalSince1970 * 1000))
@@ -768,10 +1002,14 @@ enum ExecApprovalsStore {
     }
 
     private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
-        self.withFileLock {
-            var file = self.ensureFile()
-            mutate(&file)
-            self.saveFile(file)
+        do {
+            try self.withWriteLock {
+                var file = try self.ensureFileUnlocked()
+                mutate(&file)
+                try self.saveFileUnlocked(file)
+            }
+        } catch {
+            self.logger.error("exec approvals update failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -947,7 +1185,7 @@ enum ExecApprovalsStore {
         var seen = Set<String>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
-            guard let key = self.normalizedPattern(entry.pattern), !seen.contains(key) else {
+            guard let key = normalizedPattern(entry.pattern), !seen.contains(key) else {
                 return
             }
             seen.insert(key)
@@ -1002,8 +1240,12 @@ enum ExecApprovalHelpers {
         allowlistMatch: ExecAllowlistEntry?,
         skillAllow: Bool) -> Bool
     {
-        if ask == .always { return true }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
+        if ask == .always {
+            return true
+        }
+        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow {
+            return true
+        }
         return false
     }
 
@@ -1031,7 +1273,9 @@ struct ExecEventPayload: Codable {
     static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.count <= maxChars { return trimmed }
+        if trimmed.count <= maxChars {
+            return trimmed
+        }
         let suffix = trimmed.suffix(maxChars)
         return "... (truncated) \(suffix)"
     }
@@ -1098,9 +1342,9 @@ actor SkillBinsCache {
                 guard !trimmed.isEmpty else { continue }
                 names.insert(trimmed)
 
-                guard let name = self.normalizeSkillBinName(trimmed),
-                      let resolvedPath = self.resolveSkillBinPath(trimmed, searchPaths: searchPaths),
-                      let normalizedPath = self.normalizeResolvedPath(resolvedPath)
+                guard let name = normalizeSkillBinName(trimmed),
+                      let resolvedPath = resolveSkillBinPath(trimmed, searchPaths: searchPaths),
+                      let normalizedPath = normalizeResolvedPath(resolvedPath)
                 else {
                     continue
                 }

@@ -994,51 +994,36 @@ extension MacNodeRuntime {
         }
 
         let params = try Self.decodeParams(SetParams.self, from: req.paramsJSON)
-        let current = ExecApprovalsStore.ensureFile()
-        let snapshot = ExecApprovalsStore.readSnapshot()
-        if snapshot.exists {
-            if snapshot.hash.isEmpty {
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: exec approvals base hash unavailable; reload and retry")
-            }
-            let baseHash = params.baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if baseHash.isEmpty {
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: exec approvals base hash required; reload and retry")
-            }
-            if baseHash != snapshot.hash {
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: exec approvals changed; reload and retry")
-            }
+        switch ExecApprovalsStore.saveFile(params.file, ifBaseHash: params.baseHash) {
+        case let .saved(snapshot):
+            let redacted = ExecApprovalsSnapshot(
+                path: snapshot.path,
+                exists: snapshot.exists,
+                hash: snapshot.hash,
+                file: ExecApprovalsStore.redactForSnapshot(snapshot.file))
+            let payload = try Self.encodePayload(redacted)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case .baseHashUnavailable:
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: exec approvals base hash unavailable; reload and retry")
+        case .baseHashRequired:
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: exec approvals base hash required; reload and retry")
+        case .conflict:
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: exec approvals changed; reload and retry")
+        case .unavailable:
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: exec approvals update lock unavailable; retry")
         }
-
-        var normalized = ExecApprovalsStore.normalizeIncoming(params.file)
-        let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedPath = (socketPath?.isEmpty == false)
-            ? socketPath!
-            : current.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ??
-            ExecApprovalsStore.socketPath()
-        let resolvedToken = (token?.isEmpty == false)
-            ? token!
-            : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
-
-        ExecApprovalsStore.saveFile(normalized)
-        let nextSnapshot = ExecApprovalsStore.readSnapshot()
-        let redacted = ExecApprovalsSnapshot(
-            path: nextSnapshot.path,
-            exists: nextSnapshot.exists,
-            hash: nextSnapshot.hash,
-            file: ExecApprovalsStore.redactForSnapshot(nextSnapshot.file))
-        let payload = try Self.encodePayload(redacted)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
     private func emitExecEvent(_ event: String, payload: ExecEventPayload) async {
