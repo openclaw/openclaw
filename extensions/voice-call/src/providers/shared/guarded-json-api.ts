@@ -8,6 +8,8 @@ import {
 
 // Shared guarded JSON API client for voice-call providers.
 
+const VOICE_CALL_PROVIDER_API_TIMEOUT_MS = 30_000;
+
 /** Parameters for an SSRF-guarded provider JSON request. */
 type GuardedJsonApiRequestParams = {
   url: string;
@@ -18,6 +20,7 @@ type GuardedJsonApiRequestParams = {
   allowedHostnames: string[];
   auditContext: string;
   errorPrefix: string;
+  timeoutMs?: number;
 };
 
 /** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
@@ -33,6 +36,7 @@ export async function guardedJsonApiRequest<T = unknown>(
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
+    timeoutMs: params.timeoutMs ?? VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
   });
 
   try {
