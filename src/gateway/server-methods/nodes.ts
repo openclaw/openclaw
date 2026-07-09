@@ -64,6 +64,7 @@ import {
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
@@ -527,6 +528,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
   const { nodeSession } = params;
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,
+    connId: nodeSession.connId,
     displayName: nodeSession.displayName,
     platform: nodeSession.platform,
     deviceFamily: nodeSession.deviceFamily,
@@ -988,7 +990,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       const approvedNode = approved.node;
       const cfg = context.getRuntimeConfig();
-      const currentAllowlist = resolveNodeCommandAllowlist(cfg, {
+      // Pairing allowlist, matching connect-time reconciliation: approved
+      // dangerous surfaces (e.g. computer.act) stay on the live session so a
+      // later arming works without a reconnect; invoke policy still gates use.
+      const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
         platform: approvedNode.platform,
         deviceFamily: approvedNode.deviceFamily,
         caps: approvedNode.caps,

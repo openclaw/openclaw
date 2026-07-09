@@ -177,6 +177,7 @@ async function setRuntimeApiKeyForCompletion(params: {
         params.apiKey,
         "GitHub Copilot runtime auth exchange",
       ),
+      config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
       sourceApiKey: params.apiKey,

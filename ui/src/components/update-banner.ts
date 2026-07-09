@@ -1,8 +1,9 @@
 // Control UI component renders update status and available-update actions.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { UpdateAvailable } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { icons } from "./icons.ts";
 
@@ -67,17 +68,8 @@ type UpdateBannerProps = {
   onDismiss: () => void;
 };
 
-class UpdateBanner extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class UpdateBanner extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: UpdateBannerProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     const props = this.props;

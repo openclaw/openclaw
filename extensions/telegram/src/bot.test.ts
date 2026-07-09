@@ -4097,48 +4097,67 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
-    const handler = vi.fn(async () => ({ handled: true, submitText: "Do not submit this" }));
+    const handler = vi.fn(async () => {
+      // The callback was authorized before this policy change; submitText must
+      // still honor the fresh inbound policy without releasing callback dedupe.
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            direct: { "9": { requireTopic: true } },
+          },
+        },
+      });
+      return { handled: true, submitText: "Do not submit this" };
+    });
     registerPluginInteractiveHandler("smart-replies-plugin", {
       channel: "telegram",
       namespace: "openclaw-smart-replies",
       handler,
     } satisfies TelegramInteractiveHandlerRegistration);
+    setTelegramPluginStateRuntimeForTests();
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "disabled",
-            capabilities: { inlineButtons: "dm" },
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              capabilities: { inlineButtons: "dm" },
+            },
           },
         },
-      },
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
+      });
+      const callbackHandler = getTelegramCallbackHandlerForTests();
 
-    const callbackContext = {
-      callbackQuery: {
-        id: "cbq-smart-reply-policy-skip",
-        data: "openclaw-smart-replies:v1:RG8gbm90IHN1Ym1pdCB0aGlz",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 9, type: "private" },
-          date: 1736380800,
-          message_id: 11,
-          text: "Pick a direction",
+      const callbackContext = {
+        callbackQuery: {
+          id: "cbq-smart-reply-policy-skip",
+          data: "openclaw-smart-replies:v1:RG8gbm90IHN1Ym1pdCB0aGlz",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 9, type: "private" },
+            date: 1736380800,
+            message_id: 11,
+            text: "Pick a direction",
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    };
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
 
-    await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
-    await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
+      await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
+      await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
 
-    expect(handler).toHaveBeenCalledOnce();
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+    }
   });
 
   it("submits plugin-owned callback text in mention-required group topics", async () => {

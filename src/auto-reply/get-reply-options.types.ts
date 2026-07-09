@@ -36,6 +36,9 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+/** Action sink available for model-proposed follow-up tasks during this turn. */
+export type TaskSuggestionDeliveryMode = "gateway";
+
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
   begin: () => (() => void) | void;
@@ -70,6 +73,9 @@ type ReasoningStreamPayload = Pick<
 type ReasoningProgressPayload = {
   progressTokens: number;
 };
+
+/** Return false when a channel intentionally keeps a progress event out of user-visible UI. */
+type ProgressCallbackResult = false | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
@@ -172,7 +178,7 @@ export type GetReplyOptions = {
     meta?: string;
     approvalId?: string;
     approvalSlug?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
@@ -215,7 +221,7 @@ export type GetReplyOptions = {
     exitCode?: number | null;
     durationMs?: number;
     cwd?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a patch completes with a file summary. */
   onPatchSummary?: (payload: {
     itemId?: string;
@@ -242,6 +248,8 @@ export type GetReplyOptions = {
    * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Enables task-suggestion tools only when the initiating surface can action Gateway events. */
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */
   queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Tracks ownership transfer when this turn later drains as a queued followup. */
