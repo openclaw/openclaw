@@ -42,9 +42,57 @@ openclaw-lobster-pet {
   transition: left 1.15s ease-in-out;
 }
 
-/* Disconnected pets lose their teal eye glow. */
+/* ---- Rare palette variants (weights + lore in lobster-pet.ts) ---- */
+
+/* Ghost/albino: pale translucent shell, icy glints. */
+.lobster-pet--palette-ghost {
+  --lob-glint: #a8dcff;
+}
+
+.lobster-pet--palette-ghost .lobster-pet__svg {
+  opacity: 0.62;
+}
+
+/* Abyss: deep-sea navy with bioluminescent eye glow. */
+.lobster-pet--palette-abyss {
+  --lob-glint: #52f5e3;
+}
+
+.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(3),
+.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(4) {
+  filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
+}
+
+/* Retro: homage to the classic OpenClaw logo — white sticker outline around
+   the whole sprite (the halo is two stacked 1px drop-shadows). */
+.lobster-pet--palette-retro .lobster-pet__svg {
+  filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+    drop-shadow(0 0 1.2px #f5f7fa);
+}
+
+/* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
+   right claw and antenna wear the second shell color. */
+.lobster-pet--palette-split {
+  --lob-shell2: #46536b;
+}
+
+.lobster-pet--palette-split .lob-claw--r path {
+  fill: var(--lob-shell2);
+}
+
+.lobster-pet--palette-split .lob-antennae path:last-of-type {
+  stroke: var(--lob-shell2);
+}
+
+/* Disconnected pets lose their eye glow; declared after the palette glints so
+   offline wins the cascade at equal specificity. */
 .lobster-pet--offline {
   --lob-glint: #8a949d;
+}
+
+.lobster-pet--offline .lob-eye-open circle:nth-of-type(3),
+.lobster-pet--offline .lob-eye-open circle:nth-of-type(4) {
+  filter: none;
 }
 
 .lobster-pet__body {

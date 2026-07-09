@@ -597,13 +597,6 @@
       "text": "Web"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/dashboard-header.ts",
-      "text": "OpenClaw"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
@@ -4228,6 +4221,13 @@
       "name": "placeholder",
       "path": "ui/src/pages/overview/view.ts",
       "text": "ws://100.x.y.z:18789"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/profile/profile-page.ts",
+      "text": "OpenClaw"
     },
     {
       "count": 1,
