@@ -32,6 +32,33 @@ describe("buildMcpToolSchema", () => {
     expect(inputSchema?.required).toEqual(["toString"]);
   });
 
+  it("serializes union schema properties named __proto__ as own keys", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "proof_tool",
+        description: "proof",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: Object.fromEntries([["__proto__", { type: "string" }]]),
+              required: ["__proto__"],
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    const inputSchema = entry?.inputSchema as
+      | { properties?: Record<string, unknown>; required?: string[] }
+      | undefined;
+
+    expect(Object.hasOwn(inputSchema?.properties ?? {}, "__proto__")).toBe(true);
+    expect(inputSchema?.properties?.["__proto__"]).toEqual({ type: "string" });
+    expect(JSON.stringify(inputSchema?.properties)).toContain('"__proto__"');
+    expect(inputSchema?.required).toEqual(["__proto__"]);
+  });
+
   it("does not keep inherited prototype names as required schema keys", () => {
     const [entry] = buildMcpToolSchema([
       {

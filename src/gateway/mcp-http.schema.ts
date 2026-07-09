@@ -67,7 +67,7 @@ function flattenUnionSchema(
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps: Record<string, unknown> = {};
+  const mergedProps = Object.create(null) as Record<string, unknown>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
