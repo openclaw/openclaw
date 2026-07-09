@@ -610,7 +610,9 @@ export const fr: TranslationMap = {
   },
   tasksPage: {
     active: "Actives",
+    activeSub: "Travail en arrière-plan en file d’attente et en cours d’exécution.",
     recent: "Récentes",
+    recentSub: "Dernières tâches terminées, échouées et annulées.",
     loading: "Chargement des tâches…",
     empty: "Aucune tâche en arrière-plan pour le moment.",
     emptyActive: "Aucune tâche en file d’attente ou en cours d’exécution.",
@@ -1722,7 +1724,6 @@ export const fr: TranslationMap = {
       splitRight: "Fractionner à droite",
       splitDown: "Fractionner vers le bas",
       closePane: "Fermer le volet",
-      sessionSelect: "Session du volet",
       dropSplit: "Scinder",
       dropOpenHere: "Ouvrir ici",
     },
@@ -1967,8 +1968,7 @@ export const fr: TranslationMap = {
     },
     summary: {
       enabled: "Activé",
-      yes: "Oui",
-      no: "Non",
+      scheduler: "Planificateur",
       jobs: "Tâches",
       nextWake: "Prochain réveil",
       refreshing: "Actualisation...",

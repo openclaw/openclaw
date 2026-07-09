@@ -5066,70 +5066,6 @@
       "id": "native.android.f57b231996a10d14"
     },
     {
-      "kind": "ui-call",
-      "line": 258,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Type a message…",
-      "surface": "android",
-      "id": "native.android.4949d6815387ee5c"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 272,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Gateway is offline. Text messages are queued and sent after reconnecting.",
-      "surface": "android",
-      "id": "native.android.8e06942aa080e420"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 302,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Select thinking level",
-      "surface": "android",
-      "id": "native.android.d6227e983e46ca7c"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 327,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Attach",
-      "surface": "android",
-      "id": "native.android.f5f9284eaf2e47e1"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 342,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Refresh",
-      "surface": "android",
-      "id": "native.android.27111ef04249d6f4"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 350,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Abort",
-      "surface": "android",
-      "id": "native.android.2e55791da68e83cf"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 385,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "Send",
-      "surface": "android",
-      "id": "native.android.02b1552edc8d59da"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 411,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
-      "source": "No commands found",
-      "surface": "android",
-      "id": "native.android.ff4e568bce360d5f"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 326,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMarkdown.kt",
@@ -13555,7 +13491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3065,
+      "line": 3032,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -13563,7 +13499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3065,
+      "line": 3032,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
