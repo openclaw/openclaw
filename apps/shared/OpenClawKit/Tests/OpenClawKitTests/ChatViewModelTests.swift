@@ -1205,14 +1205,14 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.canSend })
     }
 
-    @Test func `foreground user-only active session keeps activity indicator visible`() async throws {
+    @Test func `active session history preserves the known pending run`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let historyCalls = AsyncCounter()
         let userOnlyHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
             hasActiveRun: true)
         let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload(), userOnlyHistory, userOnlyHistory],
+            historyResponses: [historyPayload(), userOnlyHistory, userOnlyHistory, userOnlyHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() },
             sendMessageStatus: "pending")
 
@@ -1222,17 +1222,49 @@ struct ChatViewModelTests {
             await historyCalls.current() == 2
         }
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
+        try await waitUntil("post-send fallback keeps known run ownership", timeoutSeconds: 7.0) {
+            let historyCount = await historyCalls.current()
+            let pendingRunCount = await MainActor.run { vm.pendingRunCount }
+            return historyCount >= 3 && pendingRunCount == 1
+        }
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("foreground history applies") {
-            await historyCalls.current() == 3
+            await historyCalls.current() >= 4
         }
-        #expect(await MainActor.run { vm.pendingRunCount == 0 })
-        #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
+        #expect(await MainActor.run { vm.pendingRunCount == 1 })
+        #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
         await MainActor.run { vm.input = "another task" }
         #expect(await MainActor.run { !vm.canSend })
         await MainActor.run { vm.send() }
         await Task.yield()
         #expect(await transport.sentMessages() == ["quiet task"])
+
+        let runId = try await waitForLastSentRunId(transport)
+        emitAgentLifecycleEnd(transport: transport, runId: runId)
+        try await waitUntil("terminal lifecycle clears known run activity") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 && !vm.hasActiveSessionRunWithoutChatSnapshot
+            }
+        }
+    }
+
+    @Test func `foreground synthesizes activity when no run snapshot or local run exists`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let historyCalls = AsyncCounter()
+        let userOnlyHistory = historyPayload(
+            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
+            hasActiveRun: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [userOnlyHistory, userOnlyHistory],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.pendingRunCount == 0 })
+        await MainActor.run { vm.resumeFromForeground() }
+        try await waitUntil("foreground history applies") {
+            await historyCalls.current() == 2
+        }
+        #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
 
         transport.emit(
             .sessionMessage(
@@ -1253,24 +1285,19 @@ struct ChatViewModelTests {
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
             hasActiveRun: true)
         let (_, vm) = await makeViewModel(
-            historyResponses: [historyPayload(), userOnlyHistory, userOnlyHistory, historyPayload(sessionKey: "other")],
-            requestHistoryHook: { _ in _ = await historyCalls.increment() },
-            sendMessageStatus: "pending")
+            historyResponses: [userOnlyHistory, userOnlyHistory, historyPayload(sessionKey: "other")],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await sendUserMessage(vm, text: "quiet task")
-        try await waitUntil("send refresh applies user-only history") {
-            await historyCalls.current() == 2
-        }
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("foreground history applies") {
-            await historyCalls.current() == 3
+            await historyCalls.current() == 2
         }
         #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
 
         await MainActor.run { vm.switchSession(to: "other") }
         try await waitUntil("other session bootstrap applies") {
-            await historyCalls.current() == 4
+            await historyCalls.current() == 3
         }
         await MainActor.run { vm.input = "new task" }
         #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })

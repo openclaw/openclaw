@@ -62,7 +62,7 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var pendingRunCount: Int = 0
-    public private(set) var hasActiveSessionRunWithoutChatSnapshot = false
+    private(set) var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {
         didSet { self.syncContextUsageFraction() }
@@ -582,7 +582,7 @@ public final class OpenClawChatViewModel {
     }
 
     public var canSend: Bool {
-        !self.isSubmittingDraft && !self.isSending && !self.hasActiveRunBlockingSend && self.hasDraftToSend
+        !self.isSubmittingDraft && !self.isSending && !self.hasBlockingRunActivity && self.hasDraftToSend
     }
 
     public var hasDraftToSend: Bool {
@@ -606,7 +606,7 @@ public final class OpenClawChatViewModel {
             !self.attachments.isEmpty
     }
 
-    private var hasActiveRunBlockingSend: Bool {
+    var hasBlockingRunActivity: Bool {
         self.pendingRunCount > 0 || self.hasActiveSessionRunWithoutChatSnapshot
     }
 
@@ -1005,10 +1005,12 @@ public final class OpenClawChatViewModel {
             if refresh.sessionHasActiveRun,
                Self.hasUnansweredLatestUser(in: self.messages)
             {
-                self.clearPendingRuns(reason: nil)
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                self.updateActiveSessionRunWithoutChatSnapshot(true)
+                // Keep a known run ID authoritative so its stream and terminal
+                // events still route here. Synthesize activity only after the
+                // client has no run identity to preserve.
+                self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
             } else {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.clearPendingRuns(
@@ -1271,7 +1273,7 @@ public final class OpenClawChatViewModel {
             self.logDiagnostic("chat.ui send ignored reason=sending sessionKey=\(self.sessionKey)")
             return
         }
-        guard !self.hasActiveRunBlockingSend else {
+        guard !self.hasBlockingRunActivity else {
             self.logDiagnostic(
                 "chat.ui send ignored reason=pending sessionKey=\(self.sessionKey) "
                     + "pending=\(self.pendingRunCount) "
@@ -1760,7 +1762,7 @@ public final class OpenClawChatViewModel {
 
     func performCompact() async {
         guard !self.isCompacting else { return }
-        guard !self.isSending, !self.hasActiveRunBlockingSend, !self.isAborting else {
+        guard !self.isSending, !self.hasBlockingRunActivity, !self.isAborting else {
             self.errorText = "Wait for the current response before compacting the session."
             return
         }
@@ -2360,6 +2362,7 @@ public final class OpenClawChatViewModel {
         guard isTerminalPhase || isFailure || aborted || isSuccessfulStatus else { return }
 
         self.invalidateHistorySnapshots()
+        self.updateActiveSessionRunWithoutChatSnapshot(false)
 
         if isFailure || aborted {
             self.errorText = Self.agentLifecycleErrorMessage(evt, aborted: aborted)
@@ -2508,6 +2511,15 @@ public final class OpenClawChatViewModel {
         else { return false }
         if refresh.applied, refresh.runSnapshotApplied, refresh.supportsInFlightRunState {
             if refresh.hasInFlightRun {
+                return true
+            }
+            if refresh.sessionHasActiveRun,
+               Self.hasUnansweredLatestUser(in: self.messages)
+            {
+                // A session-level active bit cannot identify a new chat run,
+                // but it is enough to retain the run ID this client already owns.
+                self.pendingToolCallsById = [:]
+                self.updateStreamingAssistantText(nil)
                 return true
             }
             self.clearPendingRun(runId)
