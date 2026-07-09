@@ -145,4 +145,24 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     expect(factories).toContain(contextPruningExtension);
   });
+
+  it("enables cache-ttl pruning for OpenAI automatic prompt caching", () => {
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager: {} as SessionManager,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      model: { api: "openai-responses", contextWindow: 400_000 } as Model,
+    });
+
+    expect(factories).toContain(contextPruningExtension);
+  });
 });

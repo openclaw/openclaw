@@ -28,7 +28,11 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   };
 });
 
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import {
+  isCacheTtlEligibleProvider,
+  isContextPruningCacheTtlProvider,
+  readLastCacheTtlTimestamp,
+} from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
   it("allows anthropic", () => {
@@ -87,6 +91,18 @@ describe("isCacheTtlEligibleProvider", () => {
         "anthropic-messages",
       ),
     ).toBe(true);
+  });
+});
+
+describe("isContextPruningCacheTtlProvider", () => {
+  it("allows OpenAI context pruning without marking it cache-control eligible", () => {
+    expect(isCacheTtlEligibleProvider("openai", "gpt-5.5")).toBe(false);
+    expect(isContextPruningCacheTtlProvider("openai", "gpt-5.5")).toBe(true);
+  });
+
+  it("preserves provider-specific cache TTL eligibility for routed models", () => {
+    expect(isContextPruningCacheTtlProvider("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
+    expect(isContextPruningCacheTtlProvider("openrouter", "openai/gpt-5.5")).toBe(false);
   });
 });
 

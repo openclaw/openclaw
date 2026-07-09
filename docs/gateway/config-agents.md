@@ -734,6 +734,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 Notes:
 
 - Image blocks are never trimmed/cleared.
+- Direct OpenAI models can use `cache-ttl` pruning when configured manually. This uses OpenAI's automatic prompt caching and does not inject Anthropic `cache_control` markers.
 - Ratios are character-based (approximate), not exact token counts.
 - If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
 
