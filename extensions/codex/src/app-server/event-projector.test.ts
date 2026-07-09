@@ -4860,6 +4860,67 @@ describe("CodexAppServerEventProjector", () => {
       );
     });
 
+    it("warns again for a different unrecognized status (per-status dedup)", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          startedAtMs: 1_750_000_000_000,
+          item: {
+            type: "commandExecution",
+            id: "cmd-queued",
+            command: "echo queued",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          completedAtMs: 1_750_000_000_042,
+          item: {
+            type: "commandExecution",
+            id: "cmd-queued",
+            command: "echo queued",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "queued",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        }),
+      );
+
+      const toolResult = findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "cmd-queued",
+        name: "bash",
+      }).data;
+      expect(toolResult.status).toBe("failed");
+      expect(toolResult.isError).toBe(true);
+
+      const queuedWarnings = warn.mock.calls.filter(
+        (call) => call[0] === "codex app-server item carried an unrecognized status",
+      );
+      expect(queuedWarnings).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server item carried an unrecognized status",
+        expect.objectContaining({ itemType: "commandExecution", status: "queued" }),
+      );
+    });
+
     it("warns once on an unhandled notification method and still drops it", async () => {
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
       const projector = await createProjector();

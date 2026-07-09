@@ -2464,8 +2464,9 @@ export class CodexAppServerEventProjector {
   }
 
   private warnCorrelationMismatchOnce(method: string, params: JsonObject): void {
-    // turn/completed mismatches are already surfaced by the turn-watch layer;
-    // skip them here to avoid duplicate warnings on the same-thread path.
+    // A turn/completed for a non-active turn is dropped by the turn-router
+    // before reaching this projector, so a correlation warning here would be
+    // unreachable; skip it rather than rely on that upstream filtering.
     if (method === "turn/completed") {
       return;
     }
