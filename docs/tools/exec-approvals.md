@@ -229,7 +229,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
+- `security=full` does **not** add a separate heuristic command-obfuscation approval gate or ambiguous-interpreter script-preflight rejection layer on top of the configured host exec policy — this applies regardless of `ask` mode. YOLO (`security=full` plus `ask=off`) is the common no-approval case, but `security=full` with approval-gated modes (`ask=on-miss`, `ask=always`) also skips the fail-closed interpreter heuristic; `ask` controls approval prompts, not trust level. File content validation (shell variable injection checks) still runs whenever a concrete script path can be extracted.
 - `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`; `host=gateway` is only allowed from `auto` when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
