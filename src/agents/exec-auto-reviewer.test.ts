@@ -227,6 +227,92 @@ describe("createModelExecAutoReviewer", () => {
     expect(capturedPrompt).not.toContain("sessionKey");
   });
 
+  it("reuses the model verdict for byte-identical reviewer inputs", async () => {
+    const prepare = vi.fn(async () => ({
+      selection: {
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+        agentDir: "/agent",
+      },
+      model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
+      auth: { apiKey: "key", mode: "env" },
+    }));
+    const complete = vi.fn(async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            decision: "allow",
+            risk: "low",
+            rationale: "read-only inspection",
+          }),
+        },
+      ],
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await expect(reviewer(input)).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "read-only inspection",
+    });
+    await expect(reviewer({ ...input, argv: ["git", "status"] })).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "read-only inspection",
+    });
+
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse the reviewer verdict when the exec request changes", async () => {
+    const prepare = vi.fn(async () => ({
+      selection: {
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+        agentDir: "/agent",
+      },
+      model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
+      auth: { apiKey: "key", mode: "env" },
+    }));
+    const complete = vi.fn(async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            decision: "allow",
+            risk: "low",
+            rationale: "read-only inspection",
+          }),
+        },
+      ],
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await reviewer(input);
+    await reviewer({ ...input, argv: ["git", "status", "--short"] });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
   it("defers to human approval when command text tries to instruct the reviewer", async () => {
     // Command content is adversarial input to the reviewer. Prompt-injection
     // attempts force human review even if the model returns a low-risk allow.

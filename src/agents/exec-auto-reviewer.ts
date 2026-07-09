@@ -27,6 +27,7 @@ import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
 const EXEC_REVIEWER_MAX_TOKENS = 360;
+const EXEC_REVIEWER_MEMO_MAX_ENTRIES = 128;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
 const execAutoReviewResponseSchema = z.object({
@@ -76,6 +77,36 @@ function buildReviewerUserPrompt(input: ExecAutoReviewInput): string {
     stringifyInput(input),
     "UNTRUSTED_EXEC_REQUEST_JSON_END",
   ].join("\n");
+}
+
+function buildReviewerMemoKey(input: ExecAutoReviewInput): string {
+  return JSON.stringify({
+    command: input.command,
+    argv: input.argv ?? [],
+    cwd: input.cwd ?? null,
+    envKeys: input.envKeys ?? [],
+    host: input.host,
+    reason: input.reason,
+    analysis: input.analysis,
+    agent: {
+      id: input.agent?.id ?? null,
+      sessionKey: input.agent?.sessionKey ?? null,
+    },
+  });
+}
+
+function rememberReviewerDecision(
+  memo: Map<string, Promise<ExecAutoReviewDecision>>,
+  key: string,
+  decision: Promise<ExecAutoReviewDecision>,
+): void {
+  if (!memo.has(key) && memo.size >= EXEC_REVIEWER_MEMO_MAX_ENTRIES) {
+    const oldestKey = memo.keys().next().value;
+    if (oldestKey !== undefined) {
+      memo.delete(oldestKey);
+    }
+  }
+  memo.set(key, decision);
 }
 
 function normalizeRationale(value: unknown, fallback: string): string {
@@ -276,7 +307,8 @@ export function createModelExecAutoReviewer(params: {
     completeWithPreparedSimpleCompletionModel;
   const modelRef = resolveReviewerModelRef(params.reviewer);
   const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
-  return async (input) => {
+  const reviewMemo = new Map<string, Promise<ExecAutoReviewDecision>>();
+  const runReview = async (input: ExecAutoReviewInput): Promise<ExecAutoReviewDecision> => {
     let completionController: AbortController | undefined;
     try {
       if (hasReviewerDirective(input)) {
@@ -356,5 +388,15 @@ export function createModelExecAutoReviewer(params: {
         rationale: `exec reviewer failed: ${formatErrorMessage(err)}`,
       };
     }
+  };
+  return async (input) => {
+    const memoKey = buildReviewerMemoKey(input);
+    const cachedDecision = reviewMemo.get(memoKey);
+    if (cachedDecision) {
+      return cachedDecision;
+    }
+    const decision = runReview(input);
+    rememberReviewerDecision(reviewMemo, memoKey, decision);
+    return decision;
   };
 }
