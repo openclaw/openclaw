@@ -1903,17 +1903,13 @@ describe("cron service timer regressions", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
-      let now = dueAt;
       const entered = createDeferred<void>();
       const release = createDeferred<{ status: "ok"; summary: string }>();
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
         log: noopLogger,
-        nowMs: () => {
-          now += 7;
-          return now;
-        },
+        nowMs: () => dueAt,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => {
@@ -1931,6 +1927,7 @@ describe("cron service timer regressions", () => {
         persistedJob?.state.runningAtMs,
         "persisted due-job start marker",
       );
+      expect(runningAtMs).toBe(dueAt + 1);
       const task = listTaskRecords().find(
         (entry) => entry.runtime === "cron" && entry.sourceId === cronJob.id,
       );
@@ -2758,17 +2755,14 @@ describe("cron service timer regressions", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-      let now = missedAt + 60_000;
+      const catchupAt = missedAt + 60_000;
       const entered = createDeferred<void>();
       const release = createDeferred<{ status: "ok"; summary: string }>();
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
         log: noopLogger,
-        nowMs: () => {
-          now += 11;
-          return now;
-        },
+        nowMs: () => catchupAt,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => {
@@ -2786,6 +2780,7 @@ describe("cron service timer regressions", () => {
         persistedJob?.state.runningAtMs,
         "persisted startup start marker",
       );
+      expect(runningAtMs).toBe(catchupAt + 1);
       const task = listTaskRecords().find(
         (entry) => entry.runtime === "cron" && entry.sourceId === job.id,
       );

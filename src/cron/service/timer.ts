@@ -1425,7 +1425,7 @@ export async function onTimer(state: CronServiceState) {
       activeJobGeneration: number;
     }): Promise<TimedCronRunOutcome | undefined> => {
       const { id, job: plannedJob, reservedAtMs, activeJobGeneration } = params;
-      const startedAt = state.deps.nowMs();
+      const startedAt = Math.max(state.deps.nowMs(), reservedAtMs + 1);
       let job = plannedJob;
       let activeJobMarker: CronActiveJobMarker | undefined;
       let jobTimeoutMs = resolveCronJobTimeoutMs(job);
@@ -1970,7 +1970,7 @@ async function runStartupCatchupCandidate(
   candidate: StartupCatchupCandidate,
   activeJobGeneration: number,
 ): Promise<TimedCronRunOutcome | undefined> {
-  const startedAt = state.deps.nowMs();
+  const startedAt = Math.max(state.deps.nowMs(), candidate.reservedAtMs + 1);
   let job = candidate.job;
   let activeJobMarker: CronActiveJobMarker | undefined;
   let taskRunId: string | undefined;
