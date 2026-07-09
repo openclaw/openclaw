@@ -24,22 +24,6 @@ function check(id: string, detect: HealthCheck["detect"]): HealthCheck {
   };
 }
 
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index++;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 describe("runDoctorLintChecks", () => {
   it("filters selected checks and reports skipped count", async () => {
     const result = await runDoctorLintChecks(ctx, {
@@ -162,10 +146,7 @@ describe("runDoctorLintChecks", () => {
       ],
     });
 
-    const message = result.findings[0]?.message ?? "";
-    expect(message).toMatch(/^health check threw: /);
-    expect(message.endsWith("...")).toBe(true);
-    expect(hasUnpairedSurrogate(message)).toBe(false);
+    expect(result.findings[0]?.message).toBe(`health check threw: ${"A".repeat(252)}...`);
   });
 });
 
