@@ -524,6 +524,13 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.clearAll({ preservePendingUsers: true });
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
+      // Groups replayed assistant/toolResult entries by the user turn they
+      // answer. Each distinct turn must get its own chatLog runId: updateAssistant()
+      // reuses an existing component for a given runId, so two separate historical
+      // turns sharing one key would collapse into a single component showing only
+      // the later turn's text, stranded at the earlier turn's position (#onresume).
+      let historyTurnSeq = 0;
+      let historyTurnRunId = `history-turn-${historyTurnSeq}`;
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
           continue;
@@ -545,6 +552,8 @@ export function createSessionActions(context: SessionActionContext) {
             });
             chatLog.addUser(text);
           }
+          historyTurnSeq += 1;
+          historyTurnRunId = `history-turn-${historyTurnSeq}`;
           continue;
         }
         if (message.role === "assistant") {
@@ -552,8 +561,25 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            chatLog.finalizeAssistant(text);
+            chatLog.updateAssistant(text, historyTurnRunId);
           }
+          continue;
+        }
+        if (message.role === "bashExecution") {
+          // A user-run `!`/`!!` local shell command, not an agent tool call: always
+          // shown on replay regardless of verbose level, matching the live echo in
+          // tui-local-shell.ts (which itself never gates on verbose either).
+          const command = asString(message.command, "");
+          chatLog.addSystem(`[local] $ ${command}`);
+          const output = asString(message.output, "");
+          if (output) {
+            for (const outputLine of output.split("\n")) {
+              chatLog.addSystem(`[local] ${outputLine}`);
+            }
+          }
+          const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
+          const cancelled = message.cancelled === true;
+          chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
           continue;
         }
         if (message.role === "toolResult") {
@@ -579,6 +605,7 @@ export function createSessionActions(context: SessionActionContext) {
       }
       submit.reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
+      chatLog.resetStreamingAssistantState();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key
       // we stopped watching after switching away, so the persisted history above
