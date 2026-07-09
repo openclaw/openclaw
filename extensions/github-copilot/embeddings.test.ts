@@ -121,6 +121,7 @@ function firstDiscoveryRequest() {
   return request as {
     init: { headers: Record<string, string> };
     url: string;
+    timeoutMs?: number;
   };
 }
 
