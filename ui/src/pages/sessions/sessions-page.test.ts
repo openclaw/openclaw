@@ -10,12 +10,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { getWorkboardState } from "../../lib/workboard/index.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
-
-const captureSessionToWorkboard = vi.hoisted(() => vi.fn());
-
-vi.mock("../../lib/workboard/index.ts", () => ({ captureSessionToWorkboard }));
-
 import "./sessions-page.ts";
 
 type TestSessionsPage = HTMLElement & {
@@ -163,7 +159,6 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
-  captureSessionToWorkboard.mockReset();
 });
 
 describe("sessions page lifecycle", () => {
@@ -319,10 +314,19 @@ describe("sessions page lifecycle", () => {
       branchCheckpoint: vi.fn(() => branched.promise as never),
       restoreCheckpoint: vi.fn(() => restored.promise as never),
     });
-    captureSessionToWorkboard.mockReturnValue(captured.promise);
-    const client = {} as GatewayBrowserClient;
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({ messages: [] });
+      }
+      if (method === "workboard.cards.create") {
+        return captured.promise;
+      }
+      return Promise.resolve({});
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
     const context = createContext(mutableGateway.gateway, sessions);
+    getWorkboardState(context.workboard).loaded = true;
     const page = await createPage(context);
     page.result = { count: 1, sessions: [{ key: "main" }] } as SessionsListResult;
     page.selectedKeys = new Set(["main"]);
@@ -336,7 +340,9 @@ describe("sessions page lifecycle", () => {
       page.restoreCheckpoint("main", "restore-checkpoint"),
       page.addToWorkboard({ key: "main" } as GatewaySessionRow),
     ];
-    await vi.waitFor(() => expect(captureSessionToWorkboard).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
+    );
 
     mutableGateway.emit({ connected: false, client });
     deleted.resolve({ deleted: ["main"], errors: ["stale delete error"] });
