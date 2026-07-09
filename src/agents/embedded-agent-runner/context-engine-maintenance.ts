@@ -247,6 +247,8 @@ function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
     label: TURN_MAINTENANCE_TASK_LABEL,
     task: TURN_MAINTENANCE_TASK_TASK,
     notifyPolicy: "silent",
+    // Fast maintenance stays silent and must not create a one-task flow.
+    // Long-running and failed workers promote it to pending before notifying.
     deliveryStatus: "not_applicable",
     preferMetadata: true,
   });
