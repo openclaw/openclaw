@@ -43,6 +43,7 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   asOptionalRecord as readRecord,
   isRecord,
@@ -1359,7 +1360,7 @@ function convertToolContents(
       continue;
     }
     if (notice.length >= maxChars) {
-      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
       appendedNotice = true;
       continue;
     }
@@ -1368,7 +1369,7 @@ function convertToolContents(
     const shouldAppendNotice = remainingTextBudget <= 0;
     const text = item.text.slice(0, sliceLength);
     if (shouldAppendNotice) {
-      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      output.push({ type: "inputText", text: truncateUtf16Safe(`${text.trimEnd()}${notice}`, maxChars) });
       appendedNotice = true;
     } else if (text.length > 0) {
       output.push({ type: "inputText", text });
@@ -1376,7 +1377,7 @@ function convertToolContents(
   }
 
   if (!appendedNotice) {
-    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+    output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
   }
   return output;
 }
