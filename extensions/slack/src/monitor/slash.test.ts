@@ -1152,6 +1152,14 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
   });
 }
 
+function expectSenderGateBlockedResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(dispatchMock).not.toHaveBeenCalled();
+  expect(respond).toHaveBeenCalledWith({
+    text: "You are not authorized to use this command here.",
+    response_type: "ephemeral",
+  });
+}
+
 describe("slack slash commands channel policy", () => {
   it("drops mismatched slash payloads before dispatch", async () => {
     const harness = createPolicyHarness({
@@ -1300,7 +1308,26 @@ describe("slack slash commands access groups", () => {
       },
     });
 
-    expectUnauthorizedResponse(respond);
+    expectSenderGateBlockedResponse(respond);
+  });
+
+  it("blocks MPIM slash commands outside explicit allowFrom when access groups are disabled", async () => {
+    const harness = createPolicyHarness({
+      allowFrom: ["UALLOWED"],
+      channelId: "G_MPIM",
+      channelName: "group-dm",
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      useAccessGroups: false,
+    });
+    const { respond } = await registerAndRunPolicySlash({
+      harness,
+      command: {
+        user_id: "UATTACKER",
+        user_name: "Mallory",
+      },
+    });
+
+    expectSenderGateBlockedResponse(respond);
   });
 
   it("enforces access-group gating when lookup fails for private channels", async () => {
