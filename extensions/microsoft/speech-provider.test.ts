@@ -1,5 +1,7 @@
 // Microsoft tests cover speech provider plugin behavior.
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -25,6 +27,43 @@ import {
 import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function listenLocal(server: Server): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return (server.address() as AddressInfo).port;
+}
+
+async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
   config?: unknown;
@@ -93,6 +132,38 @@ describe("listMicrosoftVoices", () => {
       ) as unknown as typeof globalThis.fetch;
 
     await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+  });
+
+  it("times out hanging Microsoft voice discovery requests", async () => {
+    const requested = deferred();
+    const sockets = new Set<Socket>();
+    let requests = 0;
+    const server = createServer((_req, _res) => {
+      requests += 1;
+      requested.resolve();
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    const port = await listenLocal(server);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        await realFetch(`http://127.0.0.1:${port}/voices/list`, init),
+    ) as unknown as typeof globalThis.fetch;
+
+    try {
+      const startedAt = Date.now();
+      const voicesPromise = listMicrosoftVoices({ timeoutMs: 100 });
+      await requested.promise;
+
+      await expect(voicesPromise).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(requests).toBe(1);
+    } finally {
+      await closeServer(server, sockets);
+    }
   });
 
   it("records voice discovery exchanges in debug proxy capture mode", async () => {
