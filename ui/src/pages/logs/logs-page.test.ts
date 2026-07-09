@@ -128,8 +128,9 @@ describe("LogsPage lifecycle", () => {
 
   it("serializes quiet polls so an older cursor cannot overwrite a newer one", async () => {
     const pending = deferred<{ cursor: number; lines: string[]; reset: boolean }>();
+    const request = vi.fn(() => pending.promise);
     const client = {
-      request: vi.fn(() => pending.promise),
+      request,
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
     page.context = contextWithClient(client);
@@ -139,7 +140,7 @@ describe("LogsPage lifecycle", () => {
 
     const first = page.loadLogs({ quiet: true });
     const second = page.loadLogs({ quiet: true });
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
     expect(await second).toBe(false);
 
     pending.resolve({ cursor: 2, lines: ["fresh"], reset: true });

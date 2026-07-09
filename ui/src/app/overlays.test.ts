@@ -97,8 +97,8 @@ async function flushMicrotasks() {
 
 describe("application approval overlays", () => {
   it("reloads pending approvals for each connected epoch", async () => {
-    const firstList = deferred<unknown>();
-    const reconnectedList = deferred<unknown>();
+    const firstList = deferred();
+    const reconnectedList = deferred();
     let execListRequests = 0;
     const request = vi.fn<RequestFn>((method) => {
       if (method !== "exec.approval.list") {

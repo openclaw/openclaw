@@ -43,7 +43,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish(connected: boolean) {
+    publish: (connected: boolean) => {
       snapshot = { client, connected, sessionKey: "main" };
       for (const listener of listeners) {
         listener(snapshot);

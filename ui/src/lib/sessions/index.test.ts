@@ -47,7 +47,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
       subscribeEvents: () => () => undefined,
     },
-    publish(connected: boolean) {
+    publish: (connected: boolean) => {
       snapshot = { ...snapshot, connected };
       for (const listener of listeners) {
         listener(snapshot);

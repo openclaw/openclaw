@@ -341,7 +341,8 @@ describe("OpenClawTerminalPanel", () => {
     await vi.waitFor(() => {
       expect(createGhosttyTerminalMock).toHaveBeenCalledOnce();
     });
-    const staleHost = (createGhosttyTerminalMock.mock.calls[0]?.[0] as CreateOptions).parent;
+    const staleOptions = createGhosttyTerminalMock.mock.calls[0]![0] as CreateOptions;
+    const staleHost = staleOptions.parent;
     panel.remove();
     document.body.append(panel);
 

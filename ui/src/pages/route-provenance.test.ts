@@ -95,7 +95,8 @@ describe("route preload gateway provenance", () => {
   it("keeps sessions provenance from before its async preload", async () => {
     const client = {} as GatewayBrowserClient;
     const originalSnapshot = snapshot(client, true);
-    const { gateway, replaceSnapshot } = mutableGateway(originalSnapshot);
+    const mutable = mutableGateway(originalSnapshot);
+    const gateway = mutable.gateway;
     const list = deferred<null>();
     const request = loadRoute<SessionsRouteData>(sessionsPage, {
       gateway,
@@ -103,7 +104,7 @@ describe("route preload gateway provenance", () => {
       runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
     } as unknown as ApplicationContext);
 
-    replaceSnapshot(snapshot(client, false));
+    mutable.replaceSnapshot(snapshot(client, false));
     list.resolve(null);
     const data = await request;
 
@@ -116,12 +117,13 @@ describe("route preload gateway provenance", () => {
       request: vi.fn(async () => ({})),
     } as unknown as GatewayBrowserClient;
     const originalSnapshot = snapshot(client, true);
-    const { gateway, replaceSnapshot } = mutableGateway(originalSnapshot);
+    const mutable = mutableGateway(originalSnapshot);
+    const gateway = mutable.gateway;
     const request = loadRoute<UsageRouteData>(usagePage, {
       gateway,
     } as unknown as ApplicationContext);
 
-    replaceSnapshot(snapshot(client, false));
+    mutable.replaceSnapshot(snapshot(client, false));
     const data = await request;
 
     expect(data.gateway).toBe(gateway);
@@ -133,7 +135,8 @@ describe("route preload gateway provenance", () => {
       request: vi.fn(async () => ({ skills: [] })),
     } as unknown as GatewayBrowserClient;
     const originalSnapshot = snapshot(client, true);
-    const { gateway, replaceSnapshot } = mutableGateway(originalSnapshot);
+    const mutable = mutableGateway(originalSnapshot);
+    const gateway = mutable.gateway;
     const agentsReady = deferred<null>();
     const agents = {
       ensureList: vi.fn(() => agentsReady.promise),
@@ -143,7 +146,7 @@ describe("route preload gateway provenance", () => {
       agents,
     } as unknown as ApplicationContext);
 
-    replaceSnapshot(snapshot(client, false));
+    mutable.replaceSnapshot(snapshot(client, false));
     agentsReady.resolve(null);
     const data = await request;
 
@@ -155,7 +158,8 @@ describe("route preload gateway provenance", () => {
   it("keeps dreams provenance from before capability warmup", async () => {
     const client = {} as GatewayBrowserClient;
     const originalSnapshot = snapshot(client, false);
-    const { gateway, replaceSnapshot } = mutableGateway(originalSnapshot);
+    const mutable = mutableGateway(originalSnapshot);
+    const gateway = mutable.gateway;
     const configReady = deferred<void>();
     const request = loadRoute<DreamsRouteData>(dreamsPage, {
       gateway,
@@ -169,7 +173,7 @@ describe("route preload gateway provenance", () => {
       },
     } as unknown as ApplicationContext);
 
-    replaceSnapshot(snapshot(client, true));
+    mutable.replaceSnapshot(snapshot(client, true));
     configReady.resolve();
     const data = await request;
 
