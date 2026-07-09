@@ -517,7 +517,8 @@ describe("commands.list handler", () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
-    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
+    const longDescription = `${descriptionPrefix}😀tail`;
     const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
       name: `${longToken}-${argIndex}`,
       description: longDescription,
@@ -554,37 +555,11 @@ describe("commands.list handler", () => {
       expect((first.description as string).length).toBeLessThanOrEqual(
         COMMAND_DESCRIPTION_MAX_LENGTH,
       );
+      expect(first.description).toBe(descriptionPrefix);
       expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
       expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
       const firstArg = (first.args as Array<Record<string, unknown>>)[0];
       expect(firstArg.choices as unknown[]).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
-    } finally {
-      mockChatCommands.length = 0;
-      mockChatCommands.push(...originalCommands);
-    }
-  });
-
-  it("clamps a description without splitting a trailing surrogate pair", () => {
-    const originalCommands = [...mockChatCommands];
-    // U+1F600 is a surrogate pair; place it so it straddles the clamp limit.
-    const description = `${"d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1)}😀`;
-    try {
-      mockChatCommands.length = 0;
-      mockChatCommands.push({
-        key: "surrogate_boundary",
-        nativeName: "surrogate_boundary",
-        description,
-        textAliases: ["/surrogate_boundary"],
-        scope: "both",
-        category: "tools",
-      });
-
-      const clamped = requireCommand(listCommands(), "surrogate_boundary").description as string;
-
-      expect(clamped.length).toBeLessThanOrEqual(COMMAND_DESCRIPTION_MAX_LENGTH);
-      const lastUnit = clamped.charCodeAt(clamped.length - 1);
-      // A raw slice would leave a dangling high surrogate at the boundary.
-      expect(lastUnit >= 0xd800 && lastUnit <= 0xdbff).toBe(false);
     } finally {
       mockChatCommands.length = 0;
       mockChatCommands.push(...originalCommands);
