@@ -214,16 +214,29 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
 }
 
 /** Returns true when a compaction failure is a transient error (timeout,
- * provider 4xx/5xx) that should degrade gracefully rather than terminating
- * the run. Non-retryable failures (auth, guard, summary, unknown) remain
- * terminal. (#100778) */
+ * rate-limit, provider 5xx) that should degrade gracefully rather than
+ * terminating the run. Non-retryable failures (auth, guard, summary,
+ * 400/401/403, unknown) remain terminal. (#100778) */
 function isTransientCompactionError(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
-  return (
-    classification === "timeout" ||
-    classification === "provider_error_5xx" ||
-    classification === "provider_error_4xx"
-  );
+  if (classification === "timeout" || classification === "provider_error_5xx") {
+    return true;
+  }
+  // Only rate-limit (429) among 4xx is transient; 400/401/403 mask auth or
+  // request-shape problems that should remain terminal.
+  if (classification === "provider_error_4xx") {
+    const text = normalizeOptionalString(reason)?.toLowerCase() ?? "";
+    return (
+      text.includes("429") || text.includes("rate limit") || text.includes("too many requests")
+    );
+  }
+  // Catch rate-limit references not matched by the 4xx classifier
+  // (e.g. "rate limit exceeded" without an HTTP status code).
+  const text = normalizeOptionalString(reason)?.toLowerCase() ?? "";
+  if (text.includes("rate limit") || text.includes("too many requests") || text.includes("429")) {
+    return true;
+  }
+  return false;
 }
 
 function resolveMemoryFlushModelFallbackOptions(
