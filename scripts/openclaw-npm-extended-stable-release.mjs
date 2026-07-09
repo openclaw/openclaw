@@ -72,8 +72,19 @@ export function validateNpmPublishBoundary(
 export function validateExtendedStableNpmReleaseRequest(request) {
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
-  const taggedVersion = request.releaseTag.startsWith("v")
-    ? parseReleaseVersion(request.releaseTag.slice(1))
+  const shaPreflight =
+    request.preflightOnly === true && /^[0-9a-f]{40}$/iu.test(request.releaseTag);
+  if (shaPreflight) {
+    if (!/^[0-9a-f]{40}$/iu.test(request.checkoutSha)) {
+      throw new Error("Validation-only SHA preflight requires the full checked-out commit SHA.");
+    }
+    if (request.releaseTag.toLowerCase() !== request.checkoutSha.toLowerCase()) {
+      throw new Error("Validation-only SHA must match the checked-out commit exactly.");
+    }
+  }
+  const effectiveReleaseTag = shaPreflight ? `v${request.packageVersion}` : request.releaseTag;
+  const taggedVersion = effectiveReleaseTag.startsWith("v")
+    ? parseReleaseVersion(effectiveReleaseTag.slice(1))
     : null;
 
   if (request.npmDistTag !== "extended-stable") {
@@ -89,7 +100,7 @@ export function validateExtendedStableNpmReleaseRequest(request) {
 
   if (
     taggedVersion === null ||
-    request.releaseTag !== `v${taggedVersion.version}` ||
+    effectiveReleaseTag !== `v${taggedVersion.version}` ||
     taggedVersion.channel !== "stable"
   ) {
     throw new Error(
@@ -102,24 +113,26 @@ export function validateExtendedStableNpmReleaseRequest(request) {
 
   const releaseVersion = taggedVersion.version;
   const extendedStableBranch = `extended-stable/${taggedVersion.year}.${taggedVersion.month}.33`;
-  const expectedWorkflowRef = `refs/heads/${extendedStableBranch}`;
-  if (request.npmWorkflowRef !== expectedWorkflowRef) {
-    throw new Error(
-      `Extended-stable npm workflow ref mismatch: expected ${expectedWorkflowRef}, got ${request.npmWorkflowRef}.`,
-    );
-  }
   if (request.packageVersion !== releaseVersion) {
     throw new Error(
       `Extended-stable npm package version mismatch: expected ${releaseVersion}, got ${request.packageVersion}.`,
     );
   }
 
-  const shaValues = [request.checkoutSha, request.tagSha, request.extendedStableBranchSha];
-  if (shaValues.some((sha) => !/^[0-9a-f]{40}$/iu.test(sha))) {
-    throw new Error("Extended-stable npm release identity requires full 40-character Git SHAs.");
-  }
-  if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
-    throw new Error("Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.");
+  if (!shaPreflight) {
+    const expectedWorkflowRef = `refs/heads/${extendedStableBranch}`;
+    if (request.npmWorkflowRef !== expectedWorkflowRef) {
+      throw new Error(
+        `Extended-stable npm workflow ref mismatch: expected ${expectedWorkflowRef}, got ${request.npmWorkflowRef}.`,
+      );
+    }
+    const shaValues = [request.checkoutSha, request.tagSha, request.extendedStableBranchSha];
+    if (shaValues.some((sha) => !/^[0-9a-f]{40}$/iu.test(sha))) {
+      throw new Error("Extended-stable npm release identity requires full 40-character Git SHAs.");
+    }
+    if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
+      throw new Error("Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.");
+    }
   }
 
   if (bypassExtendedStableGuard) {
@@ -294,9 +307,11 @@ function validateRequestFromRepository() {
   const npmDistTag = process.env.RELEASE_NPM_DIST_TAG ?? "";
   const releaseTag = process.env.RELEASE_TAG ?? "";
   const npmWorkflowRef = process.env.NPM_WORKFLOW_REF ?? "";
+  const preflightOnly = process.env.PREFLIGHT_ONLY === "true";
   const bypassExtendedStableGuard = parseExtendedStableGuardBypass(
     process.env.BYPASS_EXTENDED_STABLE_GUARD ?? "",
   );
+  const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
   if (npmDistTag !== "extended-stable") {
     return validateExtendedStableNpmReleaseRequest({
       bypassExtendedStableGuard,
@@ -306,26 +321,55 @@ function validateRequestFromRepository() {
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
-      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
+      packageVersion,
       mainPackageVersion: "",
     });
   }
 
-  const parsed = releaseTag.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
+  const shaPreflight = preflightOnly && /^[0-9a-f]{40}$/iu.test(releaseTag);
+  const effectiveReleaseTag = shaPreflight ? `v${packageVersion}` : releaseTag;
+  const parsed = effectiveReleaseTag.startsWith("v")
+    ? parseReleaseVersion(effectiveReleaseTag.slice(1))
+    : null;
   if (!parsed || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
     return validateExtendedStableNpmReleaseRequest({
       npmDistTag,
       bypassExtendedStableGuard,
       releaseTag,
+      preflightOnly,
       npmWorkflowRef,
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
-      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
+      packageVersion,
       mainPackageVersion: "",
     });
   }
   const extendedStableBranch = `extended-stable/${parsed.year}.${parsed.month}.33`;
+  if (shaPreflight) {
+    if (!bypassExtendedStableGuard) {
+      execFileSync(
+        "git",
+        ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+        { stdio: "inherit" },
+      );
+    }
+    const checkoutSha = git(["rev-parse", "HEAD"]);
+    return validateExtendedStableNpmReleaseRequest({
+      npmDistTag,
+      bypassExtendedStableGuard,
+      releaseTag,
+      preflightOnly,
+      npmWorkflowRef,
+      checkoutSha,
+      tagSha: checkoutSha,
+      extendedStableBranchSha: "",
+      packageVersion,
+      mainPackageVersion: bypassExtendedStableGuard
+        ? ""
+        : packageVersionAt("refs/remotes/origin/main"),
+    });
+  }
   if (bypassExtendedStableGuard) {
     execFileSync(
       "git",
@@ -350,7 +394,7 @@ function validateRequestFromRepository() {
       checkoutSha: git(["rev-parse", "HEAD"]),
       tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
       extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
+      packageVersion,
       mainPackageVersion: "",
     });
   }
@@ -378,7 +422,7 @@ function validateRequestFromRepository() {
     checkoutSha: git(["rev-parse", "HEAD"]),
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-    packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
+    packageVersion,
     mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
   });
 }

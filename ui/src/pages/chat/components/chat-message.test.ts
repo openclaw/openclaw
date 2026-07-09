@@ -77,48 +77,6 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
-vi.mock("../../../lib/agents/display.ts", () => {
-  const isRenderableControlUiAvatarUrl = (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-
-  return {
-    assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
-    isRenderableControlUiAvatarUrl,
-    resolveAssistantTextAvatar: (value: string | null | undefined) => {
-      const trimmed = value?.trim();
-      if (!trimmed || trimmed === "A") {
-        return null;
-      }
-      if (trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed)) {
-        return null;
-      }
-      if (
-        trimmed.length > 8 ||
-        /\s/.test(trimmed) ||
-        /[\\/.:]/.test(trimmed) ||
-        /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(trimmed)
-      ) {
-        return null;
-      }
-      return trimmed;
-    },
-    resolveChatAvatarRenderUrl: (
-      candidate: string | null | undefined,
-      agent: { identity?: { avatar?: string; avatarUrl?: string } },
-    ) => {
-      if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-        return candidate;
-      }
-      for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-        if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-          return value;
-        }
-      }
-      return null;
-    },
-  };
-});
-
 vi.mock("./chat-avatar.ts", () => ({
   renderChatAvatar: (role: string) => {
     const element = document.createElement("div");

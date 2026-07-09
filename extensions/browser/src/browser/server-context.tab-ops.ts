@@ -32,6 +32,7 @@ import {
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
 import type {
+  BrowserOperationOptions,
   BrowserServerState,
   BrowserTab,
   ProfileRuntimeState,
@@ -45,7 +46,7 @@ type TabOpsDeps = {
 };
 
 type ProfileTabOps = {
-  listTabs: () => Promise<BrowserTab[]>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
 };
@@ -200,10 +201,10 @@ export function createProfileTabOps({
     };
   };
 
-  const readTabs = async (): Promise<BrowserTab[]> => {
+  const readTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      return await listChromeMcpTabs(profile.name, profile);
+      return await listChromeMcpTabs(profile.name, profile, options);
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -254,15 +255,18 @@ export function createProfileTabOps({
         continue;
       }
       if (tab.wsUrl) {
-        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, { source: "discovered" });
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, {
+          source: "discovered",
+          configuredUrl: profile.cdpUrl,
+        });
       }
       tabs.push(tab);
     }
     return tabs;
   };
 
-  const listTabs = async (): Promise<BrowserTab[]> => {
-    const tabs = await readTabs();
+  const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
+    const tabs = await readTabs(options);
     return assignTabAliases(getProfileState(), tabs);
   };
 
@@ -422,7 +426,10 @@ export function createProfileTabOps({
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
     if (wsUrl) {
-      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), { source: "discovered" });
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), {
+        source: "discovered",
+        configuredUrl: profile.cdpUrl,
+      });
     }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({

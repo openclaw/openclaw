@@ -23,7 +23,7 @@ export type GoogleMeetSpaceConfig = {
   entryPointAccess?: GoogleMeetEntryPointAccess;
 };
 
-export type GoogleMeetSpace = {
+type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
@@ -31,7 +31,7 @@ export type GoogleMeetSpace = {
   config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
+type GoogleMeetPreflightReport = {
   input: string;
   resolvedSpaceName: string;
   meetingCode?: string;
@@ -42,17 +42,17 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-export type GoogleMeetCreateSpaceResult = {
+type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-export type GoogleMeetEndActiveConferenceResult = {
+type GoogleMeetEndActiveConferenceResult = {
   space: string;
   ended: true;
 };
 
-export type GoogleMeetConferenceRecord = {
+type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
   startTime?: string;

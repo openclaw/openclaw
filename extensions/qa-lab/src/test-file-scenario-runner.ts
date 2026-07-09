@@ -32,7 +32,7 @@ export type QaTestFileScenario = QaSeedScenarioWithSource & {
 
 export type QaTestFileExecutionKind = "script" | "vitest" | "playwright";
 
-export type QaTestFileScenarioRunParams = {
+type QaTestFileScenarioRunParams = {
   commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;

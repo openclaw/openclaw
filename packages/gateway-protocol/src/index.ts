@@ -227,6 +227,8 @@ import {
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
   ExecApprovalsNodeGetParamsSchema,
+  type ExecApprovalsNodeSnapshot,
+  ExecApprovalsNodeSnapshotSchema,
   type ExecApprovalsNodeSetParams,
   ExecApprovalsNodeSetParamsSchema,
   type ExecApprovalsSetParams,
@@ -445,6 +447,28 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  TaskSuggestionEventSchema,
+  type TaskSuggestionResolution,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  type TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptParamsSchema,
+  type TaskSuggestionsAcceptResult,
+  TaskSuggestionsAcceptResultSchema,
+  type TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateParamsSchema,
+  type TaskSuggestionsCreateResult,
+  TaskSuggestionsCreateResultSchema,
+  type TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissParamsSchema,
+  type TaskSuggestionsDismissResult,
+  TaskSuggestionsDismissResultSchema,
+  type TaskSuggestionsListParams,
+  TaskSuggestionsListParamsSchema,
+  type TaskSuggestionsListResult,
+  TaskSuggestionsListResultSchema,
   type TaskSummary,
   TaskSummarySchema,
   type TasksCancelParams,
@@ -830,6 +854,18 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTaskSuggestionsListParams = lazyCompile<TaskSuggestionsListParams>(
+  TaskSuggestionsListParamsSchema,
+);
+export const validateTaskSuggestionsCreateParams = lazyCompile<TaskSuggestionsCreateParams>(
+  TaskSuggestionsCreateParamsSchema,
+);
+export const validateTaskSuggestionsAcceptParams = lazyCompile<TaskSuggestionsAcceptParams>(
+  TaskSuggestionsAcceptParamsSchema,
+);
+export const validateTaskSuggestionsDismissParams = lazyCompile<TaskSuggestionsDismissParams>(
+  TaskSuggestionsDismissParamsSchema,
+);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -1053,6 +1089,9 @@ export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
+export const validateExecApprovalsNodeSnapshot = lazyCompile<ExecApprovalsNodeSnapshot>(
+  ExecApprovalsNodeSnapshotSchema,
+);
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
 export const validateTerminalInputParams =
@@ -1237,6 +1276,17 @@ export {
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
   TaskSummarySchema,
   TasksListParamsSchema,
   TasksListResultSchema,
@@ -1626,6 +1676,17 @@ export type {
   AuditEvent,
   AuditListParams,
   AuditListResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionResolution,
+  TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateResult,
+  TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissResult,
+  TaskSuggestionsListParams,
+  TaskSuggestionsListResult,
   TaskSummary,
   TasksListParams,
   TasksListResult,
@@ -1646,6 +1707,7 @@ export type {
   CronRunsParams,
   CronRunLogEntry,
   ExecApprovalsGetParams,
+  ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
   ExecApprovalGetParams,

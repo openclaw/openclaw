@@ -93,6 +93,7 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -229,7 +230,7 @@ function truncateTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) {
     return text;
   }
-  const cut = text.slice(0, maxLen - 1);
+  const cut = truncateUtf16Safe(text, maxLen - 1);
   const lastSpace = cut.lastIndexOf(" ");
   if (lastSpace > maxLen * 0.6) {
     return cut.slice(0, lastSpace) + "…";
@@ -1045,7 +1046,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
   };
 }
 
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -1570,7 +1571,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-export function resolveGatewaySessionThinkingDefault(params: {
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;

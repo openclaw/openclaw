@@ -139,11 +139,13 @@ type DispatchInboundParams = {
     onItemEvent?: (payload: {
       itemId?: string;
       kind?: string;
+      phase?: string;
+      status?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
-    }) => Promise<void> | void;
+    }) => Promise<false | void> | false | void;
     onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
@@ -155,8 +157,9 @@ type DispatchInboundParams = {
       phase?: string;
       name?: string;
       title?: string;
+      status?: string;
       exitCode?: number | null;
-    }) => Promise<void> | void;
+    }) => Promise<false | void> | false | void;
     onPatchSummary?: (payload: {
       phase?: string;
       summary?: string;
@@ -2200,6 +2203,57 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
     expectProgressSummaryEdit("🛠️ 1 tool call");
     expectFreshFinalText("done");
+  });
+
+  it("declines failed item progress without updating the Discord draft", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    let callbackResult: false | void = undefined;
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      callbackResult = await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        phase: "end",
+        status: "failed",
+        progressText: "exec failed",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(callbackResult).toBe(false);
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("declines failed command output without updating the Discord draft", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    let callbackResult: false | void = undefined;
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      callbackResult = await params?.replyOptions?.onCommandOutput?.({
+        phase: "error",
+        title: "Exec",
+        name: "exec",
+        status: "error",
+        exitCode: 1,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(callbackResult).toBe(false);
+    expect(draftStream.update).not.toHaveBeenCalled();
   });
 
   it("counts window thinking bursts closed by a tool call when no end event fires", async () => {

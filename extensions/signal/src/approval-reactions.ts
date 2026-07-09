@@ -33,7 +33,7 @@ const PERSISTENT_NAMESPACE = "signal.approval-reactions.v2";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type SignalApprovalReactionBinding = ApprovalReactionDecisionBinding;
+type SignalApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type SignalApprovalReactionResolution = {
   approvalId: string;
@@ -352,7 +352,7 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
   };
 }
 
-export function listSignalApprovalReactionBindings(
+function listSignalApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): SignalApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });
@@ -404,7 +404,7 @@ const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
 const APPROVE_REPLY_COMMAND_LINE_RE =
   /^\s*Reply with:\s*\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
 
-export function extractSignalApprovalPromptBinding(text: string): {
+function extractSignalApprovalPromptBinding(text: string): {
   approvalId: string;
   approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
@@ -476,7 +476,7 @@ function buildTargetRoute(params: {
     : null;
 }
 
-export function shouldAppendSignalApprovalReactionHintForOutboundMessage(params: {
+function shouldAppendSignalApprovalReactionHintForOutboundMessage(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;

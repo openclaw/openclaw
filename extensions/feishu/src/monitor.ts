@@ -10,7 +10,7 @@ import {
   stopFeishuMonitorState,
 } from "./monitor.state.js";
 
-export type MonitorFeishuOpts = {
+type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];

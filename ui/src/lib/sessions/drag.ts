@@ -1,3 +1,4 @@
+// Private MIME keeps stray text and file drags from becoming session actions.
 export const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
 
 export function writeSessionDragData(dataTransfer: DataTransfer, sessionKey: string): void {

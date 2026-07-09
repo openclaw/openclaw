@@ -862,20 +862,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `scanned setup code prefers bootstrap auth over stored device token`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
@@ -918,20 +904,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `credentialless setup handoff does not send a stored device token`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
@@ -978,20 +950,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `stored device token cannot cross gateway owner`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
@@ -1040,20 +998,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `share extension identity profile uses separate node identity and token store`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let primaryIdentity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: primaryIdentity.deviceId,
@@ -1251,20 +1195,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `bootstrap hello stores additional device tokens`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -1336,16 +1266,10 @@ struct GatewayNodeSessionTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
         try Data().write(to: blocker)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        // Repoint the pinned state dir at a plain file to force write failures;
+        // the isolation trait restores the env var after the test.
         setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
+        defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -1383,20 +1307,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `non bootstrap hello stores primary device token but not additional bootstrap tokens`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "server-node-token",
@@ -1445,20 +1355,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `untrusted bootstrap hello does not persist bootstrap handoff tokens`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "untrusted-node-token",
@@ -1508,20 +1404,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `private lan bootstrap persists handoff tokens for reconnect`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         let url = try #require(URL(string: "ws://192.168.50.164:18889"))
         let bootstrapSession = FakeGatewayWebSocketSession(helloAuth: [
@@ -1599,20 +1481,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `token mismatch retries stored device token only for trusted loopback hosts`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,

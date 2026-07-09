@@ -599,6 +599,42 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("uses the canonical spawn workspace for follow-up task suggestions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const sandboxDir = "/sandbox/workspace";
+
+    createOpenClawCodingTools({
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: sandboxDir,
+        workspaceAccess: "ro",
+        fsBridge: createHostSandboxFsBridge(sandboxDir),
+      }),
+      workspaceDir: "/agent/workspace",
+      cwd: sandboxDir,
+      spawnWorkspaceDir: "/host/project",
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      workspaceDir: "/agent/workspace",
+      spawnWorkspaceDir: "/host/project",
+      cwd: "/host/project",
+    });
+  });
+
+  it("keeps an unsandboxed task repo as the follow-up suggestion cwd", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      workspaceDir: "/agent/workspace",
+      cwd: "/task/repo",
+      spawnWorkspaceDir: "/agent/workspace",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
+  });
+
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

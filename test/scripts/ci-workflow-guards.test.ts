@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const SETUP_GO_V6 = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -333,9 +334,7 @@ describe("ci workflow guards", () => {
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
     for (const job of sdkJobs) {
       const cacheStep = job.steps.find((step) => step.name === "Cache Android SDK");
-      const installStep = job.steps.find(
-        (step) => step.name === "Install Android SDK packages",
-      );
+      const installStep = job.steps.find((step) => step.name === "Install Android SDK packages");
 
       expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
       expect(installStep.run).toContain(`"${packageId}"`);
@@ -737,9 +736,31 @@ describe("ci workflow guards", () => {
     expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
     expect(restoreStep.with.path).toContain("dist/");
     expect(restoreStep.with.path).toContain("dist-runtime/");
+    expect(restoreStep.with.path).toContain("packages/*/dist/");
+    expect(saveStep.with.path).toContain("packages/*/dist/");
+    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(
+      buildArtifactSteps.find((step) => step.name === "Pack built runtime artifacts").run,
+    ).toContain("packages/*/dist");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
+  });
+
+  it("keeps the AI runtime in Testbox build artifact caches", () => {
+    const workflow = readBuildArtifactsTestboxWorkflow();
+    const steps = workflow.jobs["build-artifacts"].steps;
+    const resolveSeedsStep = steps.find((step) => step.name === "Resolve release dist cache seeds");
+    const restoreStep = steps.find((step) => step.name === "Restore dist build cache");
+    const verifyStep = steps.find((step) => step.name === "Verify build artifacts");
+    const saveStep = steps.find((step) => step.name === "Save dist build cache");
+
+    expect(resolveSeedsStep.run).toContain('cache_prefix="${RUNNER_OS}-dist-build-v2-"');
+    expect(restoreStep.with.path).toContain("packages/*/dist/");
+    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(verifyStep.run).toContain("test -f packages/ai/dist/internal/runtime.mjs");
+    expect(saveStep.with.path).toContain("packages/*/dist/");
+    expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
   it("runs gateway watch after parallel built artifact checks", () => {
@@ -764,11 +785,24 @@ describe("ci workflow guards", () => {
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
+    const manifestStep = preflightJob.steps.find((step) => step.name === "Build CI manifest");
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const setupGoStep = nodeTestJob.steps.find((step) => step.name === "Setup Go for docs i18n");
     const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
 
     expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(manifestStep.run).toContain(
+      'shard.groups?.some((group) => group.shard_name === "core-tooling")',
+    );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
+    expect(setupGoStep).toMatchObject({
+      if: "matrix.requires_go == true",
+      uses: SETUP_GO_V6,
+      with: {
+        "go-version-file": "scripts/docs-i18n/go.mod",
+        "cache-dependency-path": "scripts/docs-i18n/go.sum",
+      },
+    });
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");

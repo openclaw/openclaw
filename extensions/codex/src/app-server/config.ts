@@ -21,7 +21,13 @@ import {
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  CodexServiceTier,
+  JsonObject,
+  JsonValue,
+} from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -58,19 +64,9 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy =
-  | CodexAppServerApprovalPolicy
-  | {
-      granular: {
-        mcp_elicitations: boolean;
-        rules: boolean;
-        sandbox_approval: boolean;
-        request_permissions?: boolean;
-        skill_approval?: boolean;
-      };
-    };
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
@@ -311,12 +307,12 @@ const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerApprovalPolicySchema = z.enum([
-  "never",
-  "on-request",
-  "on-failure",
-  "untrusted",
-]);
+const codexAppServerApprovalPolicySchema = z.preprocess(
+  // Preserve the rest of a shipped plugin config until doctor persists the
+  // canonical value. Rejecting this field would discard the whole config.
+  (value) => (value === "on-failure" ? "on-request" : value),
+  z.enum(["never", "on-request", "untrusted"]),
+);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
@@ -1053,6 +1049,8 @@ export function withMcpElicitationsApprovalPolicy(
         mcp_elicitations: true,
         rules: false,
         sandbox_approval: false,
+        request_permissions: false,
+        skill_approval: false,
       },
     };
   }
@@ -1061,6 +1059,8 @@ export function withMcpElicitationsApprovalPolicy(
       mcp_elicitations: true,
       rules: true,
       sandbox_approval: true,
+      request_permissions: true,
+      skill_approval: true,
     },
   };
 }
@@ -1479,6 +1479,11 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
+  // Codex 0.143 keeps this deprecated requirements-file alias in its core
+  // parser, but app-server exposes only the canonical on-request value.
+  if (normalized === "on-failure") {
+    return "on-request";
+  }
   return resolveApprovalPolicy(normalized);
 }
 
@@ -1500,9 +1505,6 @@ function selectGuardianApprovalPolicy(
     throw new Error(
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
     );
-  }
-  if (allowedApprovalPolicies.has("on-failure")) {
-    return "on-failure";
   }
   if (allowedApprovalPolicies.has("untrusted")) {
     return "untrusted";
@@ -1810,12 +1812,10 @@ function selectGuardianSandbox(
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
-  return value === "on-request" ||
-    value === "on-failure" ||
-    value === "untrusted" ||
-    value === "never"
-    ? value
-    : undefined;
+  if (value === "on-failure") {
+    return "on-request";
+  }
+  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
 }
 
 function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
