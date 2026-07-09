@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
@@ -455,7 +456,7 @@ function clampDiaryContextEntry(entry: string): string {
   if (normalized.length <= RECENT_DIARY_CONTEXT_MAX_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
 function normalizeDiaryBlockBody(block: string): string {
