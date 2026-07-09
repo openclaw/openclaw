@@ -9,8 +9,13 @@ type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
 };
-type OpenAICompatibleChoice = Omit<DeepPartial<ChatCompletionChunk["choices"][number]>, "delta"> & {
+type OpenAICompatibleChoice = Omit<
+  DeepPartial<ChatCompletionChunk["choices"][number]>,
+  "delta" | "message"
+> & {
   delta?: OpenAICompatibleDelta;
+  // Some OpenAI-compatible endpoints deliver a full message instead of delta.
+  message?: OpenAICompatibleDelta;
 };
 type OpenAICompatibleChatCompletionChunk = Omit<
   DeepPartial<ChatCompletionChunk>,
@@ -137,6 +142,19 @@ function makeRefusalChunk(refusal: string): OpenAICompatibleChatCompletionChunk 
   };
 }
 
+function makeRefusalMessageChunk(refusal: string): OpenAICompatibleChatCompletionChunk {
+  return {
+    id: "chatcmpl-test",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: null, refusal },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
 function makeToolCallChunk(
   id: string,
   name: string,
@@ -242,6 +260,19 @@ describe("OpenAI-compatible completions params", () => {
     }).result();
 
     expect(result.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
+    mockChunksRef.chunks = [makeRefusalMessageChunk("Requests like this are not allowed.")];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.content).toStrictEqual([
+      { type: "text", text: "Requests like this are not allowed." },
+    ]);
     expect(result.stopReason).toBe("stop");
   });
 

@@ -2865,7 +2865,7 @@ describe("openai transport stream", () => {
               },
               logprobs: null,
               finish_reason: "stop",
-            } as ChatCompletionChunk["choices"][number],
+            } as unknown as ChatCompletionChunk["choices"][number],
           ],
         },
       ]),
