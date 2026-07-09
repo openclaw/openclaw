@@ -133,18 +133,15 @@ export function readEnvInt(key: string, legacyKey?: string) {
   return parseStrictInteger(raw);
 }
 
-/** Splits large output into fixed-size chunks for transport, preserving UTF-16 surrogate pairs at chunk boundaries. */
+/** Splits output into bounded chunks without splitting UTF-16 surrogate pairs. */
 export function chunkString(input: string, limit = CHUNK_LIMIT) {
   const chunks: string[] = [];
+  const chunkLimit = Number.isNaN(limit) ? CHUNK_LIMIT : Math.max(1, Math.floor(limit));
   let i = 0;
   while (i < input.length) {
-    const chunk = sliceUtf16Safe(input, i, i + limit);
-    if (chunk.length === 0 && limit > 0) {
-      // sliceUtf16Safe backed out completely — force-advance past the
-      // surrogate pair so we don't loop forever on a tiny limit.
-      i += Math.max(2, input.codePointAt(i) !== undefined ? 2 : 1);
-      continue;
-    }
+    const firstCodePointWidth = (input.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
+    // A code point is indivisible; a tiny limit may require one chunk to exceed it.
+    const chunk = sliceUtf16Safe(input, i, i + Math.max(chunkLimit, firstCodePointWidth));
     chunks.push(chunk);
     i += chunk.length;
   }

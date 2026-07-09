@@ -73,39 +73,19 @@ describe("deriveSessionName", () => {
 
 describe("chunkString", () => {
   it("preserves surrogate pairs at chunk boundaries", () => {
-    // 8191 'a' + emoji + "b" = 8194 code units. With chunk limit 8192,
-    // raw slice(0, 8192) would cut between the emoji's high surrogate at
-    // index 8191 and low surrogate at index 8192 → lone surrogate in chunk 1.
-    // sliceUtf16Safe backs out the boundary → both surrogates stay together.
     const input = "a".repeat(8191) + "🚀b";
-    const chunks = chunkString(input, 8192);
-    expect(chunks.length).toBe(2);
-    for (const chunk of chunks) {
-      const rt = new TextDecoder().decode(new TextEncoder().encode(chunk));
-      expect(rt).not.toContain("�");
-    }
-    // The emoji must not be lost across chunks.
-    const rejoined = chunks.join("");
-    expect(rejoined).toBe(input);
+    expect(chunkString(input, 8192)).toEqual(["a".repeat(8191), "🚀b"]);
   });
 
   it("returns single chunk for input smaller than limit", () => {
-    const chunks = chunkString("hello", 8192);
-    expect(chunks).toEqual(["hello"]);
+    expect(chunkString("hello", 8192)).toEqual(["hello"]);
   });
 
-  it("splits cleanly when chunk boundary aligns with surrogate pair", () => {
-    // 2 'a' + emoji + 2 'b' = 6 code units. chunk limit 2 splits at
-    // index 2 (inside the emoji). sliceUtf16Safe backs out to index 2
-    // at chunk end and advances to index 3 at chunk start → both halves
-    // preserved, data not lost.
-    const input = "aa🚀bb";
-    const chunks = chunkString(input, 2);
-    const rejoined = chunks.join("");
-    expect(rejoined).toBe(input);
-    for (const chunk of chunks) {
-      const rt = new TextDecoder().decode(new TextEncoder().encode(chunk));
-      expect(rt).not.toContain("�");
-    }
+  it("emits a whole code point when the limit is one UTF-16 unit", () => {
+    expect(chunkString("😀a", 1)).toEqual(["😀", "a"]);
+  });
+
+  it("preserves every code point across mixed chunk boundaries", () => {
+    expect(chunkString("aa🚀bb", 2)).toEqual(["aa", "🚀", "bb"]);
   });
 });
