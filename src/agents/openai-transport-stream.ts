@@ -3148,9 +3148,17 @@ async function processOpenAICompletionsStream(
           appendRoutedContentDelta(contentDelta);
         }
       }
-    } else if ((choiceDelta as { refusal?: string }).refusal) {
-      // Safety or structured-output refusal surfaced as assistant visible text.
-      appendTextDelta((choiceDelta as { refusal?: string }).refusal!);
+    } else if (
+      !choiceDelta.content &&
+      typeof (choiceDelta as { refusal?: string }).refusal === "string"
+    ) {
+      const refusalText = (choiceDelta as { refusal?: string }).refusal!;
+      const routedDeltas = hasMirroredReasoning
+        ? reasoningTagTextPartitioner.push(refusalText)
+        : reasoningTagTextPartitioner.pushVisible(refusalText);
+      for (const routedDelta of routedDeltas) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
     }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {

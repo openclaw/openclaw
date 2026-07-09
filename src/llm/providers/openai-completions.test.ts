@@ -248,6 +248,28 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload?.tools).toEqual([]);
   });
 
+  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: null, refusal: "I can't help with that." },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(result.stopReason).toBe("stop");
+  });
+
   it("does not reread an unreadable tool inventory length", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const tools = new Proxy([], {
