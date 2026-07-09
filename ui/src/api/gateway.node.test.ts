@@ -417,9 +417,9 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.caps).toEqual([
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
-    expect(connectFrame.params?.caps).toEqual(["tool-events", "inline-widgets"]);
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
