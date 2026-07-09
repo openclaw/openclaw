@@ -171,16 +171,29 @@ function rotationScripts(): BoundedClientScript[] {
   ];
 }
 
-function createRotationClientFactory(attempts: Array<string | null | undefined>) {
+function createRotationClientFactory(
+  attempts: Array<string | null | undefined>,
+  options: {
+    firstScript?: BoundedClientScript;
+    onFirstClient?: (client: CodexAppServerClient) => void;
+  } = {},
+) {
   const scripts = rotationScripts();
+  if (options.firstScript) {
+    scripts[0] = options.firstScript;
+  }
   const clientFactory: CodexAppServerClientFactory = vi.fn(
-    async (options?: { authProfileId?: string | null }) => {
-      attempts.push(options?.authProfileId);
+    async (factoryOptions?: { authProfileId?: string | null }) => {
+      attempts.push(factoryOptions?.authProfileId);
       const script = scripts[attempts.length - 1];
       if (!script) {
         throw new Error("unexpected extra bounded client");
       }
-      return createFakeBoundedClient(script);
+      const client = createFakeBoundedClient(script);
+      if (attempts.length === 1) {
+        options.onFirstClient?.(client);
+      }
+      return client;
     },
   );
   return clientFactory;
@@ -222,8 +235,11 @@ describe("runBoundedCodexAppServerTurn auth profile rotation", () => {
     const store = createStore();
     const attempts: Array<string | null | undefined> = [];
     const clientRef: { current?: CodexAppServerClient } = {};
-    const scripts: BoundedClientScript[] = [
-      (method) => {
+    const clientFactory = createRotationClientFactory(attempts, {
+      onFirstClient: (client) => {
+        clientRef.current = client;
+      },
+      firstScript: (method) => {
         if (method === "model/list") {
           return modelListResult();
         }
@@ -242,22 +258,55 @@ describe("runBoundedCodexAppServerTurn auth profile rotation", () => {
         }
         return {};
       },
-      rotationScripts()[1] as BoundedClientScript,
-    ];
-    const clientFactory: CodexAppServerClientFactory = vi.fn(
-      async (options?: { authProfileId?: string | null }) => {
-        attempts.push(options?.authProfileId);
-        const script = scripts[attempts.length - 1];
-        if (!script) {
-          throw new Error("unexpected extra bounded client");
-        }
-        const client = createFakeBoundedClient(script);
-        if (attempts.length === 1) {
-          clientRef.current = client;
-        }
-        return client;
+    });
+
+    const result = await runBoundedCodexAppServerTurn(boundedTurnParams({ store, clientFactory }));
+
+    expect(result.text).toBe("rotated profile answer");
+    expect(attempts).toEqual(["openai:first", "openai:second"]);
+    expect(store.usageStats?.["openai:first"]?.blockedUntil).toBe(RESETS_AT_SECONDS * 1000);
+  });
+
+  it("rotates when a failed turn reports usage limits only via codexErrorInfo", async () => {
+    const store = createStore();
+    const attempts: Array<string | null | undefined> = [];
+    const clientRef: { current?: CodexAppServerClient } = {};
+    const clientFactory = createRotationClientFactory(attempts, {
+      onFirstClient: (client) => {
+        clientRef.current = client;
       },
-    );
+      firstScript: (method) => {
+        if (method === "model/list") {
+          return modelListResult();
+        }
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          if (clientRef.current) {
+            mergeCodexRateLimitsUpdate(clientRef.current, { rateLimits: usageLimitRateLimits() });
+          }
+          // Failed turn/completed variant: the message has no "usage limit"
+          // text, so classification must come from the preserved
+          // codexErrorInfo on the turn error.
+          return {
+            turn: {
+              id: "turn-failed",
+              status: "failed",
+              items: [],
+              error: {
+                message: "Your workspace has run out of credits.",
+                codexErrorInfo: "usageLimitExceeded",
+              },
+              startedAt: null,
+              completedAt: null,
+              durationMs: null,
+            },
+          };
+        }
+        return {};
+      },
+    });
 
     const result = await runBoundedCodexAppServerTurn(boundedTurnParams({ store, clientFactory }));
 

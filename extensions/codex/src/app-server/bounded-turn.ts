@@ -19,6 +19,7 @@ import {
 } from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexErrorNotification,
   type CodexServerNotification,
   type CodexThreadItem,
   type CodexThreadStartParams,
@@ -419,10 +420,27 @@ async function resolveCodexBoundedTurnModel(params: {
   return model;
 }
 
+/**
+ * Builds a bounded-turn failure that keeps the Codex error payload (for
+ * example `codexErrorInfo`) attached in the same `data.error` shape as RPC
+ * failures, so usage-limit classification does not depend on message text.
+ */
+function buildCodexBoundedTurnFailureError(
+  error: CodexErrorNotification["error"] | null | undefined,
+  fallbackMessage: string,
+): Error {
+  const failure = new Error(error?.message ?? fallbackMessage);
+  if (error) {
+    Object.assign(failure, { data: { error } });
+  }
+  return failure;
+}
+
 function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
+  let promptErrorDetails: CodexErrorNotification["error"] | undefined;
   const pending: CodexServerNotification[] = [];
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
@@ -478,9 +496,8 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       return;
     }
     if (notification.method === "error") {
-      promptError =
-        readCodexErrorNotification(notification.params)?.error.message ??
-        `codex app-server ${taskLabel} turn failed`;
+      promptErrorDetails = readCodexErrorNotification(notification.params)?.error;
+      promptError = promptErrorDetails?.message ?? `codex app-server ${taskLabel} turn failed`;
       resolveCompletion?.();
     }
   };
@@ -507,11 +524,12 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
         });
       }
       if (promptError) {
-        throw new Error(promptError);
+        throw buildCodexBoundedTurnFailureError(promptErrorDetails, promptError);
       }
       if (completedTurn?.status === "failed") {
-        throw new Error(
-          completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
+        throw buildCodexBoundedTurnFailureError(
+          completedTurn.error,
+          `codex app-server ${taskLabel} turn failed`,
         );
       }
       const items = collectCompletedItems(completedTurn?.items, completedItems);
