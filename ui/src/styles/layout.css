@@ -1404,6 +1404,16 @@
   box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
 }
 
+openclaw-native-link-menu[popover] {
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
 .sidebar-session-sort-menu {
   position: fixed;
   z-index: 121;

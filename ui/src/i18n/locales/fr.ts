@@ -81,6 +81,12 @@ export const fr: TranslationMap = {
     waitForScan: "Attendre le scan",
     logout: "Se déconnecter",
   },
+  nativeLinkMenu: {
+    label: "Actions de lien",
+    openInline: "Ouvrir dans la barre latérale",
+    openExternal: "Ouvrir dans le navigateur par défaut",
+    copy: "Copier le lien",
+  },
   channels: {
     health: {
       title: "Santé du canal",
@@ -272,6 +278,7 @@ export const fr: TranslationMap = {
     model: "Modèle",
     provider: "Fournisseur",
     runtime: "Exécution",
+    runDuration: "Durée d’exécution",
     surface: "Surface",
     subject: "Sujet",
     room: "Salon",
@@ -662,6 +669,57 @@ export const fr: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Parc Codex",
+    title: "Sessions sur tous vos ordinateurs",
+    subtitle:
+      "Vue en lecture seule des sessions Codex sur ce Gateway et chaque ordinateur connecté qui les partage.",
+    summaryLabel: "Résumé des sessions Codex",
+    summary: {
+      sessions: "sessions",
+      onlineHosts: "en ligne",
+      hosts: "hôtes",
+    },
+    searchLabel: "Rechercher des sessions Codex",
+    searchPlaceholder: "Rechercher dans les titres de session",
+    scopeLabel: "Filtre d’archivage des sessions",
+    scope: {
+      active: "Actives",
+      archived: "Archivées",
+    },
+    refresh: "Actualiser",
+    disconnected: "Reconnectez-vous au Gateway pour actualiser les sessions Codex.",
+    partial: "Hôtes indisponibles : {count}. Les autres hôtes restent disponibles.",
+    loading: "Chargement des sessions Codex…",
+    loadMore: "Charger davantage",
+    loadingMore: "Chargement…",
+    untitled: "Session Codex sans titre",
+    threadId: "Fil",
+    status: {
+      active: "Actives",
+      idle: "Inactive",
+      archived: "Archivée",
+      notLoaded: "Stockée",
+      systemError: "Erreur système",
+      unknown: "Inconnu",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Nœud",
+      connected: "Connecté",
+      offline: "Hors ligne",
+      unavailable: "Catalogue de sessions indisponible",
+      sessionCount: "{count} affichés",
+    },
+    empty: {
+      title: "Aucun hôte Codex trouvé",
+      subtitle:
+        "Activez le partage des sessions Codex sur le Gateway ou un ordinateur jumelé, puis actualisez cette vue.",
+      search: "Aucune session de cet hôte ne correspond à votre recherche.",
+      active: "Aucune session active sur cet hôte.",
+      archived: "Aucune session archivée sur cet hôte.",
+    },
   },
   logbook: {
     duration: {

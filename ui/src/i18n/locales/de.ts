@@ -81,6 +81,12 @@ export const de: TranslationMap = {
     waitForScan: "Auf Scan warten",
     logout: "Abmelden",
   },
+  nativeLinkMenu: {
+    label: "Link-Aktionen",
+    openInline: "In der Seitenleiste öffnen",
+    openExternal: "Im Standardbrowser öffnen",
+    copy: "Link kopieren",
+  },
   channels: {
     health: {
       title: "Channel-Zustand",
@@ -270,6 +276,7 @@ export const de: TranslationMap = {
     model: "Modell",
     provider: "Anbieter",
     runtime: "Laufzeit",
+    runDuration: "Laufzeit",
     surface: "Oberfläche",
     subject: "Betreff",
     room: "Raum",
@@ -660,6 +667,57 @@ export const de: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Codex-Flotte",
+    title: "Sitzungen auf allen deinen Computern",
+    subtitle:
+      "Eine schreibgeschützte Ansicht der Codex-Sitzungen auf diesem Gateway und allen verbundenen Computern, die sie freigeben.",
+    summaryLabel: "Zusammenfassung der Codex-Sitzungen",
+    summary: {
+      sessions: "Sitzungen",
+      onlineHosts: "online",
+      hosts: "Hosts",
+    },
+    searchLabel: "Codex-Sitzungen durchsuchen",
+    searchPlaceholder: "Sitzungstitel durchsuchen",
+    scopeLabel: "Archivfilter für Sitzungen",
+    scope: {
+      active: "Aktiv",
+      archived: "Archiviert",
+    },
+    refresh: "Aktualisieren",
+    disconnected: "Verbinde dich erneut mit dem Gateway, um die Codex-Sitzungen zu aktualisieren.",
+    partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
+    loading: "Codex-Sitzungen werden geladen…",
+    loadMore: "Mehr laden",
+    loadingMore: "Wird geladen…",
+    untitled: "Unbenannte Codex-Sitzung",
+    threadId: "Thread",
+    status: {
+      active: "Aktiv",
+      idle: "Inaktiv",
+      archived: "Archiviert",
+      notLoaded: "Gespeichert",
+      systemError: "Systemfehler",
+      unknown: "Unbekannt",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Knoten",
+      connected: "Verbunden",
+      offline: "Offline",
+      unavailable: "Sitzungskatalog nicht verfügbar",
+      sessionCount: "{count} angezeigt",
+    },
+    empty: {
+      title: "Keine Codex-Hosts gefunden",
+      subtitle:
+        "Aktiviere die Freigabe von Codex-Sitzungen auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
+      search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
+      active: "Keine aktiven Sitzungen auf diesem Host.",
+      archived: "Keine archivierten Sitzungen auf diesem Host.",
+    },
   },
   logbook: {
     duration: {

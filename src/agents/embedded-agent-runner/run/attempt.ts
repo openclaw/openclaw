@@ -1342,6 +1342,7 @@ export async function runEmbeddedAttempt(
             ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
+            clientCaps: params.clientCaps,
             chatType: params.chatType,
             exec: {
               ...params.execOverrides,
@@ -1421,6 +1422,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -3897,6 +3899,7 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
         cancel: abortActiveRunExternally,
         abort: (reason) => abortActiveRunExternally(reason),
       };
@@ -4507,6 +4510,10 @@ export async function runEmbeddedAttempt(
               runtimeContextChars: promptSubmission.runtimeOnly
                 ? (runtimeSystemContext?.length ?? 0)
                 : (runtimeContextForHook?.length ?? 0),
+              // promptForSession is what persists to the transcript; hook
+              // prepend/append context reaches only the model, so record the
+              // delta or transcript-based context accounting undercounts it.
+              modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
             };
           }
           const systemPromptForHook = systemPromptText;

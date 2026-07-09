@@ -619,7 +619,10 @@ function sessionDetailItems(params: {
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
-  add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
+  // The roster dropped its Runtime column; the drawer is where agent runtime
+  // and run duration live now.
+  add(t("sessionsView.runtime"), resolveAgentRuntimeLabel(row.agentRuntime));
+  add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
   add(t("sessionsView.subject"), row.subject);
   add(t("sessionsView.room"), row.room);
@@ -649,7 +652,7 @@ function sessionDetailItems(params: {
 const NEW_GROUP_OPTION = "__new-group__";
 
 function sessionsTableColumnCount(props: SessionsProps): number {
-  return props.groupBy === "category" ? 9 : 8;
+  return props.groupBy === "category" ? 8 : 7;
 }
 
 function groupModeLabel(mode: SessionsGroupBy): string {
@@ -1110,10 +1113,11 @@ export function renderSessions(props: SessionsProps) {
                   : nothing}
                 ${sortHeader("kind", t("sessionsView.kind"))}
                 <th class="session-status-col">${t("sessionsView.status")}</th>
-                <th class="session-runtime-col">${t("agents.context.runtime")}</th>
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
-                <th class="session-actions-col">${t("sessionsView.actions")}</th>
+                <th class="session-actions-col">
+                  <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1360,9 +1364,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <div class="session-status-stack">
           ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
         </div>
-      </td>
-      <td class="session-runtime-cell">
-        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
       </td>
       <td>${updated}</td>
       <td class="session-token-cell">${renderTokensCell(row)}</td>
