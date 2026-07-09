@@ -12,6 +12,7 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
+  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -219,7 +220,10 @@ class DebugProxyCaptureStoreImpl {
   }
 
   get isClosed(): boolean {
-    return this.closed;
+    // A store dies with the DatabaseSync it wraps: the shared-path handle can
+    // be closed underneath us (exit-time cache close), and the cache must then
+    // rebind a fresh store instead of handing out a dead connection.
+    return this.closed || !this.db.isOpen;
   }
 
   upsertSession(session: CaptureSessionRecord): void {
@@ -811,6 +815,7 @@ type CachedStoreEntry = {
 };
 
 const cachedStores = new Map<string, CachedStoreEntry>();
+let unregisterExitClose: (() => void) | null = null;
 
 function resolveDebugProxyCaptureStoreKey(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string,
@@ -832,6 +837,9 @@ function getDebugProxyCaptureStoreImpl(
   }
   const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   cachedStores.set(key, { store, leases: 0 });
+  // Safety net for legacy path-based stores that own their DatabaseSync;
+  // shared-path stores only flip their closed flag here, never the shared DB.
+  unregisterExitClose ??= registerSqliteCacheExitClose(closeDebugProxyCaptureStore);
   return store;
 }
 
@@ -850,6 +858,8 @@ export function getDebugProxyCaptureStore(
 }
 
 export function closeDebugProxyCaptureStore(): void {
+  unregisterExitClose?.();
+  unregisterExitClose = null;
   for (const cached of cachedStores.values()) {
     cached.store.close();
   }

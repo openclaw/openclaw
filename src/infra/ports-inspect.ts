@@ -52,8 +52,8 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   let processFields: Pick<PortListener, "pid" | "command"> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      const pid = Number.parseInt(line.slice(1), 10);
-      processFields = Number.isFinite(pid) ? { pid } : {};
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
     } else if (line.startsWith("c")) {
       processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {

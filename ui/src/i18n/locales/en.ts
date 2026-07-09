@@ -62,6 +62,7 @@ export const en: TranslationMap = {
     docs: "Docs",
     theme: "Theme",
     colorMode: "Color mode",
+    colorModeOption: "Color mode: {mode}",
     resources: "Resources",
     search: "Search",
     save: "Save",
@@ -471,8 +472,8 @@ export const en: TranslationMap = {
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
     more: "More",
-    customize: "Customize sidebar",
-    customizeReset: "Reset to defaults",
+    customize: "Edit pinned items",
+    customizeReset: "Reset pinned items",
   },
   terminal: {
     title: "Terminal",

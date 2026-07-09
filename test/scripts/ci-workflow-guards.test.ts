@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const SETUP_GO_V6 = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -15,6 +16,10 @@ const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+}
+
+function readAndroidReleaseWorkflow() {
+  return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
 }
 
 function readBuildArtifactsTestboxWorkflow() {
@@ -309,7 +314,7 @@ describe("ci workflow guards", () => {
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(28);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -320,18 +325,41 @@ describe("ci workflow guards", () => {
 
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
+    const releaseWorkflow = readAndroidReleaseWorkflow();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
-    const installStep = workflow.jobs.android.steps.find(
-      (step) => step.name === "Install Android SDK packages",
-    );
-    const packageId = `platforms;android-${appCompileSdk}`;
+    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+    const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
-    expect(installStep.run).toContain(`"${packageId}"`);
-    expect(installStep.run).not.toContain(`${packageId}.0`);
+    for (const job of sdkJobs) {
+      const cacheStep = job.steps.find((step) => step.name === "Cache Android SDK");
+      const installStep = job.steps.find((step) => step.name === "Install Android SDK packages");
+
+      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
+      expect(installStep.run).toContain(`"${packageId}"`);
+    }
+  });
+
+  it("covers Android app variants, lint, and benchmark compilation", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const runStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Run Android ${{ matrix.task }}",
+    );
+
+    expect(source).toContain('{ check_name: "android-test-play", task: "test-play" }');
+    expect(source).toContain(
+      '{ check_name: "android-test-third-party", task: "test-third-party" }',
+    );
+    expect(source).toContain('{ check_name: "android-build-play", task: "build-play" }');
+    expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
+    expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
+    expect(runStep.run).toContain(":app:assemblePlayDebug");
+    expect(runStep.run).toContain(":app:assembleThirdPartyDebug");
+    expect(runStep.run).toContain(":app:lintPlayDebug");
+    expect(runStep.run).toContain(":app:lintThirdPartyDebug");
+    expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {
@@ -735,11 +763,24 @@ describe("ci workflow guards", () => {
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
+    const manifestStep = preflightJob.steps.find((step) => step.name === "Build CI manifest");
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const setupGoStep = nodeTestJob.steps.find((step) => step.name === "Setup Go for docs i18n");
     const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
 
     expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(manifestStep.run).toContain(
+      'shard.groups?.some((group) => group.shard_name === "core-tooling")',
+    );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
+    expect(setupGoStep).toMatchObject({
+      if: "matrix.requires_go == true",
+      uses: SETUP_GO_V6,
+      with: {
+        "go-version-file": "scripts/docs-i18n/go.mod",
+        "cache-dependency-path": "scripts/docs-i18n/go.sum",
+      },
+    });
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");

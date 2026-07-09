@@ -355,6 +355,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
       expectedRemoteWsTimeoutMs,
       {
         allowPrivateNetwork: true,
+        allowedHostnames: ["browserless"],
+        hostnameAllowlist: ["browserless"],
       },
     );
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
@@ -364,6 +366,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
       expectedRemoteWsTimeoutMs,
       {
         allowPrivateNetwork: true,
+        allowedHostnames: ["browserless"],
+        hostnameAllowlist: ["browserless"],
       },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();

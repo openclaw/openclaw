@@ -68,6 +68,80 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("offers masked model provider setup after a providerless bootstrap", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      lines: ["Workspace: /tmp/work"],
+    }));
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        applySetup,
+        detectInferenceBackends: async () => [],
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/work" });
+
+    const setup = await engine.handle("yes");
+
+    expect(setup.text).toContain("Configure a model provider now?");
+    expect(engine.hasPendingProposal()).toBe(true);
+
+    const providerSetup = await engine.handle("yes");
+
+    expect(providerSetup.action).toBe("open-tui");
+    expect(providerSetup.handoff).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+  });
+
+  it("hosts model provider setup in gateway chat with sensitive replies masked", async () => {
+    useTempStateDir();
+    const answers: string[] = [];
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runModelSetupWizard: async (workspace, prompter) => {
+        answers.push(`workspace:${workspace}`);
+        const provider = await prompter.select({
+          message: "Model/auth provider",
+          options: [{ value: "openai", label: "OpenAI" }],
+        });
+        answers.push(`provider:${provider}`);
+        const key = await prompter.text({ message: "API key", sensitive: true });
+        answers.push(`key:${key}`);
+      },
+    });
+
+    const providerStep = await engine.handle(
+      "configure model provider workspace /tmp/gateway-work",
+    );
+    expect(providerStep.text).toContain("Model/auth provider");
+
+    const keyStep = await engine.handle("1");
+    expect(keyStep.text).toContain("API key");
+    expect(keyStep.sensitive).toBe(true);
+
+    const done = await engine.handle("sk-test");
+    expect(done.text).toContain("finished without a default model");
+    expect(answers).toEqual(["workspace:/tmp/gateway-work", "provider:openai", "key:sk-test"]);
+  });
+
+  it("keeps deterministic mode available when model provider setup is declined", async () => {
+    const engine = new CrestodianChatEngine();
+    engine.propose({ kind: "model-setup" });
+
+    const reply = await engine.handle("not now");
+
+    expect(reply.text).toContain("remains available in deterministic mode");
+    expect(reply.text).toContain("configure model provider");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
   it("drops the proposal when the user declines", async () => {
     const runConfigSet = vi.fn(async () => {});
     const engine = new CrestodianChatEngine({ deps: { runConfigSet } });

@@ -100,7 +100,7 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
   return readPositiveIntEnv("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S", defaultSeconds);
 }
 
-export function providerTimeoutConfigJson(
+function providerTimeoutConfigJson(
   modelId: string,
   platform: Platform,
   timeoutSeconds = resolveParallelsModelTimeoutSeconds(platform),
@@ -128,7 +128,7 @@ export function providerTimeoutConfigJson(
   });
 }
 
-export function modelTransportConfigJson(modelId: string): string {
+function modelTransportConfigJson(modelId: string): string {
   if (providerIdFromModelId(modelId) !== "openai") {
     return "";
   }
@@ -140,7 +140,7 @@ export function modelTransportConfigJson(modelId: string): string {
   });
 }
 
-export function configPathMapKey(key: string): string {
+function configPathMapKey(key: string): string {
   return `[${JSON.stringify(key)}]`;
 }
 

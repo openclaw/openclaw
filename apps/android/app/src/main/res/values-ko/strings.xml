@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">게이트웨이 연결</string>
-    <string name="connect_gateway">게이트웨이 연결</string>
-    <string name="disconnect">연결 해제</string>
     <string name="trust_this_gateway">이 게이트웨이를 신뢰하시겠습니까?</string>
     <string name="trust_and_continue">신뢰하고 계속</string>
     <string name="cancel">취소</string>
     <string name="new_chat_in_worktree">worktree에서 새 채팅</string>
-    <string name="endpoint">엔드포인트</string>
-    <string name="status">상태</string>
-    <string name="connected_gateway_ready">게이트웨이가 활성화되어 준비되었습니다.</string>
-    <string name="connect_gateway_get_started">시작하려면 게이트웨이에 연결하세요.</string>
-    <string name="copy_report_for_claw">Claw용 보고서 복사</string>
-    <string name="advanced_controls">고급 제어</string>
-    <string name="connection_method">연결 방법</string>
-    <string name="setup_code">설정 코드</string>
-    <string name="manual">수동</string>
-    <string name="paste_setup_code">설정 코드 붙여넣기</string>
-    <string name="host">호스트</string>
-    <string name="use_tls">TLS 사용</string>
-    <string name="token_optional">토큰(선택 사항)</string>
-    <string name="password">비밀번호</string>
-    <string name="custom_headers_optional">사용자 지정 헤더(선택 사항)</string>
-    <string name="custom_headers_explainer">이 Gateway에 연결할 때마다 전송됩니다. 예: Cloudflare Access 서비스 토큰 헤더. 암호화되어 저장되며 다음 재연결 시 적용됩니다.</string>
-    <string name="custom_header_value">헤더 값</string>
-    <string name="custom_header_reserved">이 헤더는 연결에서 관리되며 재정의할 수 없습니다.</string>
-    <string name="add_custom_header">헤더 추가</string>
-    <string name="remove_custom_header">%1$s 제거</string>
-    <string name="run_onboarding_again">온보딩 다시 실행</string>
-    <string name="resolved_endpoint">확인된 엔드포인트</string>
     <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>
     <string name="gateway_trust_changed">게이트웨이 인증서가 변경되었습니다. 예상한 변경인 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Gateway 전환</string>
-    <string name="select_gateway">Gateway 선택</string>
-    <string name="active_gateway">활성 Gateway</string>
 </resources>

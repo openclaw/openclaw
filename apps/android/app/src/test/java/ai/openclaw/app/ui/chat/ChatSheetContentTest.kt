@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.GatewayAgentSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,6 +8,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatSheetContentTest {
+  @Test
+  fun agentChipUsesEmojiAndFallsBackToId() {
+    assertEquals(
+      "🦾 Scout",
+      chatAgentChipText(GatewayAgentSummary(id = "scout", name = "Scout", emoji = " 🦾 ")),
+    )
+    assertEquals(
+      "ops",
+      chatAgentChipText(GatewayAgentSummary(id = "ops", name = " ", emoji = null)),
+    )
+  }
+
+  @Test
+  fun agentSelectorUsesCanonicalMainSession() {
+    assertEquals("scout", selectedChatAgentId("agent:scout:node-phone", "main"))
+    assertEquals("main", selectedChatAgentId("main", "main"))
+  }
+
   @Test
   fun resolvesPendingAssistantAutoSendOnlyWhenChatIsReady() {
     assertNull(

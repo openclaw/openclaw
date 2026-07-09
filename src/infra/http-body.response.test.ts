@@ -235,6 +235,12 @@ describe("readResponseTextSnippet", () => {
       options: { maxBytes: 7, maxChars: 50 },
       expected: "1234567…",
     },
+    {
+      name: "keeps character-limited snippets UTF-16 well-formed",
+      response: new Response(makeStream([new TextEncoder().encode("ab🚀tail")])),
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "ab…",
+    },
   ] as const)("$name", async ({ response, options, expected }) => {
     await expectReadResponseTextSnippetCase({ response, options, expected });
   });

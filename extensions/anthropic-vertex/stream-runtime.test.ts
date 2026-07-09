@@ -371,6 +371,25 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("max");
   });
 
+  it("disables manual thinking when the configured budget is below 1024", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-haiku-4-5", maxTokens: 8192 });
+
+    void streamFn(
+      model,
+      { messages: [] },
+      {
+        reasoning: "low",
+        thinkingBudgets: { low: 512 },
+      },
+    );
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(false);
+    expect(transportOptions).not.toHaveProperty("thinkingBudgetTokens");
+  });
+
   it("preserves native max reasoning for Sonnet 4.6", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);

@@ -1156,6 +1156,13 @@ private fun GatewaySettingsScreen(
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  val transport =
+    remember(hostInput, tlsInput) {
+      gatewayManualTransportPresentation(
+        hostInput = hostInput,
+        requestedTls = tlsInput,
+      )
+    }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
@@ -1308,11 +1315,26 @@ private fun GatewaySettingsScreen(
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
           ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.62f))
         }
+        Text(text = "Connection security", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        val securityOptions = listOf("Unencrypted", "Secure (TLS)")
         ClawSegmentedControl(
-          options = listOf("Local", "TLS"),
-          selected = if (tlsInput) "TLS" else "Local",
-          onSelect = { selected -> tlsInput = selected == "TLS" },
+          options = securityOptions,
+          selected = if (transport.effectiveTls) "Secure (TLS)" else "Unencrypted",
+          onSelect = { selected -> tlsInput = selected == "Secure (TLS)" },
+          enabledOptions =
+            if (transport.requiresTls) {
+              setOf("Secure (TLS)")
+            } else {
+              securityOptions.toSet()
+            },
         )
+        transport.helperText?.let { helperText ->
+          Text(
+            text = helperText,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
           ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))
@@ -1333,7 +1355,7 @@ private fun GatewaySettingsScreen(
                 savedManualTls = manualTls,
                 manualHostInput = hostInput,
                 manualPortInput = portInput,
-                manualTlsInput = tlsInput,
+                manualTlsInput = transport.effectiveTls,
                 tokenInput = tokenInput,
                 bootstrapTokenInput = bootstrapTokenInput,
                 passwordInput = passwordInput,

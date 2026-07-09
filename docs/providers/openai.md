@@ -783,7 +783,7 @@ compatibility fallback when the shared
 
     | Setting                               | Config path                                                              | Default             |
     | --------------------------------------- | ---------------------------------------------------------------------------- | ---------------------- |
-    | Model                                  | `plugins.entries.voice-call.config.realtime.providers.openai.model`     | `gpt-realtime-2`    |
+    | Model                                  | `plugins.entries.voice-call.config.realtime.providers.openai.model`     | `gpt-realtime-2.1`  |
     | Voice                                  | `...openai.voice`                                                       | `alloy`             |
     | Temperature (Azure deployment bridge)  | `...openai.temperature`                                                 | `0.8`               |
     | VAD threshold                          | `...openai.vadThreshold`                                                | `0.5`                |
@@ -792,11 +792,13 @@ compatibility fallback when the shared
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
     | Auth                                   | `openai` API-key/OAuth profile, external Codex login, `...openai.apiKey`, or `OPENAI_API_KEY` | API-key sources first; Codex OAuth fallback |
 
-    Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
+    Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
     OpenAI recommends `marin` and `cedar` for the best Realtime quality. This
     is a separate set from the Text-to-speech voices above; a TTS-only voice
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
+    Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
+    smaller, lower-cost Realtime 2.1 variant.
 
     <Note>
     Backend OpenAI realtime bridges use the GA Realtime WebSocket session
@@ -825,6 +827,7 @@ compatibility fallback when the shared
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser
     WebRTC SDP exchange without logging secrets.
+    Pass `--openai-only` to run those two legs without Google credentials.
     </Note>
 
   </Accordion>

@@ -344,6 +344,9 @@ jobs:
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
+                requires_go:
+                  shard.shardName === "core-tooling" ||
+                  shard.groups?.some((group) => group.shard_name === "core-tooling"),
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -404,6 +407,7 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-ktlint", task: "ktlint" },
                   ]
                 : [],
             ),
@@ -921,7 +925,7 @@ jobs:
       contents: read
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
@@ -1008,7 +1012,7 @@ jobs:
       contents: read
     name: QA Smoke CI
     needs: [preflight, qa-smoke-ci-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
+    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1138,7 +1142,7 @@ jobs:
       fail-fast: false
       # The canonical main path waits for the admission debounce above, so
       # widen this large matrix within the current runner-registration budget.
-      max-parallel: 24
+      max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -1147,6 +1151,13 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
+
+      - name: Setup Go for docs i18n
+        if: matrix.requires_go == true
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: scripts/docs-i18n/go.mod
+          cache-dependency-path: scripts/docs-i18n/go.sum
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -2038,7 +2049,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-36-build-tools-36.0.0
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
           restore-keys: |
             ${{ runner.os }}-android-sdk-v1-
 
@@ -2068,7 +2079,7 @@ jobs:
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
-            "platforms;android-36" \
+            "platforms;android-37.0" \
             "build-tools;36.0.0"
 
       - name: Run Android ${{ matrix.task }}
@@ -2086,7 +2097,16 @@ jobs:
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
+              ./gradlew --no-daemon --build-cache \
+                :app:assemblePlayDebug \
+                :app:assembleThirdPartyDebug \
+                :app:lintPlayDebug \
+                :app:lintThirdPartyDebug \
+                :benchmark:assembleDebug
+              ;;
+            ktlint)
+              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

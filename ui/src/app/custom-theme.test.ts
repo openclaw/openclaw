@@ -58,6 +58,15 @@ function firstFetchCall(
 }
 
 describe("custom theme import helpers", () => {
+  it("keeps imported theme labels on a UTF-16 boundary", () => {
+    const parsed = parseImportedCustomTheme({
+      ...createImportedTheme(),
+      label: `${"a".repeat(79)}🚀tail`,
+    });
+
+    expect(parsed?.label).toBe("a".repeat(79));
+  });
+
   it("normalizes tweakcn share links and raw registry links", () => {
     expect(
       normalizeTweakcnThemeUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),

@@ -827,6 +827,10 @@ class MainViewModel(
     ensureRuntime().switchChatSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    ensureRuntime().selectChatAgent(agentId)
+  }
+
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
