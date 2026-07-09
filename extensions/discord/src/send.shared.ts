@@ -22,6 +22,7 @@ import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from 
 import {
   createChannelMessage,
   createUserDmChannel,
+  DiscordMultipartBodyOverflowError,
   getChannel,
   RequestClient,
 } from "./internal/discord.js";
@@ -164,6 +165,7 @@ function getDiscordErrorStatus(err: unknown) {
 
 function isDiscordUploadTooLargeError(err: unknown) {
   return (
+    err instanceof DiscordMultipartBodyOverflowError ||
     getDiscordErrorCode(err) === DISCORD_UPLOAD_TOO_LARGE ||
     getDiscordErrorStatus(err) === DISCORD_UPLOAD_TOO_LARGE_STATUS
   );

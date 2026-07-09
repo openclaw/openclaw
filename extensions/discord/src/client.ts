@@ -19,6 +19,7 @@ import type { DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
+const DISCORD_MULTIPART_BODY_OVERHEAD_BYTES = 1024 * 1024;
 
 export type DiscordClientOpts = {
   cfg: OpenClawConfig;
@@ -89,8 +90,8 @@ function resolveRest(
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
-  const multipartBodyMaxBytes =
-    (account.config.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
+  const mediaMaxBytes = (account.config.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
+  const multipartBodyMaxBytes = mediaMaxBytes + DISCORD_MULTIPART_BODY_OVERHEAD_BYTES;
   return createDiscordRequestClient(token, {
     ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
     ...(signal ? { signal } : {}),

@@ -99,7 +99,7 @@ describe("createDiscordRestClient", () => {
     expect(result.rest.options.timeout).toBe(250);
   });
 
-  it("uses configured mediaMaxMb as the dedicated REST multipart limit", () => {
+  it("keeps configured mediaMaxMb as a payload limit when sizing dedicated REST multipart bodies", () => {
     const cfg = {
       channels: {
         discord: {
@@ -111,7 +111,7 @@ describe("createDiscordRestClient", () => {
 
     const result = createDiscordRestClient({ cfg });
 
-    expect(result.rest.options.multipartBodyMaxBytes).toBe(32 * 1024 * 1024);
+    expect(result.rest.options.multipartBodyMaxBytes).toBe(33 * 1024 * 1024);
   });
 
   it("still fails closed when no explicit token is provided and config token is unresolved", () => {

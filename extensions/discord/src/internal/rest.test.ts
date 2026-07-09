@@ -877,6 +877,34 @@ describe("RequestClient", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("allows media payloads at the payload cap when multipart overhead fits the body cap", async () => {
+    const mediaMaxBytes = 256;
+    const multipartOverheadBytes = 1024;
+    const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(Buffer.isBuffer(init?.body)).toBe(true);
+      const multipartBody = init?.body as unknown as Buffer;
+      expect(multipartBody.byteLength).toBeGreaterThan(mediaMaxBytes);
+      expect(multipartBody.byteLength).toBeLessThanOrEqual(mediaMaxBytes + multipartOverheadBytes);
+      return createJsonResponse({ id: "msg" });
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      multipartBodyMaxBytes: mediaMaxBytes + multipartOverheadBytes,
+      queueRequests: false,
+    });
+
+    await expect(
+      client.post("/channels/c1/messages", {
+        body: {
+          content: "file",
+          files: [{ name: "at-cap.bin", data: new Uint8Array(mediaMaxBytes) }],
+        },
+      }),
+    ).resolves.toEqual({ id: "msg" });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects multipart uploads that exceed the aggregate body limit before fetch", async () => {
     const arrayBufferSpy = vi.spyOn(Blob.prototype, "arrayBuffer");
     const fetchSpy = vi.fn(async () => createJsonResponse({ id: "msg" }));

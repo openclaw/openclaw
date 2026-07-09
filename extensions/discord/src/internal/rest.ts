@@ -100,6 +100,16 @@ const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_DISCORD_MULTIPART_BODY_MAX_BYTES = 100 * 1024 * 1024;
 const GZIP_MAGIC = [0x1f, 0x8b] as const;
 
+export class DiscordMultipartBodyOverflowError extends Error {
+  readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super(`Discord REST multipart body exceeds ${maxBytes} bytes`);
+    this.name = "DiscordMultipartBodyOverflowError";
+    this.maxBytes = maxBytes;
+  }
+}
+
 function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
   return new Error(
     `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
@@ -159,7 +169,7 @@ function escapeMultipartQuotedValue(value: string): string {
 }
 
 function createMultipartBodyOverflowError(maxBytes: number): Error {
-  return new Error(`Discord REST multipart body exceeds ${maxBytes} bytes`);
+  return new DiscordMultipartBodyOverflowError(maxBytes);
 }
 
 async function formDataToMultipartBody(
