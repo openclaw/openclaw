@@ -1,4 +1,5 @@
 // Tool Call Repair helper module supports stream normalizer behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   consumeJsonToolClosingMarker,
   END_TOOL_REQUEST,
@@ -411,7 +412,7 @@ function truncateSuppressedTextToolCallBuffer(text: string): string {
     return text;
   }
   return (
-    text.slice(0, TEXT_TOOL_CALL_BUFFER_MAX_CHARS) +
+    truncateUtf16Safe(text, TEXT_TOOL_CALL_BUFFER_MAX_CHARS) +
     text.slice(-TEXT_TOOL_CALL_SUPPRESSED_TAIL_CHARS)
   );
 }
