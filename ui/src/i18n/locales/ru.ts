@@ -1758,7 +1758,6 @@ export const ru: TranslationMap = {
       splitRight: "Разделить вправо",
       splitDown: "Разделить вниз",
       closePane: "Закрыть панель",
-      sessionSelect: "Сессия панели",
       dropSplit: "Разделить",
       dropOpenHere: "Открыть здесь",
     },
