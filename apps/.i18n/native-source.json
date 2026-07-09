@@ -9035,31 +9035,15 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 43,
+      "line": 41,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Control",
       "surface": "apple",
       "id": "native.apple.a2d8e7b4dba29764"
     },
     {
-      "kind": "ui-call",
-      "line": 64,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "Gateway",
-      "surface": "apple",
-      "id": "native.apple.e0e99a802f07cc68"
-    },
-    {
       "kind": "ui-modifier",
-      "line": 86,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "Gateway \\(self.gatewayStateText), \\(self.sidebarActiveAgentTitle)",
-      "surface": "apple",
-      "id": "native.apple.fe4468ab02aa489d"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 87,
+      "line": 91,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
@@ -9067,7 +9051,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 134,
+      "line": 100,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Agent chat and recent work.",
+      "surface": "apple",
+      "id": "native.apple.ed16c9793f468dcd"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 103,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Realtime voice and controls.",
+      "surface": "apple",
+      "id": "native.apple.a30d0a950d0a77aa"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 173,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Overview",
       "surface": "apple",
@@ -9075,7 +9075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 156,
+      "line": 195,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Instances",
       "surface": "apple",
@@ -9083,7 +9083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 165,
+      "line": 204,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Files",
       "surface": "apple",
@@ -9091,7 +9091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 170,
+      "line": 209,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -9099,7 +9099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 175,
+      "line": 214,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Usage",
       "surface": "apple",
@@ -9107,15 +9107,39 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 180,
+      "line": 219,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Cron Jobs",
       "surface": "apple",
       "id": "native.apple.9eb33a11fb81796b"
     },
     {
+      "kind": "ui-call",
+      "line": 299,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Gateway",
+      "surface": "apple",
+      "id": "native.apple.e0e99a802f07cc68"
+    },
+    {
+      "kind": "ui-call",
+      "line": 306,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Gateway \\(self.gatewayStateText), \\(gatewayDisplayLabel), \\(self.sidebarActiveAgentTitle)",
+      "surface": "apple",
+      "id": "native.apple.e30d7d35682e8ffa"
+    },
+    {
+      "kind": "ui-call",
+      "line": 309,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Gateway \\(self.gatewayStateText), \\(self.sidebarActiveAgentTitle)",
+      "surface": "apple",
+      "id": "native.apple.75b65c24f3607c35"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 254,
+      "line": 316,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Online",
       "surface": "apple",
@@ -9123,7 +9147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 255,
+      "line": 317,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -9131,7 +9155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 256,
+      "line": 318,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Attention",
       "surface": "apple",
@@ -9139,7 +9163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 257,
+      "line": 319,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Offline",
       "surface": "apple",
