@@ -81,6 +81,12 @@ export const ru: TranslationMap = {
     waitForScan: "Ожидание сканирования",
     logout: "Выйти",
   },
+  nativeLinkMenu: {
+    label: "Действия со ссылкой",
+    openInline: "Открыть в боковой панели",
+    openExternal: "Открыть в браузере по умолчанию",
+    copy: "Копировать ссылку",
+  },
   channels: {
     health: {
       title: "Состояние канала",

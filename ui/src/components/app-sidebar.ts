@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
@@ -56,6 +56,7 @@ import {
   compareSessionRowsByUpdatedAt,
   resolveSessionNavigation,
   searchForSession,
+  type SessionCapability,
 } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -69,6 +70,8 @@ import {
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
@@ -161,11 +164,7 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-class AppSidebar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class AppSidebar extends OpenClawLightDomElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
@@ -187,7 +186,7 @@ class AppSidebar extends LitElement {
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
@@ -204,27 +203,50 @@ class AppSidebar extends LitElement {
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
 
-  private stopSessionsSubscription: (() => void) | undefined;
-  private stopSessionCreatedSubscription: (() => void) | undefined;
-  private stopAgentsSubscription: (() => void) | undefined;
-  private stopAgentSelectionSubscription: (() => void) | undefined;
-  private stopGatewaySubscription: (() => void) | undefined;
+  private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
+  private sessionsSource: SessionCapability | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
 
+  constructor() {
+    super();
+    this.subscriptions
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.updateGatewayClient(gateway.snapshot),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.synchronizeSessions(sessions),
+      )
+      .effect(
+        () => this.context?.sessions,
+        (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (agentSelection, notify) => agentSelection.subscribe(notify),
+      );
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
-    this.startSubscriptions();
   }
 
   override disconnectedCallback() {
@@ -232,58 +254,12 @@ class AppSidebar extends LitElement {
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
-    this.stopSessionCreatedSubscription?.();
-    this.stopSessionCreatedSubscription = undefined;
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopAgentSelectionSubscription?.();
-    this.stopAgentSelectionSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
     this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
     super.disconnectedCallback();
-  }
-
-  private startSubscriptions() {
-    const context = this.context;
-    if (
-      !context ||
-      this.stopSessionsSubscription ||
-      this.stopSessionCreatedSubscription ||
-      this.stopAgentsSubscription ||
-      this.stopAgentSelectionSubscription ||
-      this.stopGatewaySubscription
-    ) {
-      return;
-    }
-    this.updateGatewayClient(context.gateway.snapshot);
-    this.updateSessions(context.sessions.state);
-    this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
-      this.updateSessions(snapshot);
-    });
-    this.stopSessionCreatedSubscription = context.sessions.subscribeCreated((key) => {
-      this.promoteCreatedSession(key);
-    });
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateGatewayClient(snapshot);
-      this.requestUpdate();
-    });
-  }
-
-  override updated() {
-    this.startSubscriptions();
   }
 
   private readonly updateSessions = (snapshot: {
@@ -305,6 +281,15 @@ class AppSidebar extends LitElement {
       this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
     }
   };
+
+  private synchronizeSessions(sessions: SessionCapability) {
+    if (sessions !== this.sessionsSource) {
+      this.sessionRowsByAgent = {};
+      this.sessionCreatedOrder.clear();
+      this.sessionsSource = sessions;
+    }
+    this.updateSessions(sessions.state);
+  }
 
   private updateGatewayClient(snapshot: {
     client: GatewayBrowserClient | null;

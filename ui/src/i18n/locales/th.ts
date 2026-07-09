@@ -81,6 +81,12 @@ export const th: TranslationMap = {
     waitForScan: "รอการสแกน",
     logout: "ออกจากระบบ",
   },
+  nativeLinkMenu: {
+    label: "การดำเนินการลิงก์",
+    openInline: "เปิดในแถบด้านข้าง",
+    openExternal: "เปิดในเบราว์เซอร์เริ่มต้น",
+    copy: "คัดลอกลิงก์",
+  },
   channels: {
     health: {
       title: "สถานะช่องทาง",
