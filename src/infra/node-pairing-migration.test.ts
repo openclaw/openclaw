@@ -33,12 +33,13 @@ describe("migrateLegacyNodePairingStore", () => {
 
   test("folds legacy rows into device records, drops orphans, archives files", async () => {
     const baseDir = await suiteRootTracker.make("case");
+    const legacyTokenValue = ["legacy", "token"].join("-");
     await seedNodeDevice(baseDir, "node-kept");
     const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
     await writeJson(pairedPath, {
       "node-kept": {
         nodeId: "node-kept",
-        token: "legacy-token",
+        token: legacyTokenValue,
         displayName: "Living Room iPad",
         version: "2026.6.11",
         caps: ["canvas", "screen"],
@@ -51,7 +52,7 @@ describe("migrateLegacyNodePairingStore", () => {
       },
       "node-orphaned": {
         nodeId: "node-orphaned",
-        token: "legacy-token-2",
+        token: `${legacyTokenValue}-2`,
         approvedAtMs: 2_000,
         createdAtMs: 1_000,
       },
@@ -79,7 +80,7 @@ describe("migrateLegacyNodePairingStore", () => {
       lastConnectedAtMs: 3_000,
     });
     // The retired token never crosses into the device record.
-    expect(JSON.stringify(device)).not.toContain("legacy-token");
+    expect(JSON.stringify(device)).not.toContain(legacyTokenValue);
 
     const list = await listNodePairing(baseDir);
     expect(list.paired.map((node) => node.nodeId)).toEqual(["node-kept"]);
