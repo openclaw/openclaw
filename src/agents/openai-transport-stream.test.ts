@@ -12227,3 +12227,50 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });
+
+describe("openai refusal routing", () => {
+  const model = {
+    id: "gpt-5.4-mini",
+    name: "GPT 5.4 Mini",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com",
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  it("surfaces a streaming refusal delta when content is null", async () => {
+    const output = createAssistantOutput(model);
+    const events: Array<unknown> = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: "gpt-5.4-mini",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, refusal: "I cannot help with that request." },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event: unknown) => events.push(event) },
+    );
+
+    const textDelta = events.find(
+      (e): e is Record<string, unknown> =>
+        e !== null && typeof e === "object" && (e as Record<string, unknown>).delta !== undefined,
+    );
+    expect(textDelta?.delta).toBe("I cannot help with that request.");
+  });
+});

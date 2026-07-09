@@ -3180,6 +3180,12 @@ async function processOpenAICompletionsStream(
         appendThinkingDelta(reasoningDelta);
       }
     }
+    // Surface refusal text when content is null (safety refusals, structured-output
+    // refusals). Mirrors the Responses-path refusal routing at line 1635.
+    const refusalText = (choiceDelta as Record<string, unknown>).refusal;
+    if (typeof refusalText === "string" && refusalText.trim() && !output.content.length) {
+      appendTextDelta(refusalText);
+    }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
       flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
