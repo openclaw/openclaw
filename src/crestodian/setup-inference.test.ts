@@ -558,17 +558,149 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("installs the codex runtime before exercising its harness", async () => {
+  it("installs the codex runtime independently of a custom OpenAI route", async () => {
     const events: string[] = [];
-    const installedConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              alias: "Codex CLI",
-              agentRuntime: { id: "openclaw" },
+    const initialConfig = {
+      gateway: { port: 18789 },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+            models: [],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: false,
+            config: { appServer: { command: "codex", mode: "yolo" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const applySetup = vi.fn(async () => {
+      events.push("persist-setup");
+      return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
+    });
+    const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => {
+      events.push("install-plugin");
+      return {
+        cfg: {
+          ...params.cfg,
+          plugins: {
+            ...params.cfg.plugins,
+            entries: {
+              ...params.cfg.plugins?.entries,
+              codex: {
+                ...params.cfg.plugins?.entries?.codex,
+                enabled: true,
+              },
+            },
+            installs: {
+              ...params.cfg.plugins?.installs,
+              codex: {
+                source: "npm" as const,
+                spec: "@openclaw/codex",
+                installPath: "/tmp/plugins/codex",
+              },
             },
           },
+        },
+        required: true,
+        installed: true,
+        status: "installed" as const,
+      };
+    });
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
+      events.push("live-test");
+      return { meta: { finalAssistantVisibleText: "OK" } };
+    });
+    let persistedConfig: OpenClawConfig = {
+      ...initialConfig,
+      gateway: { port: 19000 },
+    };
+    const updateConfig = vi.fn(async (updater: (config: OpenClawConfig) => OpenClawConfig) => {
+      events.push("persist-plugin");
+      persistedConfig = updater(persistedConfig);
+      return persistedConfig;
+    });
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        applySetup: applySetup as never,
+        ensureCodexRuntimePlugin: ensureCodex as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(ensureCodex).toHaveBeenCalledOnce();
+    expect(ensureCodex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: {
+            defaults: {
+              models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+            },
+          },
+          models: {
+            providers: {
+              openai: { baseUrl: "https://proxy.example.test/v1", models: [] },
+            },
+          },
+        }),
+        model: "openai/gpt-5.5",
+      }),
+    );
+    expect(events).toEqual(["install-plugin", "live-test", "persist-plugin", "persist-setup"]);
+    // Harness selection: codex tests run embedded with the codex harness.
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      agentDir: expect.stringContaining("setup-inference-test-"),
+      provider: "openai",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        plugins: {
+          entries: { codex: { enabled: true } },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/tmp/plugins/codex",
+            },
+          },
+        },
+        tools: { exec: { mode: "full" } },
+      },
+    });
+    expect(persistedConfig).toMatchObject({
+      gateway: { port: 19000 },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://proxy.example.test/v1" },
+        },
+      },
+      agents: {
+        defaults: {
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
         },
       },
       plugins: {
@@ -580,73 +712,13 @@ describe("activateSetupInference", () => {
         },
         installs: {
           codex: {
-            source: "npm" as const,
+            source: "npm",
             spec: "@openclaw/codex",
             installPath: "/tmp/plugins/codex",
           },
         },
       },
-    } satisfies OpenClawConfig;
-    const expectedConfig = {
-      ...installedConfig,
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              alias: "Codex CLI",
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const applySetup = vi.fn(async () => {
-      events.push("persist-setup");
-      return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
     });
-    const ensureCodex = vi.fn(async () => {
-      events.push("install-plugin");
-      return {
-        cfg: installedConfig,
-        required: true,
-        installed: true,
-        status: "installed" as const,
-      };
-    });
-    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
-      events.push("live-test");
-      return { meta: { finalAssistantVisibleText: "OK" } };
-    });
-    let persistedConfig: OpenClawConfig | undefined;
-    const updateConfig = vi.fn(async (updater: (config: OpenClawConfig) => OpenClawConfig) => {
-      events.push("persist-plugin");
-      persistedConfig = updater({});
-      return persistedConfig;
-    });
-    const result = await activateSetupInference({
-      kind: "codex-cli",
-      surface: "gateway",
-      runtime,
-      deps: {
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        applySetup: applySetup as never,
-        ensureCodexRuntimePlugin: ensureCodex as never,
-        updateConfig: updateConfig as never,
-        createTempDir: makeTempDir,
-      },
-    });
-    expect(result.ok).toBe(true);
-    expect(ensureCodex).toHaveBeenCalledOnce();
-    expect(events).toEqual(["install-plugin", "live-test", "persist-plugin", "persist-setup"]);
-    // Harness selection: codex tests run embedded with the codex harness.
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      agentHarnessRuntimeOverride: "codex",
-      agentDir: expect.stringContaining("setup-inference-test-"),
-      provider: "openai",
-      config: expectedConfig,
-    });
-    expect(persistedConfig).toEqual(expectedConfig);
   });
 
   it("does not run or persist when the codex runtime install fails", async () => {

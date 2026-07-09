@@ -620,12 +620,15 @@ async function activateSetupInferenceUnredacted(
     let codexPluginPatch: unknown;
     let testPlan = plan;
     if (params.kind === "codex-cli") {
+      // This explicit Codex CLI choice owns its runtime independently of the
+      // user's existing OpenAI provider route (which may use a custom base URL).
+      const codexInstallBase = applyMergePatch(cfg, CODEX_CLI_RUNTIME_PATCH) as OpenClawConfig;
       const ensureCodex =
         deps.ensureCodexRuntimePlugin ??
         (await import("../commands/codex-runtime-plugin-install.js"))
           .ensureCodexRuntimePluginForModelSelection;
       const ensured = await ensureCodex({
-        cfg,
+        cfg: codexInstallBase,
         model: plan.modelRef,
         prompter: createQuickstartNotePrompter(params.runtime),
         runtime: params.runtime,
@@ -638,15 +641,22 @@ async function activateSetupInferenceUnredacted(
           error:
             ensured.status === "timed_out"
               ? "Codex runtime plugin installation timed out. Try again."
-              : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
+              : ensured.reason
+                ? `Could not enable the Codex runtime plugin: ${ensured.reason}.`
+                : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
         };
       }
-      // The install record and model-scoped runtime pin are transient probe
-      // inputs. Persist the same delta only after the completion passes.
-      const stagedCodexConfig = applyMergePatch(
-        ensured.cfg,
-        CODEX_CLI_RUNTIME_PATCH,
-      ) as OpenClawConfig;
+      const enabledCodex = enablePluginInConfig(ensured.cfg, "codex");
+      if (!enabledCodex.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+        };
+      }
+      // The install record, enablement, and model-scoped runtime pin are
+      // transient probe inputs. Persist the same delta only after completion.
+      const stagedCodexConfig = enabledCodex.config;
       codexPluginPatch = createMergePatch(cfg, stagedCodexConfig);
       testPlan = {
         ...plan,

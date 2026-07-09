@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  loadInstalledPluginIndexInstallRecords: vi.fn(),
   repairMissingPluginInstallsForIds: vi.fn(),
 }));
 
@@ -25,9 +26,14 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingPluginInstallsForIds: mocks.repairMissingPluginInstallsForIds,
 }));
 
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
+}));
+
 describe("Codex runtime plugin install repair", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -57,6 +63,61 @@ describe("Codex runtime plugin install repair", () => {
       required: true,
       changes: ['Repaired missing configured plugin "codex".'],
       warnings: [reviewNotice],
+    });
+  });
+
+  it.each([
+    ["plugins disabled", { plugins: { enabled: false } }],
+    ["denylisted", { plugins: { deny: ["codex"] } }],
+    ["not allowlisted", { plugins: { allow: ["other"] } }],
+  ])("does not report an existing Codex install as usable when %s", async (_label, cfg) => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      codex: { source: "npm", installPath: process.cwd() },
+    });
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+
+    const result = await ensureCodexRuntimePluginForModelSelection({
+      cfg,
+      model: "openai/gpt-5.5",
+      prompter: {} as never,
+      runtime: {} as never,
+    });
+
+    expect(result).toMatchObject({
+      cfg,
+      required: true,
+      installed: false,
+      status: "failed",
+    });
+    expect(result.reason).toBeTruthy();
+  });
+
+  it("enables an allowed existing Codex install", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      codex: { source: "npm", installPath: process.cwd() },
+    });
+    const cfg = {
+      plugins: {
+        allow: ["codex"],
+        entries: { codex: { enabled: false } },
+      },
+    };
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+
+    const result = await ensureCodexRuntimePluginForModelSelection({
+      cfg,
+      model: "openai/gpt-5.5",
+      prompter: {} as never,
+      runtime: {} as never,
+    });
+
+    expect(result).toMatchObject({
+      required: true,
+      installed: true,
+      status: "installed",
+      cfg: { plugins: { entries: { codex: { enabled: true } } } },
     });
   });
 });

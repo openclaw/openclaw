@@ -28,6 +28,7 @@ export type RuntimePluginInstallResult = {
   required: boolean;
   installed: boolean;
   status?: "installed" | "skipped" | "failed" | "timed_out";
+  reason?: string;
 };
 
 /** Predicate that decides whether a config/model pair needs the runtime plugin. */
@@ -104,10 +105,11 @@ async function ensureRuntimePluginForModelSelection(params: {
     }
     const enableResult = enablePluginInConfig(params.cfg, params.descriptor.pluginId);
     return {
-      cfg: enableResult.enabled ? enableResult.config : params.cfg,
+      cfg: enableResult.config,
       required: true,
-      installed: true,
-      status: "installed",
+      installed: enableResult.enabled,
+      status: enableResult.enabled ? "installed" : "failed",
+      ...(enableResult.reason ? { reason: enableResult.reason } : {}),
     };
   }
   const { ensureOnboardingPluginInstalled } = await import("./onboarding-plugin-install.js");
