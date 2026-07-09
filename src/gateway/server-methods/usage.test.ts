@@ -589,6 +589,27 @@ describe("gateway usage helpers", () => {
     );
   });
 
+  it("rejects an all-agent usage load when one agent task fails", async () => {
+    const failure = new Error("agent usage load failed");
+    vi.mocked(loadCostUsageSummaryFromCache)
+      .mockResolvedValueOnce(costSummary({ totalTokens: 1, totalCost: 0 }))
+      .mockRejectedValueOnce(failure);
+
+    const respond = vi.fn();
+    const request = usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }, { id: "broken" }] },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    await expect(request).rejects.toBe(failure);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("bounds sessions.usage all-agent session discovery", async () => {
     const agentCount = 13;
     const concurrencyLimit = 12;
