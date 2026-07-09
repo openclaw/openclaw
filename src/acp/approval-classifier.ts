@@ -126,14 +126,14 @@ function extractPathFromToolTitle(
   if (!tail) {
     return undefined;
   }
-  if (toolName !== "read") {
-    return undefined;
-  }
-  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
+  const keyedMatch =
+    toolName === "read"
+      ? tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/)
+      : tail.match(/^(?:path|file_path|filePath)\s*:\s*([^,]+)/);
   if (keyedMatch?.[1]) {
     return keyedMatch[1].trim();
   }
-  return tail;
+  return toolName === "read" ? tail : undefined;
 }
 
 function readLocationPaths(locations: unknown): string[] {

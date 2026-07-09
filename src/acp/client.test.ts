@@ -551,6 +551,24 @@ describe("resolvePermissionRequest", () => {
     });
   });
 
+  it("prompts for search when explicit title path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-title-escape-cwd",
+          title: "search: path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "key" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: path: ~/.ssh");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
   it("auto-approves search when only locations resolve inside cwd", async () => {
     await expectAutoAllowWithoutPrompt({
       request: {

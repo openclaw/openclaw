@@ -112,6 +112,19 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
+  it("does not auto-approve alias search when explicit title path escapes cwd", () => {
+    expect(
+      classify({
+        title: "search: path: /etc",
+        rawInput: { name: "search", query: "shadow" },
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
   it("does not auto-approve alias search when only locations escape cwd", () => {
     expect(
       classify({
