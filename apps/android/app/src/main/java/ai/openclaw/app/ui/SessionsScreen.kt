@@ -9,7 +9,6 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -181,17 +180,22 @@ internal fun SessionsScreen(
 
       item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-          Row(
-            modifier =
-              Modifier
-                .clip(RoundedCornerShape(ClawTheme.radii.row))
-                .clickable { recentFirst = !recentFirst }
-                .padding(horizontal = 2.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          Surface(
+            onClick = { recentFirst = !recentFirst },
+            modifier = Modifier.heightIn(min = 36.dp),
+            shape = RoundedCornerShape(ClawTheme.radii.row),
+            color = Color.Transparent,
+            contentColor = ClawTheme.colors.textMuted,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
           ) {
-            Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-            Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
+            Row(
+              modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+              Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+            }
           }
           SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
         }
@@ -481,8 +485,8 @@ private fun SessionRow(
           horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
           Surface(
-            modifier = Modifier.size(30.dp),
-            shape = CircleShape,
+            modifier = Modifier.size(32.dp),
+            shape = RoundedCornerShape(ClawTheme.radii.control),
             color = Color.Transparent,
             border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
           ) {
@@ -490,7 +494,7 @@ private fun SessionRow(
               Icon(
                 imageVector = if (active) Icons.Default.StarBorder else Icons.Outlined.ChatBubbleOutline,
                 contentDescription = null,
-                modifier = Modifier.size(15.dp),
+                modifier = Modifier.size(16.dp),
                 tint = ClawTheme.colors.text,
               )
             }
@@ -506,14 +510,22 @@ private fun SessionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
-              if (active) {
-                Box(modifier = Modifier.size(3.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
-              }
-              if (session.unread == true) {
-                Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ClawTheme.colors.primary))
-              }
-              if (session.pinned == true) {
-                Icon(imageVector = Icons.Default.PushPin, contentDescription = "Pinned", modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textMuted)
+              if (active || session.unread == true || session.pinned == true) {
+                Row(
+                  modifier = Modifier.size(width = 40.dp, height = 16.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                ) {
+                  if (active) {
+                    Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
+                  }
+                  if (session.unread == true) {
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ClawTheme.colors.primary))
+                  }
+                  if (session.pinned == true) {
+                    Icon(imageVector = Icons.Default.PushPin, contentDescription = "Pinned", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+                  }
+                }
               }
             }
             if (!compact) {
