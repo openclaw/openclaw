@@ -6379,6 +6379,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/meta.md
+
+- Route: /plugins/reference/meta
+- Headings:
+  - H1: Meta plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/microsoft-foundry.md
 
 - Route: /plugins/reference/microsoft-foundry
@@ -7689,9 +7698,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
-## providers/meta-model-api.md
+## providers/meta.md
 
-- Route: /providers/meta-model-api
+- Route: /providers/meta
 - Headings:
   - H2: Getting started
   - H2: Non-interactive setup
@@ -7920,6 +7929,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Plan types and endpoints
   - H2: Built-in catalog
+  - H3: Token Plan catalog
   - H2: Thinking controls
   - H2: Multimodal add-ons
   - H2: Advanced configuration

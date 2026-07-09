@@ -46,6 +46,10 @@ export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
+export type LobsterPetBuild = "round" | "squat" | "slender";
+
+export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+
 export type LobsterPetLook = {
   palette: LobsterPetPalette;
   scale: number;
@@ -56,6 +60,9 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
+  build: LobsterPetBuild;
+  clawSize: LobsterPetClawSize;
+  tailFan: boolean;
 };
 
 type ActProfile = {
@@ -187,6 +194,33 @@ const SCALES: Array<[number, number]> = [
   [2.5, 20],
 ];
 
+const BUILDS: Array<[LobsterPetBuild, number]> = [
+  ["round", 40],
+  ["squat", 30],
+  ["slender", 30],
+];
+
+const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
+  ["regular", 55],
+  ["dainty", 25],
+  ["mighty", 20],
+];
+
+// Builds reshape the whole sprite by stretching its aspect ratio (the svg
+// renders with preserveAspectRatio="none"), so eyes, claws, accessories, and
+// rare-variant geometry stay aligned for every silhouette.
+export const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
+  round: { w: 1, h: 1 },
+  squat: { w: 1.14, h: 0.9 },
+  slender: { w: 0.88, h: 1.1 },
+};
+
+export const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
+  dainty: 0.85,
+  regular: 1,
+  mighty: 1.18,
+};
+
 // Keep the perch off the footer center so tooltips and the theme toggle
 // never sit under the sprite.
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
@@ -247,7 +281,25 @@ export function createLobsterPetLook(seed: number): LobsterPetLook {
   const facing = rng() < 0.5 ? 1 : -1;
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
-  return { palette, scale, accessory, antennae, side, spotPct, facing, personality, blinkDelayS };
+  // Shape traits roll after the original ones so pre-existing seeds keep
+  // their palette/personality and only gain a silhouette.
+  const build = pickWeighted(rng, BUILDS);
+  const clawSize = pickWeighted(rng, CLAW_SIZES);
+  const tailFan = rng() < 0.3;
+  return {
+    palette,
+    scale,
+    accessory,
+    antennae,
+    side,
+    spotPct,
+    facing,
+    personality,
+    blinkDelayS,
+    build,
+    clawSize,
+    tailFan,
+  };
 }
 
 export function resolveLobsterPetMode(
@@ -344,6 +396,15 @@ const RETRO_FACE = svg`
   </g>
 `;
 
+// Tail-fan lobes peek out diagonally behind the lower body (drawn before the
+// body path so they read as "behind"). Fill color lives in lobster-pet.css.
+const TAIL_FAN = svg`
+  <g class="lob-tail">
+    <ellipse cx="16" cy="84" rx="11" ry="7" transform="rotate(-32 16 84)" />
+    <ellipse cx="104" cy="84" rx="11" ry="7" transform="rotate(32 104 84)" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -366,10 +427,11 @@ function renderLobsterSvg(look: LobsterPetLook) {
     <svg
       class="lobster-pet__svg"
       viewBox="0 0 120 105"
-      preserveAspectRatio="xMidYMax meet"
+      preserveAspectRatio="none"
       aria-hidden="true"
     >
       ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
+      ${look.tailFan ? TAIL_FAN : nothing}
       <g class="lob-claw lob-claw--l">
         <path
           d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
@@ -600,6 +662,9 @@ export class LobsterPet extends LitElement {
       `--lob-x:${this.spotPct}%`,
       `--lob-face:${this.facing}`,
       `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
     ].join(";");
     return html`
       <div class=${classes} style=${style} aria-hidden="true" @pointerdown=${this.handlePoke}>

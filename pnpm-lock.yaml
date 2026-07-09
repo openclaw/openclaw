@@ -1119,7 +1119,7 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/meta-model-api:
+  extensions/meta:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

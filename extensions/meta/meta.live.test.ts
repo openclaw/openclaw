@@ -1,25 +1,25 @@
-// Meta Model API live tests prove muse-spark auth and Responses API completion.
+// Meta live tests prove muse-spark auth and Responses API completion.
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { buildMetaModelApiProvider } from "./provider-catalog.js";
-import { wrapMetaModelApiProviderStream } from "./stream.js";
+import { buildMetaProvider } from "./provider-catalog.js";
+import { wrapMetaProviderStream } from "./stream.js";
 
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
 const LIVE_MODEL_ID = "muse-spark";
 const LIVE =
-  isLiveTestEnabled(["META_MODEL_API_LIVE_TEST", "MODEL_API_LIVE_TEST"]) &&
+  isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) &&
   MODEL_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
 function resolveLiveModel(): Model<"openai-responses"> {
-  const provider = buildMetaModelApiProvider();
+  const provider = buildMetaProvider();
   const catalogModel = provider.models?.find((entry) => entry.id === "muse-spark-1.1");
   if (!catalogModel) {
-    throw new Error("Meta Model API catalog does not include muse-spark-1.1");
+    throw new Error("Meta catalog does not include muse-spark-1.1");
   }
   return {
-    provider: "meta-model-api",
+    provider: "meta",
     baseUrl: provider.baseUrl,
     ...catalogModel,
     id: LIVE_MODEL_ID,
@@ -30,8 +30,8 @@ function resolveLiveModel(): Model<"openai-responses"> {
 function resolveLiveStreamFn() {
   const model = resolveLiveModel();
   return (
-    wrapMetaModelApiProviderStream({
-      provider: "meta-model-api",
+    wrapMetaProviderStream({
+      provider: "meta",
       modelId: model.id,
       model,
       streamFn: streamSimple,
@@ -39,7 +39,7 @@ function resolveLiveStreamFn() {
   );
 }
 
-describeLive("meta-model-api plugin live", () => {
+describeLive("meta plugin live", () => {
   it("lists muse-spark via the /models endpoint", async () => {
     const response = await fetch("https://api.ai.meta.com/v1/models", {
       headers: { Authorization: `Bearer ${MODEL_API_KEY}` },
@@ -76,7 +76,7 @@ describeLive("meta-model-api plugin live", () => {
     const result = await stream.result();
 
     if (result.stopReason === "error") {
-      throw new Error(result.errorMessage || "Meta Model API returned an error");
+      throw new Error(result.errorMessage || "Meta returned an error");
     }
 
     expect(capturedPayload?.store).toBe(false);
