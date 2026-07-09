@@ -30,6 +30,38 @@
               "supportsUsageInStreaming": false,
               "maxTokensField": "max_tokens"
             }
+          },
+          {
+            "id": "north-mini-code-1-0",
+            "name": "North Mini Code 1.0",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "minimal": "high",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
           }
         ]
       }
