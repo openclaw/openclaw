@@ -28,7 +28,19 @@ export async function packageBuildCommitFromTgz(tgzPath: string): Promise<string
 }
 
 function resolveNpmPackTarballFilename(value: unknown): string {
-  const filename = typeof value === "string" ? value.trim() : "";
+  // npm 10 returns an array, while npm 11 can key workspace results by package name.
+  const result = Array.isArray(value)
+    ? value.at(-1)
+    : value && typeof value === "object" && "openclaw" in value
+      ? value.openclaw
+      : value;
+  const filename =
+    result &&
+    typeof result === "object" &&
+    "filename" in result &&
+    typeof result.filename === "string"
+      ? result.filename.trim()
+      : "";
   if (
     !filename.endsWith(".tgz") ||
     filename.includes("\0") ||
@@ -145,7 +157,7 @@ export async function packOpenClaw(input: {
       ],
       { quiet: true },
     ).stdout;
-    const packed = resolveNpmPackTarballFilename(JSON.parse(output).at(-1)?.filename);
+    const packed = resolveNpmPackTarballFilename(JSON.parse(output));
     const tgzPath = path.join(input.destination, packed);
     const version = await packageVersionFromTgz(tgzPath);
     say(`Packed ${tgzPath}`);
@@ -173,7 +185,7 @@ export async function packOpenClaw(input: {
         quiet: true,
       },
     ).stdout;
-    const packed = resolveNpmPackTarballFilename(JSON.parse(output).at(-1)?.filename);
+    const packed = resolveNpmPackTarballFilename(JSON.parse(output));
     const tgzPath = path.join(input.destination, `openclaw-main-${shortHead}.tgz`);
     await copyFile(path.join(input.destination, packed), tgzPath);
     const buildCommit = await packageBuildCommitFromTgz(tgzPath);
@@ -299,4 +311,5 @@ export const testing = {
   acquirePackageLock,
   removeStalePackageLock,
   readLockOwner,
+  resolveNpmPackTarballFilename,
 };
