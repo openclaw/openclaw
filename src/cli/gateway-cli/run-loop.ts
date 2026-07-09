@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { startDurableRecoveryWorker } from "../../durable/recovery.js";
+import { createDurableWorkflowRegistry } from "../../durable/registry.js";
 import { maybeRecordDurableGatewayStartup } from "../../durable/startup.js";
+import {
+  startDurableWorkflowWorkerFromEnv,
+  type DurableWorkflowWorkerHandle,
+} from "../../durable/worker.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
@@ -127,6 +132,7 @@ export async function runGatewayLoop(params: {
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let stopDurableRecoveryWorker: (() => void) | null = null;
+  let durableWorkflowWorker: DurableWorkflowWorkerHandle | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
   // The HTTP server can report ready before params.start returns its close handle.
@@ -623,6 +629,8 @@ export async function runGatewayLoop(params: {
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         stopDurableRecoveryWorker?.();
         stopDurableRecoveryWorker = null;
+        await durableWorkflowWorker?.stop();
+        durableWorkflowWorker = null;
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
@@ -854,6 +862,11 @@ export async function runGatewayLoop(params: {
         stopDurableRecoveryWorker = startDurableRecoveryWorker({
           processInstanceId,
         });
+        await durableWorkflowWorker?.stop();
+        durableWorkflowWorker = startDurableWorkflowWorkerFromEnv({
+          registry: createDurableWorkflowRegistry(),
+          workerId: `gateway-${processInstanceId}`,
+        });
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {
@@ -893,6 +906,8 @@ export async function runGatewayLoop(params: {
   } finally {
     stopDurableRecoveryWorker?.();
     stopDurableRecoveryWorker = null;
+    await durableWorkflowWorker?.stop();
+    durableWorkflowWorker = null;
     await releaseLockIfHeld();
     cleanupSignals();
   }

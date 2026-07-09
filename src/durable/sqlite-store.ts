@@ -821,8 +821,14 @@ export function openDurableWorkflowSqliteStore(options?: {
                    FROM durable_workflow_runs
                   WHERE workflow_id = ?
                     AND status IN ('received', 'queued')
-                    AND recovery_state = 'runnable'
-                    AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
+                    AND (
+                      (recovery_state = 'runnable' AND claimed_by IS NULL)
+                      OR (
+                        recovery_state IN ('runnable', 'claimed')
+                        AND claimed_by IS NOT NULL
+                        AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
+                      )
+                    )
                   ORDER BY updated_at ASC, workflow_run_id ASC
                   LIMIT 1`,
               )
@@ -832,8 +838,14 @@ export function openDurableWorkflowSqliteStore(options?: {
                 `SELECT *
                    FROM durable_workflow_runs
                   WHERE status IN ('received', 'queued')
-                    AND recovery_state = 'runnable'
-                    AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
+                    AND (
+                      (recovery_state = 'runnable' AND claimed_by IS NULL)
+                      OR (
+                        recovery_state IN ('runnable', 'claimed')
+                        AND claimed_by IS NOT NULL
+                        AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
+                      )
+                    )
                   ORDER BY updated_at ASC, workflow_run_id ASC
                   LIMIT 1`,
               )
@@ -1017,8 +1029,14 @@ export function openDurableWorkflowSqliteStore(options?: {
       return runSqliteImmediateTransactionSync(db, () => {
         const filters: string[] = [
           "s.status IN ('pending', 'queued')",
-          "s.recovery_state = 'runnable'",
-          "(s.claimed_by IS NULL OR s.claim_expires_at IS NULL OR s.claim_expires_at <= ?)",
+          `(
+            (s.recovery_state = 'runnable' AND s.claimed_by IS NULL)
+            OR (
+              s.recovery_state IN ('runnable', 'claimed')
+              AND s.claimed_by IS NOT NULL
+              AND (s.claim_expires_at IS NULL OR s.claim_expires_at <= ?)
+            )
+          )`,
           "r.status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')",
         ];
         const values: SQLInputValue[] = [now];

@@ -98,6 +98,23 @@ const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
   skipped: 0,
 }));
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const stopDurableWorkflowWorker = vi.fn(async () => {});
+const startDurableWorkflowWorkerFromEnv = vi.fn((_opts: unknown) => ({
+  getStatus: vi.fn(() => ({
+    workerId: "test-durable-worker",
+    running: false,
+    stopped: true,
+    startedAt: 0,
+    inFlight: 0,
+    claimedSteps: 0,
+    idleTicks: 0,
+    failedTicks: 0,
+    pollIntervalMs: 1000,
+    maxConcurrency: 1,
+    claimTtlMs: 300_000,
+  })),
+  stop: stopDurableWorkflowWorker,
+}));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const ACTIVE_RUN_DRAIN_TIMEOUT_LOG =
   "active embedded run drain timeout reached; aborting active run(s) before restart";
@@ -213,6 +230,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
+}));
+
+vi.mock("../../durable/worker.js", () => ({
+  startDurableWorkflowWorkerFromEnv: (opts: unknown) => startDurableWorkflowWorkerFromEnv(opts),
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
@@ -415,6 +436,35 @@ describe("runGatewayLoop", () => {
       sigterm();
 
       await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("wires the durable workflow worker into gateway startup and stops it on shutdown", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      expect(startDurableWorkflowWorkerFromEnv).toHaveBeenCalledTimes(1);
+      const [workerOptions] = startDurableWorkflowWorkerFromEnv.mock.calls[0] ?? [];
+      expect(workerOptions).toEqual({
+        registry: expect.objectContaining({
+          registerWorkflow: expect.any(Function),
+          registerStepHandler: expect.any(Function),
+        }),
+        workerId: expect.stringMatching(/^gateway-[0-9a-f-]{36}$/),
+      });
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(stopDurableWorkflowWorker).toHaveBeenCalledOnce();
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,

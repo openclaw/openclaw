@@ -161,4 +161,39 @@ describe("durable workflow worker", () => {
     });
     await worker.stop();
   });
+
+  it("starts from env only when workflows and worker flags are both explicit", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-worker-env-"));
+    try {
+      const registry = createDurableWorkflowRegistry();
+      const worker = startDurableWorkflowWorkerFromEnv({
+        registry,
+        workerId: "enabled-worker",
+        env: {
+          OPENCLAW_STATE_DIR: dir,
+          OPENCLAW_DURABLE_WORKFLOWS: "1",
+          OPENCLAW_DURABLE_WORKER: "1",
+          OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS: "5",
+          OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS: "50",
+          OPENCLAW_DURABLE_WORKER_MAX_CONCURRENCY: "2",
+        },
+      });
+
+      expect(worker.getStatus()).toMatchObject({
+        workerId: "enabled-worker",
+        running: true,
+        stopped: false,
+        pollIntervalMs: 5,
+        maxConcurrency: 2,
+        claimTtlMs: 50,
+      });
+      await worker.stop();
+      expect(worker.getStatus()).toMatchObject({
+        running: false,
+        stopped: true,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
