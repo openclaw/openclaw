@@ -31,6 +31,8 @@ const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
 // invocations and "exec" is a shell-string carrier, so neither may unwrap.
 const BUN_EXEC_SUBCOMMANDS = new Set(["x"]);
 
+// "--cwd" unwraps like the npm/pnpm "-C" cwd options do: inner binding stays
+// on the delegated executable, matching the sibling wrapper cases' contract.
 const BUN_OPTIONS_WITH_VALUE = new Set(["--config", "--cwd", "--env-file", "-c"]);
 
 const BUN_FLAG_OPTIONS = new Set(["--bun", "--silent", "-b"]);
