@@ -14,6 +14,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { collectUiDiagnostics, type UiDiagnosticRow } from "./ui-diagnostics.ts";
 import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
@@ -39,9 +40,12 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallParams = "{}";
   @state() private debugCallResult: string | null = null;
   @state() private debugCallError: string | null = null;
+  @state() private uiDiagnostics: readonly UiDiagnosticRow[] = [];
+  @state() private uiDiagnosticsLoading = false;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
   private debugPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private uiDiagnosticsRequest = 0;
   private hasBoundGatewaySource = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
@@ -70,7 +74,14 @@ class DebugPage extends OpenClawLightDomElement {
       },
     );
 
+  override connectedCallback() {
+    super.connectedCallback();
+    void this.loadUiDiagnostics();
+  }
+
   override disconnectedCallback() {
+    this.uiDiagnosticsRequest += 1;
+    this.uiDiagnosticsLoading = false;
     this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
@@ -208,6 +219,24 @@ class DebugPage extends OpenClawLightDomElement {
     }
   }
 
+  private async loadUiDiagnostics() {
+    if (this.uiDiagnosticsLoading) {
+      return;
+    }
+    const request = ++this.uiDiagnosticsRequest;
+    this.uiDiagnosticsLoading = true;
+    try {
+      const diagnostics = await collectUiDiagnostics();
+      if (this.isConnected && request === this.uiDiagnosticsRequest) {
+        this.uiDiagnostics = diagnostics;
+      }
+    } finally {
+      if (this.isConnected && request === this.uiDiagnosticsRequest) {
+        this.uiDiagnosticsLoading = false;
+      }
+    }
+  }
+
   override render() {
     const body = renderDebug({
       loading: this.debugLoading,
@@ -221,9 +250,12 @@ class DebugPage extends OpenClawLightDomElement {
       callParams: this.debugCallParams,
       callResult: this.debugCallResult,
       callError: this.debugCallError,
+      uiDiagnostics: this.uiDiagnostics,
+      uiDiagnosticsLoading: this.uiDiagnosticsLoading,
       onCallMethodChange: (next) => (this.debugCallMethod = next),
       onCallParamsChange: (next) => (this.debugCallParams = next),
       onRefresh: () => void this.loadDiagnostics(),
+      onRefreshUiDiagnostics: () => void this.loadUiDiagnostics(),
       onCall: () => void this.callDebugMethod(),
     });
     return html`

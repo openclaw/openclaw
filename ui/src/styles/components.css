@@ -2642,6 +2642,238 @@
   max-width: 100%;
 }
 
+/* UI diagnostics: dense desktop table, adaptive record cards on narrow screens. */
+.debug-ui-diagnostics__header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.debug-ui-diagnostics__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.debug-ui-diagnostics__loading {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.debug-ui-diagnostics .debug-ui-diagnostics__frame {
+  margin-top: 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+}
+
+.debug-ui-diagnostics .debug-ui-diagnostics__scroller {
+  max-height: min(52vh, 560px);
+}
+
+.debug-ui-diagnostics__table {
+  min-width: 680px;
+  table-layout: fixed;
+}
+
+.debug-ui-diagnostics__table th:nth-child(1),
+.debug-ui-diagnostics__table td:nth-child(1) {
+  width: 17%;
+}
+
+.debug-ui-diagnostics__table th:nth-child(2),
+.debug-ui-diagnostics__table td:nth-child(2) {
+  width: 26%;
+}
+
+.debug-ui-diagnostics__table th:nth-child(4),
+.debug-ui-diagnostics__table td:nth-child(4) {
+  width: 124px;
+}
+
+.debug-ui-diagnostics__table tbody th {
+  position: static;
+  z-index: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  background: transparent;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  user-select: auto;
+  vertical-align: middle;
+  white-space: normal;
+}
+
+.debug-ui-diagnostics__table tbody tr:last-child > th {
+  border-bottom: none;
+}
+
+.debug-ui-diagnostics__area {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.debug-ui-diagnostics__value {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.debug-ui-diagnostics__detail {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.debug-ui-diagnostics__status {
+  --debug-diagnostic-color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--debug-diagnostic-color);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.debug-ui-diagnostics__status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--debug-diagnostic-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--debug-diagnostic-color) 12%, transparent);
+}
+
+.debug-ui-diagnostics__status--ok {
+  --debug-diagnostic-color: var(--ok);
+}
+
+.debug-ui-diagnostics__status--warn {
+  --debug-diagnostic-color: var(--warn);
+}
+
+.debug-ui-diagnostics__status--error {
+  --debug-diagnostic-color: var(--danger);
+}
+
+@media (max-width: 560px) {
+  .debug-ui-diagnostics__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .debug-ui-diagnostics__actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .debug-ui-diagnostics .debug-ui-diagnostics__frame {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    contain: none;
+  }
+
+  .debug-ui-diagnostics .debug-ui-diagnostics__scroller {
+    max-height: none;
+    overflow: visible;
+    scrollbar-gutter: auto;
+  }
+
+  .debug-ui-diagnostics__table {
+    display: block;
+    min-width: 0;
+    table-layout: auto;
+  }
+
+  .debug-ui-diagnostics__table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .debug-ui-diagnostics__table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .debug-ui-diagnostics__table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "area status"
+      "signal status"
+      "value value";
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    overflow: hidden;
+  }
+
+  .debug-ui-diagnostics__table tbody tr > :nth-child(1) {
+    grid-area: area;
+    width: auto;
+    padding: 12px 12px 2px;
+  }
+
+  .debug-ui-diagnostics__table tbody tr > :nth-child(2) {
+    grid-area: signal;
+    width: auto;
+    padding: 2px 12px 10px;
+  }
+
+  .debug-ui-diagnostics__table tbody tr > :nth-child(3) {
+    grid-area: value;
+    width: auto;
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--border) !important;
+  }
+
+  .debug-ui-diagnostics__table tbody tr > :nth-child(4) {
+    grid-area: status;
+    align-self: center;
+    width: auto;
+    padding: 10px 12px 10px 8px;
+  }
+
+  .debug-ui-diagnostics__table tbody tr > td,
+  .debug-ui-diagnostics__table tbody tr > th {
+    border-bottom: 0;
+    background: transparent;
+    min-width: 0;
+  }
+
+  .debug-ui-diagnostics__table tbody .debug-ui-diagnostics__empty-row {
+    display: block;
+  }
+
+  .debug-ui-diagnostics__empty-row .data-table-empty-cell {
+    width: auto;
+    padding: 32px 16px !important;
+  }
+}
+
 /* Cron jobs: compact single-column rows with on-demand details. */
 .cron-job .list-title {
   font-weight: 600;
