@@ -121,35 +121,36 @@ export interface Settings {
   httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 }
 
-/** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
-function deepMergeSettings(base: Settings, overrides: Settings): Settings {
-  const result: Settings = { ...base };
+type SettingsObject = Record<string, unknown>;
 
-  for (const key of Object.keys(overrides) as (keyof Settings)[]) {
-    const overrideValue = overrides[key];
-    const baseValue = base[key];
+function isMergeableSettingsObject(value: unknown): value is SettingsObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
+function deepMergeSettings<T extends object>(base: T, overrides: Partial<T>): T {
+  const baseRecord = base as SettingsObject;
+  const overrideRecord = overrides as SettingsObject;
+  const result: SettingsObject = { ...baseRecord };
+
+  for (const key of Object.keys(overrideRecord)) {
+    const overrideValue = overrideRecord[key];
+    const baseValue = baseRecord[key];
 
     if (overrideValue === undefined) {
       continue;
     }
 
     // For nested objects, merge recursively
-    if (
-      typeof overrideValue === "object" &&
-      overrideValue !== null &&
-      !Array.isArray(overrideValue) &&
-      typeof baseValue === "object" &&
-      baseValue !== null &&
-      !Array.isArray(baseValue)
-    ) {
-      (result as Record<string, unknown>)[key] = { ...baseValue, ...overrideValue };
+    if (isMergeableSettingsObject(overrideValue) && isMergeableSettingsObject(baseValue)) {
+      result[key] = deepMergeSettings(baseValue, overrideValue);
     } else {
       // For primitives and arrays, override value wins
-      (result as Record<string, unknown>)[key] = overrideValue;
+      result[key] = overrideValue;
     }
   }
 
-  return result;
+  return result as T;
 }
 
 export type SettingsScope = "global" | "project";

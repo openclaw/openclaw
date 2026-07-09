@@ -1,6 +1,19 @@
 /** Tests session settings manager runtime overrides. */
 import { describe, expect, it } from "vitest";
-import { SettingsManager } from "./settings-manager.js";
+import {
+  InMemorySettingsStorage,
+  SettingsManager,
+  type Settings,
+  type SettingsScope,
+} from "./settings-manager.js";
+
+function writeSettings(
+  storage: InMemorySettingsStorage,
+  scope: SettingsScope,
+  settings: Partial<Settings>,
+): void {
+  storage.withLock(scope, () => JSON.stringify(settings, null, 2));
+}
 
 describe("SettingsManager runtime overrides", () => {
   it("preserves compaction overrides after global setting writes", async () => {
@@ -45,5 +58,44 @@ describe("SettingsManager runtime overrides", () => {
 
     expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/example"]);
     expect(settingsManager.getCompactionReserveTokens()).toBe(50_000);
+  });
+});
+
+describe("SettingsManager nested scope merge", () => {
+  it("merges retry.provider fields split across global and project scopes", () => {
+    const storage = new InMemorySettingsStorage();
+    writeSettings(storage, "global", {
+      retry: { provider: { timeoutMs: 30_000, maxRetries: 5 } },
+    });
+    writeSettings(storage, "project", {
+      retry: { provider: { maxRetryDelayMs: 5_000 } },
+    });
+
+    const settingsManager = SettingsManager.fromStorage(storage);
+
+    expect(settingsManager.getProviderRetrySettings()).toEqual({
+      timeoutMs: 30_000,
+      maxRetries: 5,
+      maxRetryDelayMs: 5_000,
+    });
+  });
+
+  it("merges retry.provider fields split across persisted and runtime overrides", () => {
+    const settingsManager = SettingsManager.inMemory({
+      retry: { provider: { timeoutMs: 30_000, maxRetries: 5 } },
+    });
+
+    settingsManager.applyOverrides({
+      retry: { provider: { maxRetryDelayMs: 5_000 } },
+    });
+    settingsManager.applyOverrides({
+      retry: { provider: { timeoutMs: 45_000 } },
+    });
+
+    expect(settingsManager.getProviderRetrySettings()).toEqual({
+      timeoutMs: 45_000,
+      maxRetries: 5,
+      maxRetryDelayMs: 5_000,
+    });
   });
 });
