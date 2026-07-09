@@ -255,6 +255,12 @@ export function buildNodesInventory(params: {
  * and auto-approved (silent local / trusted-CIDR), so the client re-pairs
  * without user action. Owner/QR-approved and pre-provenance duplicates keep
  * their per-entry Remove button but never enter the bulk sweep.
+ *
+ * Deliberate tradeoff: groups key on display metadata because no machine
+ * identity survives a key rotation. Two distinct same-named trusted-CIDR
+ * machines can therefore land in one group and the offline one may be swept —
+ * accepted because the sweep is admin-confirmed and a wrongly removed client
+ * is re-admitted automatically by the same auto-approve policy on reconnect.
  */
 export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesInventoryEntry[] {
   return groups.flatMap((group) =>
