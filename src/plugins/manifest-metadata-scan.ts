@@ -32,18 +32,31 @@ let manifestMetadataCache:
 
 function resolveUserPath(value: string, env: NodeJS.ProcessEnv): string {
   if (value === "~" || value.startsWith("~/")) {
-    const home = env.OPENCLAW_HOME ?? env.HOME ?? env.USERPROFILE ?? os.homedir();
+    const home =
+      normalizeTrimmedString(env.OPENCLAW_HOME) ??
+      normalizeTrimmedString(env.HOME) ??
+      normalizeTrimmedString(env.USERPROFILE) ??
+      os.homedir();
     return path.join(home, value.slice(2));
   }
   return path.resolve(value);
 }
 
-function resolveStateDir(env: NodeJS.ProcessEnv): string {
+// Exported so tests can assert the empty/whitespace-home fallback without
+// driving the full filesystem scan (which is module-level cached).
+export function resolveStateDir(env: NodeJS.ProcessEnv): string {
   const override = normalizeTrimmedString(env.OPENCLAW_STATE_DIR);
   if (override) {
     return resolveUserPath(override, env);
   }
-  const home = env.OPENCLAW_HOME ?? env.HOME ?? env.USERPROFILE ?? os.homedir();
+  // An empty/whitespace HOME or OPENCLAW_HOME is not nullish, so `??` would keep
+  // it and resolve the state dir relative to cwd. Normalize first so an empty
+  // value falls through to os.homedir(), matching the canonical home resolver.
+  const home =
+    normalizeTrimmedString(env.OPENCLAW_HOME) ??
+    normalizeTrimmedString(env.HOME) ??
+    normalizeTrimmedString(env.USERPROFILE) ??
+    os.homedir();
   return path.join(home, ".openclaw");
 }
 

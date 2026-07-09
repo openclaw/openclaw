@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
+import { listOpenClawPluginManifestMetadata, resolveStateDir } from "./manifest-metadata-scan.js";
 
 const tempRoots: string[] = [];
 
@@ -106,5 +106,32 @@ describe("listOpenClawPluginManifestMetadata", () => {
       hosts: ["api.openai.com"],
       hostSuffixes: [".api.openai.com"],
     });
+  });
+});
+
+describe("resolveStateDir empty/whitespace home fallback", () => {
+  // An empty or whitespace HOME/OPENCLAW_HOME is not nullish, so the previous
+  // `??` chain kept it and resolved the state dir relative to cwd instead of
+  // falling back to os.homedir().
+  it("falls back to os.homedir() when HOME is an empty string", () => {
+    const dir = resolveStateDir({ HOME: "" });
+    expect(path.isAbsolute(dir)).toBe(true);
+    expect(dir).toBe(path.join(os.homedir(), ".openclaw"));
+  });
+
+  it("falls back to os.homedir() when OPENCLAW_HOME is whitespace", () => {
+    const dir = resolveStateDir({ OPENCLAW_HOME: "   " });
+    expect(path.isAbsolute(dir)).toBe(true);
+    expect(dir).toBe(path.join(os.homedir(), ".openclaw"));
+  });
+
+  it("still honors a valid HOME (regression)", () => {
+    const dir = resolveStateDir({ HOME: "/home/someuser" });
+    expect(dir).toBe(path.join("/home/someuser", ".openclaw"));
+  });
+
+  it("honors OPENCLAW_STATE_DIR override even with empty HOME", () => {
+    const dir = resolveStateDir({ OPENCLAW_STATE_DIR: "/custom/state", HOME: "" });
+    expect(dir).toBe(path.resolve("/custom/state"));
   });
 });
