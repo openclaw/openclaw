@@ -6396,8 +6396,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect(generateTopicLabel).toHaveBeenCalled();
     });
     const call = generateTopicLabel.mock.calls[0]?.[0] as { userMessage: string };
-    expect(call.userMessage.length).toBeLessThanOrEqual(500);
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(call.userMessage)).toBe(false);
     expect(call.userMessage).toBe(base);
   });
 
