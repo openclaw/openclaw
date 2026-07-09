@@ -102,7 +102,8 @@ Example schema:
     "security": "deny",
     "ask": "on-miss",
     "askFallback": "deny",
-    "autoAllowSkills": false
+    "autoAllowSkills": false,
+    "denylist": [{ "pattern": "git push*--force*", "reason": "history rewrite" }]
   },
   "agents": {
     "main": {
@@ -209,6 +210,45 @@ automatically.
 Set globally under `tools.exec.commandHighlighting` or per agent under
 `agents.list[].tools.exec.commandHighlighting`.
 
+### `tools.exec.denylist`
+
+<ParamField path="denylist" type="{ pattern: string; reason?: string }[]">
+  Deny-over-allow STOP list. Any command matching a denylist `pattern`
+  **always** requires an explicit human approval decision, even at
+  `security=full` with `ask=off`, and even when an allowlist entry or a
+  durable `allow-always` grant would otherwise auto-run it. `reason` is
+  optional operator context shown with the prompt.
+</ParamField>
+
+Use it to force a human in the loop on a small set of dangerous commands
+(`git push --force`, `rm -rf` patterns, etc.) without giving up a broadly
+permissive default policy.
+
+**Two config layers, unioned (deny in either layer denies):**
+
+- `tools.exec.denylist` in `openclaw.json` (global, and per agent under
+  `agents.list[].tools.exec.denylist`).
+- `denylist` in the host approvals file `~/.openclaw/exec-approvals.json`
+  (`defaults`, `*`, and per-agent scopes).
+
+Entries are `{ pattern, reason? }`; `pattern` must be non-empty and is
+validated by `openclaw config validate`.
+
+**Matching semantics** (shared with the allowlist glob compiler):
+
+- `*` matches within a path segment (`[^/]*`), `**` matches across segments
+  (`.*`), `?` matches a single non-separator character (`[^/]`).
+- Both the full command and the command basename are screened, and the
+  inner payload of `bash -c "..."` wrappers is screened too.
+- If a command cannot be analyzed while a denylist is configured, it fails
+  closed (approval required), not open.
+
+**Precedence:** a denylist hit wins ahead of `ask=off`, `security=full`,
+allowlist matches, and durable allow-always trust, on **both** the gateway
+exec host and the node host (`system.run`, node denial reason
+`denylist-hit`). An explicit allow-once approval still clears a single hit;
+`security=deny` still denies overall.
+
 ## YOLO mode (no-approval)
 
 To run host exec without approval prompts, open **both** policy layers:
@@ -223,6 +263,14 @@ explicitly when a no-UI approval prompt should fall back to allow.
 | `tools.exec.security` | `full` on `gateway`/`node` |
 | `tools.exec.ask`      | `off`                      |
 | Host `askFallback`    | `full`                     |
+
+<Note>
+YOLO removes the routine prompt, but it does **not** override
+[`tools.exec.denylist`](#toolsexecdenylist). A command matching the denylist
+still forces an explicit human approval (or denial) even under
+`security=full` + `ask=off`. Keep a denylist configured if you want a
+hard STOP list to survive YOLO.
+</Note>
 
 <Warning>
 **Important distinctions:**
@@ -429,6 +477,14 @@ Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.
+
+<Note>
+The Exec approvals card currently edits policy and **allowlists** only. The
+`tools.exec.denylist` STOP list is configured in `openclaw.json` or the host
+`exec-approvals.json` file (see
+[`tools.exec.denylist`](#toolsexecdenylist)); it is not yet editable from the
+Control UI.
+</Note>
 
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or headless

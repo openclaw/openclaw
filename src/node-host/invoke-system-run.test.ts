@@ -1975,7 +1975,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(runCommand).not.toHaveBeenCalled();
         const eventCall = sendNodeEvent.mock.calls[0];
         expect(eventCall?.[1]).toBe("exec.denied");
-        expect((eventCall?.[2] as { reason?: string }).reason).toBe("denylist-hit");
+        expect((eventCall?.[2] as { reason?: string } | undefined)?.reason).toBe("denylist-hit");
         expectInvokeErrorMessage(sendInvokeResult, {
           message: "SYSTEM_RUN_DENIED: command matches exec denylist",
         });
@@ -2002,7 +2002,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(runCommand).not.toHaveBeenCalled();
       const eventCall = sendNodeEvent.mock.calls[0];
       expect(eventCall?.[1]).toBe("exec.denied");
-      expect((eventCall?.[2] as { reason?: string }).reason).toBe("denylist-hit");
+      expect((eventCall?.[2] as { reason?: string } | undefined)?.reason).toBe("denylist-hit");
       expectInvokeErrorMessage(sendInvokeResult, {
         message: "SYSTEM_RUN_DENIED: command matches exec denylist",
       });
