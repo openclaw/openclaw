@@ -202,6 +202,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
           page.locator('button[aria-label="Stop voice input"] .agent-chat__voice-activity').count(),
         )
         .toBe(1);
+      // Phone widths keep the pill wide enough for the 7-bar meter instead of
+      // collapsing it to the generic 44px square control size.
+      const pillBox = await page.getByRole("button", { name: "Stop voice input" }).boundingBox();
+      expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
         .poll(() =>
           page

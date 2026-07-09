@@ -3650,6 +3650,13 @@ openclaw-chat-page {
     height: 44px;
   }
 
+  /* Keep the live voice pill wide enough for its 7-bar meter; the generic
+     44px square above would crush it at phone widths. */
+  .chat-send-btn--voice-live {
+    width: auto;
+    min-width: 64px;
+  }
+
   .agent-chat__composer-shell {
     width: calc(100% - 8px);
     margin: 6px 4px calc(14px + var(--safe-area-bottom));
