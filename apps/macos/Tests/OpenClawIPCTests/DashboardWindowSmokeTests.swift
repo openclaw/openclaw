@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -41,6 +42,38 @@ struct DashboardWindowSmokeTests {
     @Test func `dashboard log string strips token fragment`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=sekret")) // pragma: allowlist secret
         #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
+    }
+
+    @Test func `dashboard native chrome clears both desktop sidebars`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let chromeScript = try #require(controller._testUserScripts.first {
+            $0.source.contains("openclaw-native-macos-chrome")
+        })
+
+        #expect(chromeScript.source.contains(".sidebar-shell"))
+        #expect(chromeScript.source.contains(".settings-sidebar__header"))
+        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
+    }
+
+    @Test func `dashboard titlebar hosts back and forward controls`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let accessories = try #require(controller.window?.titlebarAccessoryViewControllers)
+        let buttons = accessories.flatMap { accessory in
+            accessory.view.subviews.compactMap { $0 as? NSButton }
+        }
+        let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
+        let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
+        // Nothing to traverse on a fresh webview: both stay disabled until the
+        // back-forward list gains entries (the SPA pushes history entries).
+        #expect(!back.isEnabled)
+        #expect(!forward.isEnabled)
+        #expect(controller._testAllowsBackForwardGestures)
     }
 
     @Test func `dashboard failure state opens in dashboard window`() throws {

@@ -364,7 +364,7 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("disconnects the shared gateway and suppresses late gateway errors when startup fails before lifecycle begins", async () => {
+  it("disconnects the shared gateway and keeps a late error guard when startup fails before lifecycle begins", async () => {
     const disconnect = vi.fn();
     const emitter = new EventEmitter();
     const gateway = { emitter, disconnect, isConnected: false };
@@ -385,13 +385,10 @@ describe("monitorDiscordProvider", () => {
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(
-      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
-    ).toBe(true);
-    expectMockLogContains(
-      runtime.error,
-      "suppressed late gateway reconnect-exhausted error after dispose",
-    );
+    expect(emitter.listenerCount("error")).toBe(1);
+    expect(() =>
+      emitter.emit("error", new Error("late gateway error after cleanup")),
+    ).not.toThrow();
   });
 
   it("fails closed before lifecycle when Discord bot identity fetch rejects", async () => {
@@ -1041,6 +1038,15 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(details).toBe(" (retryAfter=3.2s, scope=route)");
+  });
+
+  it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {
+    const prefix = "a".repeat(798);
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      rawBody: `${prefix}😀tail`,
+    });
+
+    expect(details).toBe(` (body="${prefix}...)`);
   });
 
   it("formats rejected Discord deploy entries with command details", () => {

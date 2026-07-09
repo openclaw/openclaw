@@ -265,7 +265,7 @@ describe("describeImageWithModel", () => {
 
   it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
     getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "oc-sent-v1-0123456789abcdef01234567",
+      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
       source: "test",
       mode: "api-key",
     });
@@ -283,7 +283,7 @@ describe("describeImageWithModel", () => {
     });
 
     expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
-      "oc-sent-v1-0123456789abcdef01234567",
+      "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
       "MiniMax VLM request",
     );
     const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
@@ -1461,6 +1461,7 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      config: {},
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
@@ -1527,7 +1528,10 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({ githubToken: sourceSecret });
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: {},
+    });
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
     expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");

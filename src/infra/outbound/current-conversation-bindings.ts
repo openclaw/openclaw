@@ -188,10 +188,13 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
   return null;
 }
 
-function resolveChannelSupportsCurrentConversationBinding(channel: string): boolean {
+function resolveChannelSupportsCurrentConversationBinding(params: {
+  channel: string;
+  accountId: string;
+}): boolean {
   const normalized =
-    normalizeAnyChannelId(channel) ??
-    normalizeOptionalLowercaseString(normalizeConversationText(channel));
+    normalizeAnyChannelId(params.channel) ??
+    normalizeOptionalLowercaseString(normalizeConversationText(params.channel));
   if (!normalized) {
     return false;
   }
@@ -209,10 +212,37 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
-  if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
-    return true;
+  const bindingSupport = plugin?.conversationBindings;
+  if (bindingSupport?.supportsCurrentConversationBinding !== true) {
+    return false;
   }
-  return false;
+  return (
+    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: params.accountId }) ?? true
+  );
+}
+
+function supportsGenericCurrentConversationBinding(ref: {
+  channel: string;
+  accountId: string;
+}): boolean {
+  const normalized = normalizeConversationRef({
+    ...ref,
+    conversationId: "capability-check",
+  });
+  return resolveChannelSupportsCurrentConversationBinding({
+    channel: normalized.channel,
+    accountId: normalized.accountId,
+  });
+}
+
+function bindingRefFromId(bindingId: string): { channel: string; accountId: string } | null {
+  if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+    return null;
+  }
+  const [channel, accountId] = bindingId
+    .slice(CURRENT_BINDINGS_ID_PREFIX.length)
+    .split("\u241f", 2);
+  return channel && accountId ? { channel, accountId } : null;
 }
 
 /** Reports generic current-conversation binding support for plugin-owned channels. */
@@ -220,8 +250,7 @@ export function getGenericCurrentConversationBindingCapabilities(params: {
   channel: string;
   accountId: string;
 }): SessionBindingCapabilities | null {
-  void params.accountId;
-  if (!resolveChannelSupportsCurrentConversationBinding(params.channel)) {
+  if (!supportsGenericCurrentConversationBinding(params)) {
     return null;
   }
   return {
@@ -238,7 +267,12 @@ export async function bindGenericCurrentConversation(
 ): Promise<SessionBindingRecord | null> {
   const conversation = normalizeConversationRef(input.conversation);
   const targetSessionKey = input.targetSessionKey.trim();
-  if (!conversation.channel || !conversation.conversationId || !targetSessionKey) {
+  if (
+    !conversation.channel ||
+    !conversation.conversationId ||
+    !targetSessionKey ||
+    !supportsGenericCurrentConversationBinding(conversation)
+  ) {
     return null;
   }
   loadBindingsIntoMemory();
@@ -285,6 +319,9 @@ export async function bindGenericCurrentConversation(
 export function resolveGenericCurrentConversationBinding(
   ref: ConversationRef,
 ): SessionBindingRecord | null {
+  if (!supportsGenericCurrentConversationBinding(ref)) {
+    return null;
+  }
   return pruneExpiredBinding(buildConversationKey(ref));
 }
 
@@ -296,7 +333,11 @@ export function listGenericCurrentConversationBindingsBySession(
   const results: SessionBindingRecord[] = [];
   for (const key of bindingsByConversationKey.keys()) {
     const record = pruneExpiredBinding(key);
-    if (!record || record.targetSessionKey !== targetSessionKey) {
+    if (
+      !record ||
+      record.targetSessionKey !== targetSessionKey ||
+      !supportsGenericCurrentConversationBinding(record.conversation)
+    ) {
       continue;
     }
     results.push(record);
@@ -306,10 +347,11 @@ export function listGenericCurrentConversationBindingsBySession(
 
 /** Persists last-activity metadata for an existing generic current-conversation binding. */
 export function touchGenericCurrentConversationBinding(bindingId: string, at = Date.now()): void {
-  loadBindingsIntoMemory();
-  if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+  const bindingRef = bindingRefFromId(bindingId);
+  if (!bindingRef || !supportsGenericCurrentConversationBinding(bindingRef)) {
     return;
   }
+  loadBindingsIntoMemory();
   const key = bindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
   const record = pruneExpiredBinding(key);
   if (!record) {
@@ -329,11 +371,15 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
 export async function unbindGenericCurrentConversationBindings(
   input: SessionBindingUnbindInput,
 ): Promise<SessionBindingRecord[]> {
-  loadBindingsIntoMemory();
   const removed: SessionBindingRecord[] = [];
   const normalizedBindingId = input.bindingId?.trim();
   const normalizedTargetSessionKey = input.targetSessionKey?.trim();
   if (normalizedBindingId?.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+    const bindingRef = bindingRefFromId(normalizedBindingId);
+    if (!bindingRef || !supportsGenericCurrentConversationBinding(bindingRef)) {
+      return removed;
+    }
+    loadBindingsIntoMemory();
     const key = normalizedBindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
     const record = pruneExpiredBinding(key);
     if (record) {
@@ -346,9 +392,14 @@ export async function unbindGenericCurrentConversationBindings(
   if (!normalizedTargetSessionKey) {
     return removed;
   }
+  loadBindingsIntoMemory();
   for (const key of bindingsByConversationKey.keys()) {
     const record = pruneExpiredBinding(key);
-    if (!record || record.targetSessionKey !== normalizedTargetSessionKey) {
+    if (
+      !record ||
+      record.targetSessionKey !== normalizedTargetSessionKey ||
+      !supportsGenericCurrentConversationBinding(record.conversation)
+    ) {
       continue;
     }
     bindingsByConversationKey.delete(key);

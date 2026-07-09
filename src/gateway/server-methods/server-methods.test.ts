@@ -660,7 +660,6 @@ describe("waitForAgentJob", () => {
     expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
     agentJobTesting.resetAgentRunCache();
   });
-
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
@@ -824,6 +823,28 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("truncates display text without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(7);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `${prefix}😀tail` }],
+          timestamp: 1,
+        },
+      ],
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n...(truncated)...` }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("redacts base64 audio content blocks from chat history", () => {
     const data = Buffer.from("voice-bytes").toString("base64");
     const result = sanitizeChatHistoryMessages([

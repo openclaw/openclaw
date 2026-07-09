@@ -129,7 +129,7 @@ describe("streamOpenAICodexResponses transport", () => {
     const realToken = createJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "acct-sentinel" },
     });
-    const sentinel = "oc-sent-v1-0123456789abcdef01234567";
+    const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     configureAiTransportHost({
       resolveSecretSentinel: (value) => value.replaceAll(sentinel, realToken),
     });
