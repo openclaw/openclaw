@@ -1029,4 +1029,41 @@ describe("msteams monitor handler authz", () => {
     expect(ctx.SupplementalContext).toMatchObject({ quote: { body: "secret snippet…" } });
     expect(graphThreadMockState.fetchChatMessageText).not.toHaveBeenCalled();
   });
+
+  it("replaces a DM quote preview with the complete Graph message", async () => {
+    resetThreadMocks();
+    graphThreadMockState.fetchChatMessageText.mockResolvedValueOnce("complete quoted message");
+    const { deps } = createDeps({ channels: { msteams: { dmPolicy: "open" } } } as OpenClawConfig);
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "dm-quote-1",
+        text: "what about this?",
+        from: { id: "user-id", aadObjectId: "user-aad", name: "User" },
+        conversation: { id: "19:dm@thread.v2", conversationType: "personal" },
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="message-1">' +
+              '<strong itemprop="mri">Bot</strong>' +
+              '<p itemprop="preview">truncated preview…</p></blockquote>',
+          },
+        ],
+      }),
+    );
+
+    expect(deps.tokenProvider.getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+    expect(graphThreadMockState.fetchChatMessageText).toHaveBeenCalledWith(
+      "token",
+      "19:dm@thread.v2",
+      "message-1",
+    );
+    expect(recordFromMockCall(firstSettledDispatch().ctxPayload).SupplementalContext).toMatchObject(
+      {
+        quote: { id: "message-1", body: "complete quoted message", sender: "Bot" },
+      },
+    );
+  });
 });
