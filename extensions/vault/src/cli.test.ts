@@ -175,6 +175,52 @@ describe("vault CLI setup plan", () => {
     ).toThrow("Duplicate secret target path in Vault setup: models.providers.openai.apiKey");
   });
 
+  it("discovers a configured custom Vault provider alias for status", () => {
+    expect(
+      testing.resolveStatusProviderAlias({
+        secrets: {
+          providers: {
+            "corp-vault": {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "vault",
+                integrationId: "vault",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("corp-vault");
+  });
+
+  it("requires an explicit status alias when multiple Vault providers are configured", () => {
+    const config = {
+      secrets: {
+        providers: {
+          "corp-vault": {
+            source: "exec" as const,
+            pluginIntegration: {
+              pluginId: "vault",
+              integrationId: "vault",
+            },
+          },
+          "prod-vault": {
+            source: "exec" as const,
+            pluginIntegration: {
+              pluginId: "vault",
+              integrationId: "vault",
+            },
+          },
+        },
+      },
+    };
+
+    expect(() => testing.resolveStatusProviderAlias(config)).toThrow(
+      "Multiple Vault provider aliases are configured (corp-vault, prod-vault)",
+    );
+    expect(testing.resolveStatusProviderAlias(config, "prod-vault")).toBe("prod-vault");
+  });
+
   it("reports the packaged resolver path when the CLI is bundled", async () => {
     const baseUrl = pathToFileURL("/app/dist/index.js").href;
     const [, bundledPath] = testing.resolverScriptPathCandidates(baseUrl);

@@ -72,6 +72,7 @@ type RegisterVaultCommandsParams = {
 
 type StatusOptions = {
   json?: boolean;
+  providerAlias?: string;
 };
 
 type SetupOptions = {
@@ -173,6 +174,37 @@ function readProviderStatus(config: OpenClawConfig, providerAlias: string): Prov
     ...base,
     command: normalizeOptionalString(provider.command),
   };
+}
+
+function isVaultIntegrationProvider(value: unknown): boolean {
+  if (!isRecord(value) || value.source !== "exec" || !isRecord(value.pluginIntegration)) {
+    return false;
+  }
+  return (
+    value.pluginIntegration.pluginId === "vault" &&
+    value.pluginIntegration.integrationId === "vault"
+  );
+}
+
+function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: string): string {
+  const explicitAlias = normalizeOptionalString(requestedAlias);
+  if (explicitAlias) {
+    assertValidProviderAlias(explicitAlias);
+    return explicitAlias;
+  }
+  if (readProviderStatus(config, VAULT_PROVIDER_ALIAS).configured) {
+    return VAULT_PROVIDER_ALIAS;
+  }
+  const configuredAliases = Object.entries(config.secrets?.providers ?? {})
+    .filter(([, provider]) => isVaultIntegrationProvider(provider))
+    .map(([alias]) => alias)
+    .toSorted();
+  if (configuredAliases.length > 1) {
+    throw new Error(
+      `Multiple Vault provider aliases are configured (${configuredAliases.join(", ")}). Use --provider-alias <alias>.`,
+    );
+  }
+  return configuredAliases[0] ?? VAULT_PROVIDER_ALIAS;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -447,10 +479,11 @@ async function promptProviderSecrets(options: SetupOptions): Promise<ProviderSec
 }
 
 async function runStatus(config: OpenClawConfig, options: StatusOptions): Promise<void> {
-  const provider = readProviderStatus(config, VAULT_PROVIDER_ALIAS);
+  const providerAlias = resolveStatusProviderAlias(config, options.providerAlias);
+  const provider = readProviderStatus(config, providerAlias);
   const authMethod = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
   const result = {
-    providerAlias: VAULT_PROVIDER_ALIAS,
+    providerAlias,
     provider,
     resolverScript: await resolveResolverScriptPath(),
     vaultAddr: normalizeOptionalString(process.env.VAULT_ADDR),
@@ -523,6 +556,7 @@ export function registerVaultCommands(params: RegisterVaultCommandsParams): void
     .command("status")
     .description("Show Vault SecretRef provider status")
     .option("--json", "Print JSON status")
+    .option("--provider-alias <alias>", "Secret provider alias to inspect")
     .action((options: StatusOptions) => runStatus(params.config, options));
   vault
     .command("setup")
@@ -555,6 +589,7 @@ export const testing = {
   createModelApiKeyTarget,
   parseConfigTargetMappings,
   parseProviderKeyMappings,
+  resolveStatusProviderAlias,
   resolveResolverScriptPath,
   resolverScriptPathCandidates,
 };

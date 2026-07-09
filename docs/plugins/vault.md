@@ -135,6 +135,13 @@ Check what the current shell can see:
 openclaw vault status
 ```
 
+When more than one Vault-backed secret provider is configured, select one by
+alias:
+
+```bash
+openclaw vault status --provider-alias corp-vault
+```
+
 `openclaw vault status` never prints `VAULT_TOKEN`; it reports only whether the
 token, token file, and JWT file are set.
 
