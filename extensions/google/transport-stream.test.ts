@@ -1133,6 +1133,7 @@ describe("google transport stream", () => {
 
     expect(googleAuthMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      clientOptions: { transporterOptions: { timeout: 30_000 } },
     });
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
     expect(tokenFetchMock).not.toHaveBeenCalled();
@@ -1146,7 +1147,9 @@ describe("google transport stream", () => {
     vi.stubEnv("HOME", path.join(tempDir, "home"));
     vi.stubEnv("APPDATA", "");
     vi.useFakeTimers();
-    googleAuthGetAccessTokenMock.mockReturnValueOnce(new Promise(() => {}));
+    googleAuthGetAccessTokenMock
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValueOnce("ya29.recovered-token");
 
     const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(vi.fn());
     const refreshError = pendingRefresh.catch((error: unknown) => error);
@@ -1157,6 +1160,11 @@ describe("google transport stream", () => {
       name: "TimeoutError",
       message: "request timed out",
     });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).resolves.toEqual({
+      Authorization: "Bearer ya29.recovered-token",
+    });
+    expect(googleAuthMock).toHaveBeenCalledTimes(2);
+    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {

@@ -362,11 +362,17 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
         // It also caches tokens internally and refreshes before expiry.
         return new GoogleAuth({
           scopes: [GOOGLE_VERTEX_OAUTH_SCOPE],
+          // Best-effort cancellation for clients that use the shared transporter.
+          // WIF STS and GCE metadata need the owner-level deadline below.
+          clientOptions: {
+            transporterOptions: { timeout: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS },
+          },
         });
       }),
     };
   }
-  const auth = await cachedGoogleAuthClient.promise;
+  const authClient = cachedGoogleAuthClient;
+  const auth = await authClient.promise;
 
   const cached = cachedGoogleVertexAdcToken;
   if (cached && isGoogleVertexTokenFresh(cached.expiresAtMs)) {
@@ -375,13 +381,23 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
 
   // Some google-auth-library ADC implementations bypass the configured Gaxios
   // transporter, so this owner-level deadline also bounds STS and metadata paths.
-  const token = await withTimeout(
-    auth.getAccessToken(),
-    GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
-    {
+  let token: string | null | undefined;
+  try {
+    token = await withTimeout(auth.getAccessToken(), GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS, {
       createError: () => new DOMException("request timed out", "TimeoutError"),
-    },
-  );
+    });
+  } catch (error) {
+    // The dependency coalesces in-flight refreshes. Drop only this timed-out
+    // client so a recovered identity endpoint gets a fresh attempt next time.
+    if (
+      error instanceof DOMException &&
+      error.name === "TimeoutError" &&
+      cachedGoogleAuthClient === authClient
+    ) {
+      cachedGoogleAuthClient = undefined;
+    }
+    throw error;
+  }
   const normalized = normalizeOptionalString(token);
   if (!normalized) {
     throw new Error(
