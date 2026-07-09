@@ -709,7 +709,7 @@ export function createFollowupRunner(params: {
       const flushPendingFailedProgressDeliveries = async (): Promise<boolean> => {
         const deliveries = pendingFailedProgressDeliveries.splice(0);
         for (const deliver of deliveries) {
-          enqueueProgressDelivery(deliver);
+          void enqueueProgressDelivery(deliver);
         }
         await drainProgressDeliveries();
         return observedVisibleToolErrorProgress;

@@ -3851,7 +3851,7 @@ export async function dispatchReplyFromConfig(
             ),
           trackDispatchLifecycleWork,
         ),
-    ).catch(async (err) => {
+    ).catch(async (err: unknown) => {
       await flushPendingCommentaryProgress();
       await flushPendingFailedProgressDeliveries();
       throw err;
