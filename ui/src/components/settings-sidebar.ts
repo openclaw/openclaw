@@ -19,9 +19,8 @@ export type SettingsSidebarProps = {
   onExit: () => void;
   onNavigate: (routeId: RouteId) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
+  preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
 };
-
-const preloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
   const active = props.activeRouteId === routeId;
@@ -31,13 +30,13 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
       class="settings-sidebar__item ${active ? "settings-sidebar__item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @focus=${(event: Event) =>
-        scheduleRoutePreload(preloadTimers, routeId, event, props.onPreload, active)}
-      @blur=${(event: Event) => cancelRoutePreload(preloadTimers, event)}
+        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
+      @blur=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
       @pointerenter=${(event: Event) =>
-        scheduleRoutePreload(preloadTimers, routeId, event, props.onPreload, active)}
-      @pointerleave=${(event: Event) => cancelRoutePreload(preloadTimers, event)}
+        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
+      @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
       @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(preloadTimers, routeId, event, props.onPreload, active, true)}
+        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||

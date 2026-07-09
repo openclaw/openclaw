@@ -1993,6 +1993,9 @@ importers:
       '@create-markdown/preview':
         specifier: 2.0.3
         version: 2.0.3(shiki@4.3.0)
+      '@lit/context':
+        specifier: 1.1.6
+        version: 1.1.6
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0

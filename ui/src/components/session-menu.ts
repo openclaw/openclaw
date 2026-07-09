@@ -1,6 +1,7 @@
-import { LitElement, html, nothing, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
 export type SessionMenuData = {
@@ -33,11 +34,7 @@ const EMPTY_SESSION: SessionMenuData = {
   category: null,
 };
 
-class SessionMenu extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
   @property({ attribute: false }) x = 0;
   @property({ attribute: false }) y = 0;

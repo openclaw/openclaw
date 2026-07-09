@@ -2220,6 +2220,38 @@ describe("chat composer IME composition", () => {
     expect(onHistoryKeydown).not.toHaveBeenCalled();
   });
 
+  it("invalidates after handled input history navigation", () => {
+    const onRequestUpdate = vi.fn();
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up" as const,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
+    const container = renderChatView({ onHistoryKeydown, onRequestUpdate });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    const arrowEvent = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+
+    textarea.dispatchEvent(arrowEvent);
+
+    expect(arrowEvent.defaultPrevented).toBe(true);
+    expect(onHistoryKeydown).toHaveBeenCalledOnce();
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("does not force textarea resize during IME composition", () => {
     const container = renderChatView({});
     const textarea = requireElement(
