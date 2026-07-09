@@ -246,6 +246,75 @@ const ModelCompatSchema = z
     toolCallArgumentsEncoding: z.string().optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+    // Keys below close schema drift: they are runtime-supported compat fields
+    // that were present in ModelCompatConfig and model-registry.ts but missing
+    // from this Zod schema. Because the schema uses .strict(), any key not
+    // declared here is silently rejected during config validation.
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
+    cacheControlFormat: z.union([z.literal("anthropic")]).optional(),
+    zaiToolStream: z.boolean().optional(),
+    openRouterRouting: z
+      .object({
+        allow_fallbacks: z.boolean().optional(),
+        require_parameters: z.boolean().optional(),
+        data_collection: z.union([z.literal("deny"), z.literal("allow")]).optional(),
+        zdr: z.boolean().optional(),
+        enforce_distillable_text: z.boolean().optional(),
+        order: z.array(z.string()).optional(),
+        only: z.array(z.string()).optional(),
+        ignore: z.array(z.string()).optional(),
+        quantizations: z.array(z.string()).optional(),
+        sort: z
+          .union([
+            z.string(),
+            z.object({
+              by: z.string().optional(),
+              partition: z.union([z.string(), z.null()]).optional(),
+            }),
+          ])
+          .optional(),
+        max_price: z
+          .object({
+            prompt: z.union([z.number(), z.string()]).optional(),
+            completion: z.union([z.number(), z.string()]).optional(),
+            image: z.union([z.number(), z.string()]).optional(),
+            audio: z.union([z.number(), z.string()]).optional(),
+            request: z.union([z.number(), z.string()]).optional(),
+          })
+          .optional(),
+        preferred_min_throughput: z
+          .union([
+            z.number(),
+            z.object({
+              p50: z.number().optional(),
+              p75: z.number().optional(),
+              p90: z.number().optional(),
+              p99: z.number().optional(),
+            }),
+          ])
+          .optional(),
+        preferred_max_latency: z
+          .union([
+            z.number(),
+            z.object({
+              p50: z.number().optional(),
+              p75: z.number().optional(),
+              p90: z.number().optional(),
+              p99: z.number().optional(),
+            }),
+          ])
+          .optional(),
+      })
+      .optional(),
+    vercelGatewayRouting: z
+      .object({
+        only: z.array(z.string()).optional(),
+        order: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .strict()
   .optional();
