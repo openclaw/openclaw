@@ -17,8 +17,8 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
         self.manager
     }
 
-    // Compatibility witness for the shipped single-waiter protocol; app calls use the
-    // concurrent extension and its per-request continuation dictionary.
+    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
+    /// concurrent extension and its per-request continuation dictionary.
     var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
         get { self.locationContinuation }
         set { self.locationContinuation = newValue }
@@ -64,7 +64,8 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation].compactMap { $0 }
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
             self.locationRequestContinuations.removeAll()
             self.locationContinuation = nil
             if let latest = locations.last {
@@ -82,7 +83,8 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let errorCopy = error // Capture error for Sendable compliance
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation].compactMap { $0 }
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
             self.locationRequestContinuations.removeAll()
             self.locationContinuation = nil
             for continuation in continuations {

@@ -24,8 +24,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.manager
     }
 
-    // Compatibility witness for the shipped single-waiter protocol; app calls use the
-    // concurrent extension and its per-request continuation dictionary.
+    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
+    /// concurrent extension and its per-request continuation dictionary.
     var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
         get { self.locationContinuation }
         set { self.locationContinuation = newValue }
@@ -195,7 +195,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         let locs = locations
         Task { @MainActor in
             // Resolve all one-shot requests first so overlapping callers share this update.
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation].compactMap { $0 }
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
             self.locationRequestContinuations.removeAll()
             self.locationContinuation = nil
             for continuation in continuations {
@@ -215,7 +216,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let err = error
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation].compactMap { $0 }
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
             self.locationRequestContinuations.removeAll()
             self.locationContinuation = nil
             for continuation in continuations {
