@@ -1,6 +1,6 @@
 // Qa Lab UI render tests cover evidence gallery affordances.
 import { describe, expect, it } from "vitest";
-import { renderQaLabUi, type UiState } from "./ui-render.js";
+import { redactCaptureScalar, renderQaLabUi, type UiState } from "./ui-render.js";
 
 function evidenceState(overrides: Partial<UiState> = {}): UiState {
   return {
@@ -409,5 +409,36 @@ describe("QA Lab UI evidence render", () => {
 
     expect(html).toContain("[redacted]");
     expect(html).not.toContain("secret-token");
+  });
+});
+
+describe("redactCaptureScalar", () => {
+  it("keeps long capture previews UTF-16 safe when an emoji crosses the head boundary", () => {
+    const prefix = "a".repeat(279);
+    const value = `${prefix}😀${"b".repeat(200)}`;
+
+    const result = redactCaptureScalar(value);
+
+    expect(result).toContain(prefix);
+    expect(result).toContain("…");
+    expect(result).not.toContain("😀");
+    // A naive .slice(0, 280) would leave a dangling high surrogate at index 279.
+    expect(
+      Array.from(result).every((c) => c.charCodeAt(0) < 0xd800 || c.charCodeAt(0) > 0xdbff),
+    ).toBe(true);
+  });
+
+  it("keeps long capture previews UTF-16 safe when an emoji crosses the tail boundary", () => {
+    const suffix = "z".repeat(79);
+    const value = `${"a".repeat(350)}😀${suffix}`;
+
+    const result = redactCaptureScalar(value);
+
+    expect(result).toContain(suffix);
+    expect(result).toContain("…");
+    expect(result).not.toContain("😀");
+    expect(
+      Array.from(result).every((c) => c.charCodeAt(0) < 0xd800 || c.charCodeAt(0) > 0xdbff),
+    ).toBe(true);
   });
 });

@@ -7,6 +7,31 @@ import type {
   QaEvidenceProducerContextFile,
 } from "../../shared/evidence-gallery-types.js";
 
+/** Slices a UTF-16 string without returning dangling surrogate halves at either edge. */
+function sliceUtf16Safe(input: string, start: number, end?: number): string {
+  const len = input.length;
+  let from = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
+  let to = end === undefined ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
+  if (to <= from) {
+    return "";
+  }
+  const isHighSurrogate = (codeUnit: number) => codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+  const isLowSurrogate = (codeUnit: number) => codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
+  if (from > 0 && from < len) {
+    const codeUnit = input.charCodeAt(from);
+    if (isLowSurrogate(codeUnit) && isHighSurrogate(input.charCodeAt(from - 1))) {
+      from += 1;
+    }
+  }
+  if (to > 0 && to < len) {
+    const codeUnit = input.charCodeAt(to - 1);
+    if (isHighSurrogate(codeUnit) && isLowSurrogate(input.charCodeAt(to))) {
+      to -= 1;
+    }
+  }
+  return input.slice(from, to);
+}
+
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 type Conversation = {
@@ -560,7 +585,7 @@ function isSensitiveCaptureField(label: string): boolean {
   );
 }
 
-function redactCaptureScalar(value: string, label?: string): string {
+export function redactCaptureScalar(value: string, label?: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -572,7 +597,7 @@ function redactCaptureScalar(value: string, label?: string): string {
     return "[redacted]";
   }
   if (trimmed.length > 400) {
-    return `${trimmed.slice(0, 280)}\n…\n${trimmed.slice(-80)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 280)}\n…\n${sliceUtf16Safe(trimmed, -80)}`;
   }
   return trimmed;
 }
