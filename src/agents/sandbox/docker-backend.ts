@@ -68,19 +68,18 @@ function createDockerSandboxBackendHandle(params: {
       browser: true,
     },
     async buildExecSpec({ command, workdir, env, usePty }) {
+      const dockerExec = buildDockerExecArgs({
+        containerName: params.containerName,
+        command,
+        workdir: workdir ?? params.workdir,
+        env,
+        tty: usePty,
+      });
       return {
-        argv: [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: params.containerName,
-            command,
-            workdir: workdir ?? params.workdir,
-            env,
-            tty: usePty,
-          }),
-        ],
+        argv: ["docker", ...dockerExec.args],
         env: process.env,
-        stdinMode: usePty ? "pipe-open" : "pipe-closed",
+        stdin: dockerExec.stdin,
+        stdinMode: "pipe-open",
       };
     },
     runShellCommand(command) {

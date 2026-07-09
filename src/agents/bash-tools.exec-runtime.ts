@@ -759,22 +759,20 @@ export async function runExecProcess(opts: {
         usePty: opts.usePty,
       });
       sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+      const dockerExec = buildDockerExecArgs({
+        containerName: opts.sandbox.containerName,
+        command: execCommand,
+        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+        env: shellRuntimeEnv,
+        tty: opts.usePty,
+      });
       return {
         mode: "child" as const,
-        argv: backendExecSpec?.argv ?? [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: opts.sandbox.containerName,
-            command: execCommand,
-            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-            env: shellRuntimeEnv,
-            tty: opts.usePty,
-          }),
-        ],
+        argv: backendExecSpec?.argv ?? ["docker", ...dockerExec.args],
         env: backendExecSpec?.env ?? process.env,
-        stdinMode:
-          backendExecSpec?.stdinMode ??
-          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
+        // Pipe the command via stdin to prevent shell injection through -c.
+        stdin: dockerExec.stdin,
+        stdinMode: backendExecSpec?.stdinMode ?? ("pipe-open" as const),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
