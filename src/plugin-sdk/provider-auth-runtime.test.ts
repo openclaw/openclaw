@@ -144,7 +144,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 
-  it("preserves legacy permissive CORS behavior when no allowlist is passed", async () => {
+  it("does not set CORS headers when no origin allowlist is passed", async () => {
     const port = await getFreePort();
     const callback = providerAuthRuntime.waitForLocalOAuthCallback({
       expectedState: "state-1",
@@ -164,9 +164,10 @@ describe("plugin-sdk provider-auth-runtime", () => {
       },
     });
 
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("https://legacy.example");
-    expect(preflight.headers.get("access-control-allow-methods")).toContain("GET");
+    // Without an origin allowlist, CORS headers are not set to prevent
+    // arbitrary-origin reflection.
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("access-control-allow-private-network")).toBeNull();
 
     const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
     expect(response.status).toBe(200);
