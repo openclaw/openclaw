@@ -13,6 +13,7 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
@@ -54,6 +55,7 @@ type GeminiBatchOutputLine = {
 };
 
 const GEMINI_BATCH_MAX_REQUESTS = 50000;
+const GEMINI_BATCH_OUTPUT_MAX_BYTES = 256 * 1024 * 1024;
 function hashText(text: string): string {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
@@ -205,6 +207,7 @@ async function fetchGeminiBatchStatus(params: {
 async function fetchGeminiFileContent(params: {
   gemini: GeminiEmbeddingClient;
   fileId: string;
+  maxBytes?: number;
 }): Promise<string> {
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
@@ -220,7 +223,14 @@ async function fetchGeminiFileContent(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch file content failed");
       }
-      return await res.text();
+      const maxBytes = params.maxBytes ?? GEMINI_BATCH_OUTPUT_MAX_BYTES;
+      const buffer = await readResponseWithLimit(res, maxBytes, {
+        onOverflow: ({ size, maxBytes: limit }) =>
+          new Error(
+            `Gemini batch output file too large: ${size} bytes (limit: ${limit} bytes). Reduce batch size or increase the limit.`,
+          ),
+      });
+      return buffer.toString("utf8");
     },
   });
 }

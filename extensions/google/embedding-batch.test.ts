@@ -70,13 +70,13 @@ function singleRequest(): GeminiBatchRequest[] {
   ];
 }
 
-function makeOversizedResponse(): {
+function makeOversizedResponse(mib = 20): {
   response: Response;
   getReadCount: () => number;
   wasCanceled: () => boolean;
 } {
   const chunkSize = 1024 * 1024;
-  const chunkCount = 20; // 20 MiB — over 16 MiB cap
+  const chunkCount = mib;
   let readCount = 0;
   let canceled = false;
   return {
@@ -197,6 +197,53 @@ describe("Google embedding-batch bounded JSON reads", () => {
 
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("bounds oversized file download JSONL response and cancels the stream", async () => {
+    // 257 MiB exceeds the 256 MiB GEMINI_BATCH_OUTPUT_MAX_BYTES cap.
+    const streamed = makeOversizedResponse(257);
+    let statusCalled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = fetchInputUrl(input);
+        if (url.includes("/upload/")) {
+          return jsonResponse({ name: "files/f-ok" });
+        }
+        if (url.includes(":asyncBatchEmbedContent")) {
+          return jsonResponse({ name: "batches/b-0", state: "PENDING" });
+        }
+        if (url.includes("/batches/") && !statusCalled) {
+          statusCalled = true;
+          return jsonResponse({
+            name: "batches/b-0",
+            state: "SUCCEEDED",
+            outputConfig: { file: "files/out-0" },
+          });
+        }
+        if (url.includes(":download")) {
+          return streamed.response;
+        }
+        return new Response("unexpected", { status: 500 });
+      }),
+    );
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 50,
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow(/Gemini batch output file too large/);
+
+    // The overflow was detected at the 257th chunk (256 MiB cap reached).
+    // readResponseWithLimit cancelled the reader; the cap prevented unbounded
+    // reading past the limit.
+    expect(streamed.getReadCount()).toBe(257);
   });
 
   it("parses small responses on all three JSON paths correctly", async () => {
