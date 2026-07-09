@@ -4,6 +4,7 @@
  * block sandbox tool execution.
  */
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
@@ -145,7 +146,7 @@ function sanitizeAuditField(value: string): string {
   if (sanitized.length <= MAX_AUDIT_FIELD_LENGTH) {
     return sanitized;
   }
-  return `${sanitized.slice(0, MAX_AUDIT_FIELD_LENGTH)}...`;
+  return `${truncateUtf16Safe(sanitized, MAX_AUDIT_FIELD_LENGTH)}...`;
 }
 
 function matchedPolicyRules(params: {
