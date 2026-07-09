@@ -1,4 +1,5 @@
 // Codex plugin module implements event projector behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -3066,7 +3067,7 @@ function truncateToolTranscriptText(text: string): string {
   if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  return `${truncateUtf16Safe(text, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {
