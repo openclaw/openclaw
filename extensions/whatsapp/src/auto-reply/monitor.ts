@@ -28,6 +28,7 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
+import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -221,6 +222,10 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  const reconnectCatchUpWindowMs = Math.min(
+    Math.max(messageTimeoutMs, 60_000),
+    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+  );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
@@ -302,7 +307,6 @@ export async function monitorWebChannel(
               baseMentionConfig,
               account,
             });
-
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -314,6 +318,13 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: inboundDebounceMs,
+              appendReplyWindow: connectionLocal.openedAfterRecentInbound
+                ? {
+                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
+                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
+                    maxAgeMs: reconnectCatchUpWindowMs,
+                  }
+                : undefined,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),

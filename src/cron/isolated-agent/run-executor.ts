@@ -25,11 +25,13 @@ import {
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
+  classifyEmbeddedAgentRunResultForModelFallback,
   ensureSelectedAgentHarnessPlugin,
   getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
@@ -102,7 +104,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
 }
 
 /** Detects single-line cron prompts that look like shell commands or command invocations. */
-export function isCommandStyleCronMessage(message: string): boolean {
+function isCommandStyleCronMessage(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed || trimmed.includes("\n")) {
     return false;
@@ -339,6 +341,9 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());

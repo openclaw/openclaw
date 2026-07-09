@@ -158,6 +158,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `nonSecretAuthMarkers`               | No       | `string[]`                   | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                                     |
 | `commandAliases`                     | No       | `object[]`                   | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                                                     |
 | `providerAuthEnvVars`                | No       | `Record<string, string[]>`   | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                                                      |
+| `providerUsageAuthEnvVars`           | No       | `Record<string, string[]>`   | Usage/billing-only provider credentials. OpenClaw uses these names for usage discovery and secret scrubbing but never for inference auth.                                                                                                                |
 | `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                               |
 | `channelEnvVars`                     | No       | `Record<string, string[]>`   | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                                                 |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                            |
@@ -404,7 +405,12 @@ Planner diagnostics can distinguish explicit activation hints from manifest owne
 
 ## qaRunners reference
 
-Use `qaRunners` when a plugin contributes one or more transport runners beneath the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin runtime still owns actual CLI registration through a lightweight `runtime-api.ts` surface that exports `qaRunnerCliRegistrations`.
+Use `qaRunners` when a plugin contributes one or more transport runners beneath
+the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
+runtime still owns actual CLI registration through a lightweight
+`runtime-api.ts` surface that exports matching `qaRunnerCliRegistrations`. An
+optional `adapterFactory` exposes the transport to shared QA scenarios without
+changing the registered command's runner.
 
 ```json
 {
@@ -421,6 +427,9 @@ Use `qaRunners` when a plugin contributes one or more transport runners beneath 
 | ------------- | -------- | -------- | ------------------------------------------------------------------ |
 | `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
 | `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
+
+The `adapterFactory` id must match `commandName`. Do not export registrations
+for commands absent from the manifest.
 
 ## setup reference
 
@@ -457,6 +466,8 @@ Top-level `cliBackends` stays valid and continues to describe CLI inference back
 When present, `setup.providers` and `setup.cliBackends` are the preferred descriptor-first lookup surface for setup discovery. If the descriptor only narrows the candidate plugin and setup still needs richer setup-time runtime hooks, set `requiresRuntime: true` and keep `setup-api` in place as the fallback execution path.
 
 OpenClaw also includes `setup.providers[].envVars` in generic provider auth and env-var lookups. `providerAuthEnvVars` remains supported through a compatibility adapter during the deprecation window, but non-bundled plugins that still use it receive a manifest diagnostic. New plugins should put setup/status env metadata on `setup.providers[].envVars`.
+
+Use `providerUsageAuthEnvVars` when a billing or organization-level credential must activate `resolveUsageAuth` without becoming an inference credential. These names join workspace dotenv blocking, ACP child-process stripping, sandbox secret filtering, and broad secret scrubbing. The provider runtime still reads and classifies the value inside `resolveUsageAuth`.
 
 OpenClaw can also derive simple setup choices from `setup.providers[].authMethods` when no setup entry is available, or when `setup.requiresRuntime: false` declares setup runtime unnecessary. Explicit `providerAuthChoices` entries stay preferred for custom labels, CLI flags, onboarding scope, and assistant metadata.
 
@@ -549,6 +560,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "webContentExtractors": ["firecrawl"],
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["gemini"],
+    "usageProviders": ["acme-ai"],
     "migrationProviders": ["hermes"],
     "gatewayMethodDispatch": ["authenticated-request"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
@@ -578,6 +590,7 @@ Each list is optional:
 | `webContentExtractors`           | `string[]` | Web-page content-extraction provider ids this plugin owns.                                                                           |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
@@ -589,6 +602,8 @@ Installed plugins that need the host-trusted pre-tool policy tier must declare e
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare `contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
+
+Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot` should declare each auto-discovered provider id in `contracts.usageProviders`. Usage discovery reads this contract before loading runtime code, then verifies both hooks after loading only the declared owners.
 
 General embedding providers should declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. Use the general contract for reusable vector generation, including providers consumed by memory search. `contracts.memoryEmbeddingProviders` is deprecated memory-specific compatibility and remains only while existing providers migrate to the generic embedding provider seam.
 
@@ -939,6 +954,12 @@ Provider fields:
 ## providerEndpoints reference
 
 Use `providerEndpoints` for endpoint classification that generic request policy must know before provider runtime loads. Core still owns the meaning of each `endpointClass`; plugin manifests own the host and base URL metadata.
+
+Officially externalized provider plugins are excluded from the core dist, so
+their manifests are invisible until installed. Their `providerEndpoints` must
+also be mirrored in `scripts/lib/official-external-provider-catalog.json` so
+endpoint classification keeps working without the plugin; a contract test
+enforces the mirror.
 
 Endpoint fields:
 

@@ -1,5 +1,5 @@
 // Verifies plugin loading needed before agent harness selection.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,7 +28,12 @@ vi.mock("../../plugins/activation-planner.js", () => ({
 describe("ensureSelectedAgentHarnessPlugin", () => {
   let ensureSelectedAgentHarnessPlugin: typeof import("./runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ ensureSelectedAgentHarnessPlugin } = await import("./runtime-plugin.js"));
+  });
+
+  beforeEach(() => {
     mocks.ensurePluginRegistryLoaded.mockReset();
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
@@ -67,8 +72,6 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       ({ pluginIds }: { pluginIds: readonly string[] }) =>
         pluginIds.filter((pluginId) => pluginId === "memory-core"),
     );
-    vi.resetModules();
-    ({ ensureSelectedAgentHarnessPlugin } = await import("./runtime-plugin.js"));
   });
 
   it("loads Codex and the provider owner when an explicit runtime override forces the Codex harness", async () => {

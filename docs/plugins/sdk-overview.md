@@ -187,6 +187,12 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
 
+Telegram interactive handlers can return `{ submitText }` to route text through
+Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
+the callback button when inbound policy skips the text or processing fails, so
+the user can retry after the blocking condition changes. This result field is
+Telegram-specific; other channels keep their own interactive result contracts.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host
@@ -202,7 +208,7 @@ plugins.
 | `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                                           |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
 | `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
@@ -210,6 +216,28 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+
+A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
+plugins' tab descriptors are advertised to dashboard clients in the gateway
+hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
+Bundled plugins may ship a first-class dashboard view for their tab; other
+plugins can set `path` to a plugin HTTP route (see
+`api.registerHttpRoute(...)`) that the dashboard renders in a sandboxed frame.
+`icon` is a dashboard icon name hint, `group` picks the sidebar section
+(`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
+hides the tab from connections lacking those operator scopes:
+
+```typescript
+api.session.controls.registerControlUiDescriptor({
+  surface: "tab",
+  id: "logbook",
+  label: "Logbook",
+  description: "Your day as a timeline, built from screen snapshots.",
+  icon: "sun",
+  group: "control",
+  requiredScopes: ["operator.write"],
+});
+```
 
 Use the grouped namespaces for new plugin code:
 

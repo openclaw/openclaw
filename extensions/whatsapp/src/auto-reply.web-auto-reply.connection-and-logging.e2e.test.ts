@@ -213,6 +213,52 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("widens append catch-up only after reconnecting a recently active listener", async () => {
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep: vi.fn(async () => {}),
+      messageTimeoutMs: 30 * 60_000,
+    });
+
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
+    expect(
+      (
+        mockCallArg(scripted.listenerFactory, 0, 0) as {
+          appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+        }
+      ).appendReplyWindow,
+    ).toBeUndefined();
+
+    await sendWebDirectInboundMessage({
+      onMessage: requireOnMessage(scripted.getOnMessage()),
+      body: "hi before reconnect",
+      from: "+1",
+      to: "+2",
+      id: "active-before-reconnect",
+      spies: createWebInboundDeliverySpies(),
+    });
+
+    const reconnectStartedAt = Date.now();
+    scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
+
+    const appendReplyWindow = (
+      mockCallArg(scripted.listenerFactory, 1, 0) as {
+        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+      }
+    ).appendReplyWindow;
+    expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
+    expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
+    expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
+    expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
+
+    controller.abort();
+    scripted.resolveClose(1, { status: 499, isLoggedOut: false, error: "aborted" });
+    await run;
+  });
+
   it("retries opening-phase Boom 428 through the reconnect policy", async () => {
     const boom428 = {
       output: {

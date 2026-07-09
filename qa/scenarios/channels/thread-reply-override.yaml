@@ -1,0 +1,68 @@
+title: Matrix thread reply override
+
+scenario:
+  id: thread-reply-override
+  surface: channels
+  coverage:
+    primary:
+      - channels.threads
+  objective: Verify Matrix threadReplies=always converts a top-level inbound message into a native threaded reply.
+  gatewayConfigPatch:
+    channels:
+      matrix:
+        accounts:
+          $selectedAccount:
+            threadReplies: always
+  successCriteria:
+    - A top-level Matrix inbound message receives the requested marker.
+    - The outbound message carries the triggering inbound message as its normalized thread id.
+  docsRefs:
+    - docs/channels/matrix.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/matrix/src/matrix/monitor/threads.ts
+    - extensions/qa-matrix/src/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: matrix
+    summary: Require the canonical Matrix adapter to surface the native m.thread relation through threadId.
+    config:
+      requiredChannelDriver: live
+      conversationId: main
+      marker: QA-MATRIX-THREAD-OVERRIDE-OK
+
+flow:
+  steps:
+    - name: exposes the native thread override relation
+      actions:
+        - assert:
+            expr: transport.id === 'matrix'
+            message: Matrix thread reply override requires the live Matrix adapter
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Reply exactly: ${config.marker}`"
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            textIncludes:
+              ref: config.marker
+            threadId:
+              expr: inbound.id
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+          saveAs: outbound
+        - assert:
+            expr: outbound.threadId === inbound.id
+            message:
+              expr: "`expected native Matrix thread relation to ${inbound.id}, got ${outbound.threadId ?? '<none>'}`"
+      detailsExpr: "`${outbound.threadId}: ${outbound.text}`"

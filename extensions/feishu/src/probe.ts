@@ -18,7 +18,7 @@ const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
 const MAX_PROBE_CACHE_SIZE = 64;
 export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
-export type ProbeFeishuOptions = {
+type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
 };

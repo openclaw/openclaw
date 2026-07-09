@@ -186,7 +186,7 @@ enum RemoteGatewayProbe {
             let sshResult = await ShellExecutor.run(
                 command: sshCommand,
                 cwd: nil,
-                env: nil,
+                env: CommandResolver.sshEnvironment(),
                 timeout: 8)
             guard sshResult.ok else {
                 return .failed(self.formatSSHFailure(sshResult, target: settings.target))

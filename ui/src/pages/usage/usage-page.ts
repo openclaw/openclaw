@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -24,14 +24,18 @@ import {
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
 import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
   query: {
     startDate: string;
     endDate: string;
@@ -41,6 +45,7 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
+  providerUsageSummary: ProviderUsageSummary | null;
   error: string | null;
 };
 
@@ -77,12 +82,8 @@ function toErrorMessage(error: unknown): string {
   return "request failed";
 }
 
-export class UsagePage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class UsagePage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: UsageRouteData;
@@ -90,6 +91,7 @@ export class UsagePage extends LitElement {
   @state() private usageLoading = true;
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
+  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -132,36 +134,34 @@ export class UsagePage extends LitElement {
   private logsRequestId = 0;
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
-  private subscriptions: Array<() => void> = [];
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private hasBoundGatewaySource = false;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        const cleanup = gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot));
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.subscriptions = [
-      this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-      this.context.agents.subscribe(() => this.requestUpdate()),
-    ];
-    this.applyGatewaySnapshot(this.context.gateway.snapshot, true);
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
-    }
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("routeData")) {
       this.ensureInitialData();
     }
   }
 
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
+    this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
     this.invalidateRequests();
@@ -170,13 +170,13 @@ export class UsagePage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, initial = false) {
-    const clientChanged = snapshot.client !== this.client;
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
+    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     const becameConnected = snapshot.connected && !this.connected;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
 
-    if (clientChanged && !initial) {
+    if (clientChanged) {
       this.resetForClientChange();
     }
     if (!snapshot.connected || !snapshot.client) {
@@ -199,8 +199,11 @@ export class UsagePage extends LitElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    const gateway = this.context.gateway.snapshot;
-    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       this.usageLoading = false;
       return;
@@ -213,6 +216,7 @@ export class UsagePage extends LitElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
+    this.providerUsageSummary = data.providerUsageSummary;
     this.usageError = data.error;
     this.usageLoading = false;
   }
@@ -233,9 +237,12 @@ export class UsagePage extends LitElement {
   private resetForClientChange() {
     this.clearDateDebounce();
     this.invalidateRequests();
-    this.routeDataEnabled = false;
+    if (this.routeDataInitialized) {
+      this.routeDataEnabled = false;
+    }
     this.usageResult = null;
     this.usageCostSummary = null;
+    this.providerUsageSummary = null;
     this.usageError = null;
     this.usageAgentId = null;
     this.clearSelectionsAndDetails();
@@ -301,7 +308,7 @@ export class UsagePage extends LitElement {
     this.usageError = null;
     try {
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
-      const [sessionsResult, costSummary] = await Promise.all([
+      const [sessionsResult, costSummary, providerUsageSummary] = await Promise.all([
         requestSessionUsage(client, { startDate, endDate, agentId, scope, timeZone }),
         client.request<CostUsageSummary>("usage.cost", {
           startDate,
@@ -309,12 +316,14 @@ export class UsagePage extends LitElement {
           ...agentScopeParams,
           ...buildSessionUsageDateParams(timeZone),
         }),
+        client.request<ProviderUsageSummary>("usage.status").catch(() => null),
       ]);
       if (!this.isCurrentRequest(requestId, client)) {
         return;
       }
       this.usageResult = sessionsResult;
       this.usageCostSummary = costSummary;
+      this.providerUsageSummary = providerUsageSummary;
     } catch (error) {
       if (!this.isCurrentRequest(requestId, client)) {
         return;
@@ -465,6 +474,7 @@ export class UsagePage extends LitElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
+        providerUsage: this.providerUsageSummary?.providers ?? [],
       },
       filters: {
         startDate: this.usageStartDate,

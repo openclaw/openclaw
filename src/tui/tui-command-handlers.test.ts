@@ -1,4 +1,5 @@
 // Covers TUI slash command handlers and backend call wiring.
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
@@ -16,9 +17,19 @@ type SelectableOverlay = {
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
-type SetEmptySessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
+
+function createOverlayHandle(): OverlayHandle {
+  return {
+    hide: vi.fn(),
+    setHidden: vi.fn(),
+    isHidden: vi.fn(() => false),
+    focus: vi.fn(),
+    unfocus: vi.fn(),
+    isFocused: vi.fn(() => true),
+  };
+}
 
 async function flushAsyncSelect() {
   await new Promise<void>((resolve) => {
@@ -69,11 +80,11 @@ function createHarness(params?: {
   listSessions?: ReturnType<typeof vi.fn>;
   listModels?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
+  createSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runGoalCommand?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
-  setEmptySession?: SetEmptySessionMock;
   loadHistory?: LoadHistoryMock;
   refreshSessionInfo?: ReturnType<typeof vi.fn>;
   applySessionInfoFromPatch?: ReturnType<typeof vi.fn>;
@@ -100,11 +111,15 @@ function createHarness(params?: {
   const listSessions = params?.listSessions ?? vi.fn().mockResolvedValue({ sessions: [] });
   const listModels = params?.listModels ?? vi.fn().mockResolvedValue([]);
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
+  const createSession =
+    params?.createSession ??
+    vi.fn().mockImplementation(async (opts: { key: string }) => ({
+      ok: true,
+      key: `agent:main:${opts.key}`,
+    }));
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
-  const setEmptySession =
-    params?.setEmptySession ?? (vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock);
   const addUser = vi.fn();
   const addPendingUser = vi.fn();
   const dropPendingUser = vi.fn();
@@ -123,7 +138,8 @@ function createHarness(params?: {
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
   const forgetLocalRunId = vi.fn();
   const forgetLocalBtwRunId = vi.fn();
-  const openOverlay = vi.fn();
+  const overlayHandle = createOverlayHandle();
+  const openOverlay = vi.fn(() => overlayHandle);
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
   const abortActive =
@@ -146,13 +162,14 @@ function createHarness(params?: {
     sessionInfo: {},
   };
 
-  const { handleCommand, openSessionSelector } = createCommandHandlers({
+  const { handleCommand, sendMessage, openSessionSelector } = createCommandHandlers({
     client: {
       sendChat,
       getGatewayStatus,
       listSessions,
       listModels,
       patchSession,
+      createSession,
       resetSession,
       runGoalCommand,
     } as never,
@@ -174,7 +191,6 @@ function createHarness(params?: {
     refreshSessionInfo: refreshSessionInfo as never,
     loadHistory,
     setSession,
-    setEmptySession,
     refreshAgents: vi.fn(),
     abortActive,
     setActivityStatus,
@@ -194,18 +210,20 @@ function createHarness(params?: {
 
   return {
     handleCommand,
+    sendMessage,
     getGatewayStatus,
     listSessions,
     listModels,
     sendChat,
     openSessionSelector,
     openOverlay,
+    overlayHandle,
     closeOverlay,
     patchSession,
+    createSession,
     resetSession,
     runGoalCommand,
     setSession,
-    setEmptySession,
     addUser,
     addPendingUser,
     dropPendingUser,
@@ -532,7 +550,7 @@ describe("tui command handlers", () => {
   });
 
   it("sends the selected context mode through the gateway command path", async () => {
-    const { handleCommand, sendChat, openOverlay, closeOverlay } = createHarness();
+    const { handleCommand, sendChat, openOverlay, closeOverlay, overlayHandle } = createHarness();
 
     await handleCommand("/context");
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
@@ -544,6 +562,7 @@ describe("tui command handlers", () => {
       message: "/context detail",
     });
     expect(closeOverlay).toHaveBeenCalledTimes(1);
+    expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
   });
 
   it("forwards /context list directly", async () => {
@@ -933,7 +952,10 @@ describe("tui command handlers", () => {
   it("creates unique session for /new and resets shared session for /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
     const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
-    const setEmptySessionMock = vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock;
+    const createSessionMock = vi.fn().mockResolvedValue({
+      ok: true,
+      key: "agent:main:tui-canonical",
+    });
     const applySessionMutationResult = vi.fn().mockReturnValue(true);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const resetResult = {
@@ -944,7 +966,8 @@ describe("tui command handlers", () => {
     const { handleCommand, resetSession } = createHarness({
       loadHistory,
       setSession: setSessionMock,
-      setEmptySession: setEmptySessionMock,
+      createSession: createSessionMock,
+      currentSessionId: "old-session",
       applySessionMutationResult,
       refreshSessionInfo,
       resetSession: vi.fn().mockResolvedValue(resetResult),
@@ -954,24 +977,121 @@ describe("tui command handlers", () => {
     await handleCommand("/reset");
 
     // /new creates a unique session key (isolates TUI client) (#39217)
-    expect(setSessionMock).not.toHaveBeenCalled();
-    expect(setEmptySessionMock).toHaveBeenCalledTimes(1);
-    const newSessionKey = firstMockArg(setEmptySessionMock, "setEmptySession") as
-      | string
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
+    const createOptions = firstMockArg(createSessionMock, "createSession") as
+      | { key?: string; agentId?: string; parentSessionKey?: string }
       | undefined;
-    if (!newSessionKey) {
-      throw new Error("expected /new to set a TUI session key");
+    if (!createOptions?.key) {
+      throw new Error("expected /new to create a TUI session key");
     }
-    expect(newSessionKey.startsWith("tui-")).toBe(true);
-    const uuidParts: string[] = newSessionKey.slice("tui-".length).split("-");
+    expect(createOptions.agentId).toBe("main");
+    expect(createOptions.parentSessionKey).toBe("agent:main:main");
+    expect(createOptions.key.startsWith("tui-")).toBe(true);
+    const uuidParts: string[] = createOptions.key.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
     expect(uuidParts.every((part) => /^[0-9a-f]+$/.test(part))).toBe(true);
+    expect(setSessionMock).toHaveBeenCalledWith("agent:main:tui-canonical");
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset", undefined);
     expect(applySessionMutationResult).toHaveBeenCalledWith(resetResult);
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "omits an unknown parent for the first session",
+      currentSessionKey: "agent:main:main",
+      currentAgentId: "main",
+      currentSessionId: null,
+      expectedParent: undefined,
+    },
+    {
+      name: "attributes a global session to the selected agent",
+      currentSessionKey: "global",
+      currentAgentId: "work",
+      currentSessionId: "global-session",
+      expectedParent: "global",
+    },
+  ])("$name", async ({ currentSessionKey, currentAgentId, currentSessionId, expectedParent }) => {
+    const createSession = vi.fn().mockResolvedValue({ ok: true, key: "agent:work:tui-next" });
+    const { handleCommand } = createHarness({
+      createSession,
+      currentSessionKey,
+      currentAgentId,
+      currentSessionId,
+    });
+
+    await handleCommand("/new");
+
+    expect(createSession).toHaveBeenCalledWith({
+      key: expect.stringMatching(/^tui-/),
+      agentId: currentAgentId,
+      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+    });
+  });
+
+  it.each([
+    {
+      activeChatRunId: "active-run",
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: false,
+      activityStatus: "running",
+    },
+    {
+      activeChatRunId: null,
+      pendingChatRunId: "pending-run",
+      pendingOptimisticUserMessage: false,
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: true,
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: false,
+      activityStatus: "finishing context",
+    },
+  ])("blocks /new while the current session lifecycle is unfinished", async (runState) => {
+    const createSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ createSession, ...runState });
+
+    await handleCommand("/new");
+
+    expect(createSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
+  });
+
+  it("serializes input until /new adopts the created session", async () => {
+    let resolveCreate: ((value: { ok: true; key: string }) => void) | undefined;
+    const createSession = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ ok: true; key: string }>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { handleCommand, sendMessage, sendChat, addSystem } = createHarness({ createSession });
+
+    const creating = handleCommand("/new");
+    await Promise.resolve();
+    await sendMessage("must not reach parent");
+    await handleCommand("/new");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("session change in progress; message not sent");
+    expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
+
+    if (!resolveCreate) {
+      throw new Error("expected pending session creation");
+    }
+    resolveCreate({ ok: true, key: "agent:main:tui-created" });
+    await creating;
   });
 
   it("reloads history after /reset when the backend does not return a session entry", async () => {
@@ -1086,10 +1206,10 @@ describe("tui command handlers", () => {
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
-    const setEmptySession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
+    const createSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
     const resetSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
     const { handleCommand, addSystem } = createHarness({
-      setEmptySession,
+      createSession,
       resetSession,
     });
 

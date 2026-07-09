@@ -7,6 +7,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
@@ -22,6 +23,20 @@ import {
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+
+export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
+  if (event.detail === 0) {
+    return true;
+  }
+  const target = event.currentTarget;
+  const selection = window.getSelection();
+  if (!(target instanceof Node) || !selection || selection.isCollapsed) {
+    return true;
+  }
+  return ![selection.anchorNode, selection.focusNode].some(
+    (node) => node !== null && target.contains(node),
+  );
+}
 
 function formatToolOutputForSidebar(text: string): string {
   if (isMarkdownBlockArtText(text)) {
@@ -108,14 +123,87 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
+// Sandboxed widget documents report their content height via postMessage so the
+// preview iframe can fit short/tall widgets. The event source must be one of our
+// preview frames and the height is clamped, so widget code can only resize its
+// own frame within the same bounds the preview contract allows.
+const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
+const WIDGET_FRAME_MIN_HEIGHT = 160;
+const WIDGET_FRAME_MAX_HEIGHT = 1200;
+// Preview frames render inside lit shadow roots, so a document query cannot
+// find them; frames register themselves on load and are dropped once detached.
+const widgetFrameRegistry = new Set<HTMLIFrameElement>();
+// Reported heights keyed by frame src: lit re-renders re-apply the style
+// binding, so the template must read the reported height back or it resets.
+const widgetFrameHeightsBySrc = new Map<string, number>();
+const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
+let widgetSizeListenerInstalled = false;
+
+function rememberWidgetFrameHeight(src: string, height: number) {
+  if (
+    !widgetFrameHeightsBySrc.has(src) &&
+    widgetFrameHeightsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
+  ) {
+    const oldest = widgetFrameHeightsBySrc.keys().next().value;
+    if (oldest !== undefined) {
+      widgetFrameHeightsBySrc.delete(oldest);
+    }
+  }
+  widgetFrameHeightsBySrc.set(src, height);
+}
+
+function registerWidgetFrame(event: Event) {
+  const frame = event.currentTarget;
+  if (frame instanceof HTMLIFrameElement) {
+    widgetFrameRegistry.add(frame);
+  }
+}
+
+function installWidgetSizeListener() {
+  if (widgetSizeListenerInstalled || typeof window === "undefined") {
+    return;
+  }
+  widgetSizeListenerInstalled = true;
+  window.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { type?: unknown; height?: unknown } | null;
+    if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
+      return;
+    }
+    for (const frame of widgetFrameRegistry) {
+      if (!frame.isConnected) {
+        widgetFrameRegistry.delete(frame);
+        continue;
+      }
+      if (frame.contentWindow === event.source) {
+        const height = Math.min(
+          Math.max(Math.trunc(data.height), WIDGET_FRAME_MIN_HEIGHT),
+          WIDGET_FRAME_MAX_HEIGHT,
+        );
+        // The stylesheet floors the frame at min-height 420px; reported sizes
+        // must override both properties to fit short widgets.
+        frame.style.height = `${height}px`;
+        frame.style.minHeight = `${height}px`;
+        const src = frame.getAttribute("src");
+        if (src) {
+          rememberWidgetFrameHeight(src, height);
+        }
+        return;
+      }
+    }
+  });
+}
+
 function renderPreviewFrame(params: {
   title: string;
   src?: string;
   height?: number;
   sandbox?: string;
 }) {
+  installWidgetSizeListener();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
+  const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
+  const height = reportedHeight ?? params.height;
   return keyed(
     `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
     html`
@@ -124,7 +212,8 @@ function renderPreviewFrame(params: {
         title=${params.title}
         sandbox=${sandbox}
         src=${src || nothing}
-        style=${params.height ? `height:${params.height}px` : ""}
+        style=${height ? `height:${height}px;min-height:${height}px` : ""}
+        @load=${registerWidgetFrame}
       ></iframe>
     `,
   );
@@ -164,14 +253,14 @@ export function renderToolPreview(
             options?.allowExternalEmbedUrls ?? false,
           ),
           height: preview.preferredHeight,
-          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts"),
+          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
         })}
       </div>
     </div>
   `;
 }
 
-export function buildSidebarContent(
+function buildSidebarContent(
   value: string,
   options?: {
     rawText?: string | null;
@@ -200,6 +289,9 @@ export function buildPreviewSidebarContent(
     entryUrl: preview.url,
     ...(preview.title ? { title: preview.title } : {}),
     ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
+    // The per-preview sandbox ceiling must survive the sidebar conversion, or a
+    // trusted global embed mode would re-grant same-origin to widget script.
+    ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
     ...(rawText ? { rawText } : {}),
     ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
@@ -260,23 +352,22 @@ function renderCollapsedToolSummary(params: {
 }) {
   const { label, icon, name, expanded, isError, onToggleExpanded } = params;
   const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
-  const displayName = formatCollapsedToolSummaryText(name);
+  const displayName = formatDistinctCollapsedToolSummaryText(name, displayLabel);
   return html`
     <button
       class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
       type="button"
       aria-expanded=${String(expanded)}
-      @click=${() => onToggleExpanded()}
+      @click=${(event: MouseEvent) => {
+        if (shouldToggleSelectableDisclosure(event)) {
+          onToggleExpanded();
+        }
+      }}
     >
       <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
       ${displayName
         ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-        : nothing}
-      ${isError
-        ? html`<span class="chat-tool-msg-summary__error-badge" aria-label="Tool returned an error"
-            >${icons.x}<span>Error</span></span
-          >`
         : nothing}
     </button>
   `;
@@ -294,7 +385,7 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
-export function resolveCollapsedToolSummaryParts(params: {
+function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;
@@ -322,6 +413,7 @@ export function renderToolCard(
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
+    turnSucceeded?: boolean;
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -331,7 +423,7 @@ export function renderToolCard(
   },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isError = isToolCardError(card);
+  const isError = isToolCardError(card) && opts.turnSucceeded !== true;
   const summary = resolveCollapsedToolSummaryParts({
     card,
     displayLabel: display.label,
@@ -408,34 +500,29 @@ export function renderExpandedToolCardContent(
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      <div class="chat-tool-card__header">
-        <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
-          <span>${display.label}</span>
-          ${isError
-            ? html`<span class="chat-tool-card__status-badge" role="status"
-                >${icons.x}<span>Error</span></span
-              >`
-            : nothing}
-        </div>
-        ${canOpenSidebar
-          ? html`
-              <div class="chat-tool-card__actions">
-                <openclaw-tooltip content="Open in the side panel">
-                  <button
-                    class="chat-tool-card__action-btn"
-                    type="button"
-                    @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                    aria-label="Open tool details in side panel"
-                  >
-                    <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            `
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${detail || canOpenSidebar
+        ? html`
+            <div class="chat-tool-card__header">
+              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${canOpenSidebar
+                ? html`
+                    <div class="chat-tool-card__actions">
+                      <openclaw-tooltip content="Open in the side panel">
+                        <button
+                          class="chat-tool-card__action-btn"
+                          type="button"
+                          @click=${() => onOpenSidebar?.(sidebarActionContent)}
+                          aria-label="Open tool details in side panel"
+                        >
+                          <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${hasInput
         ? renderToolDataBlock({
             label: "Tool input",
@@ -449,7 +536,12 @@ export function renderExpandedToolCardContent(
               label: isError ? "Tool error" : "Tool output",
               text: card.outputText!,
             })
-        : nothing}
+        : isError
+          ? renderToolDataBlock({
+              label: "Tool error",
+              text: "No output — tool failed.",
+            })
+          : nothing}
     </div>
   `;
 }

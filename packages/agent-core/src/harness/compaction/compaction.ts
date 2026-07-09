@@ -148,6 +148,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
+  if (usage.contextUsage?.state === "available") {
+    return usage.contextUsage.totalTokens;
+  }
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
@@ -184,7 +187,7 @@ export interface ContextUsageEstimate {
   tokens: number;
   /** Tokens reported by the most recent assistant usage block. */
   usageTokens: number;
-  /** Estimated tokens after the most recent assistant usage block. */
+  /** Estimated tokens not covered by usable provider usage. */
   trailingTokens: number;
   /** Index of the message that provided usage, or null when none exists. */
   lastUsageIndex: number | null;
@@ -195,7 +198,7 @@ function getLastAssistantUsageInfo(
 ): { usage: Usage; index: number } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const usage = getAssistantUsage(messages[i]);
-    if (usage) {
+    if (usage && usage.contextUsage?.state !== "unavailable") {
       return { usage, index: i };
     }
   }
@@ -378,7 +381,7 @@ export function findTurnStartIndex(
 }
 
 /** Cut point selected for compaction. */
-export interface CutPointResult {
+interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
   /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */

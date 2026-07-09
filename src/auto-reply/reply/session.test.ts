@@ -54,7 +54,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  sessionsDir: string;
+  storePath: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -79,7 +79,6 @@ vi.mock("./session-fork.js", () => ({
       entry: SessionEntry;
       parentEntry: SessionEntry;
     }) => Partial<SessionEntry>;
-    sessionsDir: string;
   }) => {
     const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
       string,
@@ -116,7 +115,7 @@ vi.mock("./session-fork.js", () => ({
     }
     const fork = await sessionForkMocks.forkSessionFromParent({
       parentEntry,
-      sessionsDir: params.sessionsDir,
+      storePath: params.storePath,
     });
     if (!fork) {
       return { status: "failed" };
@@ -450,10 +449,11 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
       if (!parentEntry.sessionFile) {
         return null;
       }
+      const sessionsDir = path.dirname(storePath);
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -996,6 +996,13 @@ describe("initSessionState RawBody", () => {
           messageCount: 8,
           unwindowedMessageCount: 8,
         },
+        compactionCount: 3,
+        memoryFlushAt: 123,
+        memoryFlushCompactionCount: 2,
+        memoryFlushContextHash: "stale-context",
+        memoryFlushFailureCount: 3,
+        memoryFlushLastFailedAt: 456,
+        memoryFlushLastFailureError: "provider crashed",
         skillsSnapshot: {
           prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
           skills: [{ name: "stale" }],
@@ -1029,6 +1036,13 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
+    expect(result.sessionEntry.compactionCount).toBe(0);
+    expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushContextHash).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushFailureCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailedAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailureError).toBeUndefined();
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -1038,6 +1052,13 @@ describe("initSessionState RawBody", () => {
         totalTokensFresh?: boolean;
         contextTokens?: number;
         contextBudgetStatus?: unknown;
+        compactionCount?: number;
+        memoryFlushAt?: number;
+        memoryFlushCompactionCount?: number;
+        memoryFlushContextHash?: string;
+        memoryFlushFailureCount?: number;
+        memoryFlushLastFailedAt?: number;
+        memoryFlushLastFailureError?: string;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
@@ -1045,6 +1066,13 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    expect(store[sessionKey]?.compactionCount).toBe(0);
+    expect(store[sessionKey]?.memoryFlushAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushCompactionCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushContextHash).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushFailureCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {
@@ -1261,6 +1289,48 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.sessionEntry.responseUsage).toBe("full");
+  });
+
+  it("preserves user labels across dashboard session stale rollover (#101451)", async () => {
+    const root = await makeCaseDir("openclaw-dashboard-rollover-label-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77";
+    const existingSessionId = "dashboard-session-before-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        label: "Other",
+        displayName: "Dashboard Chat",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.label).toBe("Other");
+    expect(result.sessionEntry.displayName).toBe("Dashboard Chat");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { label?: string; displayName?: string }
+    >;
+    expect(store[sessionKey]?.label).toBe("Other");
+    expect(store[sessionKey]?.displayName).toBe("Dashboard Chat");
   });
 
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
@@ -2175,8 +2245,17 @@ describe("initSessionState reset policy", () => {
       expectNewSession: false,
     },
     {
-      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse when transcript is newer than updatedAt",
       sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: false,
+    },
+    {
+      name: "main killed terminal rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      status: "killed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
@@ -2792,6 +2871,43 @@ describe("initSessionState browser tab cleanup", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
+  it("includes the peer-scoped runtime key for direct-message cleanup", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-peer-key-");
+    const canonicalKey = "agent:main:main";
+    const existingSessionId = "tab-peer-key-session-id";
+    await writeSessionStoreFast(storePath, {
+      [canonicalKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "12345",
+        Provider: "telegram",
+        ChatType: "direct",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    const cleanupParams = requireMockCallArg(
+      browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
+      "closeTrackedBrowserTabsForSessions",
+    );
+    expect(cleanupParams.sessionKeys).toEqual([
+      existingSessionId,
+      canonicalKey,
+      "agent:main:telegram:default:direct:12345",
+    ]);
   });
 });
 
@@ -3792,9 +3908,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       // Foreign owners may need the writer lane to finalize before releasing.
       // The rollover must not hold that lane while it drains them.
       await runExclusiveSessionStoreWrite(storePath, async () => {});
-      expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).toBe(
-        existingSessionId,
-      );
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
       expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
 
       admission.release();
@@ -3898,9 +4012,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const outcomes = await Promise.allSettled([runRollover(0), runRollover(1)]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).not.toBe(
-      existingSessionId,
-    );
+    expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
   });
 
   it.each([
@@ -4618,6 +4730,42 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(180_000);
     expect(stored[sessionKey].outputTokens).toBe(10_000);
+  });
+
+  it("keeps the prior total stale when last-call context is unavailable", async () => {
+    const storePath = await createStorePath("openclaw-usage-unavailable-context-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 148_874,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
+      lastCallUsage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+        total: 927_907,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(148_874);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(stored[sessionKey].inputTokens).toBe(12);
+    expect(stored[sessionKey].cacheRead).toBe(819_661);
   });
 
   it("marks a fresh zero stale when a completed run has no context snapshot", async () => {

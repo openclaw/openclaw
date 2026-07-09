@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -180,6 +181,12 @@ type ReadResponsePrefixResult = {
   truncated: boolean;
 };
 
+function validateMaxBytes(maxBytes: number): void {
+  if (!Number.isFinite(maxBytes) || maxBytes < 0) {
+    throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
+  }
+}
+
 async function readResponsePrefix(
   response: Response,
   maxBytes: number,
@@ -188,6 +195,7 @@ async function readResponsePrefix(
     onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<ReadResponsePrefixResult> {
+  validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
     const fallback = Buffer.from(await response.arrayBuffer());
@@ -209,11 +217,7 @@ async function readResponsePrefix(
   try {
     while (true) {
       const { done, value } = options?.chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(
-            reader,
-            options.chunkTimeoutMs,
-            options.onIdleTimeout,
-          )
+        ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
         : await reader.read();
       if (done) {
         size = total;
@@ -310,7 +314,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${truncateUtf16Safe(collapsed, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }

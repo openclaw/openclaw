@@ -86,7 +86,10 @@ function isIMessageConversationAllowTarget(entry: string): boolean {
   );
 }
 
-function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
+// Shared by the runtime group gate below and the startup allowlist warning in
+// monitor-provider.ts so the warning only fires when the gate would actually
+// drop every group message.
+export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   groupAllowFrom: string[];
   allowFrom: string[];
   allowLegacyConversationTargets?: boolean;
@@ -326,7 +329,7 @@ function isKnownFromMeIMessageReactionTarget(params: {
  * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
  *    after trim → `undefined`).
  */
-export function resolveIMessageGroupSystemPrompt(params: {
+function resolveIMessageGroupSystemPrompt(params: {
   groupConfig: unknown;
   defaultConfig: unknown;
 }): string | undefined {

@@ -14,7 +14,7 @@ import {
 } from "./proxy-tls.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
-export const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
+const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
 
 const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";

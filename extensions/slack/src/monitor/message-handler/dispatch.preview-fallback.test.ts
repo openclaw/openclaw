@@ -341,6 +341,13 @@ function createPreparedSlackMessage(params?: {
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
+  eventScope?: {
+    apiAppId: string;
+    enterpriseId: string;
+    isEnterpriseInstall: true;
+    teamId: string;
+    client: Record<string, unknown>;
+  };
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
@@ -376,6 +383,7 @@ function createPreparedSlackMessage(params?: {
       config: params?.accountConfig ?? {},
     },
     relayIdentity: params?.relayIdentity,
+    eventScope: params?.eventScope,
     message,
     route: {
       agentId: "agent-1",
@@ -411,6 +419,13 @@ async function dispatchNativeProgressScenario(params: {
   finalPayload?: { text: string; isError?: boolean };
   progress?: { label?: string; maxLineChars?: number; nativeTaskCards?: true; render?: "rich" };
   replyToMode?: "off" | "first" | "all" | "batched";
+  eventScope?: {
+    apiAppId: string;
+    enterpriseId: string;
+    isEnterpriseInstall: true;
+    teamId: string;
+    client: Record<string, unknown>;
+  };
 }) {
   mockedNativeStreaming = true;
   mockedSlackStreamingMode = "progress";
@@ -422,6 +437,7 @@ async function dispatchNativeProgressScenario(params: {
   await dispatchPreparedSlackMessage(
     createPreparedSlackMessage({
       replyToMode: params.replyToMode,
+      eventScope: params.eventScope,
       accountConfig: {
         streaming: {
           mode: "progress",
@@ -1796,6 +1812,40 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: false,
+      initialEmoji: "eyes",
+    });
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps Slack lifecycle reactions off for ambient room-event acks", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: false,
+      initialEmoji: "eyes",
+    });
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -2631,6 +2681,32 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+  it("uses the enterprise event team as the native progress stream fallback", async () => {
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: {
+        info: vi.fn<() => Promise<{ user: Record<string, never> }>>(async () => ({ user: {} })),
+      },
+    };
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "checking" }],
+      eventScope: {
+        apiAppId: "A_TEST",
+        enterpriseId: "E_TEST",
+        isEnterpriseInstall: true,
+        teamId: "T_ENTERPRISE",
+        client: eventClient,
+      },
+    });
+
+    expectMockCallArgFields(startSlackStreamMock, 0, "enterprise progress stream start params", {
+      client: eventClient,
+      teamId: "T_ENTERPRISE",
+    });
+  });
+
   it("reuses native Slack progress task identity across command item and output events", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
@@ -3056,6 +3132,33 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       text: FINAL_REPLY_TEXT,
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the enterprise event team as the native text stream fallback", async () => {
+    mockedNativeStreaming = true;
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: {
+        info: vi.fn<() => Promise<{ user: Record<string, never> }>>(async () => ({ user: {} })),
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        eventScope: {
+          apiAppId: "A_TEST",
+          enterpriseId: "E_TEST",
+          isEnterpriseInstall: true,
+          teamId: "T_ENTERPRISE",
+          client: eventClient,
+        },
+      }),
+    );
+
+    expectMockCallArgFields(startSlackStreamMock, 0, "enterprise Slack stream start params", {
+      client: eventClient,
+      teamId: "T_ENTERPRISE",
+    });
   });
 
   it("suppresses reasoning payloads before Slack native streaming delivery", async () => {

@@ -42,6 +42,10 @@ import {
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalCreateParamsSchema,
@@ -80,6 +84,14 @@ import {
   ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
+  AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFileSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+} from "./agents-workspace.js";
+import {
   ArtifactSummarySchema,
   ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResultSchema,
@@ -88,6 +100,7 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsListResultSchema,
 } from "./artifacts.js";
+import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
@@ -118,6 +131,8 @@ import {
   TalkSessionTurnParamsSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
+  TtsSpeakParamsSchema,
+  TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -142,7 +157,17 @@ import {
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
+  CrestodianChatParamsSchema,
+  CrestodianChatResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+} from "./crestodian.js";
+import {
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -176,6 +201,7 @@ import {
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
@@ -271,8 +297,10 @@ import {
   SessionFileKindSchema,
   SessionFileRelevanceSchema,
   SessionOperationEventSchema,
+  SessionWorktreeInfoSchema,
   SessionsCleanupParamsSchema,
   SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsFilesGetParamsSchema,
@@ -292,6 +320,20 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
+import {
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
+} from "./task-suggestions.js";
 import {
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
@@ -328,6 +370,17 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import {
+  WorktreeRecordSchema,
+  WorktreesCreateParamsSchema,
+  WorktreesGcParamsSchema,
+  WorktreesGcResultSchema,
+  WorktreesListParamsSchema,
+  WorktreesListResultSchema,
+  WorktreesRemoveParamsSchema,
+  WorktreesRemoveResultSchema,
+  WorktreesRestoreParamsSchema,
+} from "./worktrees.js";
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
@@ -350,6 +403,8 @@ export const ProtocolSchemas = {
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResult: EnvironmentsStatusResultSchema,
+  SystemInfoParams: SystemInfoParamsSchema,
+  SystemInfoResult: SystemInfoResultSchema,
   AgentEvent: AgentEventSchema,
   MessageActionParams: MessageActionParamsSchema,
   SendParams: SendParamsSchema,
@@ -359,6 +414,15 @@ export const ProtocolSchemas = {
   AgentIdentityResult: AgentIdentityResultSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
+  WorktreeRecord: WorktreeRecordSchema,
+  WorktreesListParams: WorktreesListParamsSchema,
+  WorktreesListResult: WorktreesListResultSchema,
+  WorktreesCreateParams: WorktreesCreateParamsSchema,
+  WorktreesRemoveParams: WorktreesRemoveParamsSchema,
+  WorktreesRemoveResult: WorktreesRemoveResultSchema,
+  WorktreesRestoreParams: WorktreesRestoreParamsSchema,
+  WorktreesGcParams: WorktreesGcParamsSchema,
+  WorktreesGcResult: WorktreesGcResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairRequestParams: NodePairRequestParamsSchema,
@@ -416,7 +480,9 @@ export const ProtocolSchemas = {
   SessionsFilesListResult: SessionsFilesListResultSchema,
   SessionsFilesGetParams: SessionsFilesGetParamsSchema,
   SessionsFilesGetResult: SessionsFilesGetResultSchema,
+  SessionWorktreeInfo: SessionWorktreeInfoSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
+  SessionsCreateResult: SessionsCreateResultSchema,
   SessionsSendParams: SessionsSendParamsSchema,
   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
@@ -429,7 +495,21 @@ export const ProtocolSchemas = {
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
 
-  // Task ledger and config/wizard setup payloads.
+  // Audit/task ledgers and config/wizard setup payloads.
+  AuditEvent: AuditEventSchema,
+  AuditListParams: AuditListParamsSchema,
+  AuditListResult: AuditListResultSchema,
+  TaskSuggestion: TaskSuggestionSchema,
+  TaskSuggestionEvent: TaskSuggestionEventSchema,
+  TaskSuggestionResolution: TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParams: TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResult: TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParams: TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResult: TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParams: TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResult: TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParams: TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResult: TaskSuggestionsListResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,
@@ -445,6 +525,12 @@ export const ProtocolSchemas = {
   ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
+  CrestodianChatParams: CrestodianChatParamsSchema,
+  CrestodianChatResult: CrestodianChatResultSchema,
+  CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -482,6 +568,8 @@ export const ProtocolSchemas = {
   TalkSessionOkResult: TalkSessionOkResultSchema,
   TalkSpeakParams: TalkSpeakParamsSchema,
   TalkSpeakResult: TalkSpeakResultSchema,
+  TtsSpeakParams: TtsSpeakParamsSchema,
+  TtsSpeakResult: TtsSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
@@ -505,6 +593,12 @@ export const ProtocolSchemas = {
   AgentsFilesGetResult: AgentsFilesGetResultSchema,
   AgentsFilesSetParams: AgentsFilesSetParamsSchema,
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
+  AgentsWorkspaceEntry: AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFile: AgentsWorkspaceFileSchema,
+  AgentsWorkspaceListParams: AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResult: AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParams: AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResult: AgentsWorkspaceGetResultSchema,
   ArtifactSummary: ArtifactSummarySchema,
   ArtifactsListParams: ArtifactsListParamsSchema,
   ArtifactsListResult: ArtifactsListResultSchema,
@@ -540,6 +634,10 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
+  SkillsCuratorActionParams: SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
   SkillsProposalsListParams: SkillsProposalsListParamsSchema,
   SkillsProposalsListResult: SkillsProposalsListResultSchema,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
@@ -568,6 +666,8 @@ export const ProtocolSchemas = {
   CronStatusParams: CronStatusParamsSchema,
   CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
+  CronAddResult: CronAddResultSchema,
+  CronDeclarativeAddResult: CronDeclarativeAddResultSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
   CronRunParams: CronRunParamsSchema,
@@ -593,6 +693,7 @@ export const ProtocolSchemas = {
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSnapshot: ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalGetParams: ExecApprovalGetParamsSchema,
@@ -637,6 +738,7 @@ export const ProtocolSchemas = {
 
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";

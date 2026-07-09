@@ -16,7 +16,7 @@ const CHANNEL_LABELS: Record<string, string> = {
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
 /** Parsed type / context extracted from a session key. */
-export type SessionKeyInfo = {
+type SessionKeyInfo = {
   /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
@@ -36,7 +36,7 @@ function capitalize(s: string): string {
  * Parse a session key to extract type information and a human-readable
  * fallback display name. Exported for testing.
  */
-export function parseSessionKey(key: string): SessionKeyInfo {
+function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.

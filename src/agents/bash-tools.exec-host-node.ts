@@ -14,6 +14,7 @@ import {
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -397,7 +398,7 @@ export async function executeNodeHostCommand(
               buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
-                rawCommand: prepared.rawCommand,
+                rawCommand: prepared.transportRawCommand,
                 cwd: prepared.cwd,
                 agentId: prepared.agentId,
                 sessionKey: prepared.sessionKey,
@@ -430,7 +431,7 @@ export async function executeNodeHostCommand(
             const combined = [payload.stdout, payload.stderr, payload.error]
               .filter(Boolean)
               .join("\n");
-            const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = normalizeNotifyOutput(tail(combined, DEFAULT_NOTIFY_TAIL_CHARS));
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
@@ -466,7 +467,7 @@ export async function executeNodeHostCommand(
   const invoke = buildNodeSystemRunInvoke({
     target,
     command: prepared.argv,
-    rawCommand: prepared.rawCommand,
+    rawCommand: prepared.transportRawCommand,
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,
@@ -482,5 +483,10 @@ export async function executeNodeHostCommand(
           scopes: APPROVED_NODE_INVOKE_SCOPES,
         })
       : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
-  return formatNodeRunToolResult({ raw, startedAt, cwd: params.workdir });
+  return formatNodeRunToolResult({
+    raw,
+    startedAt,
+    cwd: params.workdir,
+    warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
+  });
 }

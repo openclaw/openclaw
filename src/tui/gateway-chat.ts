@@ -15,6 +15,8 @@ import {
   type SessionsListParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
@@ -28,6 +30,8 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
@@ -37,7 +41,9 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiApprovalDecision,
   TuiSessionList,
+  TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
 } from "./tui-backend.js";
@@ -142,7 +148,7 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
-      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -282,6 +288,13 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
+  async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+      ...opts,
+      emitCommandHooks: Boolean(opts.parentSessionKey),
+    });
+  }
+
   async resetSession(
     key: string,
     reason?: "new" | "reset",
@@ -307,6 +320,62 @@ export class GatewayChatClient implements TuiBackend {
     const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
     return Array.isArray(res?.commands) ? res.commands : [];
   }
+
+  async listPluginApprovals() {
+    return await this.client.request("plugin.approval.list", {});
+  }
+
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+    return await this.client.request<{ ok?: boolean }>("plugin.approval.resolve", {
+      id,
+      decision,
+    });
+  }
+
+  getTaskSuggestionActionCapabilities() {
+    const auth = this.hello?.auth;
+    const methods = this.hello?.features?.methods;
+    const allows = (method: string, scope: "operator.admin" | "operator.write") =>
+      Array.isArray(methods) &&
+      methods.includes(method) &&
+      Boolean(
+        auth &&
+        roleScopesAllow({
+          role: auth.role,
+          requestedScopes: [scope],
+          allowedScopes: auth.scopes,
+        }),
+      );
+    return {
+      canAccept: allows("taskSuggestions.accept", "operator.admin"),
+      canDismiss: allows("taskSuggestions.dismiss", "operator.write"),
+    };
+  }
+
+  async listTaskSuggestions() {
+    if (this.hello?.features?.methods?.includes("taskSuggestions.list") !== true) {
+      return [];
+    }
+    const actions = this.getTaskSuggestionActionCapabilities();
+    if (!actions.canAccept && !actions.canDismiss) {
+      return [];
+    }
+    const result = await this.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {});
+    return result.suggestions;
+  }
+
+  async acceptTaskSuggestion(taskId: string) {
+    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
+      taskId,
+    });
+  }
+
+  async dismissTaskSuggestion(taskId: string) {
+    return await this.client.request<{ taskId: string; dismissed: boolean }>(
+      "taskSuggestions.dismiss",
+      { taskId },
+    );
+  }
 }
 
 export async function resolveGatewayConnection(
@@ -327,9 +396,19 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
+  const hasExplicitGatewayTarget = Boolean(
+    urlOverride ||
+    env.OPENCLAW_GATEWAY_URL?.trim() ||
+    env.OPENCLAW_GATEWAY_PORT?.trim() ||
+    isRemoteMode,
+  );
+  const activeLocalGatewayPort = hasExplicitGatewayTarget
+    ? undefined
+    : await readActiveGatewayLockPort();
   const url = buildGatewayConnectionDetails({
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
+    ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
   const allowInsecureLocalOperatorUi = (() => {
     if (config.gateway?.controlUi?.allowInsecureAuth !== true) {

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
@@ -57,13 +58,13 @@ function truncateChatHistoryText(
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
+    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
     truncated: true,
   };
 }
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
-export function isToolHistoryBlockType(type: unknown): boolean {
+function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
   }
@@ -398,13 +399,19 @@ function toFiniteNumber(x: unknown): number | undefined {
   return asFiniteNumber(x);
 }
 
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
+function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const c = raw as Record<string, unknown>;
-  const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
+  const out: Record<string, number> = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+    const value = toFiniteNumber(c[key]);
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sanitizeUsage(raw: unknown): Record<string, number> | undefined {

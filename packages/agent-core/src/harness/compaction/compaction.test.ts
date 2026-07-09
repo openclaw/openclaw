@@ -1,8 +1,127 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
-import { compact, generateSummary } from "./compaction.js";
+import {
+  calculateContextTokens,
+  compact,
+  estimateContextTokens,
+  generateSummary,
+} from "./compaction.js";
 import { createFileOps } from "./utils.js";
+
+describe("calculateContextTokens", () => {
+  it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
+    expect(
+      calculateContextTokens({
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: {
+          state: "available",
+          promptTokens: 148_874,
+          totalTokens: 163_978,
+        },
+        totalTokens: 927_907,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    ).toBe(163_978);
+  });
+
+  it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
+    expect(
+      calculateContextTokens({
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+        totalTokens: 927_907,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    ).toBe(927_907);
+  });
+
+  it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
+    const estimate = estimateContextTokens([
+      { role: "user", content: "hello", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          totalTokens: 927_907,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(estimate.tokens).toBeLessThan(927_907);
+    expect(estimate.tokens).toBeGreaterThan(0);
+    expect(estimate.usageTokens).toBe(0);
+    expect(estimate.lastUsageIndex).toBeNull();
+  });
+
+  it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
+    const estimate = estimateContextTokens([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "previous" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: {
+          input: 12,
+          output: 1_000,
+          cacheRead: 148_862,
+          cacheWrite: 0,
+          contextUsage: {
+            state: "available",
+            promptTokens: 148_874,
+            totalTokens: 149_874,
+          },
+          totalTokens: 149_874,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 0,
+      },
+      { role: "user", content: "next", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          totalTokens: 927_907,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ]);
+
+    expect(estimate.usageTokens).toBe(149_874);
+    expect(estimate.tokens).toBeGreaterThan(149_874);
+    expect(estimate.tokens).toBeLessThan(927_907);
+    expect(estimate.lastUsageIndex).toBe(0);
+  });
+});
 
 describe("generateSummary thinking options", () => {
   it("maps explicit Fable off to low effort for compaction", async () => {

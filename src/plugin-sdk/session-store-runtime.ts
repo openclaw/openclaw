@@ -227,11 +227,13 @@ export {
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  recordSessionMetaFromInbound,
-  updateLastRoute,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 /**
  * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. These
  * whole-store helpers are kept only during the transition before SQLite

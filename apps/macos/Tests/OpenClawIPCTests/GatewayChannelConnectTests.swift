@@ -51,7 +51,11 @@ struct GatewayChannelConnectTests {
         }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-            _ = url
+            self.makeWebSocketTask(request: URLRequest(url: url))
+        }
+
+        func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+            _ = request
             let task = GatewayTestWebSocketTask(receiveHook: { _, receiveIndex in
                 if receiveIndex == 0 {
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
@@ -237,7 +241,7 @@ struct GatewayChannelConnectTests {
     @Test func `stored device token connect scopes reuse cached scopes`() async throws {
         try await self.withTemporaryStateDir {
             let identity = DeviceIdentityStore.loadOrCreate()
-            let storedEntry = DeviceAuthStore.storeToken(
+            let storedEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,
                 role: "operator",
                 token: "bootstrap-device-token",

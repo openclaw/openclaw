@@ -161,6 +161,12 @@ export type SlackAccountConfig = {
   name?: string;
   /** Slack connection mode (socket|http|relay). Default: socket. */
   mode?: "socket" | "http" | "relay";
+  /**
+   * Treat this account as one Slack Enterprise Grid org-wide installation.
+   * The declaration is verified against auth.test during monitor startup.
+   * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
+   */
+  enterpriseOrgInstall?: boolean;
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
   /** Relay-delivered Slack event source. Used when mode is "relay". */

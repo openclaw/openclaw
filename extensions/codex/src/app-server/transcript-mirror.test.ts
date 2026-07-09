@@ -155,6 +155,44 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
   });
 
+  it("preserves gateway user-turn identity across Codex transcript mirroring", async () => {
+    const sessionFile = await createTempSessionFile();
+    const userMessage = castAgentMessage({
+      ...makeAgentUserMessage({
+        content: [{ type: "text", text: "client prompt" }],
+        timestamp: Date.now(),
+      }),
+      idempotencyKey: "client-run:user",
+    }) as MirroredAgentMessage;
+
+    const first = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      messages: [userMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+    const second = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      messages: [userMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    expect(raw).toContain('"idempotencyKey":"client-run:user"');
+    expect(raw).toContain('"mirrorOrigin":"codex-app-server"');
+    expect(raw).not.toContain('"idempotencyKey":"codex-app-server:thread-1:');
+    expect(first.userMessagesPresent).toHaveLength(1);
+    expect(second.userMessagesPresent).toHaveLength(1);
+    expect(
+      parseJsonLines<{ message?: { role?: string } }>(raw).filter(
+        (record) => record.message?.role === "user",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {
     const sessionFile = await createTempSessionFile();
     const userMessage = attachCodexMirrorIdentity(

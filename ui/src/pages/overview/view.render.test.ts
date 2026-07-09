@@ -4,7 +4,9 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderOverview, type OverviewProps } from "./view.ts";
+import { renderOverview } from "./view.ts";
+
+type OverviewProps = Parameters<typeof renderOverview>[0];
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {
@@ -21,9 +23,9 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
-      navWidth: 220,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
+      navWidth: 258,
+      sidebarPinnedRoutes: ["overview"],
+      sidebarMoreExpanded: false,
       locale: "en",
     },
     password: "",

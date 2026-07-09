@@ -2,13 +2,14 @@
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
@@ -324,7 +325,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
               assistantMessageIndex: options.assistantMessageIndex,
             })
           : payload;
-      const maybeTask = params.onBlockReply(taggedPayload);
+      const assistantMessageIndex =
+        options?.assistantMessageIndex ??
+        getReplyPayloadMetadata(taggedPayload)?.assistantMessageIndex;
+      const context = assistantMessageIndex === undefined ? undefined : { assistantMessageIndex };
+      const maybeTask = context
+        ? params.onBlockReply(taggedPayload, context)
+        : params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }
@@ -1051,7 +1058,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           messagingToolSentTextsNormalized,
         ));
     if (isMessagingDuplicate) {
-      log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
+      log.debug(
+        `Skipping block reply - already sent via messaging tool: ${truncateUtf16Safe(chunk, 50)}...`,
+      );
       if (prefixReplayCandidate) {
         markBlockReplyTextHandled();
       }

@@ -117,6 +117,17 @@ describe("readResponseWithLimit", () => {
     });
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    "rejects invalid maxBytes before reading: %s",
+    async (maxBytes) => {
+      await expectReadResponseWithLimitFailureCase({
+        response: new Response(makeStream([new Uint8Array([1, 2, 3])])),
+        maxBytes,
+        expectedError: /maxBytes must be a non-negative finite number/,
+      });
+    },
+  );
+
   it.each([
     {
       name: "times out when no new chunk arrives before idle timeout",
@@ -224,8 +235,22 @@ describe("readResponseTextSnippet", () => {
       options: { maxBytes: 7, maxChars: 50 },
       expected: "1234567…",
     },
+    {
+      name: "keeps character-limited snippets UTF-16 well-formed",
+      response: new Response(makeStream([new TextEncoder().encode("ab🚀tail")])),
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "ab…",
+    },
   ] as const)("$name", async ({ response, options, expected }) => {
     await expectReadResponseTextSnippetCase({ response, options, expected });
+  });
+
+  it("rejects invalid maxBytes before reading text snippets", async () => {
+    await expect(
+      readResponseTextSnippet(new Response(makeStream([new TextEncoder().encode("hello")])), {
+        maxBytes: Number.NaN,
+      }),
+    ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
   });
 
   it.each([

@@ -107,6 +107,7 @@ enum CommandResolver {
             "/usr/local/bin",
             "/usr/bin",
             "/bin",
+            home.appendingPathComponent(".local/bin").path,
         ]
         #if DEBUG
         // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
@@ -337,6 +338,15 @@ enum CommandResolver {
     }
 
     // MARK: - SSH helpers
+
+    static func sshEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        searchPaths: [String]? = nil) -> [String: String]
+    {
+        var environment = base
+        environment["PATH"] = (searchPaths ?? self.preferredPaths()).joined(separator: ":")
+        return environment
+    }
 
     private static func sshNodeCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
         guard !settings.target.isEmpty else { return nil }

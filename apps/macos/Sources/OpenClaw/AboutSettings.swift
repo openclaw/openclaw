@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AboutSettings: View {
     weak var updater: UpdaterProviding?
+    @Environment(\.colorScheme) private var colorScheme
     @State private var iconHover = false
     @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
     @State private var didLoadUpdaterState = false
@@ -14,10 +15,16 @@ struct AboutSettings: View {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
+                // Hero treatment from openclaw.ai: coral silhouette glow at 10% of
+                // size, teal glow at 15% plus scale 1.1 on hover.
                 OpenClawMascotView()
                     .frame(width: 160, height: 160)
-                    .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 10)
-                    .scaleEffect(self.iconHover ? 1.05 : 1.0)
+                    .shadow(
+                        color: OpenClawMascotView.heroGlowColor(
+                            for: self.colorScheme,
+                            hovering: self.iconHover),
+                        radius: self.iconHover ? 24 : 16)
+                    .scaleEffect(self.iconHover ? 1.1 : 1.0)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("OpenClaw on GitHub")
@@ -44,14 +51,18 @@ struct AboutSettings: View {
                     .padding(.horizontal, 18)
             }
 
+            // Unified first-party link set shared with the iOS and Android About screens.
             VStack(alignment: .center, spacing: 6) {
+                AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
+                AboutLinkRow(icon: "book", title: "Docs", url: "https://docs.openclaw.ai")
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
                     title: "GitHub",
                     url: "https://github.com/openclaw/openclaw")
-                AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
-                AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
-                AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:peter@steipete.me")
+                AboutLinkRow(
+                    icon: "bubble.left.and.bubble.right",
+                    title: "Discord",
+                    url: "https://discord.gg/clawd")
             }
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
@@ -154,7 +165,9 @@ private struct AboutLinkRow: View {
 
     var body: some View {
         Button {
-            if let url = URL(string: url) { NSWorkspace.shared.open(url) }
+            if let url = URL(string: url) {
+                NSWorkspace.shared.open(url)
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: self.icon)
@@ -166,22 +179,6 @@ private struct AboutLinkRow: View {
         .buttonStyle(.plain)
         .onHover { self.hovering = $0 }
         .pointingHandCursor()
-    }
-}
-
-private struct AboutMetaRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(self.label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(self.value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.primary)
-        }
     }
 }
 

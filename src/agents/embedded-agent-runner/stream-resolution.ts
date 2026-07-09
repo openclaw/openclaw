@@ -271,9 +271,10 @@ function wrapEmbeddedAgentStreamFn(
       resolvedApiKey,
       authStorage,
     });
+    const selectedApiKey = apiKey ?? options?.apiKey;
     return inner(m, transformContext(context), {
       ...mergeRunSignal(options),
-      apiKey: apiKey ?? options?.apiKey,
+      apiKey: selectedApiKey,
     });
   };
 }

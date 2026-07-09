@@ -126,7 +126,7 @@ async function loadReplyFooterUsageWindowLine(params: {
   }
 }
 
-export const formatResponseUsageLine = (params: {
+const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
     output?: number;

@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
-import { buildToolCardSidebarContent } from "./chat-tool-cards.ts";
+import { buildPreviewSidebarContent, buildToolCardSidebarContent } from "./chat-tool-cards.ts";
 
 vi.mock("../../../components/icons.ts", () => ({
   icons: {},
@@ -102,6 +102,26 @@ describe("tool-card extraction", () => {
   "deck": "Example Deck",
   "mode": "preview"
 }`);
+  });
+
+  it("preserves legacy callId tool block identities", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            callId: "legacy-call-id",
+            name: "bash",
+            input: { command: "pwd" },
+          },
+        ],
+      },
+      "legacy-call",
+    );
+
+    expect(cards[0]?.callId).toBe("legacy-call-id");
+    expect(cards[0]?.id).toBe("legacy-call:legacy-call-id");
   });
 
   it("pairs interleaved nameless tool results in content order", () => {
@@ -360,6 +380,7 @@ with Example Deck
             target: "assistant_message",
             title: "Inline demo",
             preferred_height: 420,
+            sandbox: "scripts",
           },
         }),
       },
@@ -373,6 +394,27 @@ with Example Deck
     expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
     expect(card?.preview?.title).toBe("Inline demo");
     expect(card?.preview?.preferredHeight).toBe(420);
+    expect(card?.preview?.sandbox).toBe("scripts");
+  });
+
+  it("carries the preview sandbox ceiling into sidebar canvas content", () => {
+    const sidebar = buildPreviewSidebarContent(
+      {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        viewId: "cv_widget",
+        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+        title: "Widget",
+        sandbox: "scripts",
+      },
+      null,
+    );
+
+    // Dropping the ceiling here would re-grant allow-same-origin to widget
+    // script whenever the global embed mode is "trusted".
+    expect(sidebar?.kind).toBe("canvas");
+    expect(sidebar && "sandbox" in sidebar ? sidebar.sandbox : undefined).toBe("scripts");
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {

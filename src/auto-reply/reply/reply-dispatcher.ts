@@ -48,6 +48,20 @@ export type { ReplyDispatchBeforeDeliver };
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
+const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
+
+/** Adds a core-internal cancellation observer without expanding the plugin-facing dispatcher. */
+export function appendReplyDispatcherBeforeDeliverCancelled(
+  dispatcher: ReplyDispatcher,
+  hook: ReplyDispatchCancelHandler,
+): boolean {
+  const hooks = beforeDeliverCancelledHooks.get(dispatcher);
+  if (!hooks) {
+    return false;
+  }
+  hooks.push(hook);
+  return true;
+}
 
 function buildReplyDispatchRuntimeInfo(
   payload: ReplyPayload,
@@ -168,6 +182,7 @@ function normalizeReplyPayloadInternal(
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let beforeDeliver = options.beforeDeliver;
+  const appendedBeforeDeliverCancelledHooks: ReplyDispatchCancelHandler[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -198,6 +213,27 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     pending: () => pending,
     waitForIdle: () => sendChain,
   });
+
+  const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
+    void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
+  };
+
+  const notifyBeforeDeliverCancelled = async (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ) => {
+    const observers = [
+      ...(options.onBeforeDeliverCancelled ? [options.onBeforeDeliverCancelled] : []),
+      ...appendedBeforeDeliverCancelledHooks,
+    ];
+    for (const observer of observers) {
+      try {
+        await observer(payload, info);
+      } catch (err: unknown) {
+        reportObserverError(err, info);
+      }
+    }
+  };
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
@@ -247,20 +283,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           try {
             deliverPayload = await beforeDeliver(normalized, dispatchInfo);
           } catch (err: unknown) {
-            try {
-              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
-            } catch (cancelErr: unknown) {
-              void options.onError?.(cancelErr, dispatchInfo);
-            }
+            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
             throw err;
           }
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
-            try {
-              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
-            } catch (err: unknown) {
-              void options.onError?.(err, dispatchInfo);
-            }
+            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
             return;
           }
           deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
@@ -276,7 +304,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {
-          void options.onError?.(err, dispatchInfo);
+          reportObserverError(err, dispatchInfo);
         }
         pending -= 1;
         // Clear reservation if:
@@ -315,7 +343,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
   };
 
-  return {
+  const dispatcher: ReplyDispatcher = {
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
@@ -345,6 +373,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             })
         : undefined,
   };
+  beforeDeliverCancelledHooks.set(dispatcher, appendedBeforeDeliverCancelledHooks);
+  return dispatcher;
 }
 
 export async function waitForReplyDispatcherIdle(

@@ -16,6 +16,7 @@ import {
 import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -209,7 +210,7 @@ function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayloa
   };
 }
 
-export type CliToolEventPayload = {
+type CliToolEventPayload = {
   name: string | undefined;
   phase: "start" | "update" | "result";
   args: Record<string, unknown> | undefined;
@@ -411,6 +412,13 @@ type RunCliAgentWithLifecycleParams = {
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
+  /**
+   * Stamped before every delivered CLI progress event (assistant, reasoning,
+   * tool, commentary, fast-mode). Callers wire this to the reply operation's
+   * activity evidence; per-callback stamps at call sites drift and a missed
+   * stamp lets stale-takeover reclaim a healthy run.
+   */
+  onActivity?: () => void;
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
@@ -506,6 +514,7 @@ async function runCliAgentWithLifecycleInternal(
   if (emitLifecycleStart) {
     emitAgentEvent({
       runId: params.runId,
+      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
       ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
       ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
       ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
@@ -516,6 +525,18 @@ async function runCliAgentWithLifecycleInternal(
       },
     });
   }
+  // One delivery-independent activity seam for every CLI agent event.
+  // Suppressed (silentExpected) runs still emit real events and must keep
+  // stamping, or a healthy silent stream looks stale to the takeover window.
+  const activityBridge = params.onActivity
+    ? createAgentEventBridge<Record<string, never>>({
+        runId: params.runId,
+        read: () => ({}),
+        deliver: async () => {
+          params.onActivity?.();
+        },
+      })
+    : undefined;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -525,7 +546,7 @@ async function runCliAgentWithLifecycleInternal(
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: async (payload) => {
+    deliver: async (payload: ReasoningTextPayload) => {
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
     },
@@ -551,6 +572,7 @@ async function runCliAgentWithLifecycleInternal(
     deliver: maybeAnnounceFastModeAutoOff,
   });
   const bridges = [
+    activityBridge,
     assistantBridge,
     reasoningBridge,
     reasoningProgressBridge,
@@ -590,6 +612,7 @@ async function runCliAgentWithLifecycleInternal(
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
         ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
         ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
@@ -611,6 +634,7 @@ async function runCliAgentWithLifecycleInternal(
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
         ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
         ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
@@ -620,7 +644,7 @@ async function runCliAgentWithLifecycleInternal(
           startedAt,
           endedAt: Date.now(),
           error: String(err),
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
+          ...resolveAgentRunErrorLifecycleFields(err, params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -636,6 +660,7 @@ async function runCliAgentWithLifecycleInternal(
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
         ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
         ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),

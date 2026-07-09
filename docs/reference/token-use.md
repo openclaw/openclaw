@@ -111,6 +111,11 @@ In chat:
     appears only when OpenClaw has usage metadata and local pricing for the
     active model. Custom `messages.usageTemplate` layouts can include
     token/cache fields.
+  - `/usage tokens` and `/usage full` also append active-provider quota windows
+    when the provider exposes them, for example `Premium 86% left · Chat 100%
+    left`. If usage-window credentials are missing, the provider usage endpoint
+    fails, or the quota lookup times out, the reply footer keeps the token/cost
+    line and omits the quota text.
 - `/usage cost` -> local cost summary from OpenClaw session logs.
 
 Other surfaces:

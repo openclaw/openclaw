@@ -521,7 +521,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     throw new Error("expected embedded compaction session file");
   }
   expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
-  expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(compactionCall.workspaceDir).toBe("/tmp/task-repo");
   expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
   expect(callConfig.agents?.defaults?.workspace).toBe(

@@ -20,6 +20,26 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
 });
 
+describe("buildStatusMessage current time", () => {
+  it("surfaces a live current-time line so session_status returns the date/time", () => {
+    // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
+    const now = 1_751_529_600_000;
+    const text = buildStatusMessage({
+      now,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Current time:");
+    expect(text).toContain("(UTC)");
+    expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
+  });
+});
+
 describe("buildStatusMessage context window", () => {
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
@@ -127,5 +147,90 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("Model: anthropic/claude-haiku-4-5");
     expect(text).toContain("Context: 36k/1.0m");
     expect(text).not.toContain("Context: 36k/200k");
+  });
+
+  it("shows auto-fallback override label when model differs from configured default", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("qwen3.6-blue", "Qwen 3.6 Blue", 128_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: {
+        model: "ollama-cloud/deepseek-v4-pro",
+        contextTokens: 1_000_000,
+      },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      explicitConfiguredContextTokens: 1_000_000,
+      runtimeContextTokens: 128_000,
+      sessionEntry: {
+        sessionId: "auto-fallback-qwen",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "qwen3.6-blue",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "deepseek-v4-pro",
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro",
+        totalTokens: 50_000,
+        totalTokensFresh: true,
+      },
+      sessionKey: "agent:main:telegram:direct:auto-fallback",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
+    expect(text).toContain("auto fallback; config primary ollama-cloud/deepseek-v4-pro");
+    expect(text).toContain("check provider");
+    expect(text).not.toContain("pinned session");
+  });
+
+  it("does not label a configured subagent model as auto fallback", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("qwen3.6-blue", "Qwen 3.6 Blue", 128_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "ollama-cloud/deepseek-v4-pro" },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      sessionEntry: {
+        sessionId: "configured-subagent",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "qwen3.6-blue",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "qwen3.6-blue",
+      },
+      sessionKey: "agent:worker:subagent:configured",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
+    expect(text).not.toContain("auto fallback");
+    expect(text).not.toContain("check provider");
+    expect(text).not.toContain("pinned session");
   });
 });

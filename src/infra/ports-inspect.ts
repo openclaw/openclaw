@@ -52,8 +52,8 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   let processFields: Pick<PortListener, "pid" | "command"> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      const pid = Number.parseInt(line.slice(1), 10);
-      processFields = Number.isFinite(pid) ? { pid } : {};
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
     } else if (line.startsWith("c")) {
       processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {
@@ -321,7 +321,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const parts = line.split(/\s+/);
-    const localAddress = parts.find((part) => part.includes(`:${port}`));
+    const localAddress = parts.find((part) => parseTcpEndpoint(part)?.port === port);
     if (!localAddress) {
       continue;
     }

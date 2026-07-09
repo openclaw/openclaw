@@ -494,7 +494,7 @@ describe("secret provider integration proof harness", () => {
               OPENCLAW_ENTRY: fakeOpenClaw,
             },
           },
-          { timeoutKillGraceMs: 50, timeoutMs: 2_000 },
+          { timeoutKillGraceMs: 50, timeoutMs: 500 },
         );
         result.catch(() => {});
         await waitFor(() => fs.existsSync(readyPath));
@@ -756,6 +756,7 @@ describe("secret provider integration proof harness", () => {
 
     await expect(
       proof.runCommand(process.execPath, [scriptPath], {
+        timeoutKillGraceMs: 50,
         timeoutMs: 150,
       }),
     ).rejects.toThrow(/command timed out/u);
@@ -935,7 +936,7 @@ describe("secret provider integration proof harness", () => {
           `const proof = await import(${JSON.stringify(
             `${pathToFileURL(proofScriptPath).href}?case=parent-signal-${Date.now()}`,
           )});`,
-          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutMs: 30_000 });`,
+          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutKillGraceMs: 50, timeoutMs: 30_000 });`,
           "",
         ].join("\n"),
       );

@@ -17,9 +17,13 @@ enum RemoteOnboardingProbeState: Equatable {
 }
 
 @MainActor
-final class OnboardingController {
+final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     private var window: NSWindow?
+    /// Human description of work in flight ("Installing the Gateway…").
+    /// While set, closing the window asks for confirmation instead of quitting
+    /// setup mid-operation.
+    var busyReason: String?
 
     static func markComplete() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
@@ -47,6 +51,7 @@ final class OnboardingController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        window.delegate = self
         window.center()
         DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
@@ -55,6 +60,7 @@ final class OnboardingController {
     }
 
     func close() {
+        self.busyReason = nil
         self.window?.close()
         self.window = nil
     }
@@ -67,12 +73,39 @@ final class OnboardingController {
         self.close()
         self.show()
     }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let busyReason else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Setup is still working"
+        alert.informativeText =
+            "\(busyReason)\n\nYou can keep this window open until it finishes, " +
+            "or quit setup and pick it up again later from the menu bar."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Continue Setup")
+        alert.addButton(withTitle: "Quit Setup")
+        let response = alert.runModal()
+        return response == .alertSecondButtonReturn
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing === self.window else { return }
+        self.busyReason = nil
+        self.window = nil
+    }
 }
 
 struct OnboardingView: View {
+    enum CLIInstallPhase {
+        case idle
+        case installing
+        case startingService
+    }
+
     @State var currentPage = 0
     @State var isRequesting = false
     @State var installingCLI = false
+    @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
     @State var copied = false
     @State var monitoringPermissions = false
@@ -87,6 +120,7 @@ struct OnboardingView: View {
     @State var needsBootstrap = false
     @State var didAutoKickoff = false
     @State var showAdvancedConnection = false
+    @State var showRemoteChoices = false
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
@@ -94,7 +128,8 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var onboardingWizard = OnboardingWizardModel()
+    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var aiSetup = OnboardingAISetupModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
@@ -105,13 +140,32 @@ struct OnboardingView: View {
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
 
     let pageWidth: CGFloat = Self.windowWidth
-    let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
     let cliPageIndex = 2
-    let wizardPageIndex = 3
+    let aiPageIndex = 3
     let onboardingChatPageIndex = 8
 
     let permissionsPageIndex = 5
+
+    /// Chat-like pages shrink the mascot so the conversation gets the room.
+    var usesCompactHero: Bool {
+        [self.aiPageIndex, self.onboardingChatPageIndex].contains(self.activePageIndex)
+    }
+
+    var heroFrameHeight: CGFloat {
+        self.usesCompactHero ? 78 : 145
+    }
+
+    var heroSize: CGFloat {
+        self.usesCompactHero ? 64 : 130
+    }
+
+    /// Sized so the permissions page fits all capabilities without scrolling:
+    /// heroFrameHeight + contentHeight + ~72 (nav bar) fills windowHeight 752.
+    var contentHeight: CGFloat {
+        Self.windowHeight - self.heroFrameHeight - 72
+    }
+
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         showOnboardingChat: Bool,
@@ -120,8 +174,9 @@ struct OnboardingView: View {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
-            // and WhatsApp/Telegram setup is optional.
-            return showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            // but the AI check runs against the remote gateway so a broken
+            // remote model surfaces here, not in the first chat.
+            return showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         case .unconfigured:
             return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
@@ -164,20 +219,22 @@ struct OnboardingView: View {
         self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
-    var wizardPageOrderIndex: Int? {
-        self.pageOrder.firstIndex(of: self.wizardPageIndex)
-    }
-
-    var isWizardBlocking: Bool {
-        self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
-    }
-
     var isCLIBlocking: Bool {
         self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
+    /// Onboarding must not finish without working inference: the AI page
+    /// blocks Next until a candidate passed its live test (config is authored
+    /// server-side on that success). "Configure later" on the connection page
+    /// remains the explicit skip path.
+    var isAISetupBlocking: Bool {
+        self.activePageIndex == self.aiPageIndex &&
+            self.state.connectionMode != .unconfigured &&
+            !self.aiSetup.connected
+    }
+
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isWizardBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
