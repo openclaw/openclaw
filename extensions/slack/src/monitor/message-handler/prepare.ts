@@ -1034,8 +1034,8 @@ export async function prepareSlackMessage(params: {
     wasMentioned,
   });
   const senderGate = messageIngress.senderAccess.gate;
-  if (isRoom && senderGate?.allowed === false) {
-    logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+  if (isRoomish && senderGate?.allowed === false) {
+    logVerbose(`Blocked unauthorized slack sender ${senderId} (not in group sender allowlist)`);
     return null;
   }
   if (

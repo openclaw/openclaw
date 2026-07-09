@@ -1851,8 +1851,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("classifies MPIM group DMs as group chat context", async () => {
+    const slackCtx = createReplyToAllSlackCtx();
+    slackCtx.allowFrom = ["U1"];
     const prepared = await prepareMessageWith(
-      createReplyToAllSlackCtx(),
+      slackCtx,
       createSlackAccount({ replyToMode: "all" }),
       createSlackMessage({
         channel: "G123",
@@ -1864,6 +1866,23 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.isRoomish).toBe(true);
     expect(prepared.ctxPayload.ChatType).toBe("group");
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
+  });
+
+  it("blocks MPIM group DM messages from senders outside explicit allowFrom", async () => {
+    const slackCtx = createReplyToAllSlackCtx();
+    slackCtx.allowFrom = ["UOWNER"];
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "UATTACKER",
+      }),
+    );
+
+    expect(prepared).toBeNull();
   });
 
   it.each([
@@ -2236,6 +2255,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       replyTs: "400.500",
       followUpTs: "400.800",
       currentTs: "401.000",
+      allowFrom: ["U4"],
     });
 
     expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
