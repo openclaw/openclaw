@@ -311,10 +311,10 @@ describe("exec approvals store helpers", () => {
 
   it("does not rewrite already-initialized approvals", async () => {
     createHomeDir();
-    await ensureExecApprovals();
+    await ensureExecApprovalsSnapshot();
     const renameSpy = vi.spyOn(fs, "renameSync");
 
-    await ensureExecApprovals();
+    await ensureExecApprovalsSnapshot();
 
     expect(renameSpy).not.toHaveBeenCalled();
   });
