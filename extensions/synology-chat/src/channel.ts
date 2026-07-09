@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -441,7 +442,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
     outbound: {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
-
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendText: sendSynologyChatText,
       sendMedia: async (ctx) => {
         if (!ctx.mediaUrl) {

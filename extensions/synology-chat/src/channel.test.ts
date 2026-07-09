@@ -554,6 +554,32 @@ describe("createSynologyChatPlugin", () => {
         }),
       ).rejects.toThrow("not configured");
     });
+
+    it("sanitizeText strips internal tool-trace banners from outbound text", () => {
+      const plugin = createSynologyChatPlugin();
+      const sanitizeText = plugin.outbound.sanitizeText;
+      if (!sanitizeText) throw new Error("sanitizeText not defined");
+
+      const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+      const result = sanitizeText({ text, payload: { text } });
+      expect(result).not.toContain("⚠️");
+      expect(result).not.toContain("`search repos (agent)` failed");
+      expect(result).toContain("Done.");
+
+      const prose = "The pipeline has 3 open deals.";
+      const proseResult = sanitizeText({ text: prose, payload: { text: prose } });
+      expect(proseResult).toBe(prose);
+    });
+
+    it("sanitizeText returns empty string for trace-only replies", () => {
+      const plugin = createSynologyChatPlugin();
+      const sanitizeText = plugin.outbound.sanitizeText;
+      if (!sanitizeText) throw new Error("sanitizeText not defined");
+
+      const traceOnly = "⚠️ 🛠️ `search repos (agent)` failed";
+      const result = sanitizeText({ text: traceOnly, payload: { text: traceOnly } });
+      expect(result?.trim()).toBe("");
+    });
   });
 
   describe("gateway", () => {
