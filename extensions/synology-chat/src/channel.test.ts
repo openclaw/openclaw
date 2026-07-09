@@ -558,7 +558,7 @@ describe("createSynologyChatPlugin", () => {
     it("sanitizeText strips internal tool-trace banners from outbound text", () => {
       const plugin = createSynologyChatPlugin();
       const sanitizeText = plugin.outbound.sanitizeText;
-      if (!sanitizeText) throw new Error("sanitizeText not defined");
+      if (!sanitizeText) { throw new Error("sanitizeText not defined"); }
 
       const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
       const result = sanitizeText({ text, payload: { text } });
@@ -574,7 +574,7 @@ describe("createSynologyChatPlugin", () => {
     it("sanitizeText returns empty string for trace-only replies", () => {
       const plugin = createSynologyChatPlugin();
       const sanitizeText = plugin.outbound.sanitizeText;
-      if (!sanitizeText) throw new Error("sanitizeText not defined");
+      if (!sanitizeText) { throw new Error("sanitizeText not defined"); }
 
       const traceOnly = "⚠️ 🛠️ `search repos (agent)` failed";
       const result = sanitizeText({ text: traceOnly, payload: { text: traceOnly } });
