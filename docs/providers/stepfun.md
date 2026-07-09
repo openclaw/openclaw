@@ -160,6 +160,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 compat: {
                   supportsReasoningEffort: true,
                   supportedReasoningEfforts: ["low", "medium", "high"],
+                  maxTokensField: "max_tokens",
                   reasoningEffortMap: {
                     off: "low",
                     none: "low",
@@ -215,6 +216,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 compat: {
                   supportsReasoningEffort: true,
                   supportedReasoningEfforts: ["low", "medium", "high"],
+                  maxTokensField: "max_tokens",
                   reasoningEffortMap: {
                     off: "low",
                     none: "low",

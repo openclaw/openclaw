@@ -47,6 +47,7 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high"],
+              "maxTokensField": "max_tokens",
               "reasoningEffortMap": {
                 "off": "low",
                 "none": "low",
@@ -102,6 +103,7 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high"],
+              "maxTokensField": "max_tokens",
               "reasoningEffortMap": {
                 "off": "low",
                 "none": "low",

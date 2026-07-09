@@ -61,6 +61,7 @@ describe("stepfun provider registration", () => {
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high"],
+        maxTokensField: "max_tokens",
         reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
       },
     });
@@ -74,6 +75,7 @@ describe("stepfun provider registration", () => {
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high"],
+        maxTokensField: "max_tokens",
         reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
       },
     });
@@ -87,10 +89,13 @@ describe("stepfun provider registration", () => {
     const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
     const offReasoning = standardModel.thinkingLevelMap?.off;
     expect(offReasoning).toBe("low");
-    expect(
-      buildOpenAICompletionsParams(transportModel, context, { reasoning: offReasoning } as never)
-        .reasoning_effort,
-    ).toBe("low");
+    const lowPayload = buildOpenAICompletionsParams(transportModel, context, {
+      reasoning: offReasoning,
+      maxTokens: 128,
+    } as never);
+    expect(lowPayload.reasoning_effort).toBe("low");
+    expect(lowPayload.max_tokens).toBe(128);
+    expect(lowPayload).not.toHaveProperty("max_completion_tokens");
     expect(
       buildOpenAICompletionsParams(transportModel, context, { reasoning: "high" } as never)
         .reasoning_effort,
