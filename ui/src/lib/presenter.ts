@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "../api/types.ts";
 // Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
@@ -45,10 +44,6 @@ export function formatEventPayload(payload: unknown): string {
   } catch {
     return formatUnknownText(payload);
   }
-}
-
-export function formatEventPayloadPreview(payload: unknown, maxLength = 120): string {
-  return truncateUtf16Safe(formatEventPayload(payload), maxLength);
 }
 
 export function formatCronState(job: CronJob) {
