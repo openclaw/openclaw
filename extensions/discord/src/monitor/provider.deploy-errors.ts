@@ -1,5 +1,4 @@
 // Discord provider module implements model/runtime integration.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { inspect } from "node:util";
 import {
   parseStrictFiniteNumber,
@@ -7,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { RateLimitError } from "../internal/discord.js";
 
 const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;
@@ -347,7 +347,8 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
     }
     if (bodyText) {
       const maxLen = 800;
-      const trimmed = bodyText.length > maxLen ? `${truncateUtf16Safe(bodyText, maxLen)}...` : bodyText;
+      const trimmed =
+        bodyText.length > maxLen ? `${truncateUtf16Safe(bodyText, maxLen)}...` : bodyText;
       details.push(`body=${trimmed}`);
     }
   }
