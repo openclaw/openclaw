@@ -507,6 +507,9 @@ describe("context notice", () => {
   });
 
   it("shows plan windows and hides cost sections for subscription-billed sessions", () => {
+    // Single shared timestamp: both auth rows must dedupe to one group, and the
+    // 45s pad keeps formatQuotaReset at exactly "2h" despite wall-clock drift.
+    const fiveHourReset = Date.now() + 2 * 3_600_000 + 45_000;
     const authStatus: ModelAuthStatusResult = {
       ts: Date.now(),
       providers: [
@@ -519,7 +522,7 @@ describe("context notice", () => {
             providerId: "anthropic",
             plan: "Max (20x)",
             windows: [
-              { label: "5h", usedPercent: 22, resetAt: Date.now() + 2 * 3_600_000 },
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
               { label: "Week", usedPercent: 25 },
               { label: "Fable", usedPercent: 92 },
             ],
@@ -535,7 +538,7 @@ describe("context notice", () => {
             providerId: "anthropic",
             plan: "Max (20x)",
             windows: [
-              { label: "5h", usedPercent: 22, resetAt: Date.now() + 2 * 3_600_000 },
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
               { label: "Week", usedPercent: 25 },
               { label: "Fable", usedPercent: 92 },
             ],
