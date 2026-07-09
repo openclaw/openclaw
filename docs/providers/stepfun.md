@@ -35,18 +35,18 @@ Auth env var: `STEPFUN_API_KEY`
 
 Standard (`stepfun`):
 
-| Model ref                | Context | Max output | Notes                         |
-| ------------------------ | ------- | ---------- | ----------------------------- |
-| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model        |
+| Model ref                | Context | Max output | Notes                          |
+| ------------------------ | ------- | ---------- | ------------------------------ |
+| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model         |
 | `stepfun/step-3.7-flash` | 262,144 | 262,144    | Multimodal image input support |
 
 Step Plan (`stepfun-plan`):
 
-| Model ref                          | Context | Max output | Notes                         |
-| ---------------------------------- | ------- | ---------- | ----------------------------- |
-| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model       |
+| Model ref                          | Context | Max output | Notes                          |
+| ---------------------------------- | ------- | ---------- | ------------------------------ |
+| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model        |
 | `stepfun-plan/step-3.7-flash`      | 262,144 | 262,144    | Multimodal image input support |
-| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model    |
+| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model     |
 
 ## Getting started
 
