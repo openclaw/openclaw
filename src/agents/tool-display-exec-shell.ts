@@ -240,6 +240,7 @@ export function unwrapShellWrapper(command: string): string {
 type HeredocMarker = {
   value: string;
   stripLeadingTabs: boolean;
+  operatorIndex: number;
 };
 
 function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
@@ -290,7 +291,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
     value += char;
   }
 
-  return value ? { value, stripLeadingTabs } : undefined;
+  return value ? { value, stripLeadingTabs, operatorIndex } : undefined;
 }
 
 function findHeredocBodyEnd(
@@ -319,6 +320,7 @@ function findHeredocBodyEnd(
 export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
+  visitHeredocBody?: (operatorIndex: number, start: number, end: number) => void,
 ): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
@@ -356,15 +358,20 @@ export function scanTopLevelChars(
     if (char === "\n" && pendingHeredocs.length > 0) {
       let bodyStart = i + 1;
       let bodyEnd: number | undefined;
+      const bodies: Array<{ marker: HeredocMarker; start: number; end: number }> = [];
       for (const marker of pendingHeredocs) {
         bodyEnd = findHeredocBodyEnd(command, marker, bodyStart);
         if (bodyEnd === undefined) {
           break;
         }
+        bodies.push({ marker, start: bodyStart, end: bodyEnd });
         bodyStart = bodyEnd + 1;
       }
       pendingHeredocs = [];
       if (bodyEnd !== undefined) {
+        for (const body of bodies) {
+          visitHeredocBody?.(body.marker.operatorIndex, body.start, body.end);
+        }
         i = bodyEnd - 1;
         continue;
       }
@@ -376,44 +383,61 @@ export function scanTopLevelChars(
   }
 }
 
+function splitTopLevel(
+  command: string,
+  separatorLength: (char: string, index: number) => number,
+): string[] {
+  const parts: string[] = [];
+  let segmentStart = 0;
+  let sliceStart = 0;
+  let chunks: string[] = [];
+
+  scanTopLevelChars(
+    command,
+    (char, index) => {
+      const length = separatorLength(char, index);
+      if (length === 0) {
+        return true;
+      }
+      parts.push(chunks.join("") + command.slice(sliceStart, index));
+      segmentStart = index + length;
+      sliceStart = segmentStart;
+      chunks = [];
+      return true;
+    },
+    (operatorIndex, bodyStart, bodyEnd) => {
+      if (operatorIndex < segmentStart) {
+        chunks.push(command.slice(sliceStart, bodyStart));
+        sliceStart = bodyEnd;
+      }
+    },
+  );
+
+  parts.push(chunks.join("") + command.slice(sliceStart));
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
+  return splitTopLevel(command, (char, index) => {
     if (char === ";") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
-      return true;
+      return 1;
     }
     if ((char === "&" || char === "|") && command[index + 1] === char) {
-      parts.push(command.slice(start, index));
-      start = index + 2;
-      return true;
+      return 2;
     }
-    return true;
+    return 0;
   });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 /** Splits a command on top-level single pipes without splitting `||`. */
 export function splitTopLevelPipes(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
+  return splitTopLevel(command, (char, index) => {
     if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
+      return 1;
     }
-    return true;
+    return 0;
   });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 function parseChdirTarget(head: string): string | undefined {

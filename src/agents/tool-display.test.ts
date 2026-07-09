@@ -9,6 +9,18 @@ import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
+  it("keeps same-line heredoc operators from attaching the body to later stages", () => {
+    const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
+    const stages = splitTopLevelStages(command);
+
+    expect(stages).toHaveLength(2);
+    expect(stages[0]).toBe("cat <<EOF");
+    expect(stages[1]).toContain("printf ok");
+    expect(stages[1]).toContain("printf done");
+    expect(stages[1]).not.toContain("body | secret");
+    expect(splitTopLevelPipes(stages[1] ?? "")).toHaveLength(1);
+  });
+
   it("summarizes tool-search code targets from described tool ids", () => {
     expect(
       resolveToolSearchCodeDisplayTarget({
