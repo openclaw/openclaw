@@ -148,6 +148,7 @@ function readLocationPaths(locations: unknown): string[] {
 }
 
 function resolveToolPathCandidates(params: {
+  includeLocations?: boolean;
   toolCall?: AcpApprovalToolCall;
   toolName: string | undefined;
   toolTitle: string | undefined;
@@ -156,7 +157,7 @@ function resolveToolPathCandidates(params: {
   return [
     readFirstStringValue(rawInput, ["path", "file_path", "filePath"]),
     extractPathFromToolTitle(params.toolTitle, params.toolName),
-    ...readLocationPaths(params.toolCall?.locations),
+    ...(params.includeLocations ? readLocationPaths(params.toolCall?.locations) : []),
   ].filter((value): value is string => value !== undefined);
 }
 
@@ -202,6 +203,7 @@ export function classifyAcpToolApproval(params: {
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
   if (toolName === "read" && isTrustedToolId) {
     const rawPaths = resolveToolPathCandidates({
+      includeLocations: false,
       toolCall: params.toolCall,
       toolName,
       toolTitle: params.toolCall?.title ?? undefined,
@@ -217,6 +219,7 @@ export function classifyAcpToolApproval(params: {
   }
   if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
     const rawPaths = resolveToolPathCandidates({
+      includeLocations: true,
       toolCall: params.toolCall,
       toolName,
       toolTitle: params.toolCall?.title ?? undefined,

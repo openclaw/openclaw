@@ -47,6 +47,19 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
+  it("does not auto-approve reads from locations-only metadata", () => {
+    expect(
+      classify({
+        title: "read",
+        locations: [{ path: "src/index.ts" }],
+      }),
+    ).toEqual({
+      toolName: "read",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
   it("auto-approves readonly search tools", () => {
     expect(
       classify({
