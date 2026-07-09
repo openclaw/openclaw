@@ -119,7 +119,6 @@ export type ReadResponseTextResult = {
 
 const RESPONSE_CHARSET_SCAN_BYTES = 4096;
 const latin1Decoder = new TextDecoder("latin1");
-const utf8Decoder = new TextDecoder("utf-8");
 
 function normalizeCharset(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/^["']|["']$/g, "") ?? "";
@@ -215,13 +214,14 @@ function responseContentType(res: Response): string | null {
   return typeof headers?.get === "function" ? headers.get("content-type") : null;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
   const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  const options = truncated ? { stream: true } : undefined;
   try {
-    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+    return new TextDecoder(charset ?? "utf-8").decode(bytes, options);
   } catch {
-    return utf8Decoder.decode(bytes);
+    return new TextDecoder("utf-8").decode(bytes, options);
   }
 }
 
@@ -294,7 +294,7 @@ export async function readResponseText(
     }
 
     const bytes = concatBytes(parts, bytesRead);
-    return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+    return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
   }
 
   if (maxBytes) {
