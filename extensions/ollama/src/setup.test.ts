@@ -557,6 +557,59 @@ describe("ollama setup", () => {
       }
     });
 
+    it("bounds oversized pull body and cancels the stream", async () => {
+      const chunk = new Uint8Array(1024 * 1024); // 1 MiB chunk
+      let readCount = 0;
+      let canceled = false;
+      // 64 chunks × 1 MiB = 64 MiB — exceeds the 16 MiB cap
+      const oversizedBody = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= 64) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      const prompter = {
+        progress: vi.fn(() => progress),
+      } as unknown as WizardPrompter;
+
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/api/tags")) {
+          return jsonResponse({ models: [] });
+        }
+        if (url.endsWith("/api/pull")) {
+          return new Response(oversizedBody, { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await ensureOllamaModelPulled({
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
+        prompter,
+      }).catch((err: unknown) => err);
+
+      // Stream must be cancelled well before all 64 MiB are consumed.
+      expect(readCount).toBeLessThan(64);
+      expect(canceled).toBe(true);
+      // The spinner must surface the canonical bounded-read error.
+      expect(progress.stop).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^Failed to download gemma4: Ollama pull body exceeded \d+ bytes \(received \d+\)$/,
+        ),
+      );
+    });
+
     it("skips pull when model is already available", async () => {
       const prompter = {} as unknown as WizardPrompter;
 

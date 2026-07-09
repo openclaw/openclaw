@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createSseByteGuard } from "./sse-byte-guard.js";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -58,6 +59,7 @@ export const OLLAMA_INCOMPLETE_STREAM_ERROR = "Ollama API stream ended without a
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OLLAMA_NATIVE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -1045,7 +1047,7 @@ export function buildAssistantMessage(
 }
 
 export async function* parseNdjsonStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: Pick<ReadableStreamDefaultReader<Uint8Array>, "read">,
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -1189,7 +1191,12 @@ function createRawOllamaStreamFn(
             throw new Error("Ollama API returned empty response body");
           }
 
-          const reader = response.body.getReader();
+          const rawReader = response.body.getReader();
+          const reader = createSseByteGuard(rawReader, {
+            maxBytes: OLLAMA_NATIVE_STREAM_MAX_BYTES,
+            onOverflow: ({ size, maxBytes }) =>
+              new Error(`Ollama streaming body exceeded ${maxBytes} bytes (received ${size})`),
+          });
           let accumulatedRawContent = "";
           let accumulatedVisibleContent = "";
           let accumulatedThinking = "";

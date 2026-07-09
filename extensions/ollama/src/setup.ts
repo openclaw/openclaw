@@ -18,6 +18,7 @@ import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onbo
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createSseByteGuard } from "./sse-byte-guard.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -48,6 +49,7 @@ const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
 const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const OLLAMA_PULL_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -177,7 +179,7 @@ type OllamaPullChunk = {
 type OllamaPullResult = { ok: true } | { ok: false; message: string };
 
 async function readOllamaPullChunkWithIdleTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: Pick<ReadableStreamDefaultReader<Uint8Array>, "read" | "cancel">,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -251,7 +253,12 @@ async function pullOllamaModelCore(params: {
         return { ok: false, message: `Failed to download ${modelName} (no response body)` };
       }
 
-      const reader = response.body.getReader();
+      const rawReader = response.body.getReader();
+      const reader = createSseByteGuard(rawReader, {
+        maxBytes: OLLAMA_PULL_STREAM_MAX_BYTES,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Ollama pull body exceeded ${maxBytes} bytes (received ${size})`),
+      });
       const decoder = new TextDecoder();
       let buffer = "";
       const layers = new Map<string, { total: number; completed: number }>();

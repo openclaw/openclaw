@@ -1,3 +1,4 @@
+import { createSseByteGuard } from "./sse-byte-guard.js";
 // Ollama tests cover stream runtime plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1600,6 +1601,182 @@ describe("parseNdjsonStream", () => {
       | undefined;
     expect(args?.retries).toBe(3);
     expect(args?.delayMs).toBe(2500);
+  });
+});
+
+describe("parseNdjsonStream bounded read (16 MiB cap)", () => {
+  // Layer 1: inline deterministic overflow. 32 × 1 MiB chunks advertised by a
+  // fake pull stream. The wrapped reader must cancel and throw the canonical
+  // overflow error after ~16 MiB, long before the full 32 MiB is drained.
+  it("cancels and throws when bytes exceed 16 MiB", async () => {
+    const CHUNK = 1024 * 1024; // 1 MiB
+    const TOTAL_CHUNKS = 32; // 32 MiB server-side
+    let pullCount = 0;
+    let cancelReason: unknown;
+    const overflowing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount > TOTAL_CHUNKS) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    const guarded = createSseByteGuard(overflowing.getReader(), {
+      maxBytes: 16 * 1024 * 1024,
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`Ollama streaming body exceeded ${maxBytes} bytes (received ${size})`),
+    });
+
+    let thrown: Error | undefined;
+    try {
+      for await (const _ of parseNdjsonStream(guarded)) {
+        // exhaust — overflow must fire on the read that crosses 16 MiB
+      }
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toMatch(
+      /^Ollama streaming body exceeded 16777216 bytes \(received \d+\)$/,
+    );
+    // pullCount must be capped somewhere in [17, 20]: 16 MiB exact cap leaves
+    // room for one in-flight chunk read plus one TCP-coalesced tail.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect(guarded.overflowed()).toBe(true);
+    expect(guarded.cancelled()).toBe(true);
+  });
+
+  // Layer 2: negative control. A small valid NDJSON response must drain
+  // end-to-end without overflow. Proves the cap is the cause of rejection,
+  // not body structure.
+  it("drains small valid NDJSON without overflow", async () => {
+    const lines = [
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"hello"},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5,"eval_count":2}',
+    ];
+    const reader = mockNdjsonReader(lines);
+    const guarded = createSseByteGuard(reader, {
+      maxBytes: 16 * 1024 * 1024,
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`Ollama streaming body exceeded ${maxBytes} bytes (received ${size})`),
+    });
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(guarded)) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(2);
+    expect(chunks[1].done).toBe(true);
+    expect(guarded.totalBytes()).toBeLessThan(16 * 1024 * 1024);
+    expect(guarded.overflowed()).toBe(false);
+  });
+
+  // Layer 3: loopback http.createServer real-wire proof. Drives the
+  // production `createSseByteGuard` over a real TCP socket. Server streams
+  // unbounded 1 MiB chunks with no newline terminator; client overflows at
+  // 16 MiB and observes the same canonical error message.
+  it("bounds real TCP-streamed NDJSON body without content-length", async () => {
+    const { createServer } = await import("node:http");
+    type AddressInfo = { address: string; family: string; port: number };
+    const CHUNK = 1024 * 1024;
+    const TOTAL_CHUNKS = 64;
+    let bytesSent = 0;
+    let aborted = false;
+
+    const server = createServer((req, res) => {
+      res.writeHead(200, {
+        "Content-Type": "application/x-ndjson",
+        "Transfer-Encoding": "chunked",
+      });
+      let i = 0;
+      const interval = setInterval(() => {
+        if (aborted || i >= TOTAL_CHUNKS) {
+          clearInterval(interval);
+          res.end();
+          return;
+        }
+        i += 1;
+        bytesSent += CHUNK;
+        res.write(new Uint8Array(CHUNK));
+      }, 1);
+      req.on("close", () => {
+        aborted = true;
+        clearInterval(interval);
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address() as AddressInfo;
+    const port = address.port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+        method: "POST",
+        body: "{}",
+      });
+      if (!response.body) {
+        throw new Error("loopback test setup: empty response body");
+      }
+      const guarded = createSseByteGuard(response.body.getReader(), {
+        maxBytes: 16 * 1024 * 1024,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Ollama streaming body exceeded ${maxBytes} bytes (received ${size})`),
+      });
+
+      let thrown: Error | undefined;
+      let totalRead = 0;
+      try {
+        // Keep reading until overflow throws or stream closes. Don't cap the
+        // read count; trust the server will cancel once the cap fires.
+        while (true) {
+          const result = await guarded.read();
+          if (result.done) {
+            break;
+          }
+          totalRead += result.value.byteLength;
+        }
+      } catch (err) {
+        thrown = err as Error;
+      }
+
+      // Print quantitative read-out for PR body evidence.
+      console.log(
+        `[layer3 loopback proof] cap=16777216, totalRead=${totalRead}, bytesSent=${bytesSent}, overflowed=${guarded.overflowed()}, cancelled=${guarded.cancelled()}, receivedBytes=${thrown?.message.match(/received (\d+)/)?.[1] ?? "?"}`,
+      );
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown?.message).toMatch(
+        /^Ollama streaming body exceeded 16777216 bytes \(received \d+\)$/,
+      );
+      // The cap fires when `total + chunkLen > cap`. The thrown error's
+      // `size` is that crossed value, so receivedBytes is strictly > cap.
+      // totalRead is the sum of chunks actually returned (none cross cap),
+      // so totalRead <= cap. bytesSent is what the server kept writing
+      // before our cancel propagated, so bytesSent > totalRead.
+      const receivedMatch = thrown?.message.match(/received (\d+)/);
+      const receivedBytes = receivedMatch ? Number(receivedMatch[1]) : 0;
+      expect(receivedBytes).toBeGreaterThan(16 * 1024 * 1024);
+      expect(totalRead).toBeLessThanOrEqual(16 * 1024 * 1024);
+      expect(totalRead).toBeLessThan(bytesSent);
+      expect(bytesSent).toBeLessThanOrEqual(TOTAL_CHUNKS * CHUNK);
+      expect(guarded.overflowed()).toBe(true);
+      expect(guarded.cancelled()).toBe(true);
+    } finally {
+      aborted = true;
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
 
