@@ -192,9 +192,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
               if (!ptyCommand) {
                 throw new Error("PTY command cannot be empty");
               }
+              // Escape the command with POSIX single quotes so shell
+              // metacharacters (;, &&, |, $(), backticks) in the command text
+              // are passed literally to the PTY shell rather than interpreted
+              // by the outer -c shell.
+              const escaped = `'${ptyCommand.replace(/'/g, `'\\''`)}'`;
               return await createPtyAdapter({
                 shell,
-                args: [...shellArgs, ptyCommand],
+                args: [...shellArgs, escaped],
                 cwd: input.cwd,
                 env: input.env,
               });

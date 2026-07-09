@@ -56,7 +56,7 @@ describe("process supervisor PTY command contract", () => {
     createPtyAdapterMock.mockClear();
   });
 
-  it("passes PTY command verbatim to shell args", async () => {
+  it("passes PTY command via shell args with POSIX single-quote escaping", async () => {
     createPtyAdapterMock.mockResolvedValue(createStubPtyAdapter());
     const supervisor = createProcessSupervisor();
     const command = `printf '%s\\n' "a b" && printf '%s\\n' '$HOME'`;
@@ -73,7 +73,9 @@ describe("process supervisor PTY command contract", () => {
     expect(exit.reason).toBe("exit");
     expect(createPtyAdapterMock).toHaveBeenCalledTimes(1);
     const params = firstPtyAdapterParams();
-    expect(params.args).toEqual(["-c", command]);
+    // The command is single-quote escaped to prevent shell injection through -c.
+    const expectedEscaped = `'${command.replace(/'/g, `'\\''`)}'`;
+    expect(params.args).toEqual(["-c", expectedEscaped]);
   });
 
   it("rejects empty PTY command", async () => {
