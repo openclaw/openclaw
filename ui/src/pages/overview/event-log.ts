@@ -4,7 +4,7 @@ import type { EventLogEntry } from "../../api/event-log.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { formatEventPayload } from "../../lib/presenter.ts";
+import { formatEventPayloadPreview } from "../../lib/presenter.ts";
 
 type OverviewEventLogProps = {
   events: readonly EventLogEntry[];
@@ -32,7 +32,7 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
               <span class="ov-event-log-name">${entry.event}</span>
               ${entry.payload
                 ? html`<span class="ov-event-log-payload muted"
-                    >${formatEventPayload(entry.payload).slice(0, 120)}</span
+                    >${formatEventPayloadPreview(entry.payload)}</span
                   >`
                 : nothing}
             </div>

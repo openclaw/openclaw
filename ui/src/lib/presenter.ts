@@ -46,6 +46,31 @@ export function formatEventPayload(payload: unknown): string {
   }
 }
 
+function truncateUtf16Safe(text: string, maxLength: number): string {
+  if (maxLength <= 0) {
+    return "";
+  }
+  const preview = text.slice(0, maxLength);
+  if (preview.length === 0 || preview.length === text.length) {
+    return preview;
+  }
+  const lastCodeUnit = preview.charCodeAt(preview.length - 1);
+  const nextCodeUnit = text.charCodeAt(preview.length);
+  if (
+    lastCodeUnit >= 0xd800 &&
+    lastCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff
+  ) {
+    return preview.slice(0, -1);
+  }
+  return preview;
+}
+
+export function formatEventPayloadPreview(payload: unknown, maxLength = 120): string {
+  return truncateUtf16Safe(formatEventPayload(payload), maxLength);
+}
+
 export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
