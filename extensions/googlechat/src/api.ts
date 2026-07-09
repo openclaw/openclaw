@@ -15,6 +15,7 @@ import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./ty
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
+const GOOGLE_CHAT_API_REQUEST_TIMEOUT_MS = 30_000;
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
   return readProviderJsonResponse<T>(response, label);
@@ -53,6 +54,7 @@ async function withGoogleChatResponse<T>(params: {
         Authorization: `Bearer ${token}`,
       },
     },
+    timeoutMs: GOOGLE_CHAT_API_REQUEST_TIMEOUT_MS,
     auditContext,
   });
   try {
