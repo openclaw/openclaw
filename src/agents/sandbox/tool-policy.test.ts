@@ -305,6 +305,34 @@ describe("sandbox/tool-policy", () => {
     );
   });
 
+  it("keeps redacted session keys UTF-16 safe", () => {
+    const sessionKey = `abcde\u{1F600}middle123456`;
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["browser"],
+          },
+        },
+      },
+    };
+
+    const message = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "browser",
+    });
+
+    const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
+    expect(sessionLine).toBe("Session: abcde…123456");
+    expect(sessionLine).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
   it("avoids terminal injection for control-character session keys", () => {
     const sessionKey = "agent:main:abcde\n12345";
     const cfg: OpenClawConfig = {
