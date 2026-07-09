@@ -31,6 +31,7 @@ import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
   failIfNixDaemonInstallMode,
+  filterDaemonEnv,
   formatRuntimeStatus,
   parsePort,
   resolveRuntimeStatusColor,
@@ -255,7 +256,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.writeJson(payload);
+    const safeEnvironment = filterDaemonEnv(command?.environment);
+    defaultRuntime.writeJson({
+      service: {
+        ...payload.service,
+        command: command
+          ? {
+              ...command,
+              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+            }
+          : command,
+      },
+    });
     return;
   }
 

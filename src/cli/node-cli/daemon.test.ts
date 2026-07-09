@@ -1,6 +1,7 @@
 // Node daemon tests cover node daemon command runtime behavior and errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
 
 const mocks = vi.hoisted(() => {
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => {
     stop: vi.fn(),
     restart: vi.fn(),
     isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn(async () => null),
+    readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
     readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "running" })),
   };
   return {
@@ -196,5 +197,29 @@ describe("runNodeDaemonStatus", () => {
     expect(stdout()).toContain("Restart attempts: node restart log");
     expect(stderr()).not.toContain("Logs: node service log");
     expect(stderr()).not.toContain("Restart attempts: node restart log");
+  });
+
+  it("redacts service credentials from JSON status output", async () => {
+    mocks.service.readCommand.mockResolvedValue({
+      programArguments: ["node", "node-host"],
+      environment: {
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_GATEWAY_TOKEN: "gateway-token",
+        OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
+      },
+    });
+
+    await runNodeDaemonStatus({ json: true });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      service: expect.objectContaining({
+        command: expect.objectContaining({
+          environment: { OPENCLAW_PROFILE: "work" },
+        }),
+      }),
+    });
+    const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
+    expect(payload).not.toContain("gateway-token");
+    expect(payload).not.toContain("gateway-password");
   });
 });
