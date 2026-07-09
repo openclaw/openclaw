@@ -3,7 +3,7 @@
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
  * persistence hooks without contacting real providers.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -39,6 +39,12 @@ beforeEach(() => {
   authProfileUsageTesting.setDepsForTest({
     updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
   });
+});
+
+afterEach(() => {
+  authProfileUsageTesting.setDepsForTest(null);
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {

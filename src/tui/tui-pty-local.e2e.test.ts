@@ -597,8 +597,6 @@ describe.concurrent("TUI PTY real backends", () => {
           }
           if (fixture.kind === "gateway") {
             await fixture.run.write("/stop\r", { delay: false });
-          } else {
-            await fixture.run.write("\u001b", { delay: false });
           }
           await fixture.run.waitForOutput(
             "run aborted: edit tool validation failed:",
