@@ -1923,8 +1923,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const opts = firstAgentOpts();
     const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
     expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
+    expect(extraSystemPrompt).toContain("a".repeat(59_999));
     expect(extraSystemPrompt).not.toContain("😀");
-    expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
     await ensureResponseConsumed(res);
   });
 
