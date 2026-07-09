@@ -168,6 +168,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
+import { supportsModelTools } from "../model-tool-support.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -2202,6 +2203,44 @@ describe("resolveModel", () => {
 
     expect(model.contextWindow).toBe(262144);
     expect(model.maxTokens).toBe(32768);
+  });
+
+  it("preserves custom provider model compat.supportsTools for runtime tool capability", () => {
+    const cfg = {
+      models: {
+        providers: {
+          meta: {
+            api: "openai-completions",
+            baseUrl: "https://api.meta.ai/v1",
+            models: [
+              {
+                ...makeModel("muse-spark-1.1"),
+                compat: { supportsTools: true },
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "meta/muse-spark-1.1": { alias: "Meta Muse Spark 1.1" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("meta", "muse-spark-1.1", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model).toMatchObject({
+      provider: "meta",
+      id: "muse-spark-1.1",
+      api: "openai-completions",
+      baseUrl: "https://api.meta.ai/v1",
+      compat: { supportsTools: true },
+    });
+    expect(supportsModelTools(model)).toBe(true);
   });
 
   it("merges configured model params with agent defaults for resolved models", () => {

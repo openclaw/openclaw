@@ -8633,6 +8633,46 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("tool_choice");
   });
 
+  it("keeps tools in completions payload when custom model compat sets supportsTools to true", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "muse-spark-1.1",
+        name: "Meta Muse Spark 1.1",
+        api: "openai-completions",
+        provider: "meta",
+        baseUrl: "https://api.meta.ai/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+        compat: {
+          supportsTools: true,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "exec",
+            description: "Run a command",
+            parameters: {
+              type: "object",
+              properties: {
+                cmd: { type: "string" },
+              },
+              required: ["cmd"],
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { name?: string } }> };
+
+    expect(params.tools?.map((tool) => tool.function?.name)).toEqual(["exec"]);
+  });
+
   it("omits tool-history tools:[] fallback when model compat sets supportsTools to false", () => {
     const params = buildOpenAICompletionsParams(
       {

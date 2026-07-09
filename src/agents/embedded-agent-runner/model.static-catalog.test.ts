@@ -415,6 +415,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
         api: "google-generative-ai",
         authHeader: true,
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        params: { providerDefault: true },
         request: { headers: { "X-Static-Catalog": "yes" } },
         models: [
           {
@@ -425,6 +426,8 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
             cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
             contextWindow: 1_048_576,
             maxTokens: 65_536,
+            params: { modelDefault: true },
+            compat: { supportsTools: true },
             mediaInput: { image: { maxSidePx: 3072, tokenMode: "provider" } },
           },
         ],
@@ -441,6 +444,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       api: "google-generative-ai",
       authHeader: true,
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      compat: { supportsTools: true },
       contextTokens: undefined,
       contextWindow: 1_048_576,
       cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
@@ -450,6 +454,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       maxTokens: 65_536,
       mediaInput: { image: { maxSidePx: 3072, tokenMode: "provider" } },
       name: "Gemini 3.1 Pro Preview",
+      params: { modelDefault: true, providerDefault: true },
       provider: "google",
       reasoning: true,
     });

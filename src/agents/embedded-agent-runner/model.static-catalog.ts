@@ -108,6 +108,14 @@ function modelFromProviderStaticCatalog(params: {
   const [model] = buildInlineProviderModels({
     [params.provider]: { ...params.providerConfig, models: [params.model] },
   });
+  const mergedParams =
+    (model?.params ?? params.model.params ?? params.providerConfig.params)
+      ? {
+          ...(params.providerConfig.params ?? {}),
+          ...(params.model.params ?? {}),
+          ...(model?.params ?? {}),
+        }
+      : undefined;
   return {
     ...model,
     id: model?.id ?? params.model.id,
@@ -130,6 +138,9 @@ function modelFromProviderStaticCatalog(params: {
       params.model.maxTokens ??
       params.providerConfig.maxTokens ??
       DEFAULT_CONTEXT_TOKENS,
+    params: mergedParams,
+    compat: model?.compat ?? params.model.compat,
+    mediaInput: model?.mediaInput ?? params.model.mediaInput,
     ...(params.providerConfig.authHeader !== undefined
       ? { authHeader: params.providerConfig.authHeader }
       : {}),
