@@ -18,6 +18,7 @@ import {
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
@@ -116,6 +117,60 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("permanently rejects provider-blocked rows before backoff or reconciliation", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "blocked" }],
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now(),
+      recoveryState: "unknown_after_send",
+      platformSendStartedAt: Date.now(),
+    });
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const reconcileUnknownSend = vi.fn();
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery, reconcileUnknownSend },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "slack",
+        phase: "recovery",
+        to: "C123",
+      }),
+    );
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 1,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery: () => ({ status: "allowed" }) },
+    });
+    await runRecovery({ deliver });
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {

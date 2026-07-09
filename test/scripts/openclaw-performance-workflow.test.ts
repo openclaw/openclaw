@@ -102,6 +102,9 @@ describe("OpenClaw performance workflow", () => {
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+    expect(runKova.run).toContain(
+      "profiling-affected resource thresholds with no baseline regression",
+    );
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
