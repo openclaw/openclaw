@@ -1508,6 +1508,77 @@ describe("devices cli password-mode fallback", () => {
     );
   }
 
+  function rejectGatewayWithMissingPairingScope() {
+    callGateway.mockRejectedValueOnce(new Error("missing scope: operator.pairing"));
+  }
+
+  it("falls back to local list when password loopback auth lacks pairing scope", async () => {
+    rejectGatewayWithMissingPairingScope();
+    const localPairing = {
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "device-1",
+          publicKey: "pk",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          clientId: "openclaw-macos",
+          clientMode: "cli",
+          ts: 1,
+        },
+      ],
+      paired: [],
+    };
+    listDevicePairing.mockResolvedValueOnce(localPairing).mockResolvedValueOnce(localPairing);
+
+    await runDevicesCommand(["list"]);
+
+    expect(listDevicePairing).toHaveBeenCalledTimes(1);
+    expect(readRuntimeOutput()).toContain(fallbackNotice);
+    expect(readRuntimeOutput()).toContain("req-1");
+  });
+
+  it("falls back to local approve when password loopback auth lacks pairing scope", async () => {
+    rejectGatewayWithMissingPairingScope();
+    rejectGatewayWithMissingPairingScope();
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "device-1",
+          publicKey: "pk",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          clientId: "openclaw-macos",
+          clientMode: "cli",
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+    approveDevicePairing.mockResolvedValueOnce({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk",
+        roles: ["operator"],
+        scopes: ["operator.pairing"],
+        approvedAtMs: 100,
+        createdAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesApprove(["req-1"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(readRuntimeOutput()).toContain(fallbackNotice);
+    expect(readRuntimeOutput()).toContain("Approved");
+  });
+
   it("falls back to local approve when gateway returns unknown requestId on loopback", async () => {
     callGateway.mockResolvedValueOnce({
       pending: [

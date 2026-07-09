@@ -308,6 +308,11 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
   );
 }
 
+function isMissingOperatorScopeError(error: unknown, scope: OperatorScope): boolean {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  return message.includes("missing scope") && message.includes(scope);
+}
+
 function isUnknownRequestIdError(error: unknown): boolean {
   const maybeGatewayError =
     typeof error === "object" && error !== null
@@ -503,6 +508,16 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
   } catch (error) {
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
+      if (isMissingOperatorScopeError(error, PAIRING_SCOPE) && isLocalLoopbackGateway(opts)) {
+        const local = await listDevicePairing();
+        if (opts.json !== true) {
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          pending: local.pending as PendingDevice[],
+          paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+        };
+      }
       throw error;
     }
     const local = await listDevicePairing();
@@ -558,6 +573,15 @@ async function approvePairingWithFallback(
     }
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
+      if (isMissingOperatorScopeError(error, PAIRING_SCOPE)) {
+        // Password/shared-secret loopback auth can connect device-less but lose
+        // operator scopes before the gateway reaches requestId validation.
+        const localApproved = await tryLocalApproveForLoopback(opts, requestId, originalRequest);
+        if (localApproved !== undefined) {
+          return localApproved;
+        }
+        return null;
+      }
       if (isUnknownRequestIdError(error)) {
         // Password auth mode: the gateway accepted the connection but returned
         // a method-level unknown-requestId error (the pending request was
