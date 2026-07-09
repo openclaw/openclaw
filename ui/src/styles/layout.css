@@ -479,30 +479,6 @@
   flex-direction: column;
 }
 
-/* macOS app only: the native window hides its titlebar and injects
-   html.openclaw-native-macos plus --openclaw-native-titlebar-height (see
-   DashboardWindowController.installNativeChromeScript), leaving an empty
-   strip next to the traffic lights. The brand mark sits there instead of
-   spending a sidebar row; web builds never show it (breadcrumb has the name). */
-.sidebar-native-brand {
-  display: none;
-}
-
-@media (min-width: 700px) {
-  html.openclaw-native-macos .sidebar:not(.sidebar--collapsed) .sidebar-native-brand {
-    /* 84px clears the native traffic-light cluster (drag region starts at 78px).
-       The mark is a transparent SVG; any box-shadow/background reads as a
-       misplaced card behind the mascot, so it renders bare. */
-    position: absolute;
-    top: 0;
-    left: 84px;
-    display: block;
-    width: 22px;
-    height: 22px;
-    margin-top: calc((var(--openclaw-native-titlebar-height, 50px) - 22px) / 2);
-  }
-}
-
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
