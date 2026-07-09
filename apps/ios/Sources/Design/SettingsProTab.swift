@@ -37,10 +37,14 @@ struct SettingsProTab: View {
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0
+    @AppStorage(NotificationServingPreference.storageKey) var notificationServingEnabled: Bool =
+        NotificationServingPreference.defaultEnabled
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
     @State var connectingGatewayID: String?
+    @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
+    @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
@@ -59,6 +63,8 @@ struct SettingsProTab: View {
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
     @State var locationPermissionSummary = LocationPermissionSummary(
         desiredMode: .off,
         locationServicesEnabled: true,
@@ -260,7 +266,7 @@ struct SettingsProTab: View {
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
-                    onContinue: self.requestNotificationAuthorizationFromSettings)
+                    onContinue: self.acceptNotificationRelayDisclosure)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {
@@ -291,6 +297,29 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
+            .confirmationDialog(
+                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: { if !$0 { self.pendingForgetGateway = nil } }),
+                    titleVisibility: .visible)
+            {
+                Button(role: .destructive) {
+                    self.forgetPendingGateway()
+                } label: {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {
+                    self.pendingForgetGateway = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                } message: {
+                    Text("This removes saved credentials, device access, TLS trust, and cached chats for this gateway.")
+                        .font(OpenClawType.subhead)
+                }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

@@ -71,6 +71,7 @@ import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
+  collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -124,6 +125,7 @@ async function createQaSuiteTransportAdapter(params: {
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
+  transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
@@ -141,7 +143,17 @@ async function createQaSuiteTransportAdapter(params: {
             ? "crabline"
             : params.transportId,
         outputDir: params.outputDir,
-        adapterOptions: params.adapterOptions,
+        adapterOptions: {
+          ...params.adapterOptions,
+          ...(params.transportPolicy
+            ? {
+                transportPolicy: {
+                  ...params.adapterOptions?.transportPolicy,
+                  ...params.transportPolicy,
+                },
+              }
+            : {}),
+        },
         state: params.state,
       },
       usesLiveAdapter ? params.adapterFactories : undefined,
@@ -281,6 +293,36 @@ async function waitForQaLabReadyOrStopOwned(params: {
     }
     throw error;
   }
+}
+
+async function runQaSuiteCleanupSteps(steps: ReadonlyArray<() => Promise<void>>) {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+function throwQaSuiteCleanupErrors(params: {
+  cleanupErrors: unknown[];
+  runFailed: boolean;
+  runError: unknown;
+}) {
+  if (params.cleanupErrors.length === 0) {
+    return;
+  }
+  if (params.cleanupErrors.length === 1 && !params.runFailed) {
+    throw params.cleanupErrors[0];
+  }
+  throw new AggregateError(
+    params.runFailed ? [params.runError, ...params.cleanupErrors] : params.cleanupErrors,
+    params.runFailed ? "QA suite and cleanup failed" : "QA suite cleanup failed",
+    params.runFailed ? { cause: params.runError } : undefined,
+  );
 }
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
@@ -762,6 +804,7 @@ async function runQaRuntimeParitySuite(params: {
     adapterOptions: params.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
+    transportPolicy: collectQaSuiteTransportPolicy(params.selectedScenarios),
     state: lab.state,
     transportId: params.transportId,
   });
@@ -1263,7 +1306,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedScenarios);
+  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(
+    selectedScenarios,
+    params?.adapterOptions?.sutAccountId?.trim() || "sut",
+  );
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
@@ -1601,6 +1647,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     adapterOptions: params?.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
+    transportPolicy: collectQaSuiteTransportPolicy(selectedScenarios),
     state: lab.state,
     transportId,
   });
@@ -1609,6 +1656,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
+  let runFailed = false;
+  let runError: unknown;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
     const activeMock = await startQaProviderServer(providerMode);
@@ -1866,28 +1915,46 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       ...(runtimeParityCell ? { runtimeParityCell } : {}),
     } satisfies QaSuiteResult;
   } catch (error) {
+    runFailed = true;
+    runError = error;
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
-    if (env) {
-      await closeQaWebSessions(env.webSessionIds);
+    const cleanupSteps: Array<() => Promise<void>> = [];
+    const activeEnv = env;
+    if (activeEnv) {
+      cleanupSteps.push(() => closeQaWebSessions(activeEnv.webSessionIds));
     }
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
-    await gateway?.stop({
-      keepTemp,
-      preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-    });
-    await transportFactoryResult.cleanup();
-    await disposeRegisteredAgentHarnesses();
-    await mock?.stop();
+    const activeGateway = gateway;
+    if (activeGateway) {
+      cleanupSteps.push(() =>
+        activeGateway.stop({
+          keepTemp,
+          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+        }),
+      );
+    }
+    cleanupSteps.push(
+      () => transportFactoryResult.cleanup(),
+      () => disposeRegisteredAgentHarnesses(),
+    );
+    const activeMock = mock;
+    if (activeMock) {
+      cleanupSteps.push(() => activeMock.stop());
+    }
     if (ownsLab) {
-      await lab.stop();
+      cleanupSteps.push(() => lab.stop());
     } else {
-      lab.setControlUi({
-        controlUiUrl: null,
-        controlUiProxyTarget: null,
+      cleanupSteps.push(async () => {
+        lab.setControlUi({
+          controlUiUrl: null,
+          controlUiProxyTarget: null,
+        });
       });
     }
+    const cleanupErrors = await runQaSuiteCleanupSteps(cleanupSteps);
+    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
   }
 }
 
@@ -1902,6 +1969,8 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  runQaSuiteCleanupSteps,
+  throwQaSuiteCleanupErrors,
   resolveQaSuiteControlUiEnabled,
   scenarioRequiresControlUi,
   resolveQaSuiteTransportReadyTimeoutMs,

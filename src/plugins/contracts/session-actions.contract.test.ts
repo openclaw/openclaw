@@ -168,7 +168,7 @@ describe("plugin session actions", () => {
     });
 
     expect(registry.registry.sessionActions).toHaveLength(1);
-    const actionEntry = registry.registry.sessionActions?.[0];
+    const actionEntry = registry.registry.sessionActions[0];
     expect(actionEntry?.pluginId).toBe("session-action-fixture");
     expect(actionEntry?.pluginName).toBe("Session Action Fixture");
     expect(actionEntry?.action.id).toBe("approve");
@@ -209,7 +209,7 @@ describe("plugin session actions", () => {
       },
     });
 
-    expect(registry.registry.sessionActions?.map((entry) => entry.action.id)).toEqual(["dup"]);
+    expect(registry.registry.sessionActions.map((entry) => entry.action.id)).toEqual(["dup"]);
     const diagnosticMessages = registry.registry.diagnostics?.map((diagnostic) => {
       expect(diagnostic.pluginId).toBe("invalid-session-actions");
       return diagnostic.message;

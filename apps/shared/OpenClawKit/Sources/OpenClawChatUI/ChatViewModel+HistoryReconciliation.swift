@@ -25,6 +25,7 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                durationSeconds: content.durationSeconds,
                 content: content.content,
                 id: content.id,
                 name: content.name,
@@ -133,7 +134,9 @@ extension OpenClawChatViewModel {
         OpenClawChatMessage(
             id: existing.id,
             role: incoming.role,
-            content: incoming.content,
+            content: self.preservingLocalAudioDurations(
+                in: incoming.content,
+                from: existing.content),
             timestamp: incoming.timestamp ?? existing.timestamp,
             idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
@@ -141,6 +144,38 @@ extension OpenClawChatViewModel {
             usage: incoming.usage,
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage)
+    }
+
+    private static func preservingLocalAudioDurations(
+        in incoming: [OpenClawChatMessageContent],
+        from existing: [OpenClawChatMessageContent]) -> [OpenClawChatMessageContent]
+    {
+        let localDurations = existing
+            .filter { $0.mimeType?.hasPrefix("audio/") == true }
+            .map(\.durationSeconds)
+        var audioIndex = 0
+        return incoming.map { content in
+            guard content.mimeType?.hasPrefix("audio/") == true else { return content }
+            defer { audioIndex += 1 }
+            guard content.durationSeconds == nil,
+                  localDurations.indices.contains(audioIndex),
+                  let localDuration = localDurations[audioIndex]
+            else {
+                return content
+            }
+            return OpenClawChatMessageContent(
+                type: content.type,
+                text: content.text,
+                thinking: content.thinking,
+                thinkingSignature: content.thinkingSignature,
+                mimeType: content.mimeType,
+                fileName: content.fileName,
+                durationSeconds: localDuration,
+                content: content.content,
+                id: content.id,
+                name: content.name,
+                arguments: content.arguments)
+        }
     }
 
     func currentRunMessageScope() -> RunMessageScope {

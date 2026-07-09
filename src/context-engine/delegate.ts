@@ -56,6 +56,13 @@ export async function delegateCompactionToRuntime(
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
 
+  // Post-compaction live session: the runtime reports rotation through the
+  // result sessionId/sessionFile pair; otherwise the input session stays live.
+  const successorSessionId = result.result?.sessionId ?? params.sessionId;
+  const successorSessionFile = result.result?.sessionFile ?? params.sessionFile;
+  const agentId = runtimeContext.sessionTarget?.agentId ?? runtimeContext.agentId;
+  const sessionKey = params.sessionKey ?? runtimeContext.sessionKey;
+
   return {
     ok: result.ok,
     compacted: result.compacted,
@@ -68,7 +75,16 @@ export async function delegateCompactionToRuntime(
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
           sessionId: result.result.sessionId,
+          // Deprecated raw path stays populated for shipped plugin-sdk readers
+          // of the delegate result; sessionTarget is the canonical successor.
           sessionFile: result.result.sessionFile,
+          sessionTarget: {
+            kind: "file",
+            ...(agentId ? { agentId } : {}),
+            sessionId: successorSessionId,
+            ...(sessionKey ? { sessionKey } : {}),
+            sessionFile: successorSessionFile,
+          },
         }
       : undefined,
   };

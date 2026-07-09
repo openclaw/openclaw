@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
 
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
@@ -111,6 +115,7 @@ beforeAll(loadOAuthModuleForTest);
 afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.resetModules();
 });
 
 function createUsableOAuthExpiry(): number {

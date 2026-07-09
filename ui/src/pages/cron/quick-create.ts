@@ -13,7 +13,7 @@ import type { CronFormState } from "../../lib/cron/index.ts";
 
 // ── Types ──
 
-export type CronQuickCreateProps = {
+type CronQuickCreateProps = {
   open: boolean;
   step: CronQuickCreateStep;
   draft: CronQuickCreateDraft;

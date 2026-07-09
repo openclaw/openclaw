@@ -7,9 +7,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createExpiredOauthStore,
@@ -27,11 +29,14 @@ let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableA
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
 type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
 
-const { getOAuthApiKeyMock } = vi.hoisted(() => ({
-  getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
-    throw new Error("Failed to extract accountId from token");
-  }),
-}));
+const { getOAuthApiKeyMock } = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
+      throw new Error("Failed to extract accountId from token");
+    }),
+  };
+});
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<(_options?: unknown) => OAuthCredential | null>(
@@ -84,6 +89,7 @@ afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.resetModules();
 });
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
@@ -214,6 +220,42 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces refresh contention once without local lock details", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider: "openai" }), agentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    const lockPath = path.join(agentDir, "oauth-refresh.lock");
+    const lockCause = Object.assign(new Error(`file lock timeout for ${lockPath}`), {
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      lockPath,
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
+      buildRefreshContentionError({ provider: "openai", profileId, cause: lockCause }),
+    );
+
+    const failure = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+      forceRefresh: true,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+    expect(failure).toMatchObject({
+      provider: "openai",
+      profileId,
+      reason: null,
+      cause: { code: "refresh_contention", lockPath },
+    });
+    const message = failure instanceof Error ? failure.message : String(failure);
+    expect(message.match(/OAuth token refresh failed/g)).toHaveLength(1);
+    expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
+    expect(message).not.toContain(lockPath);
+    expect(message).not.toContain("file lock timeout");
   });
 
   it("does not fill an explicit empty default profile beside managed OpenAI OAuth", async () => {

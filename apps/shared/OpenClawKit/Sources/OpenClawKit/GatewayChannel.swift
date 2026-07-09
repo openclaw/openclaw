@@ -564,10 +564,10 @@ public actor GatewayChannelActor {
         } else if let password = selectedAuth.authPassword {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
         if includeDeviceIdentity, let identity {
-            let payload = GatewayDeviceAuthPayload.buildV3(
+            let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
                 deviceId: identity.deviceId,
                 clientId: clientId,
                 clientMode: clientMode,
@@ -575,9 +575,7 @@ public actor GatewayChannelActor {
                 scopes: scopes,
                 signedAtMs: signedAtMs,
                 token: selectedAuth.signatureToken,
-                nonce: connectNonce,
-                platform: platform,
-                deviceFamily: InstanceIdentity.deviceFamily)
+                nonce: connectNonce)
             if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
                 payload: payload,
                 identity: identity,

@@ -54,8 +54,6 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
       { standardId: "allowlist-block", scenarioId: "slack-allowlist-block" },
       { standardId: "top-level-reply-shape", scenarioId: "slack-top-level-reply-shape" },
       { standardId: "restart-resume", scenarioId: "slack-restart-resume" },
-      { standardId: "thread-follow-up", scenarioId: "slack-thread-follow-up" },
-      { standardId: "thread-isolation", scenarioId: "slack-thread-isolation" },
     ],
   },
   {

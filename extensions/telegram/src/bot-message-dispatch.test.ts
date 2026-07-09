@@ -913,6 +913,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     const pipelineArgs = expectRecordFields(mockCallArg(createChannelMessageReplyPipeline), {});
     const typing = expectRecordFields(pipelineArgs.typing, {});
+    expect(typing.maxConsecutiveFailures).toBe(5);
     await (typing.start as () => Promise<void>)();
     expect(sendChatAction).toHaveBeenCalledWith(-1003774691294, "typing", {
       message_thread_id: 3731,
@@ -6368,6 +6369,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
+  });
+
+  it("truncates DM topic auto-rename input on UTF-16 boundaries", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "s1", updatedAt: 1 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    const bot = createBot();
+    const base = "a".repeat(499);
+    const rawBody = `${base}😀tail`;
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          RawBody: rawBody,
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(generateTopicLabel).toHaveBeenCalled();
+    });
+    const call = generateTopicLabel.mock.calls[0]?.[0] as { userMessage: string };
+    expect(call.userMessage).toBe(base);
   });
 
   it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {

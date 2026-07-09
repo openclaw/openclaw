@@ -602,15 +602,18 @@ Optional:
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
 
-Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
+Canonical YAML scenarios exposed through the Slack live adapter:
+
+- `thread-follow-up`
+- `thread-isolation`
+
+Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 - `slack-canary`
 - `slack-mention-gating`
 - `slack-allowlist-block`
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
-- `slack-thread-follow-up`
-- `slack-thread-isolation`
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.

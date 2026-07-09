@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isReasoningReplyPayload,
@@ -112,7 +113,11 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
+import {
+  createActiveHoursPredicate,
+  isWithinActiveHours,
+  resolveActiveHoursTimezone,
+} from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
@@ -861,6 +866,10 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
 }
 
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
+
+function truncateHeartbeatPreview(value: string | undefined): string | undefined {
+  return value ? truncateUtf16Safe(value, 200) : undefined;
+}
 
 function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; silent: boolean } {
   const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
@@ -2007,7 +2016,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
-        preview: heartbeatToolResponse.summary.slice(0, 200),
+        preview: truncateHeartbeatPreview(heartbeatToolResponse.summary),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
@@ -2161,7 +2170,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
-        preview: normalized.text.slice(0, 200),
+        preview: truncateHeartbeatPreview(normalized.text),
         durationMs: Date.now() - startedAt,
         hasMedia: false,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -2190,7 +2199,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
@@ -2210,7 +2219,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
-        preview: previewText?.slice(0, 200),
+        preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         channel: delivery.channel,
         hasMedia: mediaUrls.length > 0,
@@ -2233,7 +2242,7 @@ export async function runHeartbeatOnce(opts: {
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
-          preview: previewText?.slice(0, 200),
+          preview: truncateHeartbeatPreview(previewText),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
           channel: delivery.channel,
@@ -2317,7 +2326,7 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
-      preview: previewText?.slice(0, 200),
+      preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
@@ -2344,6 +2353,8 @@ export async function runHeartbeatOnce(opts: {
     heartbeatTyping?.onCleanup?.();
   }
 }
+
+export const testing = { truncateHeartbeatPreview };
 
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
@@ -2386,13 +2397,15 @@ export function startHeartbeatRunner(opts: {
         : undefined,
     });
 
-  const seekActiveSlotForAgent = (agent: HeartbeatAgentState, rawDueMs: number) =>
-    seekNextActivePhaseDueMs({
+  const seekActiveSlotForAgent = (agent: HeartbeatAgentState, rawDueMs: number) => {
+    const isActive = createActiveHoursPredicate(state.cfg, agent.heartbeat);
+    return seekNextActivePhaseDueMs({
       startMs: rawDueMs,
       intervalMs: agent.intervalMs,
       phaseMs: agent.phaseMs,
-      isActive: (ms) => isWithinActiveHours(state.cfg, agent.heartbeat, ms),
+      isActive,
     });
+  };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
     const rawDueMs =
@@ -2535,11 +2548,12 @@ export function startHeartbeatRunner(opts: {
         phaseMs,
         ahChanged ? undefined : prevState,
       );
+      const isActive = createActiveHoursPredicate(cfg, agent.heartbeat);
       const nextDueMs = seekNextActivePhaseDueMs({
         startMs: rawNextDueMs,
         intervalMs,
         phaseMs,
-        isActive: (ms) => isWithinActiveHours(cfg, agent.heartbeat, ms),
+        isActive,
       });
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
