@@ -59,11 +59,6 @@ export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js"
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
-export {
-  resolveReadOnlyWorkspaceSkillMounts,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./sandbox/workspace-mounts.js";
-
 export type {
   CreateSandboxBackendParams,
   SandboxBackendCommandParams,
