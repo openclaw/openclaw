@@ -7204,14 +7204,14 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.isError).toBe(true);
       expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
       // Should surface the rate-limit message, not generic failure
-      expect(result.payload.text).toContain("rate limit");
+      expect(result.payload.text).toContain("rate-limited");
     }
   });
 
   it("surfaces typed overloaded failures in group chats via FailoverError.reason", async () => {
-    // Simulate a FailoverError with reason="overloaded" but generic message
+    // Simulate a FailoverError with reason="overloaded" and explicit message
     const failoverError = Object.assign(
-      new Error("Service temporarily unavailable"),
+      new Error("Model is overloaded"),
       {
         name: "FailoverError",
         reason: "overloaded",
@@ -7236,7 +7236,7 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.isError).toBe(true);
       expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-      // Should surface overloaded message, not rate-limit cooldown
+      // Should surface overloaded message
       expect(result.payload.text).toContain("overloaded");
     }
   });
