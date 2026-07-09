@@ -119,6 +119,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
+  # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.15.0"
 
 jobs:
@@ -290,7 +292,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -307,6 +309,11 @@ jobs:
             dispatch_status=$?
             set -e
             printf '%s\n' "$dispatch_output"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
 
             run_id=""
             for _ in $(seq 1 60); do
@@ -450,7 +457,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -467,6 +474,11 @@ jobs:
             dispatch_status=$?
             set -e
             printf '%s\n' "$dispatch_output"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
 
             run_id=""
             for _ in $(seq 1 60); do
@@ -620,7 +632,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -637,6 +649,11 @@ jobs:
             dispatch_status=$?
             set -e
             printf '%s\n' "$dispatch_output"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
 
             run_id=""
             for _ in $(seq 1 60); do
@@ -883,7 +900,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -910,6 +927,11 @@ jobs:
           dispatch_status=$?
           set -e
           printf '%s\n' "$dispatch_output"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::npm-telegram-beta-e2e.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
 
           run_id=""
           for _ in $(seq 1 60); do
@@ -1026,7 +1048,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -1066,6 +1088,11 @@ jobs:
           dispatch_status=$?
           set -e
           printf '%s\n' "$dispatch_output"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::openclaw-performance.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
 
           run_id=""
           for _ in $(seq 1 60); do
@@ -1181,7 +1208,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue

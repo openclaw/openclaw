@@ -3,7 +3,6 @@ import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { hasStoredGatewayAuth, type GatewayBrowserClient } from "../api/gateway.ts";
-import type { AgentsListResult } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
@@ -16,7 +15,7 @@ import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
-import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
@@ -29,8 +28,6 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
-import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -71,18 +68,6 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash
-  );
-}
-
-function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | null): string {
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const agent = agentsList?.agents.find(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
-  );
-  return (
-    normalizeOptionalString(agent?.identity?.name) ??
-    normalizeOptionalString(agent?.name) ??
-    agentId
   );
 }
 
@@ -785,10 +770,6 @@ class OpenClawShell extends OpenClawLightDomElement {
       gatewaySnapshot,
       context.config.current.terminalEnabled ?? false,
     );
-    const agentLabel = resolveAgentLabel(
-      this.activeSessionKey || gatewaySnapshot.sessionKey,
-      context.agents.state.agentsList,
-    );
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginTabId =
@@ -828,17 +809,12 @@ class OpenClawShell extends OpenClawLightDomElement {
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         <openclaw-app-topbar
-          .routeId=${activeRoute}
           .basePath=${context.basePath}
-          .agentLabel=${agentLabel}
-          .overviewHref=${pathForRoute("overview", context.basePath)}
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
-          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-            this.navigate(routeId, options)}
         ></openclaw-app-topbar>
         <div class="shell-nav">
           ${settingsTakeover
