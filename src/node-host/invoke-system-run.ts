@@ -127,6 +127,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylisted: boolean;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
   trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
@@ -733,6 +734,7 @@ async function evaluateSystemRunPolicyPhase(
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
+    denylisted,
     safeBins,
     safeBinProfiles,
     trustedSafeBinDirs,
@@ -868,7 +870,7 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always") {
+  if (phase.policy.approvalDecision === "allow-always" && !phase.denylisted) {
     persistAllowAlwaysDecision({
       approvals: phase.approvals.file,
       agentId: phase.agentId,

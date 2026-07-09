@@ -182,7 +182,11 @@ function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
   command: string;
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
   requiresAllowlistPlanApproval: boolean;
+  requiresDenylistApproval: boolean;
 }): AllowAlwaysPersistenceDecision {
+  if (params.requiresDenylistApproval) {
+    return createOneShotAllowAlwaysDecision();
+  }
   if (!params.requiresAllowlistPlanApproval) {
     return params.allowAlwaysPersistence;
   }
@@ -626,6 +630,7 @@ export async function processGatewayAllowlist(
     command: params.command,
     allowAlwaysPersistence,
     requiresAllowlistPlanApproval,
+    requiresDenylistApproval,
   });
   const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
     ask: hostAsk,

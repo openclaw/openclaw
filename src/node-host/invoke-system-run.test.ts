@@ -1983,6 +1983,36 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("does not persist allow-always approvals when a denylist hit is explicitly approved", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          denylist: [{ pattern: "echo *", reason: "stop" }],
+        },
+        agents: {},
+      },
+      run: async () => {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+          approvalDecision: "allow-always",
+          approved: true,
+          runCommand: vi.fn(async () => createLocalRunResult("denylist-approved")),
+        });
+
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult, { payloadContains: "denylist-approved" });
+        expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+      },
+    });
+  });
+
   it("denies system.run when tools.exec.denylist from openclaw.json matches", async () => {
     setRuntimeConfigSnapshot({
       tools: {

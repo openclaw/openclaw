@@ -18,6 +18,7 @@ import {
   planShellAuthorization,
   type ExecAuthorizationPlan,
 } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -417,6 +418,38 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
+  it("makes denylist-triggered gateway approvals one-shot", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "rm -rf /tmp/scratch",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm **", reason: "destructive" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "off",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(resolveExecApprovalUnavailableDecisionsMock).toHaveBeenCalledWith({
+      ask: "off",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
   it("does not gate security=full commands that miss the config exec denylist", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -754,9 +787,15 @@ describe("processGatewayAllowlist", () => {
       command,
       ask: "off",
     });
+    const enforcedCommand = buildAuthorizedShellCommandFromPlan({
+      plan: authorizationPlan,
+      mode: "enforced",
+      segmentSatisfiedBy: ["safeBins"],
+    });
+    expect(enforcedCommand.ok).toBe(true);
 
     expect(result).toEqual({
-      execCommandOverride: "/usr/bin/head -c 16",
+      execCommandOverride: enforcedCommand.ok ? enforcedCommand.command : undefined,
     });
   });
 
