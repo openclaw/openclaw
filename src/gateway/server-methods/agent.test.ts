@@ -153,6 +153,21 @@ vi.mock("../../agents/agent-scope.js", () => ({
     const m = /^agent:([^:]+):/.exec((sessionKey ?? "").trim());
     return m?.[1] ?? "main";
   },
+  resolveSessionAgentIds: ({
+    sessionKey,
+    agentId,
+    fallbackAgentId,
+  }: {
+    sessionKey?: string | null;
+    agentId?: string;
+    fallbackAgentId?: string;
+  }) => {
+    const parsedAgentId = /^agent:([^:]+):/.exec((sessionKey ?? "").trim())?.[1];
+    return {
+      defaultAgentId: "main",
+      sessionAgentId: agentId ?? parsedAgentId ?? fallbackAgentId ?? "main",
+    };
+  },
   resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (
