@@ -3351,6 +3351,52 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("keeps an exact continuation ready for later media when the stable row was deleted", async () => {
+    mocks.agentCommand.mockClear();
+    const sessionKey = "agent:main:cron:delete-after-run:run:run-1";
+    const entry: SessionEntry = {
+      sessionId: "run-1",
+      updatedAt: Date.now(),
+      lifecycleRevision: "revision-1",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "ready",
+        basePersisted: true,
+      },
+    };
+    const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: sessionKey,
+      entry,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }] });
+
+    for (const reqId of ["cron-media-first", "cron-media-second"]) {
+      await invokeAgent(
+        {
+          message: `${reqId} finished`,
+          sessionKey,
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: reqId,
+        },
+        { reqId, client: cronContinuationGatewayClient() },
+      );
+      await waitForAssertion(() => {
+        expect(store[sessionKey]?.cronRunContinuation).toEqual({
+          lifecycleRevision: "revision-1",
+          phase: "ready",
+          basePersisted: true,
+        });
+      });
+    }
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(2);
+  });
+
   it("persists a fallback model after the continuation session id rotates", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";

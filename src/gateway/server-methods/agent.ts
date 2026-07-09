@@ -1845,7 +1845,8 @@ export const agentHandlers: GatewayRequestHandlers = {
               current.cronRunContinuation = {
                 ...releasedMarker,
                 phase: "ready",
-                basePersisted: canPersistToBase || baseWasSuperseded,
+                basePersisted:
+                  releasedMarker.basePersisted === true || canPersistToBase || baseWasSuperseded,
               };
               current.updatedAt = Date.now();
               released = true;
@@ -2969,7 +2970,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                   freshEntry.cronRunContinuation = {
                     ...marker,
                     phase: "continuing",
-                    basePersisted: false,
                     ownerRunId: runId,
                     ownerLifecycleGeneration: lifecycleGeneration,
                   };
