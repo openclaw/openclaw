@@ -25,7 +25,6 @@ Docs: https://docs.openclaw.ai
 
 - **Browser actions on Node 24:** keep browser request cancellation bound to the client and response lifetime instead of Node 24.16+'s prematurely aborted body-stream signal, preventing valid POST actions from failing after JSON parsing. Thanks @obviyus and @vincentkoc.
 - **SecretRef model credentials:** keep resolved provider secrets behind process-local sentinels through auth storage, stream setup, SDK configuration, and managed local-provider probing, then inject plaintext only at the final network or provider-plugin boundary while retaining exact-value log redaction. (#102008, #102009)
-- **Google Meet agent routing:** keep Chrome Meet sessions bound to the agent that joined them across delayed bridge startup and same-URL session reuse, so participant speech cannot fall back to another agent's workspace or tool policy.
 - **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
 - **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
 - **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.
