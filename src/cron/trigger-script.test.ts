@@ -21,6 +21,11 @@ function completed(params: { value: unknown; output?: unknown[] }): CodeModeHead
   };
 }
 
+function abortReason(signal: AbortSignal | undefined): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason : new Error("preparation aborted");
+}
+
 function createPreparedRuntime(config: OpenClawConfig) {
   const tool = wrapToolWithBeforeToolCallHook(
     {
@@ -171,7 +176,7 @@ describe("cron trigger script evaluator", () => {
     const prepareRuntime = vi.fn(async (params: PrepareParams) => {
       if (prepareRuntime.mock.calls.length === 1) {
         return await new Promise<never>((_resolve, reject) => {
-          params.signal?.addEventListener("abort", () => reject(params.signal?.reason), {
+          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
             once: true,
           });
         });
@@ -208,7 +213,7 @@ describe("cron trigger script evaluator", () => {
       const prepareRuntime = vi.fn(async (params: PrepareParams) => {
         if (prepareRuntime.mock.calls.length === 1) {
           return await new Promise<never>((_resolve, reject) => {
-            params.signal?.addEventListener("abort", () => reject(params.signal?.reason), {
+            params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
               once: true,
             });
           });
@@ -363,7 +368,7 @@ describe("cron trigger script evaluator", () => {
       const config = {} as OpenClawConfig;
       const prepareRuntime = vi.fn(async (params: { signal?: AbortSignal }): Promise<never> => {
         return await new Promise<never>((_resolve, reject) => {
-          params.signal?.addEventListener("abort", () => reject(params.signal?.reason), {
+          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
             once: true,
           });
         });
