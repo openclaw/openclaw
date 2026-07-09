@@ -245,6 +245,7 @@ enum ExecApprovalsStore {
         let url: URL
         let device: UInt64
         let inode: UInt64
+        let raw: Data
     }
 
     private enum LegacyMigrationResult {
@@ -279,6 +280,18 @@ enum ExecApprovalsStore {
         let realDirectory = fileURL.deletingLastPathComponent().resolvingSymlinksInPath()
         let lockURL = realDirectory.appendingPathComponent("\(fileURL.lastPathComponent).lock")
         var delay: useconds_t = 25000
+        var lockPayload: [String: Any] = [
+            "pid": Int(getpid()),
+            "createdAt": ISO8601DateFormatter().string(from: Date()),
+            "nonce": UUID().uuidString,
+        ]
+        if let starttime = self.processStartTime(getpid()) {
+            lockPayload["starttime"] = starttime
+        }
+        let payload = try JSONSerialization.data(
+            withJSONObject: lockPayload,
+            options: [.prettyPrinted, .sortedKeys])
+        let raw = payload + Data([0x0A])
 
         for attempt in 0..<self.writeLockAttempts {
             let descriptor = open(
@@ -286,30 +299,24 @@ enum ExecApprovalsStore {
                 O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
                 S_IRUSR | S_IWUSR)
             if descriptor >= 0 {
+                var info = stat()
+                guard fstat(descriptor, &info) == 0 else {
+                    let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    close(descriptor)
+                    throw error
+                }
+                let handle = WriteLockHandle(
+                    descriptor: descriptor,
+                    url: lockURL,
+                    device: UInt64(info.st_dev),
+                    inode: UInt64(info.st_ino),
+                    raw: raw)
                 do {
-                    var info = stat()
-                    guard fstat(descriptor, &info) == 0 else {
-                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                    }
-                    var lockPayload: [String: Any] = [
-                        "pid": Int(getpid()),
-                        "createdAt": ISO8601DateFormatter().string(from: Date()),
-                    ]
-                    if let starttime = self.processStartTime(getpid()) {
-                        lockPayload["starttime"] = starttime
-                    }
-                    let payload = try JSONSerialization.data(
-                        withJSONObject: lockPayload,
-                        options: [.prettyPrinted, .sortedKeys])
-                    try self.writeAll(payload + Data([0x0A]), to: descriptor)
-                    return WriteLockHandle(
-                        descriptor: descriptor,
-                        url: lockURL,
-                        device: UInt64(info.st_dev),
-                        inode: UInt64(info.st_ino))
+                    try self.writeAll(raw, to: descriptor)
+                    return handle
                 } catch {
                     close(descriptor)
-                    _ = unlink(lockURL.path)
+                    self.removeWriteLockIfOwned(handle, requirePayloadMatch: false)
                     throw error
                 }
             }
@@ -317,9 +324,8 @@ enum ExecApprovalsStore {
             guard errno == EEXIST else {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
-            if self.removeDeadWriteLockIfUnchanged(at: lockURL) {
-                continue
-            }
+            // POSIX unlink is path-based, so an identity check cannot make stale
+            // recovery atomic. Retry live contention; stale locks fail closed.
             guard attempt + 1 < self.writeLockAttempts else {
                 throw POSIXError(.ETIMEDOUT)
             }
@@ -346,35 +352,6 @@ enum ExecApprovalsStore {
         }
     }
 
-    private static func removeDeadWriteLockIfUnchanged(at url: URL) -> Bool {
-        guard let data = try? Data(contentsOf: url),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rawPID = payload["pid"] as? NSNumber
-        else { return false }
-        let owner = pid_t(rawPID.int32Value)
-        guard owner > 0 else { return false }
-        if kill(owner, 0) == 0 || errno == EPERM {
-            guard let storedStarttime = (payload["starttime"] as? NSNumber)?.uint64Value,
-                  let currentStarttime = self.processStartTime(owner),
-                  storedStarttime != currentStarttime
-            else { return false }
-        } else {
-            guard errno == ESRCH else { return false }
-        }
-
-        var observed = stat()
-        guard lstat(url.path, &observed) == 0,
-              let current = try? Data(contentsOf: url),
-              current == data
-        else { return false }
-        var unchanged = stat()
-        guard lstat(url.path, &unchanged) == 0,
-              unchanged.st_dev == observed.st_dev,
-              unchanged.st_ino == observed.st_ino
-        else { return false }
-        return unlink(url.path) == 0 || errno == ENOENT
-    }
-
     private static func processStartTime(_ pid: pid_t) -> UInt64? {
         guard pid > 0 else { return nil }
         var info = kinfo_proc()
@@ -385,17 +362,27 @@ enum ExecApprovalsStore {
               info.kp_proc.p_pid == pid
         else { return nil }
         let started = info.kp_proc.p_starttime
-        guard started.tv_sec >= 0, started.tv_usec >= 0 else { return nil }
-        return UInt64(started.tv_sec) * 1_000_000 + UInt64(started.tv_usec)
+        guard started.tv_sec >= 0 else { return nil }
+        return UInt64(started.tv_sec)
     }
 
     private static func releaseWriteLock(_ handle: WriteLockHandle) {
         close(handle.descriptor)
+        self.removeWriteLockIfOwned(handle, requirePayloadMatch: true)
+    }
+
+    private static func removeWriteLockIfOwned(
+        _ handle: WriteLockHandle,
+        requirePayloadMatch: Bool)
+    {
         var current = stat()
         guard lstat(handle.url.path, &current) == 0,
               UInt64(current.st_dev) == handle.device,
               UInt64(current.st_ino) == handle.inode
         else { return }
+        if requirePayloadMatch {
+            guard let raw = try? Data(contentsOf: handle.url), raw == handle.raw else { return }
+        }
         _ = unlink(handle.url.path)
     }
 
@@ -722,6 +709,23 @@ enum ExecApprovalsStore {
         }
     }
 
+    private static func fileHasUnpersistedAllowlistIDs(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let agents = root["agents"] as? [String: Any]
+        else { return false }
+        for case let agent as [String: Any] in agents.values {
+            guard let allowlist = agent["allowlist"] as? [[String: Any]] else { continue }
+            if allowlist.contains(where: { entry in
+                guard let rawID = entry["id"] as? String else { return true }
+                return UUID(uuidString: rawID) == nil
+            }) {
+                return true
+            }
+        }
+        return false
+    }
+
     static func saveFile(_ file: ExecApprovalsFile) {
         do {
             try self.withWriteLock {
@@ -771,6 +775,7 @@ enum ExecApprovalsStore {
         self.ensureSecureStateDirectory()
         let url = self.fileURL()
         let existed = FileManager().fileExists(atPath: url.path)
+        let needsIDBackfill = existed && self.fileHasUnpersistedAllowlistIDs(url)
         let loaded = self.loadFileUnlocked()
         let loadedHash = self.hashFile(loaded)
 
@@ -789,7 +794,7 @@ enum ExecApprovalsStore {
         if file.agents == nil {
             file.agents = [:]
         }
-        if !existed || loadedHash != self.hashFile(file) {
+        if !existed || needsIDBackfill || loadedHash != self.hashFile(file) {
             try self.saveFileUnlocked(file)
         }
         return file
@@ -986,6 +991,46 @@ enum ExecApprovalsStore {
             file.agents = agents
         }
         return rejected
+    }
+
+    @discardableResult
+    static func updateAllowlistEntry(
+        agentId: String?,
+        id: UUID,
+        pattern: String) -> ExecAllowlistPatternValidationReason?
+    {
+        let normalizedPattern: String
+        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
+        case let .valid(validPattern):
+            normalizedPattern = validPattern
+        case let .invalid(reason):
+            return reason
+        }
+
+        self.updateFile { file in
+            let key = self.agentKey(agentId)
+            var agents = file.agents ?? [:]
+            var agent = agents[key] ?? ExecApprovalsAgent()
+            var allowlist = agent.allowlist ?? []
+            guard let index = allowlist.firstIndex(where: { $0.id == id }) else { return }
+            allowlist[index].pattern = normalizedPattern
+            agent.allowlist = allowlist
+            agents[key] = agent
+            file.agents = agents
+        }
+        return nil
+    }
+
+    static func removeAllowlistEntry(agentId: String?, id: UUID) {
+        self.updateFile { file in
+            let key = self.agentKey(agentId)
+            var agents = file.agents ?? [:]
+            var agent = agents[key] ?? ExecApprovalsAgent()
+            let allowlist = (agent.allowlist ?? []).filter { $0.id != id }
+            agent.allowlist = allowlist
+            agents[key] = agent
+            file.agents = agents
+        }
     }
 
     static func updateAgentSettings(agentId: String?, mutate: (inout ExecApprovalsAgent) -> Void) {

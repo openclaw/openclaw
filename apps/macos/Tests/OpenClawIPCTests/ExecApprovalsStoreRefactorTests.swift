@@ -201,7 +201,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `native writer reclaims lock from reused pid`() async throws {
+    func `native writer keeps lock from reused pid`() async throws {
         try await self.withTempStateDir { stateDir in
             let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
             let payload = try JSONSerialization.data(withJSONObject: [
@@ -211,13 +211,80 @@ struct ExecApprovalsStoreRefactorTests {
             ])
             try payload.write(to: lockURL)
 
-            let rejected = ExecApprovalsStore.updateAllowlist(
+            _ = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
 
-            #expect(rejected.isEmpty)
-            #expect(!FileManager().fileExists(atPath: lockURL.path))
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/bin/echo"])
+            #expect(FileManager().fileExists(atPath: lockURL.path))
+            #expect(try Data(contentsOf: lockURL) == payload)
+            #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty != false)
+        }
+    }
+
+    @Test
+    func `native writer keeps expired malformed lock`() async throws {
+        try await self.withTempStateDir { stateDir in
+            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
+            try Data("{".utf8).write(to: lockURL)
+            try FileManager().setAttributes(
+                [.modificationDate: Date().addingTimeInterval(-31)],
+                ofItemAtPath: lockURL.path)
+
+            _ = ExecApprovalsStore.updateAllowlist(
+                agentId: "main",
+                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
+
+            #expect(FileManager().fileExists(atPath: lockURL.path))
+            #expect(try Data(contentsOf: lockURL) == Data("{".utf8))
+            #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty != false)
+        }
+    }
+
+    @Test
+    func `entry scoped update persists a legacy missing id before editing`() async throws {
+        try await self.withTempStateDir { _ in
+            let raw = Data(
+                """
+                {"version":1,"agents":{"main":{"allowlist":[{"pattern":"/bin/echo"}]}}}
+                """.utf8)
+            try raw.write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+
+            let resolved = ExecApprovalsStore.resolve(agentId: "main")
+            guard let id = resolved.allowlist.first?.id else {
+                Issue.record("expected legacy allowlist entry")
+                return
+            }
+            let rejected = ExecApprovalsStore.updateAllowlistEntry(
+                agentId: "main",
+                id: id,
+                pattern: "/bin/cat")
+
+            #expect(rejected == nil)
+            let persisted = ExecApprovalsStore.loadFile().agents?["main"]?.allowlist
+            #expect(persisted?.map(\.id) == [id])
+            #expect(persisted?.map(\.pattern) == ["/bin/cat"])
+        }
+    }
+
+    @Test
+    func `entry scoped update cannot restore a revoked allowlist snapshot`() async throws {
+        try await self.withTempStateDir { _ in
+            let revokedID = UUID()
+            _ = ExecApprovalsStore.updateAllowlist(
+                agentId: "main",
+                allowlist: [ExecAllowlistEntry(id: revokedID, pattern: "/bin/echo")])
+            let stale = ExecAllowlistEntry(id: revokedID, pattern: "/bin/cat")
+
+            _ = ExecApprovalsStore.updateAllowlist(
+                agentId: "main",
+                allowlist: [ExecAllowlistEntry(pattern: "/usr/bin/date")])
+            let rejected = ExecApprovalsStore.updateAllowlistEntry(
+                agentId: "main",
+                id: revokedID,
+                pattern: stale.pattern)
+
+            #expect(rejected == nil)
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/usr/bin/date"])
         }
     }
 

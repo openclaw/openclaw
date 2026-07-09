@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 // Covers exec approvals store socket interactions.
 import fs from "node:fs";
 import path from "node:path";
@@ -177,6 +179,112 @@ describe("exec approvals store helpers", () => {
         command: "true",
       }),
     ).toBeUndefined();
+  });
+
+  it("persists synchronous compatibility writes without restoring revoked policy", async () => {
+    const dir = createHomeDir();
+    await ensureExecApprovals();
+    await updateExecApprovals({
+      update: (file) => ({
+        ...file,
+        defaults: { ...file.defaults, security: "allowlist" },
+        agents: {
+          ...file.agents,
+          main: {
+            ...file.agents?.main,
+            allowlist: [{ id: "revoked", pattern: "/bin/echo" }],
+          },
+        },
+      }),
+    });
+    const stale = readExecApprovalsSnapshot().file;
+
+    await updateExecApprovals({
+      update: (file) => ({
+        ...file,
+        defaults: { ...file.defaults, security: "deny" },
+        agents: { ...file.agents, main: { ...file.agents?.main, allowlist: [] } },
+      }),
+    });
+    persistAllowAlwaysDecisionSync({
+      approvals: stale,
+      agentId: "main",
+      decision: { kind: "exact-command", commandText: "echo stale" },
+    });
+    recordAllowlistMatchesUseSync({
+      approvals: stale,
+      agentId: "main",
+      matches: [{ id: "revoked", pattern: "/bin/echo" }],
+      command: "echo stale",
+    });
+
+    expect(stale.defaults?.security).toBe("deny");
+    expect(stale.agents?.main?.allowlist).toEqual([
+      expect.objectContaining({ pattern: expect.stringMatching(/^=command:/) }),
+    ]);
+    expect(readApprovalsFile(dir).defaults?.security).toBe("deny");
+    expect(allowlistEntries(dir, "main")).toEqual([
+      expect.objectContaining({ pattern: expect.stringMatching(/^=command:/) }),
+    ]);
+  });
+
+  it("fails closed when a synchronous writer finds an ownerless live lock", () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    const descriptor = fs.openSync(lockPath, "wx", 0o600);
+    try {
+      const staleAt = new Date(Date.now() - 60_000);
+      fs.futimesSync(descriptor, staleAt, staleAt);
+      const before = fs.fstatSync(descriptor);
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(expect.objectContaining({ code: "file_lock_timeout" }));
+
+      const after = fs.statSync(lockPath);
+      expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
+      fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid })}\n`, "utf8");
+      expect(fs.readFileSync(lockPath, "utf8")).toContain(`"pid":${process.pid}`);
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("retries brief synchronous contention from another process", async () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          "const lockPath = process.argv[1];",
+          'const descriptor = fs.openSync(lockPath, "wx", 0o600);',
+          "fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid }));",
+          'process.stdout.write("ready\\n");',
+          "setTimeout(() => {",
+          "  fs.closeSync(descriptor);",
+          "  fs.rmSync(lockPath, { force: true });",
+          "}, 100);",
+        ].join("\n"),
+        lockPath,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await once(child.stdout, "data");
+
+    try {
+      saveExecApprovals({ version: 1, defaults: { security: "allowlist" }, agents: {} });
+      expect(readApprovalsFile(dir).defaults?.security).toBe("allowlist");
+    } finally {
+      if (child.exitCode === null) {
+        await once(child, "exit");
+      }
+    }
   });
 
   it("fails closed without writing target approvals before state migration runs", async () => {
